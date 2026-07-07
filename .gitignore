@@ -1,0 +1,4 @@
+.env
+.proofstorm-active
+*.log
+.DS_Store

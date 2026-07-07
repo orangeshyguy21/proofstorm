@@ -1,0 +1,2 @@
+# Placeholder for V2 (nutshell mint). Not used in V1.
+FROM cashubtc/nutshell:0.20.2

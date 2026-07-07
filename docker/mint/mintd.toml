@@ -1,0 +1,32 @@
+# cdk-mintd FakeWallet config for proofstorm.
+# Regtest/dev only — BIP39 test mnemonic; do not reuse in production.
+
+[info]
+url = "http://mint:3338"
+listen_host = "0.0.0.0"
+listen_port = 3338
+mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+input_fee_ppk = 0
+
+[mint_info]
+name = "proofstorm"
+description = "proofstorm FakeWallet mint"
+urls = ["http://mint:3338"]
+
+[database]
+engine = "sqlite"
+
+# cdk-mintd 0.17: one [[ln]] entry per unit; min/max bounds required.
+[[ln]]
+ln_backend = "fakewallet"
+unit = "sat"
+min_mint = 1
+max_mint = 500000
+min_melt = 1
+max_melt = 500000
+
+[fake_wallet]
+fee_percent = 0.0
+reserve_fee_min = 0
+min_delay_time = 0
+max_delay_time = 0

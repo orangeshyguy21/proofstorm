@@ -1,0 +1,12 @@
+# Nutshell wallet: cashubtc/nutshell image ships the CLI via poetry, not /usr/local/bin/cashu.
+ARG NUTSHELL_VERSION=0.20.2
+FROM cashubtc/nutshell:${NUTSHELL_VERSION}
+
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'cd /app && exec poetry run cashu "$@"' \
+    > /usr/local/bin/cashu \
+    && chmod +x /usr/local/bin/cashu
+
+# Long-lived container; host scripts drive it via docker exec.
+ENTRYPOINT ["sleep", "infinity"]

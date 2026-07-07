@@ -1,0 +1,125 @@
+# proofstorm — one FakeWallet mint + N independent CLI wallets.
+# Drive wallets from the host: make fund / make smoke / make down.
+# Makefile starts mint + wallet-1 .. wallet-N only.
+#
+# Compatible with docker-compose 1.29+ and Compose V2.
+#
+# Wallet image/data dir are selected via env (see Makefile):
+#   WALLET_IMPL=cdk       -> Dockerfile.cdk,  /root/.cdk
+#   WALLET_IMPL=nutshell  -> Dockerfile.nutshell, /root/.cashu
+
+version: "3.8"
+
+networks:
+  net:
+    driver: bridge
+
+volumes:
+  mint-data:
+  wallet-1-data:
+  wallet-2-data:
+  wallet-3-data:
+  wallet-4-data:
+  wallet-5-data:
+  wallet-6-data:
+  wallet-7-data:
+  wallet-8-data:
+  wallet-9-data:
+  wallet-10-data:
+
+x-wallet: &wallet
+  build:
+    context: .
+    dockerfile: ${WALLET_DOCKERFILE:-docker/wallet/Dockerfile.cdk}
+    args:
+      CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.1}
+      NUTSHELL_VERSION: ${NUTSHELL_VERSION:-0.20.2}
+  restart: on-failure
+  networks: [net]
+  depends_on:
+    mint:
+      condition: service_healthy
+  environment:
+    MINT_URL: http://mint:3338
+  entrypoint: ["sleep", "infinity"]
+
+services:
+  mint:
+    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.17.1}
+    container_name: proofstorm-mint
+    restart: on-failure
+    networks: [net]
+    ports:
+      - "${MINT_HOST_PORT:-3338}:3338"
+    volumes:
+      - ./docker/mint/mintd.toml:/config.toml:ro
+      - mint-data:/app/data
+    environment:
+      CDK_MINTD_WORK_DIR: /app/data
+    command: ["cdk-mintd", "--config", "/config.toml"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3338/v1/info || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  wallet-1:
+    <<: *wallet
+    container_name: proofstorm-wallet-1
+    volumes:
+      - wallet-1-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-2:
+    <<: *wallet
+    container_name: proofstorm-wallet-2
+    volumes:
+      - wallet-2-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-3:
+    <<: *wallet
+    container_name: proofstorm-wallet-3
+    volumes:
+      - wallet-3-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-4:
+    <<: *wallet
+    container_name: proofstorm-wallet-4
+    volumes:
+      - wallet-4-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-5:
+    <<: *wallet
+    container_name: proofstorm-wallet-5
+    volumes:
+      - wallet-5-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-6:
+    <<: *wallet
+    container_name: proofstorm-wallet-6
+    volumes:
+      - wallet-6-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-7:
+    <<: *wallet
+    container_name: proofstorm-wallet-7
+    volumes:
+      - wallet-7-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-8:
+    <<: *wallet
+    container_name: proofstorm-wallet-8
+    volumes:
+      - wallet-8-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-9:
+    <<: *wallet
+    container_name: proofstorm-wallet-9
+    volumes:
+      - wallet-9-data:${WALLET_DATA_DIR:-/root/.cdk}
+
+  wallet-10:
+    <<: *wallet
+    container_name: proofstorm-wallet-10
+    volumes:
+      - wallet-10-data:${WALLET_DATA_DIR:-/root/.cdk}
