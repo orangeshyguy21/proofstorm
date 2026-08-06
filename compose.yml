@@ -58,7 +58,8 @@ services:
       CDK_MINTD_WORK_DIR: /app/data
     command: ["cdk-mintd", "--config", "/config.toml"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3338/v1/info || exit 1"]
+      test:
+        ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3338/v1/info || exit 1"]
       interval: 3s
       timeout: 5s
       retries: 30

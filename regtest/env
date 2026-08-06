@@ -1,0 +1,21 @@
+# proofstorm regtest environment. ALL VALUES ARE REGTEST-ONLY — never reuse
+# any secret here in a real deployment. Loaded by docker-compose for the
+# regtest stack and by regtest/scripts/*.sh.
+
+# ----- bitcoind RPC -----
+BTC_RPC_USER=polar
+BTC_RPC_PASS=polar
+
+# ----- Channel funding (fund-topology.sh) -----
+CHANNEL_CAPACITY_SAT=10000000    # 0.1 BTC channel between lnd-a and lnd-b
+CHANNEL_PUSH_SAT=5000000         # push half so both mints have outbound liquidity
+
+# ----- Block miner cadence -----
+MINE_INTERVAL_SECONDS=30
+
+# ----- Nutshell mint private key (any 64-char hex for regtest) -----
+NUTSHELL_PRIVATE_KEY=ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70
+
+# ----- Host port map -----
+CDK_MINT_HOST_PORT=3338
+NUTSHELL_MINT_HOST_PORT=3339

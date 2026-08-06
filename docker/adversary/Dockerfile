@@ -1,0 +1,19 @@
+# Adversary/wallet image for the proofstorm regtest stack.
+# Ships cdk-cli (for wallet-driven attacks: mint/send/receive/melt) plus
+# curl + jq (for raw NUT HTTP attacks and DoS floods). Host scripts drive it
+# via `docker exec`. Regtest only.
+ARG CDK_CLI_VERSION=0.17.1
+
+FROM rust:1-slim-trixie AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ARG CDK_CLI_VERSION
+RUN cargo install cdk-cli --version ${CDK_CLI_VERSION} --locked
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl jq coreutils \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/cargo/bin/cdk-cli /usr/local/bin/cdk-cli
+ENTRYPOINT ["sleep", "infinity"]

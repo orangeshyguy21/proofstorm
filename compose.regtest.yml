@@ -1,0 +1,201 @@
+# proofstorm regtest stack — adversarial harness (Phase 6).
+#
+#   bitcoind (regtest) ── block-miner
+#        │
+#   lnd-a ⇄ channel ⇄ lnd-b
+#     │                  │
+#   cdk-mintd          nutshell (mint mode)
+#     └──────┬───────────┘
+#         adversary (cdk-cli + curl/jq, driven from host via docker exec)
+#
+# Compatible with docker-compose 1.29+ and Compose V2 (no top-level `name:`;
+# the Makefile passes `-p proofstorm-rt`). Channel setup and mining are driven
+# from the host by regtest/scripts/*, matching proofstorm's control-plane style.
+#
+# All secrets/params come from regtest/env + regtest/versions.env (regtest only).
+
+version: "3.8"
+
+networks:
+  net:
+    driver: bridge
+
+volumes:
+  bitcoind-data:
+  lnd-a-data:
+  lnd-b-data:
+  cdk-mintd-data:
+  nutshell-data:
+  adversary-data:
+
+x-lnd: &lnd
+  image: polarlightning/lnd:${LND_VERSION:-0.20.0-beta}
+  restart: on-failure
+  networks: [net]
+  depends_on:
+    bitcoind:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD-SHELL", "lncli --lnddir=/home/lnd/.lnd --network=regtest getinfo > /dev/null"]
+    interval: 3s
+    timeout: 5s
+    retries: 40
+
+services:
+  bitcoind:
+    image: polarlightning/bitcoind:${BITCOIND_VERSION:-30.0}
+    container_name: proofstorm-rt-bitcoind
+    restart: on-failure
+    networks: [net]
+    ports:
+      - "18443:18443"
+    volumes:
+      - bitcoind-data:/home/bitcoin/.bitcoin
+    command: >
+      -regtest
+      -server=1
+      -rpcbind=0.0.0.0
+      -rpcallowip=0.0.0.0/0
+      -rpcuser=${BTC_RPC_USER:-polar}
+      -rpcpassword=${BTC_RPC_PASS:-polar}
+      -rpcport=18443
+      -txindex=1
+      -zmqpubrawblock=tcp://0.0.0.0:28334
+      -zmqpubrawtx=tcp://0.0.0.0:28335
+      -fallbackfee=0.0002
+      -debug=0
+    healthcheck:
+      test: >
+        bitcoin-cli -regtest
+        -rpcuser=${BTC_RPC_USER:-polar} -rpcpassword=${BTC_RPC_PASS:-polar}
+        getblockchaininfo
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  # Perpetual miner: one block every MINE_INTERVAL_SECONDS against bitcoind's
+  # `default` wallet (created by fund-topology.sh). Started by the Makefile
+  # AFTER setup, so getnewaddress resolves on first try.
+  block-miner:
+    image: polarlightning/bitcoind:${BITCOIND_VERSION:-30.0}
+    container_name: proofstorm-rt-block-miner
+    restart: on-failure
+    networks: [net]
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    volumes:
+      - ./regtest/scripts:/scripts:ro
+    environment:
+      - BTC_RPC_USER=${BTC_RPC_USER:-polar}
+      - BTC_RPC_PASS=${BTC_RPC_PASS:-polar}
+      - MINE_INTERVAL_SECONDS=${MINE_INTERVAL_SECONDS:-30}
+    entrypoint: ["/scripts/block-miner.sh"]
+
+  lnd-a:
+    <<: *lnd
+    container_name: proofstorm-rt-lnd-a
+    ports: ["10009:10009"]
+    volumes:
+      - lnd-a-data:/home/lnd/.lnd
+    command: >
+      lnd --noseedbackup --alias=lnd-a --externalip=lnd-a
+      --listen=0.0.0.0:9735 --rpclisten=0.0.0.0:10009 --restlisten=0.0.0.0:8080
+      --bitcoin.active --bitcoin.regtest --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=${BTC_RPC_USER:-polar} --bitcoind.rpcpass=${BTC_RPC_PASS:-polar}
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      --tlsextradomain=lnd-a --tlsextradomain=localhost
+      --accept-keysend --debuglevel=info
+
+  lnd-b:
+    <<: *lnd
+    container_name: proofstorm-rt-lnd-b
+    ports: ["10029:10009"]
+    volumes:
+      - lnd-b-data:/home/lnd/.lnd
+    command: >
+      lnd --noseedbackup --alias=lnd-b --externalip=lnd-b
+      --listen=0.0.0.0:9735 --rpclisten=0.0.0.0:10009 --restlisten=0.0.0.0:8080
+      --bitcoin.active --bitcoin.regtest --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=${BTC_RPC_USER:-polar} --bitcoind.rpcpass=${BTC_RPC_PASS:-polar}
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      --tlsextradomain=lnd-b --tlsextradomain=localhost
+      --accept-keysend --debuglevel=info
+
+  cdk-mintd:
+    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.17.1}
+    container_name: proofstorm-rt-cdk-mintd
+    restart: on-failure
+    networks: [net]
+    ports:
+      - "${CDK_MINT_HOST_PORT:-3338}:3338"
+    depends_on:
+      lnd-a:
+        condition: service_healthy
+    volumes:
+      - cdk-mintd-data:/app/data
+      - lnd-a-data:/lnd:ro
+      - ./docker/mint/mintd.regtest.toml:/config.toml:ro
+    environment:
+      - CDK_MINTD_WORK_DIR=/app/data
+    command: ["cdk-mintd", "--config", "/config.toml"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3338/v1/info || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  nutshell:
+    image: cashubtc/nutshell:${NUTSHELL_VERSION:-0.20.2}
+    container_name: proofstorm-rt-nutshell
+    restart: on-failure
+    networks: [net]
+    ports:
+      - "${NUTSHELL_MINT_HOST_PORT:-3339}:3338"
+    depends_on:
+      lnd-b:
+        condition: service_healthy
+    volumes:
+      - nutshell-data:/app/data
+      - lnd-b-data:/lnd:ro
+    environment:
+      - MINT_LISTEN_HOST=0.0.0.0
+      - MINT_LISTEN_PORT=3338
+      - MINT_BACKEND_BOLT11_SAT=LndRestWallet
+      - MINT_LND_REST_ENDPOINT=https://lnd-b:8080
+      - MINT_LND_REST_CERT=/lnd/tls.cert
+      - MINT_LND_REST_MACAROON=/lnd/data/chain/bitcoin/regtest/admin.macaroon
+      - MINT_DATABASE=/app/data
+      - MINT_PRIVATE_KEY=${NUTSHELL_PRIVATE_KEY:-ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70ps70}
+      - MINT_INFO_NAME=proofstorm-regtest-nutshell
+      - MINT_INFO_DESCRIPTION=proofstorm regtest Nutshell mint (LND backend)
+      # Keep the limiter ON here (unlike orchard's e2e) so the DoS oracle (SPEC
+      # D1) can observe the deployed rate limiter, not a disabled one.
+    command: ["poetry", "run", "mint"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://localhost:3338/v1/info\").status==200 else 1)'"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  adversary:
+    build:
+      context: .
+      dockerfile: docker/adversary/Dockerfile
+      args:
+        CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.1}
+    container_name: proofstorm-rt-adversary
+    restart: on-failure
+    networks: [net]
+    depends_on:
+      cdk-mintd:
+        condition: service_healthy
+      nutshell:
+        condition: service_healthy
+    volumes:
+      - adversary-data:/root/.cdk
+    entrypoint: ["sleep", "infinity"]
