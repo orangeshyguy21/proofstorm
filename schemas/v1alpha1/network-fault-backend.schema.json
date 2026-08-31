@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "NetworkFaultBounds": {
+      "additionalProperties": false,
+      "properties": {
+        "max_delay_ms": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_jitter_ms": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_loss_basis_points": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "NetworkFaultDirection": {
+      "enum": [
+        "from_to",
+        "bidirectional"
+      ],
+      "type": "string"
+    },
+    "NetworkFaultFeature": {
+      "enum": [
+        "partition",
+        "heal",
+        "delay",
+        "loss"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "type": "string"
+    },
+    "bounds": {
+      "$ref": "#/$defs/NetworkFaultBounds"
+    },
+    "directions": {
+      "items": {
+        "$ref": "#/$defs/NetworkFaultDirection"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "features": {
+      "items": {
+        "$ref": "#/$defs/NetworkFaultFeature"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "api_version",
+    "id",
+    "version",
+    "features",
+    "directions",
+    "bounds"
+  ],
+  "title": "NetworkFaultBackend",
+  "type": "object"
+}

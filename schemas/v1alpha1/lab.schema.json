@@ -1,0 +1,236 @@
+{
+  "$defs": {
+    "Capability": {
+      "enum": [
+        "catalog.read",
+        "lab.read",
+        "lab.create",
+        "lab.edit",
+        "lab.clone",
+        "lab.validate",
+        "lab.publish",
+        "lab.materialize",
+        "lab.status",
+        "lab.close",
+        "experiment.create",
+        "experiment.read",
+        "experiment.close",
+        "lease.acquire",
+        "lease.release",
+        "action.cancel",
+        "topology.inspect",
+        "topology.mutate",
+        "node.add",
+        "node.remove",
+        "node.control",
+        "peer.connect",
+        "peer.disconnect",
+        "wallet.create",
+        "wallet.control",
+        "wallet.fund",
+        "channel.open",
+        "channel.close",
+        "channel.force_close",
+        "channel.rebalance",
+        "chain.mine",
+        "chain.fee",
+        "chain.reorg",
+        "network.delay",
+        "network.drop",
+        "network.partition",
+        "network.heal",
+        "component.logs",
+        "traffic.capture",
+        "oracle.list",
+        "oracle.run",
+        "artifact.read",
+        "policy.read",
+        "policy.edit",
+        "snapshot.create",
+        "snapshot.restore"
+      ],
+      "type": "string"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ComponentSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "config_version": {
+          "description": "Version of the implementation adapter's configuration contract.",
+          "type": "string"
+        },
+        "control": {
+          "$ref": "#/$defs/ControlClass"
+        },
+        "id": {
+          "type": "string"
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "version": {
+          "description": "Version of the service binary, image, or implementation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "implementation",
+        "config_version",
+        "control"
+      ],
+      "type": "object"
+    },
+    "ControlClass": {
+      "enum": [
+        "laboratory",
+        "target",
+        "attacker",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "LabLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_components": {
+          "default": 64,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_config_bytes": {
+          "default": 65536,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_links": {
+          "default": 256,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "LabPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "limits": {
+          "$ref": "#/$defs/LabLimits",
+          "default": {
+            "max_components": 64,
+            "max_config_bytes": 65536,
+            "max_links": 256
+          }
+        }
+      },
+      "type": "object"
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "lightning_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
+    "LinkSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkKind"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "from",
+        "to"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "type": "string"
+    },
+    "components": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ComponentSpec"
+      },
+      "type": "array"
+    },
+    "links": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/LinkSpec"
+      },
+      "type": "array"
+    },
+    "name": {
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/LabPolicy",
+      "default": {
+        "allow": [],
+        "limits": {
+          "max_components": 64,
+          "max_config_bytes": 65536,
+          "max_links": 256
+        }
+      }
+    }
+  },
+  "required": [
+    "api_version",
+    "name"
+  ],
+  "title": "LabSpec",
+  "type": "object"
+}

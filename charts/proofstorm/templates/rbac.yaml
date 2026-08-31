@@ -1,0 +1,51 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "proofstorm.name" . }}
+rules:
+  - apiGroups: ["proofstorm.dev"]
+    resources: ["proofstormlabs"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["proofstorm.dev"]
+    resources: ["proofstormlabs/status", "proofstormlabs/finalizers"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["proofstorm.dev"]
+    resources: ["proofstormlabactions"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: ["proofstorm.dev"]
+    resources: ["proofstormlabactions/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges", "serviceaccounts", "configmaps", "services", "persistentvolumeclaims"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "proofstorm.name" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "proofstorm.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "proofstorm.name" . }}
+    namespace: {{ .Release.Namespace }}

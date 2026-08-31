@@ -1,0 +1,2840 @@
+use k8s_openapi::api::batch::v1::Job;
+use kube::ResourceExt;
+use proofstorm_core::{Capability, ComponentKind};
+use serde_json::{Value, json};
+use thiserror::Error;
+
+use crate::{
+    BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction, ChannelRebalanceAction,
+    ConservationOracleAction, LabAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab,
+    ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
+    WalletInitializeAction, WalletInvoiceAction, WalletPayAction, WalletRoundTripAction,
+    component_ports, instance_namespace,
+};
+
+const REACHABILITY_PROBE_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+
+pub struct BootstrapJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub chain: &'a str,
+    pub mint_lightning: &'a str,
+    pub payer_lightning: &'a str,
+    pub bitcoin_image: &'a str,
+    pub lnd_image: &'a str,
+    pub funding_sat: u64,
+    pub channel_sat: u64,
+    pub push_sat: u64,
+}
+
+pub struct WalletRoundTripJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub wallet: &'a str,
+    pub mint: &'a str,
+    pub payer_lightning: &'a str,
+    pub wallet_image: &'a str,
+    pub lnd_image: &'a str,
+    pub amount_sat: u64,
+    pub tolerance_sat: u64,
+}
+
+pub struct PeerConnectJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub from_lightning: &'a str,
+    pub to_lightning: &'a str,
+    pub from_adapter: LightningAdapter,
+    pub from_image: &'a str,
+    pub to_adapter: LightningAdapter,
+    pub to_image: &'a str,
+}
+
+pub struct PeerDisconnectJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub from_lightning: &'a str,
+    pub to_lightning: &'a str,
+    pub from_adapter: LightningAdapter,
+    pub from_image: &'a str,
+    pub to_adapter: LightningAdapter,
+    pub to_image: &'a str,
+}
+
+pub struct ChannelOpenJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub chain: &'a str,
+    pub from_lightning: &'a str,
+    pub to_lightning: &'a str,
+    pub bitcoin_image: &'a str,
+    pub from_adapter: LightningAdapter,
+    pub from_image: &'a str,
+    pub to_adapter: LightningAdapter,
+    pub to_image: &'a str,
+    pub channel_sat: u64,
+    pub push_sat: u64,
+}
+
+pub struct ChannelCloseJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub chain: &'a str,
+    pub from_lightning: &'a str,
+    pub to_lightning: &'a str,
+    pub channel_id: &'a str,
+    pub bitcoin_image: &'a str,
+    pub from_adapter: LightningAdapter,
+    pub from_image: &'a str,
+    pub to_adapter: LightningAdapter,
+    pub to_image: &'a str,
+    pub force: bool,
+}
+
+pub struct ChannelRebalanceJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub lightning: &'a str,
+    pub lightning_image: &'a str,
+    pub outgoing_channel_id: &'a str,
+    pub incoming_channel_id: &'a str,
+    pub amount_sat: u64,
+    pub max_fee_sat: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightningAdapter {
+    Lnd,
+    Cln,
+}
+
+impl LightningAdapter {
+    fn from_implementation(implementation: &str) -> Option<Self> {
+        match implementation {
+            "lnd" => Some(Self::Lnd),
+            "cln" => Some(Self::Cln),
+            _ => None,
+        }
+    }
+}
+
+pub struct WalletJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub wallet: &'a str,
+    pub mint: &'a str,
+    pub wallet_image: &'a str,
+}
+
+pub struct WalletFundJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub wallet: &'a str,
+    pub mint: &'a str,
+    pub payer_lightning: &'a str,
+    pub wallet_image: &'a str,
+    pub lightning_image: &'a str,
+    pub amount_sat: u64,
+}
+
+pub struct WalletInvoiceJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub quote_id: &'a str,
+    pub wallet: &'a str,
+    pub mint: &'a str,
+    pub wallet_image: &'a str,
+    pub amount_sat: u64,
+    pub timeout_seconds: u32,
+}
+
+pub struct WalletPayJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub quote_id: &'a str,
+    pub wallet: &'a str,
+    pub mint: &'a str,
+    pub recipient_wallet: &'a str,
+    pub wallet_image: &'a str,
+    pub amount_sat: u64,
+}
+
+#[derive(Debug, Error)]
+pub enum ActionRenderError {
+    #[error("action identity does not match referenced lab: {0}")]
+    Identity(&'static str),
+    #[error("action capability is invalid for its typed request")]
+    Capability,
+    #[error("typed action request is outside bounded policy: {0}")]
+    Bounds(&'static str),
+    #[error("component {component:?} must use installed {implementation:?} {kind:?} adapter")]
+    Component {
+        component: String,
+        implementation: &'static str,
+        kind: ComponentKind,
+    },
+    #[error("component {0:?} has no immutable lock entry")]
+    MissingLock(String),
+    #[error("component {0:?} is not present in the immutable lab revision")]
+    UnknownComponent(String),
+    #[error("component {component:?} does not advertise logical service {service:?}")]
+    UnknownService { component: String, service: String },
+    #[error("component {component:?} uses unsupported action adapter {adapter:?}")]
+    UnsupportedAdapter { component: String, adapter: String },
+    #[error("typed action rendered an invalid Kubernetes Job: {0}")]
+    InvalidResource(#[from] serde_json::Error),
+}
+
+#[must_use]
+pub const fn action_result_container(action: &LabAction) -> &'static str {
+    match action {
+        LabAction::NodeStart(_)
+        | LabAction::NodeStop(_)
+        | LabAction::NodeRestart(_)
+        | LabAction::NetworkPartition(_)
+        | LabAction::NetworkHeal(_)
+        | LabAction::BootstrapLiquidity(_)
+        | LabAction::PeerConnect(_)
+        | LabAction::PeerDisconnect(_)
+        | LabAction::ChannelOpen(_)
+        | LabAction::ChannelClose(_)
+        | LabAction::ChannelForceClose(_)
+        | LabAction::ChannelRebalance(_) => "result",
+        LabAction::WalletInitialize(_)
+        | LabAction::WalletBalance(_)
+        | LabAction::WalletFund(_)
+        | LabAction::WalletInvoice(_)
+        | LabAction::WalletPay(_)
+        | LabAction::WalletRoundTrip(_) => "wallet",
+        LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
+    }
+}
+
+/// Validate a typed action against its immutable lab and render its deterministic Job.
+///
+/// # Errors
+///
+/// Returns an error for identity drift, unsupported components, values outside
+/// policy bounds, or an invalid internal Kubernetes resource.
+pub fn render_lab_action_job(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+) -> Result<Job, ActionRenderError> {
+    validate_action_identity(action, lab)?;
+    let mut job = match &action.spec.action {
+        LabAction::NodeStart(_)
+        | LabAction::NodeStop(_)
+        | LabAction::NodeRestart(_)
+        | LabAction::NetworkPartition(_)
+        | LabAction::NetworkHeal(_) => {
+            return Err(ActionRenderError::Bounds(
+                "direct controller actions do not render Jobs",
+            ));
+        }
+        LabAction::BootstrapLiquidity(request) => render_bootstrap_action(action, lab, request)?,
+        LabAction::PeerConnect(request) => render_peer_connect_action(action, lab, request)?,
+        LabAction::PeerDisconnect(request) => render_peer_disconnect_action(action, lab, request)?,
+        LabAction::ChannelOpen(request) => render_channel_open_action(action, lab, request)?,
+        LabAction::ChannelClose(request) => {
+            render_channel_close_action(action, lab, request, false)?
+        }
+        LabAction::ChannelForceClose(request) => {
+            render_channel_close_action(action, lab, request, true)?
+        }
+        LabAction::ChannelRebalance(request) => {
+            render_channel_rebalance_action(action, lab, request)?
+        }
+        LabAction::WalletInitialize(request) => {
+            render_wallet_initialize_action(action, lab, request)?
+        }
+        LabAction::WalletBalance(request) => render_wallet_balance_action(action, lab, request)?,
+        LabAction::WalletFund(request) => render_wallet_fund_action(action, lab, request)?,
+        LabAction::WalletInvoice(request) => render_wallet_invoice_action(action, lab, request)?,
+        LabAction::WalletPay(request) => render_wallet_pay_action(action, lab, request)?,
+        LabAction::WalletRoundTrip(request) => render_wallet_action(action, lab, request)?,
+        LabAction::ConservationOracle(request) => render_oracle_action(action, lab, request)?,
+        LabAction::ReachabilityOracle(request) => {
+            render_reachability_oracle_action(action, lab, request)?
+        }
+    };
+    mark_controller_owned(&mut job, &action.name_any());
+    Ok(job)
+}
+
+/// Render an idempotent controller-owned cleanup Job for private action state.
+///
+/// Most actions have no persistent private intermediary. Wallet invoices do:
+/// their payment request must be removed from the wallet volume before a
+/// cancellation can be reported as complete.
+///
+/// # Errors
+///
+/// Returns an error when the original action is invalid for its immutable lab
+/// or the fixed cleanup resource contract cannot be rendered.
+pub fn render_lab_action_cleanup_job(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+) -> Result<Option<Job>, ActionRenderError> {
+    let LabAction::WalletInvoice(request) = &action.spec.action else {
+        return Ok(None);
+    };
+    render_lab_action_job(action, lab)?;
+    let resource_name = format!("{}-cleanup", action.name_any());
+    let namespace = instance_namespace(&action.spec.instance_key);
+    let invoice_file = format!(
+        "/wallet/.proofstorm/quotes/{}/invoice.log",
+        request.quote_id
+    );
+    let script = format!(
+        "set -eu; rm -f '{invoice_file}'; test ! -e '{invoice_file}'; printf '%s' '{{\"cleaned\":true}}' >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(&action.spec.instance_key),
+        "containers": [container("cleanup", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &script, &[mount("wallet", "/wallet", false)])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{}-data", request.wallet)}}]
+    });
+    let mut cleanup = job(
+        &resource_name,
+        &namespace,
+        &action.spec.instance_key,
+        "wallet-invoice-cleanup",
+        60,
+        &pod,
+    )?;
+    mark_controller_owned(&mut cleanup, &action.name_any());
+    Ok(Some(cleanup))
+}
+
+fn render_peer_connect_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &PeerConnectAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::PeerConnect {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
+    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+    render_peer_connect_job(&PeerConnectJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        from_lightning: &request.from_lightning,
+        to_lightning: &request.to_lightning,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_peer_disconnect_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &PeerDisconnectAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::PeerDisconnect {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
+    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+    render_peer_disconnect_job(&PeerDisconnectJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        from_lightning: &request.from_lightning,
+        to_lightning: &request.to_lightning,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_channel_open_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &ChannelOpenAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::ChannelOpen {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
+    validate_channel_bounds(request.channel_sat, request.push_sat)?;
+    let bitcoin_image =
+        locked_component_image(lab, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
+    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+    render_channel_open_job(&ChannelOpenJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        chain: &request.chain,
+        from_lightning: &request.from_lightning,
+        to_lightning: &request.to_lightning,
+        bitcoin_image,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+        channel_sat: request.channel_sat,
+        push_sat: request.push_sat,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_channel_close_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &ChannelCloseAction,
+    force: bool,
+) -> Result<Job, ActionRenderError> {
+    let expected = if force {
+        Capability::ChannelForceClose
+    } else {
+        Capability::ChannelClose
+    };
+    if action.spec.capability != expected {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
+    validate_channel_id(&request.channel_id)?;
+    let bitcoin_image =
+        locked_component_image(lab, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
+    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+    render_channel_close_job(&ChannelCloseJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        chain: &request.chain,
+        from_lightning: &request.from_lightning,
+        to_lightning: &request.to_lightning,
+        channel_id: &request.channel_id,
+        bitcoin_image,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+        force,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_channel_rebalance_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &ChannelRebalanceAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::ChannelRebalance {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_channel_id(&request.outgoing_channel_id)?;
+    validate_channel_id(&request.incoming_channel_id)?;
+    validate_rebalance_bounds(request)?;
+    let (adapter, lightning_image) = locked_lightning(lab, &request.lightning)?;
+    if adapter != LightningAdapter::Lnd {
+        return Err(ActionRenderError::UnsupportedAdapter {
+            component: request.lightning.clone(),
+            adapter: "cln".into(),
+        });
+    }
+    render_channel_rebalance_job(&ChannelRebalanceJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        lightning: &request.lightning,
+        lightning_image,
+        outgoing_channel_id: &request.outgoing_channel_id,
+        incoming_channel_id: &request.incoming_channel_id,
+        amount_sat: request.amount_sat,
+        max_fee_sat: request.max_fee_sat,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_bootstrap_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &BootstrapLiquidityAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletFund {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_bootstrap_action(request)?;
+    let bitcoin_image =
+        locked_component_image(lab, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
+    let mint_lnd_image = locked_component_image(
+        lab,
+        &request.mint_lightning,
+        ComponentKind::Lightning,
+        "lnd",
+    )?;
+    let payer_lnd_image = locked_component_image(
+        lab,
+        &request.payer_lightning,
+        ComponentKind::Lightning,
+        "lnd",
+    )?;
+    if mint_lnd_image != payer_lnd_image {
+        return Err(ActionRenderError::Bounds(
+            "Lightning components must resolve to the same pinned image",
+        ));
+    }
+    render_bootstrap_job(&BootstrapJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        chain: &request.chain,
+        mint_lightning: &request.mint_lightning,
+        payer_lightning: &request.payer_lightning,
+        bitcoin_image,
+        lnd_image: mint_lnd_image,
+        funding_sat: request.funding_sat,
+        channel_sat: request.channel_sat,
+        push_sat: request.push_sat,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_initialize_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletInitializeAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletCreate {
+        return Err(ActionRenderError::Capability);
+    }
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    render_wallet_initialize_job(&WalletJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        wallet_image,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_balance_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletBalanceAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletControl {
+        return Err(ActionRenderError::Capability);
+    }
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    render_wallet_balance_job(&WalletJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        wallet_image,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_fund_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletFundAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletFund {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_wallet_amount(request.amount_sat)?;
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    let lightning_image = locked_component_image(
+        lab,
+        &request.payer_lightning,
+        ComponentKind::Lightning,
+        "lnd",
+    )?;
+    render_wallet_fund_job(&WalletFundJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        payer_lightning: &request.payer_lightning,
+        wallet_image,
+        lightning_image,
+        amount_sat: request.amount_sat,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_invoice_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletInvoiceAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletFund {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_wallet_amount(request.amount_sat)?;
+    validate_quote_id(&request.quote_id)?;
+    if !(30..=600).contains(&request.timeout_seconds) {
+        return Err(ActionRenderError::Bounds(
+            "timeout_seconds must be in 30..=600",
+        ));
+    }
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    render_wallet_invoice_job(&WalletInvoiceJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        quote_id: &request.quote_id,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        wallet_image,
+        amount_sat: request.amount_sat,
+        timeout_seconds: request.timeout_seconds,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_pay_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletPayAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletControl {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_wallet_amount(request.amount_sat)?;
+    validate_quote_id(&request.quote_id)?;
+    if request.wallet == request.recipient_wallet {
+        return Err(ActionRenderError::Bounds(
+            "payer and recipient wallets must differ",
+        ));
+    }
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    nutshell_wallet_image(lab, &request.recipient_wallet)?;
+    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    render_wallet_pay_job(&WalletPayJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        quote_id: &request.quote_id,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        recipient_wallet: &request.recipient_wallet,
+        wallet_image,
+        amount_sat: request.amount_sat,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletRoundTripAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletControl {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_wallet_round_trip_action(request)?;
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    let lnd_image = locked_component_image(
+        lab,
+        &request.payer_lightning,
+        ComponentKind::Lightning,
+        "lnd",
+    )?;
+    render_wallet_round_trip_job(&WalletRoundTripJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        payer_lightning: &request.payer_lightning,
+        wallet_image,
+        lnd_image,
+        amount_sat: request.amount_sat,
+        tolerance_sat: request.tolerance_sat,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_oracle_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &ConservationOracleAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::OracleRun {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_conservation_oracle_action(request)?;
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    render_conservation_oracle_job(
+        &action.name_any(),
+        &action.spec.instance_key,
+        &request.wallet,
+        &request.mint,
+        wallet_image,
+        request.expected_sat,
+        request.tolerance_sat,
+    )
+    .map_err(ActionRenderError::from)
+}
+
+fn render_reachability_oracle_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &ReachabilityOracleAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::OracleRun {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_reachability_oracle_action(request)?;
+    let source = lab
+        .spec
+        .lab
+        .components
+        .iter()
+        .find(|component| component.id == request.from_component)
+        .ok_or_else(|| ActionRenderError::UnknownComponent(request.from_component.clone()))?;
+    let destination = lab
+        .spec
+        .lab
+        .components
+        .iter()
+        .find(|component| component.id == request.to_component)
+        .ok_or_else(|| ActionRenderError::UnknownComponent(request.to_component.clone()))?;
+    let port = component_ports(destination)
+        .get(&request.service)
+        .copied()
+        .ok_or_else(|| ActionRenderError::UnknownService {
+            component: destination.id.clone(),
+            service: request.service.clone(),
+        })?;
+    let deadline = i64::from(request.timeout_seconds * request.attempts + 15);
+    let script = format!(
+        "set -eu; reachable=false; completed=0; i=1; while test \"$i\" -le {attempts}; do completed=$i; if nc -z -w {timeout} {destination} {port}; then reachable=true; break; fi; i=$((i+1)); done; printf '{{\"from_component\":\"{source}\",\"to_component\":\"{destination}\",\"service\":\"{service}\",\"port\":{port},\"reachable\":%s,\"attempts\":%s,\"timeout_seconds\":{timeout}}}' \"$reachable\" \"$completed\" >/dev/termination-log",
+        attempts = request.attempts,
+        timeout = request.timeout_seconds,
+        destination = destination.id,
+        source = source.id,
+        service = request.service,
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(&action.spec.instance_key),
+        "containers": [container("oracle", REACHABILITY_PROBE_IMAGE, &script, &[])]
+    });
+    let mut rendered = job(
+        &action.name_any(),
+        &instance_namespace(&action.spec.instance_key),
+        &action.spec.instance_key,
+        "reachability-oracle",
+        deadline,
+        &pod,
+    )?;
+    let labels = rendered
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.template.metadata.as_mut())
+        .and_then(|metadata| metadata.labels.as_mut())
+        .expect("internally rendered probe pod has labels");
+    // The Pod must not match the controller-action firewall exception. Giving it
+    // the source component identity makes the lab's actual source policy govern
+    // this observation, including any active partitions.
+    labels.remove("proofstorm.dev/operation");
+    labels.insert(
+        "proofstorm.dev/component".to_owned(),
+        request.from_component.clone(),
+    );
+    Ok(rendered)
+}
+
+fn nutshell_wallet_image<'a>(
+    lab: &'a ProofstormLab,
+    wallet: &str,
+) -> Result<&'a str, ActionRenderError> {
+    let (adapter, image) = locked_component(lab, wallet, ComponentKind::Wallet)?;
+    if adapter != "nutshell-wallet" {
+        return Err(ActionRenderError::UnsupportedAdapter {
+            component: wallet.to_owned(),
+            adapter: adapter.to_owned(),
+        });
+    }
+    Ok(image)
+}
+
+fn validate_action_identity(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+) -> Result<(), ActionRenderError> {
+    for (matches, field) in [
+        (action.spec.lab_name == lab.name_any(), "lab_name"),
+        (
+            action.spec.workspace_id == lab.spec.workspace_id,
+            "workspace_id",
+        ),
+        (
+            action.spec.instance_id == lab.spec.instance_id,
+            "instance_id",
+        ),
+        (
+            action.spec.instance_key == lab.spec.instance_key,
+            "instance_key",
+        ),
+    ] {
+        if !matches {
+            return Err(ActionRenderError::Identity(field));
+        }
+    }
+    Ok(())
+}
+
+fn validate_bootstrap_action(request: &BootstrapLiquidityAction) -> Result<(), ActionRenderError> {
+    if !(1..=1_000_000_000).contains(&request.funding_sat) {
+        return Err(ActionRenderError::Bounds(
+            "funding_sat must be in 1..=1,000,000,000",
+        ));
+    }
+    if !(20_000..=100_000_000).contains(&request.channel_sat) {
+        return Err(ActionRenderError::Bounds(
+            "channel_sat must be in 20,000..=100,000,000",
+        ));
+    }
+    if request.channel_sat > request.funding_sat {
+        return Err(ActionRenderError::Bounds(
+            "channel_sat cannot exceed funding_sat",
+        ));
+    }
+    if request.push_sat > request.channel_sat / 2 {
+        return Err(ActionRenderError::Bounds(
+            "push_sat cannot exceed half of channel_sat",
+        ));
+    }
+    if request.mint_lightning == request.payer_lightning {
+        return Err(ActionRenderError::Bounds(
+            "mint and payer Lightning components must differ",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_lightning_pair(from: &str, to: &str) -> Result<(), ActionRenderError> {
+    if from == to {
+        return Err(ActionRenderError::Bounds(
+            "from and to Lightning components must differ",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_channel_bounds(channel_sat: u64, push_sat: u64) -> Result<(), ActionRenderError> {
+    if !(20_000..=100_000_000).contains(&channel_sat) {
+        return Err(ActionRenderError::Bounds(
+            "channel_sat must be in 20,000..=100,000,000",
+        ));
+    }
+    if push_sat > channel_sat / 2 {
+        return Err(ActionRenderError::Bounds(
+            "push_sat cannot exceed half of channel_sat",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_channel_id(channel_id: &str) -> Result<(), ActionRenderError> {
+    let digest = channel_id.strip_prefix("ch-").unwrap_or_default();
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ActionRenderError::Bounds(
+            "channel_id must be an opaque ch- prefixed SHA-256 handle",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rebalance_bounds(request: &ChannelRebalanceAction) -> Result<(), ActionRenderError> {
+    if request.outgoing_channel_id == request.incoming_channel_id {
+        return Err(ActionRenderError::Bounds(
+            "outgoing and incoming channel handles must differ",
+        ));
+    }
+    if !(1..=10_000_000).contains(&request.amount_sat) {
+        return Err(ActionRenderError::Bounds(
+            "amount_sat must be in 1..=10,000,000",
+        ));
+    }
+    if request.max_fee_sat > request.amount_sat || request.max_fee_sat > 100_000 {
+        return Err(ActionRenderError::Bounds(
+            "max_fee_sat cannot exceed amount_sat or 100,000",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_wallet_round_trip_action(
+    request: &WalletRoundTripAction,
+) -> Result<(), ActionRenderError> {
+    validate_wallet_amount(request.amount_sat)?;
+    if request.tolerance_sat > request.amount_sat || request.tolerance_sat > 10_000 {
+        return Err(ActionRenderError::Bounds(
+            "tolerance_sat cannot exceed amount_sat or 10,000",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_wallet_amount(amount_sat: u64) -> Result<(), ActionRenderError> {
+    if !(1..=500_000).contains(&amount_sat) {
+        return Err(ActionRenderError::Bounds(
+            "amount_sat must be in 1..=500,000",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_quote_id(value: &str) -> Result<(), ActionRenderError> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 63
+        || bytes[0] == b'-'
+        || bytes[bytes.len() - 1] == b'-'
+        || value.contains("--")
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+    {
+        return Err(ActionRenderError::Bounds(
+            "quote_id must be a lowercase kebab-case identifier of 1..=63 bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_conservation_oracle_action(
+    request: &ConservationOracleAction,
+) -> Result<(), ActionRenderError> {
+    if request.expected_sat > 100_000_000 {
+        return Err(ActionRenderError::Bounds(
+            "expected_sat cannot exceed 100,000,000",
+        ));
+    }
+    if request.tolerance_sat > 10_000 {
+        return Err(ActionRenderError::Bounds(
+            "tolerance_sat cannot exceed 10,000",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_reachability_oracle_action(
+    request: &ReachabilityOracleAction,
+) -> Result<(), ActionRenderError> {
+    if request.from_component == request.to_component {
+        return Err(ActionRenderError::Bounds(
+            "from_component and to_component must differ",
+        ));
+    }
+    if !(1..=5).contains(&request.timeout_seconds) {
+        return Err(ActionRenderError::Bounds(
+            "timeout_seconds must be in 1..=5",
+        ));
+    }
+    if !(1..=5).contains(&request.attempts) {
+        return Err(ActionRenderError::Bounds("attempts must be in 1..=5"));
+    }
+    Ok(())
+}
+
+fn locked_component<'a>(
+    lab: &'a ProofstormLab,
+    id: &str,
+    kind: ComponentKind,
+) -> Result<(&'a str, &'a str), ActionRenderError> {
+    let component = lab
+        .spec
+        .lab
+        .components
+        .iter()
+        .find(|component| component.id == id && component.kind == kind)
+        .ok_or_else(|| ActionRenderError::Component {
+            component: id.to_owned(),
+            implementation: "installed",
+            kind,
+        })?;
+    let lock = lab
+        .spec
+        .lock
+        .entries
+        .iter()
+        .find(|entry| entry.component_id == id && entry.catalog_id == component.implementation)
+        .ok_or_else(|| ActionRenderError::MissingLock(id.to_owned()))?;
+    Ok((&component.implementation, &lock.image))
+}
+
+fn locked_lightning<'a>(
+    lab: &'a ProofstormLab,
+    id: &str,
+) -> Result<(LightningAdapter, &'a str), ActionRenderError> {
+    let (implementation, image) = locked_component(lab, id, ComponentKind::Lightning)?;
+    let adapter = LightningAdapter::from_implementation(implementation).ok_or_else(|| {
+        ActionRenderError::UnsupportedAdapter {
+            component: id.to_owned(),
+            adapter: implementation.to_owned(),
+        }
+    })?;
+    Ok((adapter, image))
+}
+
+fn locked_component_image<'a>(
+    lab: &'a ProofstormLab,
+    id: &str,
+    kind: ComponentKind,
+    implementation: &'static str,
+) -> Result<&'a str, ActionRenderError> {
+    let valid = lab.spec.lab.components.iter().any(|component| {
+        component.id == id && component.kind == kind && component.implementation == implementation
+    });
+    if !valid {
+        return Err(ActionRenderError::Component {
+            component: id.to_owned(),
+            implementation,
+            kind,
+        });
+    }
+    lab.spec
+        .lock
+        .entries
+        .iter()
+        .find(|entry| entry.component_id == id && entry.catalog_id == implementation)
+        .map(|entry| entry.image.as_str())
+        .ok_or_else(|| ActionRenderError::MissingLock(id.to_owned()))
+}
+
+fn mark_controller_owned(job: &mut Job, action_name: &str) {
+    for labels in [
+        job.metadata.labels.as_mut(),
+        job.spec
+            .as_mut()
+            .and_then(|spec| spec.template.metadata.as_mut())
+            .and_then(|metadata| metadata.labels.as_mut()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        labels.insert(
+            "app.kubernetes.io/managed-by".to_owned(),
+            "proofstormd".to_owned(),
+        );
+        labels.insert("proofstorm.dev/action".to_owned(), action_name.to_owned());
+    }
+}
+
+/// Render the bounded chain funding and Lightning channel bootstrap job.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_bootstrap_job(spec: &BootstrapJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let BootstrapJobSpec {
+        resource_name,
+        instance_key,
+        chain,
+        mint_lightning,
+        payer_lightning,
+        bitcoin_image,
+        lnd_image,
+        funding_sat,
+        channel_sat,
+        push_sat,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let bcli = format!(
+        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
+    );
+    let chain_init = format!(
+        "set -eu; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; {bcli} createwallet default >/dev/null 2>&1 || true; addr=$({bcli} -rpcwallet=default getnewaddress); {bcli} -rpcwallet=default generatetoaddress 101 \"$addr\" >/dev/null; printf '%s' \"$addr\" >/shared/miner-address"
+    );
+    let address = |node: &str, path: &str, output: &str| {
+        format!(
+            "set -eu; until lncli --lnddir={path} --network=regtest --rpcserver={node}:10009 getinfo >/dev/null 2>&1; do sleep 1; done; lncli --lnddir={path} --network=regtest --rpcserver={node}:10009 newaddress p2wkh | grep -o '\"address\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4 >{output}; test -s {output}"
+        )
+    };
+    let fund = format!(
+        "set -eu; a=$(cat /shared/mint-address); b=$(cat /shared/payer-address); {bcli} -rpcwallet=default sendtoaddress \"$a\" {} >/dev/null; {bcli} -rpcwallet=default sendtoaddress \"$b\" {} >/dev/null; {bcli} -rpcwallet=default generatetoaddress 6 \"$(cat /shared/miner-address)\" >/dev/null",
+        sats_to_btc(funding_sat),
+        sats_to_btc(funding_sat)
+    );
+    let channel = format!(
+        "set -eu; mint='lncli --lnddir=/mint-lnd --network=regtest --rpcserver={mint_lightning}:10009'; payer='lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009'; pk=$($mint getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); test -n \"$pk\"; $payer connect \"$pk@{mint_lightning}:9735\" >/dev/null 2>&1 || true; $payer listchannels --peer \"$pk\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4 >/shared/channels-before || true; $payer openchannel --node_key=\"$pk\" --local_amt={channel_sat} --push_amt={push_sat} >/dev/null; printf '%s' \"$pk\" >/shared/peer-pubkey"
+    );
+    let confirm = format!(
+        "set -eu; {bcli} -rpcwallet=default generatetoaddress 6 \"$(cat /shared/miner-address)\" >/dev/null"
+    );
+    let channel_verify = format!(
+        "set -eu; payer='lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009'; pk=$(cat /shared/peer-pubkey); point=''; until test -n \"$point\"; do for candidate in $($payer listchannels --peer \"$pk\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); do if ! grep -Fxq \"$candidate\" /shared/channels-before; then point=$candidate; break; fi; done; test -n \"$point\" || sleep 1; done; printf '%s' \"$point\" >/shared/channel-point"
+    );
+    let result = format!(
+        "set -eu; point=$(cat /shared/channel-point); digest=$(printf '%s' \"$point\" | sha256sum | cut -d' ' -f1); printf '%s' '{{\"funding_sat\":{funding_sat},\"channel_sat\":{channel_sat},\"push_sat\":{push_sat},\"channel_id\":\"ch-'\"$digest\"'\",\"ready\":true}}' >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [
+            container("chain-init", bitcoin_image, &chain_init, &[mount("shared", "/shared", false)]),
+            container("mint-address", lnd_image, &address(mint_lightning, "/mint-lnd", "/shared/mint-address"), &[mount("shared", "/shared", false), mount("mint-lnd", "/mint-lnd", true)]),
+            container("payer-address", lnd_image, &address(payer_lightning, "/payer-lnd", "/shared/payer-address"), &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)]),
+            container("chain-fund", bitcoin_image, &fund, &[mount("shared", "/shared", false)]),
+            container("channel-open", lnd_image, &channel, &[mount("shared", "/shared", false), mount("mint-lnd", "/mint-lnd", true), mount("payer-lnd", "/payer-lnd", true)]),
+            container("channel-confirm", bitcoin_image, &confirm, &[mount("shared", "/shared", false)]),
+            container("channel-verify", lnd_image, &channel_verify, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
+        ],
+        "containers": [container("result", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[mount("shared", "/shared", true)])],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "mint-lnd", "persistentVolumeClaim": {"claimName": format!("data-{mint_lightning}-0")}},
+            {"name": "payer-lnd", "persistentVolumeClaim": {"claimName": format!("data-{payer_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "bootstrap",
+        300,
+        &pod,
+    )
+}
+
+fn lightning_cli(adapter: LightningAdapter, mount: &str, component: &str) -> String {
+    match adapter {
+        LightningAdapter::Lnd => {
+            format!("lncli --lnddir={mount} --network=regtest --rpcserver={component}:10009")
+        }
+        LightningAdapter::Cln => {
+            format!("lightning-cli --lightning-dir={mount} --network=regtest")
+        }
+    }
+}
+
+fn lightning_identity_script(
+    adapter: LightningAdapter,
+    mount: &str,
+    component: &str,
+    output: &str,
+) -> String {
+    let cli = lightning_cli(adapter, mount, component);
+    let extract = match adapter {
+        LightningAdapter::Lnd => {
+            "$cli getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4"
+        }
+        LightningAdapter::Cln => "$cli getinfo | jq -r '.id'",
+    };
+    format!(
+        "set -eu; cli='{cli}'; until $cli getinfo >/dev/null 2>&1; do sleep 1; done; pk=$({extract}); test -n \"$pk\"; test \"$pk\" != null; printf '%s' \"$pk\" >{output}"
+    )
+}
+
+fn peer_connected_test(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
+    match adapter {
+        LightningAdapter::Lnd => format!("{cli} listpeers | grep -q \"{peer}\""),
+        LightningAdapter::Cln => {
+            format!("{cli} listpeers \"{peer}\" | grep -Eq '\"connected\":[[:space:]]*true'")
+        }
+    }
+}
+
+fn peer_connect_command(adapter: LightningAdapter, cli: &str, peer: &str, host: &str) -> String {
+    match adapter {
+        LightningAdapter::Lnd => {
+            format!("{cli} connect \"{peer}@{host}:9735\" >/dev/null 2>&1 || true")
+        }
+        LightningAdapter::Cln => {
+            format!("{cli} connect \"{peer}\" \"{host}\" 9735 >/dev/null 2>&1 || true")
+        }
+    }
+}
+
+fn peer_disconnect_command(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
+    match adapter {
+        LightningAdapter::Lnd => {
+            format!("{cli} disconnect \"{peer}\" >/dev/null 2>&1 || true")
+        }
+        LightningAdapter::Cln => {
+            format!("{cli} disconnect \"{peer}\" true >/dev/null 2>&1 || true")
+        }
+    }
+}
+
+fn channel_points_command(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
+    match adapter {
+        LightningAdapter::Lnd => format!(
+            "{cli} listchannels --peer \"{peer}\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4"
+        ),
+        LightningAdapter::Cln => format!(
+            "{cli} listpeerchannels \"{peer}\" | jq -r '.channels[] | select(.funding_txid != null) | \"\\(.funding_txid):\\(.funding_outnum)\"'"
+        ),
+    }
+}
+
+fn active_channel_points_command(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
+    match adapter {
+        LightningAdapter::Lnd => channel_points_command(adapter, cli, peer),
+        LightningAdapter::Cln => format!(
+            "{cli} listpeerchannels \"{peer}\" | jq -r '.channels[] | select(.state == \"CHANNELD_NORMAL\") | \"\\(.funding_txid):\\(.funding_outnum)\"'"
+        ),
+    }
+}
+
+/// Render a bounded logical Lightning peer-connect job for the installed adapter.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_peer_connect_job(spec: &PeerConnectJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let PeerConnectJobSpec {
+        resource_name,
+        instance_key,
+        from_lightning,
+        to_lightning,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let identity = lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
+    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
+    let connect = peer_connect_command(from_adapter, "$from", "$pk", to_lightning);
+    let connected = peer_connected_test(from_adapter, "$from", "$pk");
+    let script = format!(
+        "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); {connect}; {connected}; printf '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"connected\":true}}' >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [container("to-identity", to_image, &identity, &[
+            mount("shared", "/shared", false), mount("to", "/to", true)
+        ])],
+        "containers": [container("result", from_image, &script, &[
+            mount("shared", "/shared", true), mount("from", "/from", true)
+        ])],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
+            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "peer-connect",
+        90,
+        &pod,
+    )
+}
+
+/// Render a bounded logical Lightning peer-disconnect job.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_peer_disconnect_job(
+    spec: &PeerDisconnectJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let PeerDisconnectJobSpec {
+        resource_name,
+        instance_key,
+        from_lightning,
+        to_lightning,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    if from_adapter == LightningAdapter::Lnd && to_adapter == LightningAdapter::Lnd {
+        let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
+        let to_cli = lightning_cli(to_adapter, "/to", to_lightning);
+        let script = format!(
+            "set -eu; from='{from_cli}'; to='{to_cli}'; until $from getinfo >/dev/null 2>&1 && $to getinfo >/dev/null 2>&1; do sleep 1; done; from_pk=$($from getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); to_pk=$($to getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); $from disconnect \"$to_pk\" >/dev/null 2>&1 || true; $to disconnect \"$from_pk\" >/dev/null 2>&1 || true; sleep 2; if $from listpeers | grep -q \"$to_pk\" || $to listpeers | grep -q \"$from_pk\"; then exit 1; fi; printf '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"disconnected\":true}}' >/dev/termination-log"
+        );
+        let pod = json!({
+            "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+            "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+            "containers": [container("result", from_image, &script, &[
+                mount("from", "/from", true), mount("to", "/to", true)
+            ])],
+            "volumes": [
+                {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
+                {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
+            ]
+        });
+        return job(
+            resource_name,
+            &namespace,
+            instance_key,
+            "peer-disconnect",
+            90,
+            &pod,
+        );
+    }
+    let from_identity =
+        lightning_identity_script(from_adapter, "/from", from_lightning, "/shared/from-pubkey");
+    let to_identity =
+        lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
+    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
+    let to_cli = lightning_cli(to_adapter, "/to", to_lightning);
+    let from_disconnect = peer_disconnect_command(from_adapter, "$cli", "$pk");
+    let to_disconnect = peer_disconnect_command(to_adapter, "$cli", "$pk");
+    let from_connected = peer_connected_test(from_adapter, "$cli", "$pk");
+    let to_connected = peer_connected_test(to_adapter, "$cli", "$pk");
+    let from_disconnect_script =
+        format!("set -eu; cli='{from_cli}'; pk=$(cat /shared/to-pubkey); {from_disconnect}");
+    let to_disconnect_script =
+        format!("set -eu; cli='{to_cli}'; pk=$(cat /shared/from-pubkey); {to_disconnect}");
+    let from_verify = format!(
+        "set -eu; cli='{from_cli}'; pk=$(cat /shared/to-pubkey); sleep 2; if {from_connected}; then exit 1; fi"
+    );
+    let result = format!(
+        "set -eu; cli='{to_cli}'; pk=$(cat /shared/from-pubkey); if {to_connected}; then exit 1; fi; printf '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"disconnected\":true}}' >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [
+            container("from-identity", from_image, &from_identity, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
+            container("to-identity", to_image, &to_identity, &[mount("shared", "/shared", false), mount("to", "/to", true)]),
+            container("from-disconnect", from_image, &from_disconnect_script, &[mount("shared", "/shared", true), mount("from", "/from", true)]),
+            container("to-disconnect", to_image, &to_disconnect_script, &[mount("shared", "/shared", true), mount("to", "/to", true)]),
+            container("from-verify", from_image, &from_verify, &[mount("shared", "/shared", true), mount("from", "/from", true)])
+        ],
+        "containers": [container("result", to_image, &result, &[
+            mount("shared", "/shared", true), mount("to", "/to", true)
+        ])],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
+            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "peer-disconnect",
+        90,
+        &pod,
+    )
+}
+
+/// Render a bounded Lightning channel-open and confirmation job.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_channel_open_job(spec: &ChannelOpenJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let ChannelOpenJobSpec {
+        resource_name,
+        instance_key,
+        chain,
+        from_lightning,
+        to_lightning,
+        bitcoin_image,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+        channel_sat,
+        push_sat,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let to_identity =
+        lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
+    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
+    let points = channel_points_command(from_adapter, "$from", "$pk");
+    let active_points = active_channel_points_command(from_adapter, "$from", "$pk");
+    let connected = peer_connected_test(from_adapter, "$from", "$pk");
+    let open_command = match from_adapter {
+        LightningAdapter::Lnd => format!(
+            "$from openchannel --node_key=\"$pk\" --local_amt={channel_sat} --push_amt={push_sat} >/dev/null"
+        ),
+        LightningAdapter::Cln => format!(
+            "$from fundchannel -k \"id=$pk\" \"amount={channel_sat}sat\" \"announce=true\" \"push_msat={push_sat}msat\" >/shared/open.json; txid=$(jq -r '.txid' /shared/open.json); outnum=$(jq -r '.outnum' /shared/open.json); test -n \"$txid\"; test \"$txid\" != null; printf '%s:%s' \"$txid\" \"$outnum\" >/shared/channel-point"
+        ),
+    };
+    let open = format!(
+        "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); {connected}; {points} >/shared/channels-before || true; {open_command}; printf '%s' \"$pk\" >/shared/peer-pubkey"
+    );
+    let bcli = format!(
+        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
+    );
+    let confirm = format!(
+        "set -eu; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; addr=$({bcli} -rpcwallet=default getnewaddress); {bcli} -rpcwallet=default generatetoaddress 6 \"$addr\" >/dev/null"
+    );
+    let verify = format!(
+        "set -eu; from='{from_cli}'; pk=$(cat /shared/peer-pubkey); expected=$(cat /shared/channel-point 2>/dev/null || true); point=''; until test -n \"$point\"; do for candidate in $({active_points}); do if test -n \"$expected\"; then test \"$candidate\" = \"$expected\" && point=$candidate && break; elif ! grep -Fxq \"$candidate\" /shared/channels-before; then point=$candidate; break; fi; done; test -n \"$point\" || sleep 1; done; printf '%s' \"$point\" >/shared/channel-point"
+    );
+    let result = format!(
+        "set -eu; point=$(cat /shared/channel-point); digest=$(printf '%s' \"$point\" | sha256sum | cut -d' ' -f1); printf '%s' '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"channel_id\":\"ch-'\"$digest\"'\",\"channel_sat\":{channel_sat},\"push_sat\":{push_sat},\"active\":true}}' >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [
+            container("to-identity", to_image, &to_identity, &[mount("shared", "/shared", false), mount("to", "/to", true)]),
+            container("channel-open", from_image, &open, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
+            container("channel-confirm", bitcoin_image, &confirm, &[]),
+            container("channel-verify", from_image, &verify, &[mount("shared", "/shared", false), mount("from", "/from", true)])
+        ],
+        "containers": [container("result", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[mount("shared", "/shared", true)])],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
+            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "channel-open",
+        180,
+        &pod,
+    )
+}
+
+/// Render a bounded circular LND payment between two opaque channel handles.
+///
+/// Payment material and native channel identifiers remain in the Job's
+/// ephemeral volume; the terminal artifact contains only logical identities,
+/// opaque handles, amounts, and observed balance deltas.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_channel_rebalance_job(
+    spec: &ChannelRebalanceJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let ChannelRebalanceJobSpec {
+        resource_name,
+        instance_key,
+        lightning,
+        lightning_image,
+        outgoing_channel_id,
+        incoming_channel_id,
+        amount_sat,
+        max_fee_sat,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let cli = lightning_cli(LightningAdapter::Lnd, "/lightning", lightning);
+    let script = format!(
+        r#"set -eu
+node='{cli}'
+until $node getinfo >/dev/null 2>&1; do sleep 1; done
+snapshot() {{
+  $node listchannels --active_only --skip_peer_alias_lookup | awk '
+    function val(line) {{ sub(/^[^:]*:[[:space:]]*/, "", line); gsub(/[",[:space:]]/, "", line); return line }}
+    /"active":/ {{ active=val($0) }}
+    /"remote_pubkey":/ {{ peer=val($0) }}
+    /"channel_point":/ {{ point=val($0) }}
+    /"scid":/ {{ chan=val($0) }}
+    /"local_balance":/ {{ local=val($0) }}
+    /"remote_balance":/ {{ remote=val($0); print point "|" chan "|" peer "|" local "|" remote "|" active }}'
+}}
+rounds=0
+while :; do
+  snapshot >/shared/before
+  out_chan=''; out_peer=''; out_before=''; in_chan=''; in_peer=''; in_before=''; in_remote=''
+  while IFS='|' read -r point chan peer local remote active; do
+    test "$active" = true || continue
+    digest=$(printf '%s' "$point" | sha256sum | cut -d' ' -f1)
+    if test "ch-$digest" = '{outgoing_channel_id}'; then out_chan=$chan; out_peer=$peer; out_before=$local; fi
+    if test "ch-$digest" = '{incoming_channel_id}'; then in_chan=$chan; in_peer=$peer; in_before=$local; in_remote=$remote; fi
+  done </shared/before
+  if test -n "$out_chan" && test -n "$in_chan" && test "$out_chan" != "$in_chan" && test "$out_peer" != "$in_peer"; then break; fi
+  rounds=$((rounds + 1)); test "$rounds" -lt 30; sleep 1
+done
+test "$out_before" -ge $(({amount_sat} + {max_fee_sat})); test "$in_remote" -ge {amount_sat}
+invoice=$($node addinvoice --memo=proofstorm-rebalance --amt={amount_sat} --private --expiry=120 | grep -o '"payment_request":[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+test -n "$invoice"
+attempts=0
+until $node sendpayment --pay_req="$invoice" --outgoing_chan_id="$out_chan" --last_hop="$in_peer" --fee_limit={max_fee_sat} --timeout=10s --max_parts=1 --allow_self_payment --force --json >/shared/payment.json 2>&1 && grep -Eq '"status":[[:space:]]*"SUCCEEDED"' /shared/payment.json; do
+  attempts=$((attempts + 1)); test "$attempts" -lt 45; sleep 2
+done
+snapshot >/shared/after
+out_after=''; in_after=''
+while IFS='|' read -r point chan peer local remote active; do
+  if test "$chan" = "$out_chan"; then out_after=$local; fi
+  if test "$chan" = "$in_chan"; then in_after=$local; fi
+done </shared/after
+test -n "$out_after"; test -n "$in_after"
+out_delta=$((out_before - out_after)); in_delta=$((in_after - in_before)); fee_sat=$((out_delta - {amount_sat}))
+test "$out_delta" -ge {amount_sat}; test "$in_delta" -ge {amount_sat}; test "$fee_sat" -ge 0; test "$fee_sat" -le {max_fee_sat}
+printf '{{"lightning":"{lightning}","outgoing_channel_id":"{outgoing_channel_id}","incoming_channel_id":"{incoming_channel_id}","amount_sat":{amount_sat},"fee_sat":%s,"outgoing_local_before_sat":%s,"outgoing_local_after_sat":%s,"incoming_local_before_sat":%s,"incoming_local_after_sat":%s,"rebalanced":true}}' "$fee_sat" "$out_before" "$out_after" "$in_before" "$in_after" >/dev/termination-log
+"#
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [container("result", lightning_image, &script, &[
+            mount("shared", "/shared", false), mount("lightning", "/lightning", true)
+        ])],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "lightning", "persistentVolumeClaim": {"claimName": format!("data-{lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "channel-rebalance",
+        120,
+        &pod,
+    )
+}
+
+fn render_cln_channel_close_job(
+    spec: &ChannelCloseJobSpec<'_>,
+    namespace: &str,
+    to_identity: &str,
+    from_cli: &str,
+) -> Result<Job, serde_json::Error> {
+    let ChannelCloseJobSpec {
+        resource_name,
+        instance_key,
+        chain,
+        from_lightning,
+        to_lightning,
+        channel_id,
+        bitcoin_image,
+        from_image,
+        to_image,
+        force,
+        ..
+    } = *spec;
+    let unilateral_timeout = u8::from(force);
+    let close = format!(
+        "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); $from listpeerchannels \"$pk\" | jq -r '.channels[] | select(.funding_txid != null) | \"\\(.funding_txid):\\(.funding_outnum) \\(.channel_id)\"' >/shared/channels; point=''; native=''; while read -r candidate candidate_native; do digest=$(printf '%s' \"$candidate\" | sha256sum | cut -d' ' -f1); if [ \"ch-$digest\" = \"{channel_id}\" ]; then point=$candidate; native=$candidate_native; break; fi; done </shared/channels; test -n \"$point\"; test -n \"$native\"; printf '%s' \"$point\" >/shared/channel-point; printf '%s' \"$native\" >/shared/native-channel-id; touch /shared/close-started; $from close \"$native\" {unilateral_timeout} >/shared/close.json; touch /shared/close-done"
+    );
+    let bcli = format!(
+        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
+    );
+    let confirm = format!(
+        "set -eu; until test -f /shared/close-started; do sleep 1; done; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; addr=$({bcli} -rpcwallet=default getnewaddress); rounds=0; until test -f /shared/close-done; do {bcli} -rpcwallet=default generatetoaddress 1 \"$addr\" >/dev/null; rounds=$((rounds + 1)); test \"$rounds\" -lt 60; sleep 1; done; {bcli} -rpcwallet=default generatetoaddress 6 \"$addr\" >/dev/null; touch /shared/mined"
+    );
+    let states = if force {
+        "AWAITING_UNILATERAL|FUNDING_SPEND_SEEN|ONCHAIN"
+    } else {
+        "CLOSINGD_COMPLETE|FUNDING_SPEND_SEEN|ONCHAIN"
+    };
+    let result = format!(
+        "set -eu; until test -f /shared/mined; do sleep 1; done; from='{from_cli}'; native=$(cat /shared/native-channel-id); rounds=0; while :; do state=$($from listpeerchannels | jq -r --arg id \"$native\" '.channels[] | select(.channel_id == $id) | .state'); if printf '%s' \"$state\" | grep -q CHANNELD_NORMAL; then exit 1; fi; if test -n \"$state\" && printf '%s' \"$state\" | grep -Eq '{states}'; then break; fi; if test -z \"$state\" && $from listclosedchannels | grep -q \"$native\"; then break; fi; rounds=$((rounds + 1)); test \"$rounds\" -lt 30; sleep 1; done; printf '%s' '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"channel_id\":\"{channel_id}\",\"closed\":true,\"confirmed\":true,\"force\":{force},\"pending_resolution\":{force}}}' >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [container("to-identity", to_image, to_identity, &[
+            mount("shared", "/shared", false), mount("to", "/to", true)
+        ])],
+        "containers": [
+            container("channel-close", from_image, &close, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
+            container("channel-confirm", bitcoin_image, &confirm, &[mount("shared", "/shared", false)]),
+            container("result", from_image, &result, &[mount("shared", "/shared", true), mount("from", "/from", true)])
+        ],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
+            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        namespace,
+        instance_key,
+        if force {
+            "channel-force-close"
+        } else {
+            "channel-close"
+        },
+        180,
+        &pod,
+    )
+}
+
+/// Render a bounded cooperative or force channel-close and confirmation job.
+///
+/// The public channel handle is matched against hashes of active LND channel
+/// points inside the credential-bearing Job. Raw implementation identifiers do
+/// not cross the controller boundary.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_channel_close_job(spec: &ChannelCloseJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let ChannelCloseJobSpec {
+        resource_name,
+        instance_key,
+        chain,
+        from_lightning,
+        to_lightning,
+        channel_id,
+        bitcoin_image,
+        from_adapter,
+        from_image,
+        to_adapter,
+        to_image,
+        force,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let to_identity =
+        lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
+    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
+    if from_adapter == LightningAdapter::Cln {
+        return render_cln_channel_close_job(spec, &namespace, &to_identity, &from_cli);
+    }
+    let close = match from_adapter {
+        LightningAdapter::Lnd => {
+            let force_flag = if force { " --force" } else { "" };
+            format!(
+                "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); point=''; for candidate in $($from listchannels --peer \"$pk\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); do digest=$(printf '%s' \"$candidate\" | sha256sum | cut -d' ' -f1); if [ \"ch-$digest\" = \"{channel_id}\" ]; then point=$candidate; break; fi; done; test -n \"$point\"; printf '%s' \"$point\" >/shared/channel-point; txid=${{point%:*}}; index=${{point##*:}}; $from closechannel{force_flag} --funding_txid=\"$txid\" --output_index=\"$index\" >/shared/close.json"
+            )
+        }
+        LightningAdapter::Cln => {
+            let unilateral_timeout = u8::from(force);
+            format!(
+                "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); $from listpeerchannels \"$pk\" | jq -r '.channels[] | select(.funding_txid != null) | \"\\(.funding_txid):\\(.funding_outnum) \\(.channel_id)\"' >/shared/channels; point=''; native=''; while read -r candidate candidate_native; do digest=$(printf '%s' \"$candidate\" | sha256sum | cut -d' ' -f1); if [ \"ch-$digest\" = \"{channel_id}\" ]; then point=$candidate; native=$candidate_native; break; fi; done </shared/channels; test -n \"$point\"; test -n \"$native\"; printf '%s' \"$point\" >/shared/channel-point; printf '%s' \"$native\" >/shared/native-channel-id; $from close \"$native\" {unilateral_timeout} >/shared/close.json"
+            )
+        }
+    };
+    let bcli = format!(
+        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
+    );
+    let confirm = format!(
+        "set -eu; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; addr=$({bcli} -rpcwallet=default getnewaddress); {bcli} -rpcwallet=default generatetoaddress 6 \"$addr\" >/dev/null"
+    );
+    let verify = match from_adapter {
+        LightningAdapter::Lnd => {
+            let terminal_check = if force {
+                "$from pendingchannels | grep -q \"$point\""
+            } else {
+                "$from closedchannels | grep -q \"$point\""
+            };
+            format!(
+                "set -eu; from='{from_cli}'; point=$(cat /shared/channel-point); if $from listchannels | grep -q \"$point\"; then exit 1; fi; {terminal_check}"
+            )
+        }
+        LightningAdapter::Cln => {
+            let states = if force {
+                "AWAITING_UNILATERAL|FUNDING_SPEND_SEEN|ONCHAIN"
+            } else {
+                "CLOSINGD_COMPLETE|FUNDING_SPEND_SEEN|ONCHAIN"
+            };
+            format!(
+                "set -eu; from='{from_cli}'; native=$(cat /shared/native-channel-id); until state=$($from listpeerchannels | jq -r --arg id \"$native\" '.channels[] | select(.channel_id == $id) | .state'); do sleep 1; done; if printf '%s' \"$state\" | grep -q CHANNELD_NORMAL; then exit 1; fi; if test -n \"$state\"; then printf '%s' \"$state\" | grep -Eq '{states}'; else $from listclosedchannels | grep -q \"$native\"; fi"
+            )
+        }
+    };
+    let result = format!(
+        "printf '%s' '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"channel_id\":\"{channel_id}\",\"closed\":true,\"confirmed\":true,\"force\":{force},\"pending_resolution\":{force}}}' >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [
+            container("to-identity", to_image, &to_identity, &[mount("shared", "/shared", false), mount("to", "/to", true)]),
+            container("channel-close", from_image, &close, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
+            container("channel-confirm", bitcoin_image, &confirm, &[]),
+            container("channel-verify", from_image, &verify, &[mount("shared", "/shared", true), mount("from", "/from", true)])
+        ],
+        "containers": [container("result", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[])],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
+            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        if force {
+            "channel-force-close"
+        } else {
+            "channel-close"
+        },
+        180,
+        &pod,
+    )
+}
+
+/// Initialize a persistent logical wallet through its locked adapter.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_wallet_initialize_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let WalletJobSpec {
+        resource_name,
+        instance_key,
+        wallet,
+        mint,
+        wallet_image,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let script = format!(
+        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"initialized\":true,\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet")])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-initialize",
+        90,
+        &pod,
+    )
+}
+
+/// Read a sanitized balance from a disposable snapshot of a logical wallet.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let WalletJobSpec {
+        resource_name,
+        instance_key,
+        wallet,
+        mint,
+        wallet_image,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let script = format!(
+        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [container("snapshot", wallet_image, "set -eu; cp -R /source/. /wallet/", &[mount("source", "/source", true), mount("wallet", "/wallet", false)])],
+        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet")])],
+        "volumes": [
+            {"name": "source", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
+            {"name": "wallet", "emptyDir": {}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-balance",
+        90,
+        &pod,
+    )
+}
+
+/// Fund a persistent wallet with a bounded mint quote paid by a logical node.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_wallet_fund_job(spec: &WalletFundJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let WalletFundJobSpec {
+        resource_name,
+        instance_key,
+        wallet,
+        mint,
+        payer_lightning,
+        wallet_image,
+        lightning_image,
+        amount_sat,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let wallet_script = format!(
+        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} >/shared/invoice.log 2>&1 & pid=$!; until test -f /shared/paid; do sleep 1; done; wait $pid; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"funded_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log; touch /shared/done"
+    );
+    let payer_script = format!(
+        "set -eu; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' /shared/invoice.log 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009 payinvoice --force \"$invoice\" >/dev/null; touch /shared/paid; until test -f /shared/done; do sleep 1; done"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [
+            container_with_env("wallet", wallet_image, &wallet_script, &[mount("shared", "/shared", false), mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")]),
+            container("payer", lightning_image, &payer_script, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
+        ],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
+            {"name": "payer-lnd", "persistentVolumeClaim": {"claimName": format!("data-{payer_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-fund",
+        180,
+        &pod,
+    )
+}
+
+/// Create and settle a receive quote while keeping its payment request in the
+/// recipient wallet's private persistent volume.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_wallet_invoice_job(
+    spec: &WalletInvoiceJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let WalletInvoiceJobSpec {
+        resource_name,
+        instance_key,
+        quote_id,
+        wallet,
+        mint,
+        wallet_image,
+        amount_sat,
+        timeout_seconds,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let deadline_seconds = timeout_seconds.saturating_add(60);
+    let script = format!(
+        "set -eu; umask 077; cd /app; quote_dir=/wallet/.proofstorm/quotes/{quote_id}; invoice_file=\"$quote_dir/invoice.log\"; mkdir -p \"$quote_dir\"; cleanup() {{ rm -f \"$invoice_file\"; }}; trap cleanup EXIT; trap 'exit 143' HUP INT TERM; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} >\"$invoice_file\" 2>&1; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"quote_id\":\"{quote_id}\",\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"direction\":\"receive\",\"phase\":\"settled\",\"amount_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-invoice",
+        i64::from(deadline_seconds),
+        &pod,
+    )
+}
+
+/// Pay a private receive quote from a distinct persistent wallet.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_wallet_pay_job(spec: &WalletPayJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let WalletPayJobSpec {
+        resource_name,
+        instance_key,
+        quote_id,
+        wallet,
+        mint,
+        recipient_wallet,
+        wallet_image,
+        amount_sat,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let script = format!(
+        "set -eu; cd /app; invoice_file=/recipient/.proofstorm/quotes/{quote_id}/invoice.log; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' \"$invoice_file\" 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu pay \"$invoice\" >/tmp/pay.log 2>&1; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"quote_id\":\"{quote_id}\",\"wallet\":\"{wallet}\",\"recipient_wallet\":\"{recipient_wallet}\",\"direction\":\"pay\",\"phase\":\"paid\",\"amount_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false), mount("recipient", "/recipient", true)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")])],
+        "volumes": [
+            {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
+            {"name": "recipient", "persistentVolumeClaim": {"claimName": format!("{recipient_wallet}-data")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-pay",
+        180,
+        &pod,
+    )
+}
+
+/// Render a disposable wallet mint-and-self-swap job with an out-of-band payer.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_wallet_round_trip_job(
+    spec: &WalletRoundTripJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let WalletRoundTripJobSpec {
+        resource_name,
+        instance_key,
+        wallet,
+        mint,
+        payer_lightning,
+        wallet_image,
+        lnd_image,
+        amount_sat,
+        tolerance_sat,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let wallet_script = format!(
+        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} >/shared/invoice.log 2>&1 & pid=$!; until test -f /shared/paid; do sleep 1; done; wait $pid; before=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); cashu selfpay >/shared/swap.log 2>&1; after=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$before\"; test -n \"$after\"; test \"$after\" -le \"$before\"; test $((before-after)) -le {tolerance_sat}; printf '{{\"minted_sat\":%s,\"balance_before_swap_sat\":%s,\"balance_after_swap_sat\":%s,\"inflation\":false}}' '{amount_sat}' \"$before\" \"$after\" >/dev/termination-log; touch /shared/done"
+    );
+    let payer_script = format!(
+        "set -eu; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' /shared/invoice.log 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009 payinvoice --force \"$invoice\" >/dev/null; touch /shared/paid; until test -f /shared/done; do sleep 1; done"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [
+            container_with_env("wallet", wallet_image, &wallet_script, &[mount("shared", "/shared", false), mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")]),
+            container("payer", lnd_image, &payer_script, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
+        ],
+        "volumes": [
+            {"name": "shared", "emptyDir": {}},
+            {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
+            {"name": "payer-lnd", "persistentVolumeClaim": {"claimName": format!("data-{payer_lightning}-0")}}
+        ]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-round-trip",
+        240,
+        &pod,
+    )
+}
+
+/// Render a read-only-wallet conservation oracle job.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_conservation_oracle_job(
+    resource_name: &str,
+    instance_key: &str,
+    wallet: &str,
+    mint: &str,
+    wallet_image: &str,
+    expected_sat: u64,
+    tolerance_sat: u64,
+) -> Result<Job, serde_json::Error> {
+    let namespace = instance_namespace(instance_key);
+    let script = format!(
+        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; actual=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$actual\"; delta=$((actual-{expected_sat})); test \"$delta\" -ge 0 || delta=$((-delta)); conserved=false; test \"$delta\" -le {tolerance_sat} && conserved=true; printf '{{\"expected_sat\":{expected_sat},\"actual_sat\":%s,\"tolerance_sat\":{tolerance_sat},\"conserved\":%s}}' \"$actual\" \"$conserved\" >/dev/termination-log; test \"$conserved\" = true"
+    );
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "initContainers": [container("snapshot", wallet_image, "set -eu; cp -R /source/. /wallet/", &[mount("source", "/source", true), mount("wallet", "/wallet", false)])],
+        "containers": [container_with_env("oracle", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet")])],
+        "volumes": [
+            {"name": "source", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
+            {"name": "wallet", "emptyDir": {}}
+        ]
+    });
+    job(resource_name, &namespace, instance_key, "oracle", 120, &pod)
+}
+
+fn job(
+    name: &str,
+    namespace: &str,
+    instance_key: &str,
+    operation: &str,
+    deadline_seconds: i64,
+    pod: &Value,
+) -> Result<Job, serde_json::Error> {
+    resource(json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": metadata(name, namespace, instance_key, operation),
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": deadline_seconds,
+            "ttlSecondsAfterFinished": 600,
+            "template": {
+                "metadata": {"labels": labels(instance_key, operation)},
+                "spec": pod
+            }
+        }
+    }))
+}
+
+fn sats_to_btc(sats: u64) -> String {
+    format!("{}.{:08}", sats / 100_000_000, sats % 100_000_000)
+}
+
+fn metadata(name: &str, namespace: &str, instance_key: &str, operation: &str) -> Value {
+    json!({"name": name, "namespace": namespace, "labels": labels(instance_key, operation)})
+}
+
+fn labels(instance_key: &str, operation: &str) -> Value {
+    json!({"proofstorm.dev/instance": instance_key, "proofstorm.dev/operation": operation,
+        "app.kubernetes.io/managed-by": "proofstorm-mcp"})
+}
+
+fn pod_security() -> Value {
+    json!({"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
+        "seccompProfile": {"type": "RuntimeDefault"}})
+}
+
+fn instance_affinity(instance_key: &str) -> Value {
+    json!({"podAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [{
+        "labelSelector": {"matchLabels": {"proofstorm.dev/instance": instance_key}},
+        "topologyKey": "kubernetes.io/hostname"
+    }]}})
+}
+
+fn mount(name: &str, path: &str, read_only: bool) -> Value {
+    json!({"name": name, "mountPath": path, "readOnly": read_only})
+}
+
+fn container(name: &str, image: &str, script: &str, mounts: &[Value]) -> Value {
+    container_with_env(name, image, script, mounts, vec![])
+}
+
+fn container_with_env(
+    name: &str,
+    image: &str,
+    script: &str,
+    mounts: &[Value],
+    environment: Vec<(&str, &str)>,
+) -> Value {
+    json!({"name": name, "image": image, "imagePullPolicy": "IfNotPresent",
+        "command": ["/bin/sh", "-c", script], "volumeMounts": mounts,
+        "env": environment.into_iter().map(|(name, value)| json!({"name": name, "value": value})).collect::<Vec<_>>(),
+        "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}})
+}
+
+fn resource(value: Value) -> Result<Job, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use proofstorm_core::{
+        API_VERSION, ComponentSpec, ControlClass, LabPolicy, LabSpec, default_catalog, resolve_lock,
+    };
+
+    use super::*;
+
+    fn typed_bootstrap() -> (ProofstormLab, ProofstormLabAction) {
+        let component = |id: &str, kind: ComponentKind, implementation: &str| ComponentSpec {
+            id: id.into(),
+            kind,
+            implementation: implementation.into(),
+            version: None,
+            config_version: "v1alpha1".into(),
+            control: if kind == ComponentKind::Mint {
+                ControlClass::Target
+            } else {
+                ControlClass::Laboratory
+            },
+            config: BTreeMap::new(),
+        };
+        let lab_spec = LabSpec {
+            api_version: API_VERSION.into(),
+            name: "action-lab".into(),
+            components: vec![
+                component("chain", ComponentKind::Bitcoin, "bitcoin-core"),
+                component("mint-lnd", ComponentKind::Lightning, "lnd"),
+                component("payer-lnd", ComponentKind::Lightning, "lnd"),
+                component("attacker-cln", ComponentKind::Lightning, "cln"),
+                component("mint", ComponentKind::Mint, "cdk"),
+                component("wallet", ComponentKind::Wallet, "nutshell-wallet"),
+            ],
+            links: vec![],
+            policy: LabPolicy::default(),
+        };
+        let lock = resolve_lock(&lab_spec, &default_catalog()).expect("lock");
+        let lab = ProofstormLab::new(
+            "lab-resource",
+            crate::ProofstormLabSpec {
+                workspace_id: "workspace".into(),
+                instance_id: "instance".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "sha256:revision".into(),
+                lock,
+                lab: lab_spec,
+            },
+        );
+        let action = ProofstormLabAction::new(
+            "action-123",
+            crate::ProofstormLabActionSpec {
+                lab_name: "lab-resource".into(),
+                workspace_id: "workspace".into(),
+                instance_id: "instance".into(),
+                instance_key: "i0123456789012345678".into(),
+                experiment_id: "experiment".into(),
+                lease_id: "lease".into(),
+                principal_id: "principal".into(),
+                sequence: 1,
+                operation_id: "bootstrap".into(),
+                request_digest: "sha256:request".into(),
+                capability: Capability::WalletFund,
+                accepted_at_unix: 1,
+                action: LabAction::BootstrapLiquidity(BootstrapLiquidityAction {
+                    chain: "chain".into(),
+                    mint_lightning: "mint-lnd".into(),
+                    payer_lightning: "payer-lnd".into(),
+                    funding_sat: 100_000_000,
+                    channel_sat: 10_000_000,
+                    push_sat: 5_000_000,
+                }),
+            },
+        );
+        (lab, action)
+    }
+
+    #[test]
+    fn bounded_jobs_have_deadlines_and_no_service_account_tokens() {
+        let job = render_bootstrap_job(&BootstrapJobSpec {
+            resource_name: "op-123",
+            instance_key: "i0123456789012345678",
+            chain: "chain",
+            mint_lightning: "mint-lnd",
+            payer_lightning: "payer-lnd",
+            bitcoin_image: "bitcoin",
+            lnd_image: "lnd",
+            funding_sat: 100_000_000,
+            channel_sat: 10_000_000,
+            push_sat: 5_000_000,
+        })
+        .expect("job");
+        assert_eq!(
+            job.spec
+                .as_ref()
+                .and_then(|spec| spec.active_deadline_seconds),
+            Some(300)
+        );
+        let pod = &job.spec.expect("spec").template.spec.expect("pod");
+        assert_eq!(pod.automount_service_account_token, Some(false));
+    }
+
+    #[test]
+    fn typed_peer_and_channel_actions_are_bounded_and_adapter_locked() {
+        let (lab, mut action) = typed_bootstrap();
+        let locked_lnd = lab
+            .spec
+            .lock
+            .entries
+            .iter()
+            .find(|entry| entry.component_id == "mint-lnd")
+            .expect("lnd lock")
+            .image
+            .clone();
+
+        action.spec.capability = Capability::PeerConnect;
+        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+        });
+        let peer = render_lab_action_job(&action, &lab).expect("peer job");
+        assert_eq!(
+            peer.spec
+                .as_ref()
+                .and_then(|spec| spec.active_deadline_seconds),
+            Some(90)
+        );
+        assert_eq!(
+            peer.spec
+                .expect("peer spec")
+                .template
+                .spec
+                .expect("pod")
+                .containers[0]
+                .image
+                .as_deref(),
+            Some(locked_lnd.as_str())
+        );
+
+        action.spec.capability = Capability::ChannelOpen;
+        action.spec.action = LabAction::ChannelOpen(ChannelOpenAction {
+            chain: "chain".into(),
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+            channel_sat: 2_000_000,
+            push_sat: 0,
+        });
+        let channel = render_lab_action_job(&action, &lab).expect("channel job");
+        assert_eq!(
+            channel
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.active_deadline_seconds),
+            Some(180)
+        );
+        let LabAction::ChannelOpen(request) = &mut action.spec.action else {
+            panic!("channel action");
+        };
+        request.push_sat = request.channel_sat;
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+    }
+
+    #[test]
+    fn typed_peer_and_channel_teardown_uses_opaque_handles() {
+        let (lab, mut action) = typed_bootstrap();
+        action.spec.capability = Capability::PeerDisconnect;
+        action.spec.action = LabAction::PeerDisconnect(PeerDisconnectAction {
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+        });
+        let disconnect = render_lab_action_job(&action, &lab).expect("peer disconnect job");
+        let disconnect_pod = disconnect
+            .spec
+            .expect("disconnect spec")
+            .template
+            .spec
+            .expect("disconnect pod");
+        assert!(disconnect_pod.init_containers.is_none());
+        let disconnect_script = disconnect_pod.containers[0]
+            .command
+            .as_ref()
+            .expect("disconnect command")[2]
+            .as_str();
+        assert!(disconnect_script.contains("$from disconnect \"$to_pk\""));
+        assert!(disconnect_script.contains("$to disconnect \"$from_pk\""));
+        assert!(!disconnect_script.contains("disconnectpeer"));
+
+        let channel_id = format!("ch-{}", "a".repeat(64));
+        action.spec.capability = Capability::ChannelClose;
+        action.spec.action = LabAction::ChannelClose(ChannelCloseAction {
+            chain: "chain".into(),
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+            channel_id: channel_id.clone(),
+        });
+        let close = render_lab_action_job(&action, &lab).expect("channel close job");
+        let close_script = close
+            .spec
+            .expect("close spec")
+            .template
+            .spec
+            .expect("close pod")
+            .init_containers
+            .expect("close init containers")[1]
+            .command
+            .as_ref()
+            .expect("close command")[2]
+            .clone();
+        assert!(close_script.contains("closechannel"));
+        assert!(!close_script.contains("closechannel --force"));
+
+        action.spec.capability = Capability::ChannelForceClose;
+        action.spec.action = LabAction::ChannelForceClose(ChannelCloseAction {
+            chain: "chain".into(),
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+            channel_id,
+        });
+        let force_close = render_lab_action_job(&action, &lab).expect("force close job");
+        let force_script = force_close
+            .spec
+            .expect("force close spec")
+            .template
+            .spec
+            .expect("force close pod")
+            .init_containers
+            .expect("force init containers")[1]
+            .command
+            .as_ref()
+            .expect("force close command")[2]
+            .clone();
+        assert!(force_script.contains("closechannel --force"));
+
+        let LabAction::ChannelForceClose(request) = &mut action.spec.action else {
+            panic!("force close action");
+        };
+        request.channel_id = "raw-channel-point".into();
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+    }
+
+    #[test]
+    fn cln_and_lnd_peer_channel_jobs_use_endpoint_specific_adapters() {
+        let (lab, mut action) = typed_bootstrap();
+        action.spec.capability = Capability::PeerConnect;
+        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+            from_lightning: "attacker-cln".into(),
+            to_lightning: "mint-lnd".into(),
+        });
+        let peer = render_lab_action_job(&action, &lab).expect("CLN to LND peer job");
+        let peer_pod = peer
+            .spec
+            .expect("peer spec")
+            .template
+            .spec
+            .expect("peer pod");
+        let identity = &peer_pod.init_containers.expect("identity init")[0];
+        assert!(
+            identity
+                .image
+                .as_deref()
+                .is_some_and(|image| image.contains("polarlightning/lnd"))
+        );
+        let connect = peer_pod.containers[0]
+            .command
+            .as_ref()
+            .expect("connect command")[2]
+            .as_str();
+        assert!(connect.contains("lightning-cli --lightning-dir=/from"));
+        assert!(connect.contains("connect \"$pk\" \"mint-lnd\" 9735"));
+
+        action.spec.capability = Capability::ChannelOpen;
+        action.spec.action = LabAction::ChannelOpen(ChannelOpenAction {
+            chain: "chain".into(),
+            from_lightning: "attacker-cln".into(),
+            to_lightning: "mint-lnd".into(),
+            channel_sat: 1_000_000,
+            push_sat: 0,
+        });
+        let channel = render_lab_action_job(&action, &lab).expect("CLN channel job");
+        let channel_pod = channel
+            .spec
+            .expect("channel spec")
+            .template
+            .spec
+            .expect("channel pod");
+        let init = channel_pod.init_containers.expect("channel init");
+        let open = init[1].command.as_ref().expect("open command")[2].as_str();
+        assert!(open.contains("fundchannel -k"));
+        assert!(open.contains("jq -r '.txid'"));
+        assert_ne!(init[0].image, init[1].image);
+
+        action.spec.capability = Capability::ChannelClose;
+        action.spec.action = LabAction::ChannelClose(ChannelCloseAction {
+            chain: "chain".into(),
+            from_lightning: "attacker-cln".into(),
+            to_lightning: "mint-lnd".into(),
+            channel_id: format!("ch-{}", "a".repeat(64)),
+        });
+        let close = render_lab_action_job(&action, &lab).expect("CLN close job");
+        let close_pod = close
+            .spec
+            .expect("close spec")
+            .template
+            .spec
+            .expect("close pod");
+        assert_eq!(
+            close_pod
+                .init_containers
+                .as_ref()
+                .expect("identity init")
+                .len(),
+            1
+        );
+        assert_eq!(close_pod.containers.len(), 3);
+        let close_script = close_pod.containers[0]
+            .command
+            .as_ref()
+            .expect("close command")[2]
+            .as_str();
+        let confirm_script = close_pod.containers[1]
+            .command
+            .as_ref()
+            .expect("confirm command")[2]
+            .as_str();
+        let result_script = close_pod.containers[2]
+            .command
+            .as_ref()
+            .expect("result command")[2]
+            .as_str();
+        assert!(close_script.contains("touch /shared/close-started"));
+        assert!(close_script.contains("touch /shared/close-done"));
+        assert!(confirm_script.contains("until test -f /shared/close-done"));
+        assert!(result_script.contains("until test -f /shared/mined"));
+        assert!(result_script.contains("test \"$rounds\" -lt 30"));
+        assert!(result_script.contains("FUNDING_SPEND_SEEN|ONCHAIN"));
+    }
+
+    #[test]
+    fn typed_rebalance_uses_opaque_handles_and_rejects_unsupported_adapters() {
+        let (lab, mut action) = typed_bootstrap();
+        let outgoing = format!("ch-{}", "a".repeat(64));
+        let incoming = format!("ch-{}", "b".repeat(64));
+        action.spec.capability = Capability::ChannelRebalance;
+        action.spec.action = LabAction::ChannelRebalance(ChannelRebalanceAction {
+            lightning: "mint-lnd".into(),
+            outgoing_channel_id: outgoing.clone(),
+            incoming_channel_id: incoming.clone(),
+            amount_sat: 100_000,
+            max_fee_sat: 100,
+        });
+        let rebalance = render_lab_action_job(&action, &lab).expect("rebalance job");
+        let spec = rebalance.spec.expect("job spec");
+        assert_eq!(spec.active_deadline_seconds, Some(120));
+        let pod = spec.template.spec.expect("rebalance pod");
+        assert!(pod.init_containers.is_none());
+        assert_eq!(pod.containers.len(), 1);
+        let script = pod.containers[0]
+            .command
+            .as_ref()
+            .expect("rebalance command")[2]
+            .as_str();
+        assert!(script.contains("--allow_self_payment"));
+        assert!(script.contains("--max_parts=1"));
+        assert!(script.contains("--last_hop=\"$in_peer\""));
+        assert!(script.contains("attempts=$((attempts + 1))"));
+        assert!(script.contains("test \"$attempts\" -lt 45"));
+        assert!(script.contains("rounds=$((rounds + 1))"));
+        assert!(script.contains("test \"$rounds\" -lt 30"));
+        assert!(script.contains("--timeout=10s"));
+        assert!(script.contains("/\"scid\":/"));
+        assert!(!script.contains("/\"chan_id\":/"));
+        assert!(script.contains("cut -d'\"' -f4"));
+        assert!(!script.contains("cut -d'\\\"'"));
+        assert!(script.contains("'\"status\":[[:space:]]*\"SUCCEEDED\"'"));
+        assert!(script.contains(&outgoing));
+        assert!(script.contains(&incoming));
+        assert!(script.contains("outgoing_local_before_sat"));
+        assert!(!script.contains("payment_request\":\""));
+
+        if let LabAction::ChannelRebalance(request) = &mut action.spec.action {
+            request.incoming_channel_id.clone_from(&outgoing);
+        } else {
+            panic!("rebalance action");
+        }
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+        if let LabAction::ChannelRebalance(request) = &mut action.spec.action {
+            request.incoming_channel_id = incoming;
+            request.lightning = "attacker-cln".into();
+        }
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::UnsupportedAdapter { .. })
+        ));
+    }
+
+    #[test]
+    fn wallet_initialize_and_balance_use_the_locked_adapter_and_snapshot_reads() {
+        let (lab, mut action) = typed_bootstrap();
+        let wallet_image = lab
+            .spec
+            .lock
+            .entries
+            .iter()
+            .find(|entry| entry.component_id == "wallet")
+            .expect("wallet lock")
+            .image
+            .clone();
+        action.spec.capability = Capability::WalletCreate;
+        action.spec.action = LabAction::WalletInitialize(WalletInitializeAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+        });
+        let initialize = render_lab_action_job(&action, &lab).expect("initialize job");
+        assert_eq!(
+            initialize
+                .spec
+                .expect("spec")
+                .template
+                .spec
+                .expect("pod")
+                .containers[0]
+                .image
+                .as_deref(),
+            Some(wallet_image.as_str())
+        );
+
+        action.spec.capability = Capability::WalletControl;
+        action.spec.action = LabAction::WalletBalance(WalletBalanceAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+        });
+        let balance = render_lab_action_job(&action, &lab).expect("balance job");
+        let snapshot = &balance
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod")
+            .init_containers
+            .expect("snapshot")[0];
+        assert_eq!(snapshot.name, "snapshot");
+        assert_eq!(
+            snapshot.volume_mounts.as_ref().expect("mounts")[0].read_only,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn wallet_fund_is_bounded_and_uses_locked_wallet_and_payer_adapters() {
+        let (lab, mut action) = typed_bootstrap();
+        action.spec.capability = Capability::WalletFund;
+        action.spec.action = LabAction::WalletFund(WalletFundAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+            payer_lightning: "payer-lnd".into(),
+            amount_sat: 1_000,
+        });
+        let funded = render_lab_action_job(&action, &lab).expect("fund job");
+        let pod = funded.spec.expect("spec").template.spec.expect("pod");
+        assert_eq!(pod.containers[0].name, "wallet");
+        assert_eq!(pod.containers[1].name, "payer");
+        let LabAction::WalletFund(request) = &mut action.spec.action else {
+            panic!("fund action");
+        };
+        request.amount_sat = 500_001;
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+    }
+
+    #[test]
+    fn wallet_invoice_and_pay_keep_payment_material_in_private_volumes() {
+        let (lab, mut invoice_action) = typed_bootstrap();
+        invoice_action.spec.capability = Capability::WalletFund;
+        invoice_action.spec.action = LabAction::WalletInvoice(WalletInvoiceAction {
+            quote_id: "quote-one".into(),
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+            amount_sat: 100,
+            timeout_seconds: 300,
+        });
+        let invoice = render_lab_action_job(&invoice_action, &lab).expect("invoice job");
+        let invoice_spec = invoice.spec.expect("invoice spec");
+        assert_eq!(invoice_spec.active_deadline_seconds, Some(360));
+        let invoice_pod = invoice_spec.template.spec.expect("invoice pod");
+        let invoice_script = invoice_pod.containers[0]
+            .command
+            .as_ref()
+            .expect("invoice command")
+            .last()
+            .expect("invoice script");
+        assert!(invoice_script.contains("/wallet/.proofstorm/quotes/quote-one"));
+        assert!(invoice_script.contains("cashu invoice 100"));
+        assert!(invoice_script.contains("trap cleanup EXIT"));
+        assert!(invoice_script.contains("trap 'exit 143' HUP INT TERM"));
+        assert!(!invoice_script.contains("lnbcrt1"));
+        let cleanup = render_lab_action_cleanup_job(&invoice_action, &lab)
+            .expect("cleanup render")
+            .expect("invoice cleanup");
+        let cleanup_spec = cleanup.spec.expect("cleanup spec");
+        assert_eq!(cleanup_spec.active_deadline_seconds, Some(60));
+        let cleanup_pod = cleanup_spec.template.spec.expect("cleanup pod");
+        assert!(!cleanup_pod.automount_service_account_token.unwrap_or(true));
+        let cleanup_script = cleanup_pod.containers[0]
+            .command
+            .as_ref()
+            .expect("cleanup command")
+            .last()
+            .expect("cleanup script");
+        assert!(cleanup_script.contains("rm -f"));
+        assert!(cleanup_script.contains("quote-one/invoice.log"));
+
+        let mut pay_lab = lab;
+        let mut receiver = pay_lab
+            .spec
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == "wallet")
+            .expect("wallet")
+            .clone();
+        receiver.id = "receiver-wallet".into();
+        pay_lab.spec.lab.components.push(receiver);
+        let mut receiver_lock = pay_lab
+            .spec
+            .lock
+            .entries
+            .iter()
+            .find(|entry| entry.component_id == "wallet")
+            .expect("wallet lock")
+            .clone();
+        receiver_lock.component_id = "receiver-wallet".into();
+        pay_lab.spec.lock.entries.push(receiver_lock);
+        let mut pay_action = invoice_action;
+        pay_action.spec.capability = Capability::WalletControl;
+        pay_action.spec.action = LabAction::WalletPay(WalletPayAction {
+            quote_id: "quote-one".into(),
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+            recipient_wallet: "receiver-wallet".into(),
+            amount_sat: 100,
+        });
+        let pay = render_lab_action_job(&pay_action, &pay_lab).expect("pay job");
+        let pod = pay.spec.expect("pay spec").template.spec.expect("pay pod");
+        let recipient_mount = pod.containers[0]
+            .volume_mounts
+            .as_ref()
+            .expect("mounts")
+            .iter()
+            .find(|mount| mount.name == "recipient")
+            .expect("recipient mount");
+        assert_eq!(recipient_mount.read_only, Some(true));
+
+        let LabAction::WalletPay(request) = &mut pay_action.spec.action else {
+            panic!("pay action");
+        };
+        request.recipient_wallet = "wallet".into();
+        assert!(matches!(
+            render_lab_action_job(&pay_action, &pay_lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+    }
+
+    #[test]
+    fn oracle_snapshots_the_wallet_and_round_trip_has_a_fixed_deadline() {
+        let oracle = render_conservation_oracle_job(
+            "op-oracle",
+            "i0123456789012345678",
+            "wallet",
+            "mint",
+            "wallet-image",
+            100,
+            2,
+        )
+        .expect("oracle");
+        let oracle_pod = oracle.spec.expect("spec").template.spec.expect("pod");
+        assert_eq!(
+            oracle_pod.init_containers.expect("snapshot")[0].name,
+            "snapshot"
+        );
+        assert_eq!(oracle_pod.containers[0].name, "oracle");
+
+        let round_trip = render_wallet_round_trip_job(&WalletRoundTripJobSpec {
+            resource_name: "op-wallet",
+            instance_key: "i0123456789012345678",
+            wallet: "wallet",
+            mint: "mint",
+            payer_lightning: "payer-lnd",
+            wallet_image: "wallet",
+            lnd_image: "lnd",
+            amount_sat: 100,
+            tolerance_sat: 2,
+        })
+        .expect("round trip");
+        assert_eq!(
+            round_trip
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.active_deadline_seconds),
+            Some(240)
+        );
+    }
+
+    #[test]
+    fn typed_bootstrap_is_identity_checked_and_controller_owned() {
+        let (lab, mut action) = typed_bootstrap();
+        let job = render_lab_action_job(&action, &lab).expect("typed job");
+        assert_eq!(job.metadata.name.as_deref(), Some("action-123"));
+        assert_eq!(
+            job.metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get("app.kubernetes.io/managed-by"))
+                .map(String::as_str),
+            Some("proofstormd")
+        );
+        action.spec.instance_id = "another-instance".into();
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Identity("instance_id"))
+        ));
+    }
+
+    #[test]
+    fn typed_bootstrap_refuses_out_of_bounds_and_unknown_fields() {
+        let (lab, mut action) = typed_bootstrap();
+        let LabAction::BootstrapLiquidity(request) = &mut action.spec.action else {
+            panic!("expected bootstrap action");
+        };
+        request.push_sat = request.channel_sat;
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+
+        let mut document = serde_json::to_value(&action.spec).expect("serialize action");
+        document["action"]["parameters"]["command"] = json!("arbitrary shell");
+        assert!(serde_json::from_value::<crate::ProofstormLabActionSpec>(document).is_err());
+    }
+
+    #[test]
+    fn node_lifecycle_is_typed_and_never_renders_a_privileged_job() {
+        let (lab, mut action) = typed_bootstrap();
+        action.spec.capability = Capability::NodeControl;
+        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+            component: "chain".into(),
+        });
+        let serialized = serde_json::to_value(&action.spec.action).expect("serialize action");
+        assert_eq!(serialized["kind"], "node_restart");
+        assert_eq!(serialized["parameters"]["component"], "chain");
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+        assert_eq!(action_result_container(&action.spec.action), "result");
+    }
+
+    #[test]
+    fn typed_wallet_round_trip_uses_the_locked_wallet_adapter_image() {
+        let (mut lab, mut action) = typed_bootstrap();
+        let locked_image = "registry.example/nutshell@sha256:locked-wallet-image";
+        lab.spec
+            .lock
+            .entries
+            .iter_mut()
+            .find(|entry| entry.component_id == "wallet")
+            .expect("wallet lock entry")
+            .image = locked_image.into();
+        action.spec.capability = Capability::WalletControl;
+        action.spec.action = LabAction::WalletRoundTrip(WalletRoundTripAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+            payer_lightning: "payer-lnd".into(),
+            amount_sat: 1_000,
+            tolerance_sat: 100,
+        });
+
+        let job = render_lab_action_job(&action, &lab).expect("typed wallet job");
+        let pod = job.spec.expect("job spec").template.spec.expect("pod spec");
+        let wallet = pod
+            .containers
+            .iter()
+            .find(|container| container.name == "wallet")
+            .expect("wallet result container");
+        assert_eq!(wallet.image.as_deref(), Some(locked_image));
+        assert_eq!(action_result_container(&action.spec.action), "wallet");
+    }
+
+    #[test]
+    fn typed_conservation_oracle_snapshots_with_the_locked_wallet_image() {
+        let (mut lab, mut action) = typed_bootstrap();
+        let locked_image = "registry.example/nutshell@sha256:locked-oracle-image";
+        lab.spec
+            .lock
+            .entries
+            .iter_mut()
+            .find(|entry| entry.component_id == "wallet")
+            .expect("wallet lock entry")
+            .image = locked_image.into();
+        action.spec.capability = Capability::OracleRun;
+        action.spec.action = LabAction::ConservationOracle(ConservationOracleAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+            expected_sat: 997,
+            tolerance_sat: 0,
+        });
+
+        let job = render_lab_action_job(&action, &lab).expect("typed oracle job");
+        let pod = job.spec.expect("job spec").template.spec.expect("pod spec");
+        let snapshot = pod.init_containers.expect("snapshot container");
+        assert_eq!(snapshot[0].image.as_deref(), Some(locked_image));
+        assert_eq!(pod.containers[0].image.as_deref(), Some(locked_image));
+        assert_eq!(action_result_container(&action.spec.action), "oracle");
+
+        action.spec.capability = Capability::WalletControl;
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Capability)
+        ));
+
+        action.spec.capability = Capability::OracleRun;
+        lab.spec
+            .lab
+            .components
+            .iter_mut()
+            .find(|component| component.id == "wallet")
+            .expect("wallet component")
+            .implementation = "cocod-wallet".into();
+        lab.spec
+            .lock
+            .entries
+            .iter_mut()
+            .find(|entry| entry.component_id == "wallet")
+            .expect("wallet lock entry")
+            .catalog_id = "cocod-wallet".into();
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::UnsupportedAdapter { adapter, .. })
+                if adapter == "cocod-wallet"
+        ));
+    }
+
+    #[test]
+    fn reachability_oracle_uses_source_firewall_identity_and_advertised_service() {
+        let (lab, mut action) = typed_bootstrap();
+        action.spec.capability = Capability::OracleRun;
+        action.spec.action = LabAction::ReachabilityOracle(ReachabilityOracleAction {
+            from_component: "wallet".into(),
+            to_component: "mint".into(),
+            service: "http".into(),
+            timeout_seconds: 2,
+            attempts: 3,
+        });
+
+        let job = render_lab_action_job(&action, &lab).expect("reachability job");
+        assert!(
+            job.metadata
+                .labels
+                .as_ref()
+                .is_some_and(|labels| labels.contains_key("proofstorm.dev/operation"))
+        );
+        let template = &job.spec.as_ref().expect("job spec").template;
+        let labels = template
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.labels.as_ref())
+            .expect("pod labels");
+        assert_eq!(
+            labels.get("proofstorm.dev/component").map(String::as_str),
+            Some("wallet")
+        );
+        assert!(!labels.contains_key("proofstorm.dev/operation"));
+        let pod = template.spec.as_ref().expect("pod spec");
+        assert!(!pod.automount_service_account_token.unwrap_or(true));
+        let probe = &pod.containers[0];
+        assert_eq!(probe.image.as_deref(), Some(REACHABILITY_PROBE_IMAGE));
+        let script = &probe.command.as_ref().expect("shell command")[2];
+        assert!(script.contains("nc -z -w 2 mint 3338"));
+        assert!(script.contains("\"reachable\":%s"));
+        assert_eq!(action_result_container(&action.spec.action), "oracle");
+    }
+
+    #[test]
+    fn reachability_oracle_refuses_unknown_services_and_unbounded_probes() {
+        let (lab, mut action) = typed_bootstrap();
+        action.spec.capability = Capability::OracleRun;
+        action.spec.action = LabAction::ReachabilityOracle(ReachabilityOracleAction {
+            from_component: "wallet".into(),
+            to_component: "mint".into(),
+            service: "ssh".into(),
+            timeout_seconds: 2,
+            attempts: 3,
+        });
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::UnknownService { .. })
+        ));
+
+        let LabAction::ReachabilityOracle(request) = &mut action.spec.action else {
+            unreachable!()
+        };
+        request.service = "http".into();
+        request.attempts = 6;
+        assert!(matches!(
+            render_lab_action_job(&action, &lab),
+            Err(ActionRenderError::Bounds(_))
+        ));
+    }
+}

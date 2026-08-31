@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "LeasePhase": {
+      "enum": [
+        "active",
+        "released",
+        "expired"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acquired_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "experiment_id": {
+      "type": "string"
+    },
+    "expires_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "id": {
+      "type": "string"
+    },
+    "instance_id": {
+      "type": "string"
+    },
+    "max_actions": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "phase": {
+      "$ref": "#/$defs/LeasePhase"
+    },
+    "principal_id": {
+      "type": "string"
+    },
+    "released_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "workspace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "experiment_id",
+    "instance_id",
+    "principal_id",
+    "phase",
+    "acquired_at_unix",
+    "expires_at_unix",
+    "max_actions"
+  ],
+  "title": "ExperimentLease",
+  "type": "object"
+}

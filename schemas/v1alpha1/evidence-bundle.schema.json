@@ -1,0 +1,636 @@
+{
+  "$defs": {
+    "Capability": {
+      "enum": [
+        "catalog.read",
+        "lab.read",
+        "lab.create",
+        "lab.edit",
+        "lab.clone",
+        "lab.validate",
+        "lab.publish",
+        "lab.materialize",
+        "lab.status",
+        "lab.close",
+        "experiment.create",
+        "experiment.read",
+        "experiment.close",
+        "lease.acquire",
+        "lease.release",
+        "action.cancel",
+        "topology.inspect",
+        "topology.mutate",
+        "node.add",
+        "node.remove",
+        "node.control",
+        "peer.connect",
+        "peer.disconnect",
+        "wallet.create",
+        "wallet.control",
+        "wallet.fund",
+        "channel.open",
+        "channel.close",
+        "channel.force_close",
+        "channel.rebalance",
+        "chain.mine",
+        "chain.fee",
+        "chain.reorg",
+        "network.delay",
+        "network.drop",
+        "network.partition",
+        "network.heal",
+        "component.logs",
+        "traffic.capture",
+        "oracle.list",
+        "oracle.run",
+        "artifact.read",
+        "policy.read",
+        "policy.edit",
+        "snapshot.create",
+        "snapshot.restore"
+      ],
+      "type": "string"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ComponentSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "config_version": {
+          "description": "Version of the implementation adapter's configuration contract.",
+          "type": "string"
+        },
+        "control": {
+          "$ref": "#/$defs/ControlClass"
+        },
+        "id": {
+          "type": "string"
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "version": {
+          "description": "Version of the service binary, image, or implementation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "implementation",
+        "config_version",
+        "control"
+      ],
+      "type": "object"
+    },
+    "ControlClass": {
+      "enum": [
+        "laboratory",
+        "target",
+        "attacker",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "EvidenceAction": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_at_unix": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "artifact_byte_length": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "artifact_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifact_media_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capability": {
+          "$ref": "#/$defs/Capability"
+        },
+        "completed_at_unix": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "experiment_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/OperationKind"
+        },
+        "lease_id": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/OperationPhase"
+        },
+        "principal_id": {
+          "type": "string"
+        },
+        "request": true,
+        "request_digest": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at_unix": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "instance_id",
+        "experiment_id",
+        "lease_id",
+        "principal_id",
+        "sequence",
+        "kind",
+        "capability",
+        "request_digest",
+        "request",
+        "phase",
+        "accepted_at_unix"
+      ],
+      "type": "object"
+    },
+    "EvidenceArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/OperationArtifact"
+        },
+        "kind": {
+          "$ref": "#/$defs/OperationKind"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "sequence",
+        "kind",
+        "artifact"
+      ],
+      "type": "object"
+    },
+    "EvidenceBundleContent": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/EvidenceArtifact"
+          },
+          "type": "array"
+        },
+        "experiment": {
+          "$ref": "#/$defs/Experiment"
+        },
+        "instance": {
+          "$ref": "#/$defs/EvidenceInstance"
+        },
+        "journal": {
+          "items": {
+            "$ref": "#/$defs/EvidenceAction"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "$ref": "#/$defs/PublishedRevision"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "api_version",
+        "workspace_id",
+        "experiment",
+        "instance",
+        "revision",
+        "journal",
+        "artifacts"
+      ],
+      "type": "object"
+    },
+    "EvidenceInstance": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "lock_digest": {
+          "type": "string"
+        },
+        "revision_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision_digest",
+        "lock_digest"
+      ],
+      "type": "object"
+    },
+    "Experiment": {
+      "additionalProperties": false,
+      "properties": {
+        "closed_at_unix": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "created_at_unix": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "owner_principal_id": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/ExperimentPhase"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_id",
+        "instance_id",
+        "owner_principal_id",
+        "phase",
+        "created_at_unix"
+      ],
+      "type": "object"
+    },
+    "ExperimentPhase": {
+      "enum": [
+        "active",
+        "closed"
+      ],
+      "type": "string"
+    },
+    "LabLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_components": {
+          "default": 64,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_config_bytes": {
+          "default": 65536,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_links": {
+          "default": 256,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "LabPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "limits": {
+          "$ref": "#/$defs/LabLimits",
+          "default": {
+            "max_components": 64,
+            "max_config_bytes": 65536,
+            "max_links": 256
+          }
+        }
+      },
+      "type": "object"
+    },
+    "LabSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "components": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ComponentSpec"
+          },
+          "type": "array"
+        },
+        "links": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LinkSpec"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/LabPolicy",
+          "default": {
+            "allow": [],
+            "limits": {
+              "max_components": 64,
+              "max_config_bytes": 65536,
+              "max_links": 256
+            }
+          }
+        }
+      },
+      "required": [
+        "api_version",
+        "name"
+      ],
+      "type": "object"
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "lightning_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
+    "LinkSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkKind"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "LockEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_version": {
+          "type": "string"
+        },
+        "catalog_id": {
+          "type": "string"
+        },
+        "component_id": {
+          "type": "string"
+        },
+        "config_digest": {
+          "type": "string"
+        },
+        "config_version": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "source_digest": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component_id",
+        "catalog_id",
+        "adapter_version",
+        "version",
+        "config_version",
+        "config_digest",
+        "image",
+        "source_digest"
+      ],
+      "type": "object"
+    },
+    "OperationArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_length": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "content": true,
+        "digest": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "digest",
+        "byte_length",
+        "content"
+      ],
+      "type": "object"
+    },
+    "OperationKind": {
+      "enum": [
+        "node_start",
+        "node_stop",
+        "node_restart",
+        "bootstrap_liquidity",
+        "peer_connect",
+        "peer_disconnect",
+        "channel_open",
+        "channel_close",
+        "channel_force_close",
+        "channel_rebalance",
+        "network_partition",
+        "network_delay",
+        "network_loss",
+        "network_heal",
+        "wallet_initialize",
+        "wallet_balance",
+        "wallet_fund",
+        "wallet_invoice",
+        "wallet_pay",
+        "wallet_round_trip",
+        "conservation_oracle",
+        "reachability_oracle"
+      ],
+      "type": "string"
+    },
+    "OperationPhase": {
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "PublishedRevision": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "lab": {
+          "$ref": "#/$defs/LabSpec"
+        },
+        "lock": {
+          "$ref": "#/$defs/ResolvedLock"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "digest",
+        "lab",
+        "lock"
+      ],
+      "type": "object"
+    },
+    "ResolvedLock": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/LockEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "api_version",
+        "digest",
+        "entries"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "byte_length": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "content": {
+      "$ref": "#/$defs/EvidenceBundleContent"
+    },
+    "digest": {
+      "type": "string"
+    },
+    "media_type": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "media_type",
+    "digest",
+    "byte_length",
+    "content"
+  ],
+  "title": "EvidenceBundle",
+  "type": "object"
+}

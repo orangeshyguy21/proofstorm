@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "byte_length": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "content": true,
+    "digest": {
+      "type": "string"
+    },
+    "media_type": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "media_type",
+    "digest",
+    "byte_length",
+    "content"
+  ],
+  "title": "OperationArtifact",
+  "type": "object"
+}

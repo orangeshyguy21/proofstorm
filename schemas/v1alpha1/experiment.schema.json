@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "ExperimentPhase": {
+      "enum": [
+        "active",
+        "closed"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "closed_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "created_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "id": {
+      "type": "string"
+    },
+    "instance_id": {
+      "type": "string"
+    },
+    "owner_principal_id": {
+      "type": "string"
+    },
+    "phase": {
+      "$ref": "#/$defs/ExperimentPhase"
+    },
+    "workspace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "instance_id",
+    "owner_principal_id",
+    "phase",
+    "created_at_unix"
+  ],
+  "title": "Experiment",
+  "type": "object"
+}

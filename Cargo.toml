@@ -1,0 +1,38 @@
+[workspace]
+members = [
+    "crates/proofstorm-core",
+    "crates/proofstorm-kube",
+    "crates/proofstorm-mcp",
+    "crates/proofstorm-store",
+    "crates/proofstormd",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/orangeshyguy21/proofstorm"
+
+[workspace.dependencies]
+anyhow = "1.0"
+futures = "0.3"
+k8s-openapi = { version = "0.28.0", features = ["v1_34"] }
+kube = { version = "=4.0.0", default-features = false, features = ["client", "derive", "runtime", "rustls-tls", "ring"] }
+rmcp = { version = "3.0.1", default-features = false, features = ["macros", "schemars", "server", "transport-async-rw", "transport-io"] }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+schemars = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["io-std", "macros", "rt-multi-thread", "signal"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

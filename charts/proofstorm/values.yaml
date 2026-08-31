@@ -1,0 +1,12 @@
+image:
+  repository: proofstorm-registry.localhost:5000/proofstormd
+  tag: 0.1.0-alpha.1
+  pullPolicy: Always
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi

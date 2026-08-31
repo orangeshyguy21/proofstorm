@@ -1,0 +1,372 @@
+use std::collections::BTreeMap;
+
+use kube::CustomResource;
+use proofstorm_core::{Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(CustomResource, Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[kube(
+    group = "proofstorm.dev",
+    version = "v1alpha1",
+    kind = "ProofstormLab",
+    plural = "proofstormlabs",
+    shortname = "pslab",
+    namespaced,
+    status = "ProofstormLabStatus"
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormLabSpec {
+    pub workspace_id: String,
+    pub instance_id: String,
+    /// Stable opaque identity used to derive the instance namespace.
+    pub instance_key: String,
+    /// Digest of the immutable resolved lab revision.
+    pub revision_digest: String,
+    pub lock: ResolvedLock,
+    pub lab: LabSpec,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum LabPhase {
+    #[default]
+    Pending,
+    Ready,
+    Closing,
+    CleanupBlocked,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TeardownReceipt {
+    pub instance_id: String,
+    pub instance_namespace: String,
+    pub inventory_digest: String,
+    pub verified_absent: bool,
+    pub checked_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormLabStatus {
+    pub phase: LabPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+    #[serde(default)]
+    pub components: Vec<ComponentStatus>,
+    #[serde(default)]
+    pub inventory: Vec<InventoryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teardown_receipt: Option<TeardownReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(CustomResource, Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[kube(
+    group = "proofstorm.dev",
+    version = "v1alpha1",
+    kind = "ProofstormLabAction",
+    plural = "proofstormlabactions",
+    shortname = "psaction",
+    namespaced,
+    status = "ProofstormLabActionStatus"
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormLabActionSpec {
+    pub lab_name: String,
+    pub workspace_id: String,
+    pub instance_id: String,
+    pub instance_key: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub principal_id: String,
+    pub sequence: u64,
+    pub operation_id: String,
+    pub request_digest: String,
+    pub capability: Capability,
+    pub accepted_at_unix: i64,
+    #[schemars(with = "LabActionSchema")]
+    pub action: LabAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "parameters", rename_all = "snake_case")]
+pub enum LabAction {
+    NodeStart(NodeControlAction),
+    NodeStop(NodeControlAction),
+    NodeRestart(NodeControlAction),
+    BootstrapLiquidity(BootstrapLiquidityAction),
+    PeerConnect(PeerConnectAction),
+    PeerDisconnect(PeerDisconnectAction),
+    ChannelOpen(ChannelOpenAction),
+    ChannelClose(ChannelCloseAction),
+    ChannelForceClose(ChannelCloseAction),
+    ChannelRebalance(ChannelRebalanceAction),
+    NetworkPartition(NetworkPartitionAction),
+    NetworkHeal(NetworkHealAction),
+    WalletInitialize(WalletInitializeAction),
+    WalletBalance(WalletBalanceAction),
+    WalletFund(WalletFundAction),
+    WalletInvoice(WalletInvoiceAction),
+    WalletPay(WalletPayAction),
+    WalletRoundTrip(WalletRoundTripAction),
+    ConservationOracle(ConservationOracleAction),
+    ReachabilityOracle(ReachabilityOracleAction),
+}
+
+// Kubernetes structural schemas cannot merge the different `kind` constants
+// generated for an internally tagged Rust enum. This schema admits only the
+// union of known action fields; serde still enforces the exact kind/parameter
+// pairing before proofstormd can reconcile an action.
+#[derive(JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct LabActionSchema {
+    kind: LabActionKindSchema,
+    parameters: LabActionParametersSchema,
+}
+
+#[derive(JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+enum LabActionKindSchema {
+    NodeStart,
+    NodeStop,
+    NodeRestart,
+    BootstrapLiquidity,
+    PeerConnect,
+    PeerDisconnect,
+    ChannelOpen,
+    ChannelClose,
+    ChannelForceClose,
+    ChannelRebalance,
+    NetworkPartition,
+    NetworkHeal,
+    WalletInitialize,
+    WalletBalance,
+    WalletFund,
+    WalletInvoice,
+    WalletPay,
+    WalletRoundTrip,
+    ConservationOracle,
+    ReachabilityOracle,
+}
+
+#[derive(JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct LabActionParametersSchema {
+    component: Option<String>,
+    chain: Option<String>,
+    mint_lightning: Option<String>,
+    payer_lightning: Option<String>,
+    funding_sat: Option<u64>,
+    channel_sat: Option<u64>,
+    push_sat: Option<u64>,
+    from_lightning: Option<String>,
+    to_lightning: Option<String>,
+    lightning: Option<String>,
+    channel_id: Option<String>,
+    outgoing_channel_id: Option<String>,
+    incoming_channel_id: Option<String>,
+    max_fee_sat: Option<u64>,
+    from_component: Option<String>,
+    to_component: Option<String>,
+    partition_operation_id: Option<String>,
+    wallet: Option<String>,
+    recipient_wallet: Option<String>,
+    mint: Option<String>,
+    quote_id: Option<String>,
+    amount_sat: Option<u64>,
+    timeout_seconds: Option<u32>,
+    expected_sat: Option<u64>,
+    tolerance_sat: Option<u64>,
+    service: Option<String>,
+    attempts: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeControlAction {
+    pub component: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BootstrapLiquidityAction {
+    pub chain: String,
+    pub mint_lightning: String,
+    pub payer_lightning: String,
+    pub funding_sat: u64,
+    pub channel_sat: u64,
+    pub push_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerConnectAction {
+    pub from_lightning: String,
+    pub to_lightning: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerDisconnectAction {
+    pub from_lightning: String,
+    pub to_lightning: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelOpenAction {
+    pub chain: String,
+    pub from_lightning: String,
+    pub to_lightning: String,
+    pub channel_sat: u64,
+    pub push_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelCloseAction {
+    pub chain: String,
+    pub from_lightning: String,
+    pub to_lightning: String,
+    /// Opaque Proofstorm handle returned by channel creation.
+    pub channel_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelRebalanceAction {
+    pub lightning: String,
+    /// Opaque Proofstorm handle for the channel that sends the circular payment.
+    pub outgoing_channel_id: String,
+    /// Opaque Proofstorm handle for the channel that receives the circular payment.
+    pub incoming_channel_id: String,
+    pub amount_sat: u64,
+    pub max_fee_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkPartitionAction {
+    pub from_component: String,
+    pub to_component: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkHealAction {
+    /// Durable operation ID of the partition being healed.
+    pub partition_operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletInitializeAction {
+    pub wallet: String,
+    pub mint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletBalanceAction {
+    pub wallet: String,
+    pub mint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletFundAction {
+    pub wallet: String,
+    pub mint: String,
+    pub payer_lightning: String,
+    pub amount_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletInvoiceAction {
+    pub quote_id: String,
+    pub wallet: String,
+    pub mint: String,
+    pub amount_sat: u64,
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletPayAction {
+    pub quote_id: String,
+    pub wallet: String,
+    pub mint: String,
+    pub recipient_wallet: String,
+    pub amount_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletRoundTripAction {
+    pub wallet: String,
+    pub mint: String,
+    pub payer_lightning: String,
+    pub amount_sat: u64,
+    pub tolerance_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConservationOracleAction {
+    pub wallet: String,
+    pub mint: String,
+    pub expected_sat: u64,
+    pub tolerance_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReachabilityOracleAction {
+    pub from_component: String,
+    pub to_component: String,
+    /// Logical service advertised by the destination component adapter.
+    pub service: String,
+    pub timeout_seconds: u32,
+    pub attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum ActionPhase {
+    #[default]
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormLabActionStatus {
+    pub phase: ActionPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<BTreeMap<String, Value>>,
+}

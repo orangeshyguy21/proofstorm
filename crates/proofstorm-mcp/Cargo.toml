@@ -1,0 +1,28 @@
+[package]
+name = "proofstorm-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
+proofstorm-core = { path = "../proofstorm-core" }
+proofstorm-kube = { path = "../proofstorm-kube" }
+proofstorm-store = { path = "../proofstorm-store" }
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tempfile = "3.20"
+
+[lints]
+workspace = true
