@@ -1,0 +1,481 @@
+{
+  "$defs": {
+    "ComponentConditionReason": {
+      "enum": [
+        "observed",
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "storage_bound",
+        "storage_pending",
+        "credentials_projected",
+        "credentials_missing",
+        "endpoints_ready",
+        "endpoints_missing",
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped",
+        "control_available",
+        "control_unavailable"
+      ],
+      "type": "string"
+    },
+    "ComponentConditionType": {
+      "enum": [
+        "workload_ready",
+        "storage_ready",
+        "credentials_ready",
+        "service_ready",
+        "protocol_ready",
+        "dependencies_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "type": "string"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ConditionAggregationContract": {
+      "additionalProperties": false,
+      "properties": {
+        "all_of": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionType"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "condition": {
+          "$ref": "#/$defs/ComponentConditionType"
+        }
+      },
+      "required": [
+        "condition",
+        "all_of"
+      ],
+      "type": "object"
+    },
+    "ConfigDefault": {
+      "oneOf": [
+        {
+          "properties": {
+            "source": {
+              "const": "literal",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "source",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExecutionMountContract": {
+      "additionalProperties": false,
+      "properties": {
+        "mount_path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/ExecutionStorageSource"
+        }
+      },
+      "required": [
+        "name",
+        "mount_path",
+        "read_only",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ExecutionStorageSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "source": {
+              "const": "stateful_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_persistent_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_config",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "link_kind": {
+              "$ref": "#/$defs/LinkKind"
+            },
+            "source": {
+              "const": "linked_stateful_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "link_kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "lightning_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
+    "OperationAdmissionContract": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/OperationClass"
+        },
+        "prerequisites": {
+          "items": {
+            "$ref": "#/$defs/ReadinessPrerequisite"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "operation",
+        "prerequisites"
+      ],
+      "type": "object"
+    },
+    "OperationClass": {
+      "enum": [
+        "inspect",
+        "start",
+        "stop",
+        "restart",
+        "native_exec",
+        "network_heal",
+        "peer_channel_mutation",
+        "wallet_payment"
+      ],
+      "type": "string"
+    },
+    "ProtocolProbeContract": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "tcp",
+              "type": "string"
+            },
+            "port_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "port_name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "http_get",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "port_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "port_name",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReadinessPrerequisite": {
+      "enum": [
+        "accepted_identity",
+        "storage",
+        "workload_identity",
+        "execution_context",
+        "target_descriptor",
+        "fault_identity",
+        "dependencies",
+        "protocol"
+      ],
+      "type": "string"
+    },
+    "StorageRequirementTemplate": {
+      "oneOf": [
+        {
+          "properties": {
+            "source": {
+              "const": "stateful_claim_template",
+              "type": "string"
+            },
+            "template_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "template_name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_claim",
+              "type": "string"
+            },
+            "suffix": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "suffix"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkloadControllerKind": {
+      "enum": [
+        "deployment",
+        "stateful_set"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applicable_conditions": {
+      "items": {
+        "$ref": "#/$defs/ComponentConditionType"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "condition_aggregation": {
+      "items": {
+        "$ref": "#/$defs/ConditionAggregationContract"
+      },
+      "type": "array"
+    },
+    "condition_reasons": {
+      "additionalProperties": false,
+      "properties": {
+        "component_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "credentials_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "dependencies_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "experiment_controllable": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "protocol_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "service_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "storage_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "workload_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "config_defaults": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ConfigDefault"
+      },
+      "type": "object"
+    },
+    "execution_environment": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "execution_mounts": {
+      "items": {
+        "$ref": "#/$defs/ExecutionMountContract"
+      },
+      "type": "array"
+    },
+    "execution_state_contract": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ComponentKind"
+    },
+    "operation_admission": {
+      "items": {
+        "$ref": "#/$defs/OperationAdmissionContract"
+      },
+      "type": "array"
+    },
+    "protocol_probe": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProtocolProbeContract"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "service_ports": {
+      "additionalProperties": {
+        "format": "uint16",
+        "maximum": 65535,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "storage_requirements": {
+      "items": {
+        "$ref": "#/$defs/StorageRequirementTemplate"
+      },
+      "type": "array"
+    },
+    "workload_kind": {
+      "$ref": "#/$defs/WorkloadControllerKind"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "config_defaults",
+    "service_ports",
+    "execution_state_contract",
+    "execution_mounts",
+    "execution_environment",
+    "workload_kind",
+    "storage_requirements",
+    "applicable_conditions",
+    "condition_reasons",
+    "condition_aggregation",
+    "operation_admission"
+  ],
+  "title": "ComponentBackendContract",
+  "type": "object"
+}

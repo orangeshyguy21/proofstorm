@@ -1362,6 +1362,7 @@ dependencies = [
  "kube",
  "proofstorm-core",
  "proofstorm-kube",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",

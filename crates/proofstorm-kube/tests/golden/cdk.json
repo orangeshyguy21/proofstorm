@@ -1,0 +1,451 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "credentials_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "cdk",
+    "component_id": "mint",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "credentials_ready": [
+        "not_observed",
+        "credentials_projected",
+        "credentials_missing"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [
+      {
+        "claim_name": "data-lightning-0",
+        "identity": "lnd:lightning:data-lightning-0",
+        "mount_name": "lnd",
+        "mount_path": "/lnd",
+        "read_only": true,
+        "source_component_id": "lightning",
+        "source_state_contract": "proofstorm/lnd-state/v1"
+      }
+    ],
+    "effective_config": {
+      "description": "Proofstorm regtest CDK mint",
+      "name": "Proofstorm CDK mint"
+    },
+    "execution_context": {
+      "component_id": "mint",
+      "environment": {
+        "CDK_MINTD_WORK_DIR": "/app/data",
+        "HOME": "/app/data"
+      },
+      "image": "docker.io/cashubtc/mintd@sha256:b17af7ed8bce85086c011afeae1d578ccde1c0b098b16fd961140931dec06f8a",
+      "mounts": [
+        {
+          "mount_path": "/config",
+          "name": "config",
+          "read_only": true,
+          "source": {
+            "source": "component_config"
+          }
+        },
+        {
+          "mount_path": "/app/data",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "component_persistent_data"
+          }
+        },
+        {
+          "mount_path": "/lnd",
+          "name": "lnd",
+          "read_only": true,
+          "source": {
+            "link_kind": "lightning_backend",
+            "source": "linked_stateful_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/cdk-mint-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "mint",
+    "linked_targets": {
+      "lightning": {
+        "component_id": "lightning",
+        "kind": "lightning",
+        "ports": {
+          "p2p": 9735,
+          "rest": 8080,
+          "rpc": 10009
+        }
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "peer_channel_mutation",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "wallet_payment",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "http_get",
+      "path": "/v1/info",
+      "port": 3338
+    },
+    "relevant_links": [
+      {
+        "from": "mint",
+        "kind": "lightning_backend",
+        "to": "lightning"
+      }
+    ],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:88d46397152ee55d33c0cd2e62c0ef9a660a450a60b693225bfb980289726ae5",
+    "storage": [
+      {
+        "claim_name": "mint-data"
+      }
+    ],
+    "target_descriptor": {
+      "component_id": "mint",
+      "kind": "mint",
+      "ports": {
+        "http": 3338
+      }
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "deployment",
+      "name": "mint"
+    }
+  },
+  "resources": {
+    "configMaps": [
+      {
+        "apiVersion": "v1",
+        "data": {
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\ninput_fee_ppk = 100\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\nurls = [\"http://mint:3338\"]\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
+        },
+        "kind": "ConfigMap",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-config",
+          "namespace": "proofstorm-i-golden-b2"
+        }
+      }
+    ],
+    "deployments": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "cdk",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-mint-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "mint",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "mint"
+            }
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:88d46397152ee55d33c0cd2e62c0ef9a660a450a60b693225bfb980289726ae5"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "mint",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "mint"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [
+                    "--config",
+                    "/config/config.toml"
+                  ],
+                  "command": [
+                    "cdk-mintd"
+                  ],
+                  "env": [
+                    {
+                      "name": "CDK_MINTD_WORK_DIR",
+                      "value": "/app/data"
+                    }
+                  ],
+                  "image": "docker.io/cashubtc/mintd@sha256:b17af7ed8bce85086c011afeae1d578ccde1c0b098b16fd961140931dec06f8a",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 3338,
+                      "name": "http"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "failureThreshold": 40,
+                    "httpGet": {
+                      "path": "/v1/info",
+                      "port": 3338
+                    },
+                    "periodSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/config",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/app/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/lnd",
+                      "name": "lnd",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "configMap": {
+                    "name": "mint-config"
+                  },
+                  "name": "config"
+                },
+                {
+                  "name": "data",
+                  "persistentVolumeClaim": {
+                    "claimName": "mint-data"
+                  }
+                },
+                {
+                  "name": "lnd",
+                  "persistentVolumeClaim": {
+                    "claimName": "data-lightning-0"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "persistentVolumeClaims": [
+      {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-data",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "1Gi"
+            }
+          }
+        }
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "http",
+              "port": 3338,
+              "targetPort": 3338
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          }
+        }
+      }
+    ],
+    "statefulSets": []
+  }
+}

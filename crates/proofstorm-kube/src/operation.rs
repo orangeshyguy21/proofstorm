@@ -1,6 +1,10 @@
 use k8s_openapi::api::batch::v1::Job;
 use kube::ResourceExt;
-use proofstorm_core::{Capability, ComponentKind, LinkKind};
+use proofstorm_core::{
+    Capability, ComponentConditionReason, ComponentConditionState, ComponentConditionType,
+    ComponentKind, ComponentPlanContract, ComponentStatus, ExecutionStorageSource, OperationClass,
+    ReadinessPrerequisite,
+};
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -181,8 +185,334 @@ pub enum ActionRenderError {
     UnknownService { component: String, service: String },
     #[error("component {component:?} uses unsupported action adapter {adapter:?}")]
     UnsupportedAdapter { component: String, adapter: String },
+    #[error("component plan is invalid: {0}")]
+    InvalidPlan(String),
     #[error("typed action rendered an invalid Kubernetes Job: {0}")]
     InvalidResource(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ActionAdmissionError {
+    #[error("action identity is invalid: {0}")]
+    Identity(&'static str),
+    #[error("component plan is invalid: {0}")]
+    InvalidPlan(String),
+    #[error("component {component:?} has no {operation:?} admission contract")]
+    MissingContract {
+        component: String,
+        operation: OperationClass,
+    },
+    #[error("component {component:?} does not satisfy {prerequisite:?} for {operation:?}")]
+    PrerequisiteUnsatisfied {
+        component: String,
+        operation: OperationClass,
+        prerequisite: ReadinessPrerequisite,
+        condition: Option<ComponentConditionType>,
+        state: Option<ComponentConditionState>,
+        reason: Option<ComponentConditionReason>,
+    },
+}
+
+impl ActionAdmissionError {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Identity(_) => "action_identity_invalid",
+            Self::InvalidPlan(_) => "action_plan_invalid",
+            Self::MissingContract { .. } => "action_admission_contract_missing",
+            Self::PrerequisiteUnsatisfied { .. } => "action_prerequisite_unsatisfied",
+        }
+    }
+}
+
+/// Evaluate a typed action against backend-declared readiness prerequisites.
+///
+/// Immutable execution contexts and target descriptors remain usable when a
+/// component protocol is unhealthy. Runtime conditions are required only when
+/// the selected operation contract names their prerequisite.
+///
+/// # Errors
+///
+/// Returns a stable failure when identity, compiled admission contracts, or an
+/// applicable runtime readiness prerequisite is unavailable.
+pub fn evaluate_action_admission(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+) -> Result<(), ActionAdmissionError> {
+    validate_action_identity(action, lab).map_err(|error| match error {
+        ActionRenderError::Identity(field) => ActionAdmissionError::Identity(field),
+        _ => ActionAdmissionError::InvalidPlan(error.to_string()),
+    })?;
+    let plans = crate::compile_component_plans(
+        &lab.spec.instance_key,
+        &lab.spec.revision_digest,
+        &lab.spec.lab,
+        &lab.spec.lock,
+    )
+    .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
+    let statuses = lab
+        .status
+        .as_ref()
+        .filter(|status| status.observed_revision_digest == lab.spec.revision_digest)
+        .map_or(&[][..], |status| status.components.as_slice());
+    let protocol_lease_current = lab
+        .annotations()
+        .get(crate::PROTOCOL_PROBER_LEASE_ANNOTATION)
+        .is_some_and(|lease| {
+            lease != "inactive"
+                && lab.status.as_ref().is_some_and(|status| {
+                    status.observed_protocol_probe_lease.as_ref() == Some(lease)
+                })
+        });
+
+    for (component, operation) in action_participants(&action.spec.action) {
+        let plan = require_admission_plan(&plans, component, operation)?;
+        let contract = plan
+            .operation_admission
+            .iter()
+            .find(|contract| contract.operation == operation)
+            .ok_or_else(|| ActionAdmissionError::MissingContract {
+                component: component.to_owned(),
+                operation,
+            })?;
+        for prerequisite in &contract.prerequisites {
+            evaluate_prerequisite(
+                plan,
+                statuses,
+                operation,
+                *prerequisite,
+                protocol_lease_current,
+            )?;
+        }
+    }
+
+    if let Some((executor, target)) = action_execution_target(&action.spec.action)
+        && executor != target
+    {
+        let target = require_admission_plan(&plans, target, OperationClass::NativeExec)?;
+        evaluate_prerequisite(
+            target,
+            statuses,
+            OperationClass::NativeExec,
+            ReadinessPrerequisite::TargetDescriptor,
+            protocol_lease_current,
+        )?;
+    }
+    Ok(())
+}
+
+fn require_admission_plan<'a>(
+    plans: &'a [ComponentPlanContract],
+    component: &str,
+    operation: OperationClass,
+) -> Result<&'a ComponentPlanContract, ActionAdmissionError> {
+    plans
+        .iter()
+        .find(|plan| plan.component_id == component)
+        .ok_or_else(|| ActionAdmissionError::PrerequisiteUnsatisfied {
+            component: component.to_owned(),
+            operation,
+            prerequisite: ReadinessPrerequisite::AcceptedIdentity,
+            condition: None,
+            state: None,
+            reason: None,
+        })
+}
+
+fn evaluate_prerequisite(
+    plan: &ComponentPlanContract,
+    statuses: &[ComponentStatus],
+    operation: OperationClass,
+    prerequisite: ReadinessPrerequisite,
+    protocol_lease_current: bool,
+) -> Result<(), ActionAdmissionError> {
+    let condition_type = match prerequisite {
+        ReadinessPrerequisite::Storage => Some(ComponentConditionType::StorageReady),
+        ReadinessPrerequisite::Dependencies => Some(ComponentConditionType::DependenciesReady),
+        ReadinessPrerequisite::Protocol => Some(ComponentConditionType::ProtocolReady),
+        ReadinessPrerequisite::AcceptedIdentity
+        | ReadinessPrerequisite::ExecutionContext
+        | ReadinessPrerequisite::TargetDescriptor
+        | ReadinessPrerequisite::FaultIdentity => return Ok(()),
+        ReadinessPrerequisite::WorkloadIdentity => {
+            return evaluate_workload_identity(plan, statuses, operation);
+        }
+    };
+    let condition_type = condition_type.expect("runtime prerequisite has a condition");
+    if !plan.applicable_conditions.contains(&condition_type) {
+        return Ok(());
+    }
+    if matches!(
+        prerequisite,
+        ReadinessPrerequisite::Dependencies | ReadinessPrerequisite::Protocol
+    ) && !protocol_lease_current
+    {
+        return Err(unsatisfied(
+            plan,
+            operation,
+            prerequisite,
+            Some(condition_type),
+            None,
+        ));
+    }
+    let status = current_component_status(plan, statuses);
+    let condition = status.and_then(|status| {
+        status
+            .conditions
+            .iter()
+            .find(|condition| condition.condition_type == condition_type)
+    });
+    if condition.is_some_and(|condition| condition.state == ComponentConditionState::True) {
+        return Ok(());
+    }
+    Err(unsatisfied(
+        plan,
+        operation,
+        prerequisite,
+        Some(condition_type),
+        condition,
+    ))
+}
+
+fn evaluate_workload_identity(
+    plan: &ComponentPlanContract,
+    statuses: &[ComponentStatus],
+    operation: OperationClass,
+) -> Result<(), ActionAdmissionError> {
+    let condition = current_component_status(plan, statuses).and_then(|status| {
+        status
+            .conditions
+            .iter()
+            .find(|condition| condition.condition_type == ComponentConditionType::WorkloadReady)
+    });
+    if condition.is_some_and(|condition| {
+        !matches!(
+            condition.reason,
+            ComponentConditionReason::NotObserved | ComponentConditionReason::StaleRevision
+        )
+    }) {
+        return Ok(());
+    }
+    Err(unsatisfied(
+        plan,
+        operation,
+        ReadinessPrerequisite::WorkloadIdentity,
+        Some(ComponentConditionType::WorkloadReady),
+        condition,
+    ))
+}
+
+fn current_component_status<'a>(
+    plan: &ComponentPlanContract,
+    statuses: &'a [ComponentStatus],
+) -> Option<&'a ComponentStatus> {
+    statuses.iter().find(|status| {
+        status.id == plan.component_id
+            && status.observed_revision_digest == plan.revision_digest
+            && status.observed_rollout_digest == plan.rollout_digest
+    })
+}
+
+fn unsatisfied(
+    plan: &ComponentPlanContract,
+    operation: OperationClass,
+    prerequisite: ReadinessPrerequisite,
+    condition_type: Option<ComponentConditionType>,
+    condition: Option<&proofstorm_core::ComponentCondition>,
+) -> ActionAdmissionError {
+    ActionAdmissionError::PrerequisiteUnsatisfied {
+        component: plan.component_id.clone(),
+        operation,
+        prerequisite,
+        condition: condition_type,
+        state: condition.map(|condition| condition.state),
+        reason: condition.map(|condition| condition.reason),
+    }
+}
+
+fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
+    match action {
+        LabAction::NativeExec(request) => Some((&request.component, &request.target_component)),
+        LabAction::ReachabilityOracle(request) => {
+            Some((&request.from_component, &request.to_component))
+        }
+        _ => None,
+    }
+}
+
+fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
+    use OperationClass as Operation;
+    match action {
+        LabAction::NodeStart(request) => vec![(&request.component, Operation::Start)],
+        LabAction::NodeStop(request) => vec![(&request.component, Operation::Stop)],
+        LabAction::NodeRestart(request) => vec![(&request.component, Operation::Restart)],
+        LabAction::BootstrapLiquidity(request) => vec![
+            (&request.chain, Operation::PeerChannelMutation),
+            (&request.mint_lightning, Operation::PeerChannelMutation),
+            (&request.payer_lightning, Operation::PeerChannelMutation),
+        ],
+        LabAction::PeerConnect(request) => vec![
+            (&request.from_lightning, Operation::PeerChannelMutation),
+            (&request.to_lightning, Operation::PeerChannelMutation),
+        ],
+        LabAction::PeerDisconnect(request) => vec![
+            (&request.from_lightning, Operation::PeerChannelMutation),
+            (&request.to_lightning, Operation::PeerChannelMutation),
+        ],
+        LabAction::ChannelOpen(request) => vec![
+            (&request.chain, Operation::PeerChannelMutation),
+            (&request.from_lightning, Operation::PeerChannelMutation),
+            (&request.to_lightning, Operation::PeerChannelMutation),
+        ],
+        LabAction::ChannelClose(request) | LabAction::ChannelForceClose(request) => vec![
+            (&request.chain, Operation::PeerChannelMutation),
+            (&request.from_lightning, Operation::PeerChannelMutation),
+            (&request.to_lightning, Operation::PeerChannelMutation),
+        ],
+        LabAction::ChannelRebalance(request) => {
+            vec![(&request.lightning, Operation::PeerChannelMutation)]
+        }
+        LabAction::NetworkPartition(request) => vec![
+            (&request.from_component, Operation::Inspect),
+            (&request.to_component, Operation::Inspect),
+        ],
+        LabAction::NetworkHeal(_) => Vec::new(),
+        LabAction::WalletInitialize(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
+        ],
+        LabAction::WalletBalance(request) => vec![
+            (&request.wallet, Operation::Inspect),
+            (&request.mint, Operation::Inspect),
+        ],
+        LabAction::WalletFund(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
+            (&request.payer_lightning, Operation::WalletPayment),
+        ],
+        LabAction::WalletInvoice(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
+        ],
+        LabAction::WalletPay(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
+            (&request.recipient_wallet, Operation::WalletPayment),
+        ],
+        LabAction::WalletRoundTrip(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
+            (&request.payer_lightning, Operation::WalletPayment),
+        ],
+        LabAction::ConservationOracle(request) => vec![
+            (&request.wallet, Operation::Inspect),
+            (&request.mint, Operation::Inspect),
+        ],
+        LabAction::ReachabilityOracle(request) => {
+            vec![(&request.from_component, Operation::NativeExec)]
+        }
+        LabAction::NativeExec(request) => vec![(&request.component, Operation::NativeExec)],
+    }
 }
 
 #[must_use]
@@ -282,23 +612,22 @@ fn render_native_exec_action(
         ));
     }
 
-    let component = lab
-        .spec
-        .lab
-        .components
+    let plans = crate::compile_component_plans(
+        &lab.spec.instance_key,
+        &lab.spec.revision_digest,
+        &lab.spec.lab,
+        &lab.spec.lock,
+    )
+    .map_err(|error| ActionRenderError::InvalidPlan(error.to_string()))?;
+    let component = plans
         .iter()
-        .find(|component| component.id == request.component)
+        .find(|plan| plan.component_id == request.component)
         .ok_or_else(|| ActionRenderError::UnknownComponent(request.component.clone()))?;
-    let (implementation, image) = locked_component(lab, &request.component, component.kind)?;
-    let target = lab
-        .spec
-        .lab
-        .components
+    let target = plans
         .iter()
-        .find(|component| component.id == request.target_component)
+        .find(|plan| plan.component_id == request.target_component)
         .ok_or_else(|| ActionRenderError::UnknownComponent(request.target_component.clone()))?;
-    let (target_implementation, _) = locked_component(lab, &request.target_component, target.kind)?;
-    let context = native_exec_component_context(lab, component, implementation)?;
+    let context = native_exec_component_context(component)?;
     let mut environment = vec![
         ("PROOFSTORM_COMPONENT".to_owned(), request.component.clone()),
         (
@@ -311,7 +640,6 @@ fn render_native_exec_action(
     environment.extend(native_exec_target_environment(
         &action.spec.instance_key,
         target,
-        target_implementation,
     ));
 
     // A non-zero native exit is experiment data, not an infrastructure failure.
@@ -324,7 +652,7 @@ fn render_native_exec_action(
         "enableServiceLinks": false,
         "securityContext": pod_security(),
         "affinity": instance_affinity(&action.spec.instance_key),
-        "containers": [container_with_env("exec", image, wrapper, &context.mounts, environment)],
+        "containers": [container_with_env("exec", &component.execution_context.image, wrapper, &context.mounts, environment)],
         "volumes": context.volumes,
     });
     let mut rendered = job(
@@ -361,96 +689,77 @@ struct NativeExecComponentContext {
 }
 
 fn native_exec_component_context(
-    lab: &ProofstormLab,
-    component: &proofstorm_core::ComponentSpec,
-    implementation: &str,
+    plan: &ComponentPlanContract,
 ) -> Result<NativeExecComponentContext, ActionRenderError> {
     let mut context = NativeExecComponentContext {
         mounts: Vec::new(),
         volumes: Vec::new(),
-        environment: Vec::new(),
-    };
-    match component.kind {
-        ComponentKind::Bitcoin => {
-            context
-                .mounts
-                .push(mount("data", "/home/bitcoin/.bitcoin", false));
-            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("data-{}-0", component.id)}}));
-            context
-                .environment
-                .push(("HOME".to_owned(), "/home/bitcoin".to_owned()));
-        }
-        ComponentKind::Lightning if implementation == "lnd" => {
-            context.mounts.push(mount("data", "/home/lnd/.lnd", false));
-            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("data-{}-0", component.id)}}));
-            context
-                .environment
-                .push(("HOME".to_owned(), "/home/lnd".to_owned()));
-        }
-        ComponentKind::Lightning if implementation == "cln" => {
-            context
-                .mounts
-                .push(mount("data", "/home/cln/.lightning", false));
-            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("data-{}-0", component.id)}}));
-            context
-                .environment
-                .push(("HOME".to_owned(), "/home/cln".to_owned()));
-        }
-        ComponentKind::Mint if implementation == "cdk" => {
-            let lightning = lab
-                .spec
-                .lab
-                .links
-                .iter()
-                .find(|link| link.from == component.id && link.kind == LinkKind::LightningBackend)
-                .ok_or(ActionRenderError::Bounds(
-                    "mint requires a Lightning backend link",
-                ))?;
-            context.mounts.extend([
-                mount("config", "/config", true),
-                mount("data", "/app/data", false),
-                mount("lnd", "/lnd", true),
-            ]);
-            context.volumes.extend([
-                json!({"name": "config", "configMap": {"name": format!("{}-config", component.id)}}),
-                json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("{}-data", component.id)}}),
-                json!({"name": "lnd", "persistentVolumeClaim": {"claimName": format!("data-{}-0", lightning.to)}}),
-            ]);
-            context.environment.extend([
-                ("HOME".to_owned(), "/app/data".to_owned()),
-                ("CDK_MINTD_WORK_DIR".to_owned(), "/app/data".to_owned()),
-            ]);
-        }
-        ComponentKind::Wallet => {
-            context.mounts.push(mount("data", "/wallet", false));
-            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("{}-data", component.id)}}));
-            context.environment.extend([
-                ("HOME".to_owned(), "/wallet".to_owned()),
-                ("PROOFSTORM_WALLET".to_owned(), component.id.clone()),
-            ]);
-        }
-        ComponentKind::Attacker => context
+        environment: plan
+            .execution_context
             .environment
-            .push(("HOME".to_owned(), "/tmp".to_owned())),
-        _ => {
-            return Err(ActionRenderError::UnsupportedAdapter {
-                component: component.id.clone(),
-                adapter: implementation.to_owned(),
-            });
-        }
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    value.replace("{component_id}", &plan.component_id),
+                )
+            })
+            .collect(),
+    };
+    for binding in &plan.execution_context.mounts {
+        context
+            .mounts
+            .push(mount(&binding.name, &binding.mount_path, binding.read_only));
+        let source = match binding.source {
+            ExecutionStorageSource::StatefulData => {
+                json!({"persistentVolumeClaim": {"claimName": format!("data-{}-0", plan.component_id)}})
+            }
+            ExecutionStorageSource::ComponentPersistentData => {
+                json!({"persistentVolumeClaim": {"claimName": format!("{}-data", plan.component_id)}})
+            }
+            ExecutionStorageSource::ComponentConfig => {
+                json!({"configMap": {"name": format!("{}-config", plan.component_id)}})
+            }
+            ExecutionStorageSource::LinkedStatefulData { link_kind } => {
+                let target = plan
+                    .relevant_links
+                    .iter()
+                    .find(|link| link.kind == link_kind && link.from == plan.component_id)
+                    .ok_or_else(|| {
+                        ActionRenderError::InvalidPlan(format!(
+                            "component {:?} lacks required {link_kind:?} execution binding",
+                            plan.component_id
+                        ))
+                    })?;
+                json!({"persistentVolumeClaim": {"claimName": format!("data-{}-0", target.to)}})
+            }
+        };
+        let mut volume = json!({"name": binding.name});
+        volume
+            .as_object_mut()
+            .expect("execution volume is an object")
+            .extend(
+                source
+                    .as_object()
+                    .expect("volume source is an object")
+                    .clone(),
+            );
+        context.volumes.push(volume);
     }
     Ok(context)
 }
 
 fn native_exec_target_environment(
     instance_key: &str,
-    target: &proofstorm_core::ComponentSpec,
-    target_implementation: &str,
+    target: &ComponentPlanContract,
 ) -> Vec<(String, String)> {
     let namespace = instance_namespace(instance_key);
-    let ports = component_ports(target);
+    let ports = &target.target_descriptor.ports;
     let mut environment = vec![
-        ("PROOFSTORM_TARGET_COMPONENT".to_owned(), target.id.clone()),
+        (
+            "PROOFSTORM_TARGET_COMPONENT".to_owned(),
+            target.component_id.clone(),
+        ),
         (
             "PROOFSTORM_TARGET_KIND".to_owned(),
             serde_json::to_value(target.kind)
@@ -461,12 +770,15 @@ fn native_exec_target_environment(
         ),
         (
             "PROOFSTORM_TARGET_IMPLEMENTATION".to_owned(),
-            target_implementation.to_owned(),
+            target.backend_id.clone(),
         ),
-        ("PROOFSTORM_TARGET_HOST".to_owned(), target.id.clone()),
+        (
+            "PROOFSTORM_TARGET_HOST".to_owned(),
+            target.component_id.clone(),
+        ),
         (
             "PROOFSTORM_TARGET_FQDN".to_owned(),
-            format!("{}.{namespace}.svc", target.id),
+            format!("{}.{namespace}.svc", target.component_id),
         ),
         (
             "PROOFSTORM_TARGET_SERVICES_JSON".to_owned(),
@@ -481,24 +793,34 @@ fn native_exec_target_environment(
     }));
     match target.kind {
         ComponentKind::Bitcoin => environment.extend([
-            ("BITCOIN_RPC_HOST".to_owned(), target.id.clone()),
-            ("BITCOIN_RPC_PORT".to_owned(), "18443".to_owned()),
+            ("BITCOIN_RPC_HOST".to_owned(), target.component_id.clone()),
+            (
+                "BITCOIN_RPC_PORT".to_owned(),
+                ports.get("rpc").copied().unwrap_or_default().to_string(),
+            ),
             ("BITCOIN_RPC_USER".to_owned(), "proofstorm".to_owned()),
             (
                 "BITCOIN_RPC_PASSWORD".to_owned(),
                 "proofstorm-regtest-only".to_owned(),
             ),
         ]),
-        ComponentKind::Lightning if target_implementation == "lnd" => environment.extend([
-            ("LND_RPC_HOST".to_owned(), target.id.clone()),
-            ("LND_RPC_PORT".to_owned(), "10009".to_owned()),
+        ComponentKind::Lightning if target.backend_id == "lnd" => environment.extend([
+            ("LND_RPC_HOST".to_owned(), target.component_id.clone()),
+            (
+                "LND_RPC_PORT".to_owned(),
+                ports.get("rpc").copied().unwrap_or_default().to_string(),
+            ),
         ]),
-        ComponentKind::Lightning if target_implementation == "cln" => {
-            environment.push(("CLN_P2P_HOST".to_owned(), target.id.clone()));
+        ComponentKind::Lightning if target.backend_id == "cln" => {
+            environment.push(("CLN_P2P_HOST".to_owned(), target.component_id.clone()));
         }
         ComponentKind::Mint => environment.push((
             "CASHU_MINT_URL".to_owned(),
-            format!("http://{}:3338", target.id),
+            format!(
+                "http://{}:{}",
+                target.component_id,
+                ports.get("http").copied().unwrap_or_default()
+            ),
         )),
         _ => {}
     }
@@ -2271,7 +2593,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use proofstorm_core::{
-        API_VERSION, ComponentSpec, ControlClass, LabPolicy, LabSpec, default_catalog, resolve_lock,
+        API_VERSION, ComponentCondition, ComponentSpec, ComponentStatus, ControlClass, LabPolicy,
+        LabSpec, default_catalog, resolve_lock,
     };
 
     use super::*;
@@ -2343,6 +2666,329 @@ mod tests {
             },
         );
         (lab, action)
+    }
+
+    fn ready_admission_status(lab: &mut ProofstormLab) {
+        lab.metadata.annotations.get_or_insert_default().insert(
+            crate::PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
+            "lease-current".into(),
+        );
+        let plans = crate::compile_component_plans(
+            &lab.spec.instance_key,
+            &lab.spec.revision_digest,
+            &lab.spec.lab,
+            &lab.spec.lock,
+        )
+        .expect("plans");
+        let components = plans
+            .iter()
+            .map(|plan| ComponentStatus {
+                id: plan.component_id.clone(),
+                kind: plan.kind,
+                observed_revision_digest: plan.revision_digest.clone(),
+                observed_rollout_digest: plan.rollout_digest.clone(),
+                conditions: plan
+                    .applicable_conditions
+                    .iter()
+                    .map(|condition_type| ComponentCondition {
+                        condition_type: *condition_type,
+                        state: ComponentConditionState::True,
+                        reason: match condition_type {
+                            ComponentConditionType::WorkloadReady => {
+                                ComponentConditionReason::WorkloadAvailable
+                            }
+                            ComponentConditionType::StorageReady => {
+                                ComponentConditionReason::StorageBound
+                            }
+                            ComponentConditionType::CredentialsReady => {
+                                ComponentConditionReason::CredentialsProjected
+                            }
+                            ComponentConditionType::ServiceReady => {
+                                ComponentConditionReason::EndpointsReady
+                            }
+                            ComponentConditionType::ProtocolReady => {
+                                ComponentConditionReason::ProtocolResponding
+                            }
+                            ComponentConditionType::DependenciesReady => {
+                                ComponentConditionReason::DependenciesSatisfied
+                            }
+                            ComponentConditionType::ComponentReady => {
+                                ComponentConditionReason::ComponentOperational
+                            }
+                            ComponentConditionType::ExperimentControllable => {
+                                ComponentConditionReason::ControlAvailable
+                            }
+                        },
+                        message: "ready".into(),
+                        last_transition_unix: 1,
+                    })
+                    .collect(),
+                ready: true,
+                service: format!("{}.instance.svc", plan.component_id),
+                ports: plan.target_descriptor.ports.clone(),
+            })
+            .collect();
+        lab.status = Some(crate::ProofstormLabStatus {
+            phase: crate::LabPhase::Ready,
+            observed_revision_digest: lab.spec.revision_digest.clone(),
+            observed_protocol_probe_lease: Some("lease-current".into()),
+            components,
+            ..crate::ProofstormLabStatus::default()
+        });
+    }
+
+    fn set_condition(
+        lab: &mut ProofstormLab,
+        component: &str,
+        condition_type: ComponentConditionType,
+        state: ComponentConditionState,
+        reason: ComponentConditionReason,
+    ) {
+        let condition = lab
+            .status
+            .as_mut()
+            .expect("status")
+            .components
+            .iter_mut()
+            .find(|status| status.id == component)
+            .expect("component status")
+            .conditions
+            .iter_mut()
+            .find(|condition| condition.condition_type == condition_type)
+            .expect("condition");
+        condition.state = state;
+        condition.reason = reason;
+    }
+
+    #[test]
+    fn admission_uses_operation_prerequisites_instead_of_lab_ready() {
+        let (mut lab, mut action) = typed_bootstrap();
+
+        action.spec.action = LabAction::NativeExec(NativeExecAction {
+            component: "chain".into(),
+            target_component: "mint-lnd".into(),
+            script: "bitcoin-cli -help".into(),
+            timeout_seconds: 30,
+        });
+        assert!(
+            evaluate_action_admission(&action, &lab).is_ok(),
+            "immutable execution and target contracts do not require lab readiness"
+        );
+
+        ready_admission_status(&mut lab);
+        lab.status.as_mut().expect("status").phase = crate::LabPhase::Pending;
+        set_condition(
+            &mut lab,
+            "chain",
+            ComponentConditionType::ProtocolReady,
+            ComponentConditionState::False,
+            ComponentConditionReason::ProtocolProbeFailed,
+        );
+        action.spec.action = LabAction::NodeStart(crate::NodeControlAction {
+            component: "chain".into(),
+        });
+        assert!(
+            evaluate_action_admission(&action, &lab).is_ok(),
+            "start depends on storage, not protocol or aggregate lab phase"
+        );
+
+        set_condition(
+            &mut lab,
+            "chain",
+            ComponentConditionType::StorageReady,
+            ComponentConditionState::False,
+            ComponentConditionReason::StoragePending,
+        );
+        assert!(matches!(
+            evaluate_action_admission(&action, &lab),
+            Err(ActionAdmissionError::PrerequisiteUnsatisfied {
+                prerequisite: ReadinessPrerequisite::Storage,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn admission_allows_stopped_recovery_and_rejects_unhealthy_mutation() {
+        let (mut lab, mut action) = typed_bootstrap();
+        ready_admission_status(&mut lab);
+        set_condition(
+            &mut lab,
+            "mint-lnd",
+            ComponentConditionType::WorkloadReady,
+            ComponentConditionState::False,
+            ComponentConditionReason::IntentionallyStopped,
+        );
+        set_condition(
+            &mut lab,
+            "mint-lnd",
+            ComponentConditionType::ProtocolReady,
+            ComponentConditionState::False,
+            ComponentConditionReason::IntentionallyStopped,
+        );
+
+        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+            component: "mint-lnd".into(),
+        });
+        assert!(evaluate_action_admission(&action, &lab).is_ok());
+
+        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+        });
+        assert_eq!(
+            evaluate_action_admission(&action, &lab),
+            Err(ActionAdmissionError::PrerequisiteUnsatisfied {
+                component: "mint-lnd".into(),
+                operation: OperationClass::PeerChannelMutation,
+                prerequisite: ReadinessPrerequisite::Protocol,
+                condition: Some(ComponentConditionType::ProtocolReady),
+                state: Some(ComponentConditionState::False),
+                reason: Some(ComponentConditionReason::IntentionallyStopped),
+            })
+        );
+    }
+
+    #[test]
+    fn workload_identity_rejects_stale_status_but_network_control_does_not() {
+        let (mut lab, mut action) = typed_bootstrap();
+        ready_admission_status(&mut lab);
+        lab.status
+            .as_mut()
+            .expect("status")
+            .components
+            .iter_mut()
+            .find(|status| status.id == "chain")
+            .expect("chain")
+            .observed_rollout_digest = "sha256:stale".into();
+
+        action.spec.action = LabAction::NodeStop(crate::NodeControlAction {
+            component: "chain".into(),
+        });
+        assert!(matches!(
+            evaluate_action_admission(&action, &lab),
+            Err(ActionAdmissionError::PrerequisiteUnsatisfied {
+                prerequisite: ReadinessPrerequisite::WorkloadIdentity,
+                ..
+            })
+        ));
+
+        action.spec.action = LabAction::NetworkPartition(crate::NetworkPartitionAction {
+            from_component: "chain".into(),
+            to_component: "mint-lnd".into(),
+        });
+        assert!(evaluate_action_admission(&action, &lab).is_ok());
+    }
+
+    #[test]
+    fn read_only_wallet_inspection_survives_mint_protocol_failure() {
+        let (mut lab, mut action) = typed_bootstrap();
+        ready_admission_status(&mut lab);
+        set_condition(
+            &mut lab,
+            "mint",
+            ComponentConditionType::ProtocolReady,
+            ComponentConditionState::False,
+            ComponentConditionReason::ProtocolProbeFailed,
+        );
+
+        action.spec.action = LabAction::WalletBalance(crate::WalletBalanceAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+        });
+        assert!(evaluate_action_admission(&action, &lab).is_ok());
+
+        action.spec.action = LabAction::WalletFund(crate::WalletFundAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+            payer_lightning: "payer-lnd".into(),
+            amount_sat: 100,
+        });
+        assert_eq!(
+            evaluate_action_admission(&action, &lab),
+            Err(ActionAdmissionError::PrerequisiteUnsatisfied {
+                component: "mint".into(),
+                operation: OperationClass::WalletPayment,
+                prerequisite: ReadinessPrerequisite::Protocol,
+                condition: Some(ComponentConditionType::ProtocolReady),
+                state: Some(ComponentConditionState::False),
+                reason: Some(ComponentConditionReason::ProtocolProbeFailed),
+            })
+        );
+    }
+
+    #[test]
+    fn stale_lab_revision_fences_runtime_admission_only() {
+        let (mut lab, mut action) = typed_bootstrap();
+        ready_admission_status(&mut lab);
+        lab.status
+            .as_mut()
+            .expect("status")
+            .observed_revision_digest = "sha256:previous-revision".into();
+
+        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+            component: "chain".into(),
+        });
+        assert!(matches!(
+            evaluate_action_admission(&action, &lab),
+            Err(ActionAdmissionError::PrerequisiteUnsatisfied {
+                prerequisite: ReadinessPrerequisite::WorkloadIdentity,
+                state: None,
+                reason: None,
+                ..
+            })
+        ));
+
+        action.spec.action = LabAction::NativeExec(NativeExecAction {
+            component: "chain".into(),
+            target_component: "chain-b".into(),
+            script: "bitcoin-cli -help".into(),
+            timeout_seconds: 30,
+        });
+        assert!(
+            evaluate_action_admission(&action, &lab).is_ok(),
+            "a newly compiled immutable execution contract does not consume stale status"
+        );
+    }
+
+    #[test]
+    fn scheduler_lease_fences_protocol_admission_without_blocking_recovery() {
+        let (mut lab, mut action) = typed_bootstrap();
+        ready_admission_status(&mut lab);
+        lab.metadata
+            .annotations
+            .as_mut()
+            .expect("annotations")
+            .insert(
+                crate::PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
+                "inactive".into(),
+            );
+
+        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+        });
+        assert!(matches!(
+            evaluate_action_admission(&action, &lab),
+            Err(ActionAdmissionError::PrerequisiteUnsatisfied {
+                prerequisite: ReadinessPrerequisite::Dependencies | ReadinessPrerequisite::Protocol,
+                state: None,
+                reason: None,
+                ..
+            })
+        ));
+
+        action.spec.action = LabAction::NodeStart(crate::NodeControlAction {
+            component: "mint-lnd".into(),
+        });
+        assert!(evaluate_action_admission(&action, &lab).is_ok());
+        action.spec.action = LabAction::NativeExec(NativeExecAction {
+            component: "mint-lnd".into(),
+            target_component: "payer-lnd".into(),
+            script: "lncli --help".into(),
+            timeout_seconds: 30,
+        });
+        assert!(evaluate_action_admission(&action, &lab).is_ok());
     }
 
     #[test]
@@ -2489,6 +3135,61 @@ mod tests {
             .expect("pod labels");
         assert_eq!(labels["proofstorm.dev/network-identity"], "chain");
         assert!(!labels.contains_key("proofstorm.dev/component"));
+    }
+
+    #[test]
+    fn native_exec_mounts_are_compiled_from_the_executor_plan() {
+        let (mut lab, mut action) = typed_bootstrap();
+        lab.spec.lab.links.push(proofstorm_core::LinkSpec {
+            kind: proofstorm_core::LinkKind::LightningBackend,
+            from: "mint".into(),
+            to: "mint-lnd".into(),
+        });
+        lab.spec.lock = resolve_lock(&lab.spec.lab, &default_catalog()).expect("linked lock");
+        action.spec.capability = Capability::ComponentExec;
+        action.spec.action = LabAction::NativeExec(NativeExecAction {
+            component: "mint".into(),
+            target_component: "chain-b".into(),
+            script: "cdk-mintd --help".into(),
+            timeout_seconds: 30,
+        });
+
+        let job = render_lab_action_job(&action, &lab).expect("mint native exec");
+        let pod = job
+            .spec
+            .as_ref()
+            .expect("job spec")
+            .template
+            .spec
+            .as_ref()
+            .expect("pod spec");
+        let volumes = pod.volumes.as_ref().expect("plan volumes");
+        assert_eq!(
+            volumes[0].config_map.as_ref().expect("config").name,
+            "mint-config"
+        );
+        assert_eq!(
+            volumes[1]
+                .persistent_volume_claim
+                .as_ref()
+                .expect("mint data")
+                .claim_name,
+            "mint-data"
+        );
+        assert_eq!(
+            volumes[2]
+                .persistent_volume_claim
+                .as_ref()
+                .expect("linked LND data")
+                .claim_name,
+            "data-mint-lnd-0"
+        );
+        let mounts = pod.containers[0]
+            .volume_mounts
+            .as_ref()
+            .expect("plan mounts");
+        assert_eq!(mounts[2].mount_path, "/lnd");
+        assert_eq!(mounts[2].read_only, Some(true));
     }
 
     #[test]

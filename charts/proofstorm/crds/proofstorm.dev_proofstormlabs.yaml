@@ -203,11 +203,13 @@ spec:
                           type: string
                         component_id:
                           type: string
-                        config_digest:
-                          type: string
                         config_version:
                           type: string
+                        effective_config_digest:
+                          type: string
                         image:
+                          type: string
+                        rollout_digest:
                           type: string
                         source_digest:
                           type: string
@@ -217,9 +219,10 @@ spec:
                       - adapter_version
                       - catalog_id
                       - component_id
-                      - config_digest
                       - config_version
+                      - effective_config_digest
                       - image
+                      - rollout_digest
                       - source_digest
                       - version
                       type: object
@@ -249,6 +252,65 @@ spec:
                 default: []
                 items:
                   properties:
+                    conditions:
+                      items:
+                        properties:
+                          condition_type:
+                            enum:
+                            - workload_ready
+                            - storage_ready
+                            - credentials_ready
+                            - service_ready
+                            - protocol_ready
+                            - dependencies_ready
+                            - component_ready
+                            - experiment_controllable
+                            type: string
+                          last_transition_unix:
+                            format: int64
+                            type: integer
+                          message:
+                            maxLength: 160
+                            type: string
+                          reason:
+                            enum:
+                            - observed
+                            - not_observed
+                            - stale_revision
+                            - workload_available
+                            - workload_unavailable
+                            - storage_bound
+                            - storage_pending
+                            - credentials_projected
+                            - credentials_missing
+                            - endpoints_ready
+                            - endpoints_missing
+                            - protocol_responding
+                            - protocol_probe_pending
+                            - protocol_probe_failed
+                            - dependencies_satisfied
+                            - dependencies_unsatisfied
+                            - component_operational
+                            - component_not_operational
+                            - intentionally_stopped
+                            - control_available
+                            - control_unavailable
+                            type: string
+                          state:
+                            enum:
+                            - 'true'
+                            - 'false'
+                            - unknown
+                            type: string
+                        required:
+                        - condition_type
+                        - last_transition_unix
+                        - message
+                        - reason
+                        - state
+                        type: object
+                      maxItems: 8
+                      type: array
                     id:
                       type: string
                     kind:
@@ -261,6 +323,10 @@ spec:
                       - proxy
                       - oracle
                       type: string
+                    observed_revision_digest:
+                      type: string
+                    observed_rollout_digest:
+                      type: string
                     ports:
                       additionalProperties:
                         format: uint16
@@ -269,12 +335,16 @@ spec:
                         type: integer
                       type: object
                     ready:
+                      description: Alpha compatibility projection derived only from `ComponentReady`.
                       type: boolean
                     service:
                       type: string
                   required:
+                  - conditions
                   - id
                   - kind
+                  - observed_revision_digest
+                  - observed_rollout_digest
                   - ports
                   - ready
                   - service
@@ -312,6 +382,12 @@ spec:
                 format: int64
                 nullable: true
                 type: integer
+              observedProtocolProbeLease:
+                nullable: true
+                type: string
+              observedRevisionDigest:
+                description: Immutable lab revision against which this status was observed.
+                type: string
               phase:
                 enum:
                 - Pending
@@ -340,6 +416,7 @@ spec:
                 - verifiedAbsent
                 type: object
             required:
+            - observedRevisionDigest
             - phase
             type: object
         required:

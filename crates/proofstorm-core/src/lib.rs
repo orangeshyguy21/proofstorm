@@ -1,5 +1,6 @@
 //! Domain contracts shared by every Proofstorm interface.
 
+mod backend;
 mod catalog;
 mod evidence;
 mod experiment;
@@ -13,6 +14,16 @@ mod quote;
 mod schema;
 mod validation;
 
+pub use backend::{
+    BackendContractRegistry, ComponentBackendContract, ComponentConditionReason,
+    ComponentConditionState, ComponentConditionType, ComponentPlanContract, ComponentPlanInput,
+    ConditionAggregationContract, ConfigDefault, CredentialObservationContract,
+    ExecutionContextContract, ExecutionMountContract, ExecutionStorageSource,
+    LinkedStateObservationContract, OperationAdmissionContract, OperationClass,
+    ProtocolProbeContract, ProtocolProbePlan, ReadinessPrerequisite, StorageObservationContract,
+    StorageRequirementTemplate, TargetDescriptorContract, WorkloadControllerKind,
+    WorkloadObservationContract, default_backend_registry,
+};
 pub use catalog::{
     CatalogEntry, CatalogResponse, default_catalog, validate_catalog_component,
     validate_component_config,
@@ -23,7 +34,8 @@ pub use evidence::{
 };
 pub use experiment::{Experiment, ExperimentLease, ExperimentPhase, LeasePhase};
 pub use instance::{
-    ComponentStatus, InstancePhase, InventoryEntry, LabInstance, LabInstanceStatus, TeardownReceipt,
+    ComponentCondition, ComponentStatus, InstancePhase, InventoryEntry, LabInstance,
+    LabInstanceStatus, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, TeardownReceipt,
 };
 pub use model::{
     API_VERSION, Capability, ComponentKind, ComponentSpec, ControlClass, LabLimits, LabPolicy,
@@ -37,7 +49,9 @@ pub use network::{
 };
 pub use operation::{LabOperation, OperationArtifact, OperationKind, OperationPhase};
 pub use publication::{
-    LockEntry, PublishedRevision, ResolvedLock, digest_json, publication_digest, resolve_lock,
+    EFFECTIVE_CONFIG_DIGEST_VERSION, LOCK_API_VERSION, LockEntry, PublishedRevision,
+    ROLLOUT_DIGEST_VERSION, ResolvedLock, digest_json, publication_digest, resolve_effective_lab,
+    resolve_lock,
 };
 pub use quote::{WalletQuote, WalletQuoteDirection, WalletQuotePhase};
 pub use schema::schema_documents;

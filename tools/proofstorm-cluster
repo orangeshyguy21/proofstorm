@@ -148,7 +148,32 @@ setup() {
   docker build --file "${ROOT_DIR}/Dockerfile.proofstormd" \
     --tag "localhost:5111/proofstormd:${PROOFSTORM_VERSION}" "${ROOT_DIR}"
   docker push "localhost:5111/proofstormd:${PROOFSTORM_VERSION}"
+  # Helm installs chart CRDs once, but intentionally does not upgrade them.
+  # Reconcile the checked-in API definitions before upgrading the controller so
+  # reused developer clusters cannot run a new controller against a stale API.
+  "${KUBECTL_BIN}" --context k3d-proofstorm apply --server-side --force-conflicts \
+    --field-manager=proofstorm-cluster -f "${ROOT_DIR}/charts/proofstorm/crds"
+  local existing_labs
+  existing_labs="$("${KUBECTL_BIN}" --context k3d-proofstorm get \
+    proofstormlabs.proofstorm.dev --all-namespaces -o json)"
+  if ! python3 -c '
+import json, sys
+labs = json.load(sys.stdin).get("items", [])
+valid = all(
+    "rollout_digest" in entry and "effective_config_digest" in entry
+    for lab in labs
+    for entry in lab.get("spec", {}).get("lock", {}).get("entries", [])
+)
+raise SystemExit(0 if valid else 1)
+' <<<"${existing_labs}"; then
+    echo "existing Proofstorm labs use an incompatible alpha schema" >&2
+    echo "labs are not migrated or deleted automatically; reset the disposable developer cluster:" >&2
+    echo "  tools/proofstorm-cluster down" >&2
+    echo "  tools/proofstorm-cluster setup" >&2
+    exit 1
+  fi
   "${HELM_BIN}" upgrade --install proofstorm "${ROOT_DIR}/charts/proofstorm" \
+    --kube-context k3d-proofstorm \
     --namespace proofstorm-system --create-namespace --rollback-on-failure --wait
   "${KUBECTL_BIN}" --context k3d-proofstorm rollout restart deployment/proofstormd -n proofstorm-system
   "${KUBECTL_BIN}" --context k3d-proofstorm rollout status deployment/proofstormd -n proofstorm-system --timeout=90s

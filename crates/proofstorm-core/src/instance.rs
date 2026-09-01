@@ -3,7 +3,12 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::ComponentKind;
+use crate::{
+    ComponentConditionReason, ComponentConditionState, ComponentConditionType, ComponentKind,
+};
+
+pub const MAX_COMPONENT_CONDITIONS: usize = 8;
+pub const MAX_CONDITION_MESSAGE_BYTES: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -29,12 +34,39 @@ pub enum InstancePhase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ComponentCondition {
+    pub condition_type: ComponentConditionType,
+    pub state: ComponentConditionState,
+    pub reason: ComponentConditionReason,
+    #[schemars(length(max = 160))]
+    pub message: String,
+    pub last_transition_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ComponentStatus {
     pub id: String,
     pub kind: ComponentKind,
+    pub observed_revision_digest: String,
+    pub observed_rollout_digest: String,
+    #[schemars(length(max = 8))]
+    pub conditions: Vec<ComponentCondition>,
+    /// Alpha compatibility projection derived only from `ComponentReady`.
     pub ready: bool,
     pub service: String,
     pub ports: BTreeMap<String, u16>,
+}
+
+impl ComponentStatus {
+    /// Recompute the alpha compatibility projection from the aggregate
+    /// `ComponentReady` condition.
+    pub fn derive_ready(&mut self) {
+        self.ready = self.conditions.iter().any(|condition| {
+            condition.condition_type == ComponentConditionType::ComponentReady
+                && condition.state == ComponentConditionState::True
+        });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

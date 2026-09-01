@@ -245,13 +245,16 @@
         "component_id": {
           "type": "string"
         },
-        "config_digest": {
-          "type": "string"
-        },
         "config_version": {
           "type": "string"
         },
+        "effective_config_digest": {
+          "type": "string"
+        },
         "image": {
+          "type": "string"
+        },
+        "rollout_digest": {
           "type": "string"
         },
         "source_digest": {
@@ -267,7 +270,8 @@
         "adapter_version",
         "version",
         "config_version",
-        "config_digest",
+        "effective_config_digest",
+        "rollout_digest",
         "image",
         "source_digest"
       ],

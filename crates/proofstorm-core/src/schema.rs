@@ -2,9 +2,9 @@ use schemars::schema_for;
 use serde_json::Value;
 
 use crate::{
-    Capability, CatalogResponse, EvidenceBundle, Experiment, ExperimentLease, LabOperation,
-    LabSpec, NetworkFaultBackend, OperationArtifact, PublishedRevision, ResolvedLock,
-    ValidationReport, WalletQuote,
+    Capability, CatalogResponse, ComponentBackendContract, ComponentPlanContract, EvidenceBundle,
+    Experiment, ExperimentLease, LabOperation, LabSpec, NetworkFaultBackend, OperationArtifact,
+    PublishedRevision, ResolvedLock, ValidationReport, WalletQuote,
 };
 
 #[must_use]
@@ -27,6 +27,16 @@ pub fn schema_documents() -> Vec<(&'static str, Value)> {
         (
             "catalog.schema.json",
             serde_json::to_value(schema_for!(CatalogResponse)).expect("catalog schema serializes"),
+        ),
+        (
+            "component-backend-contract.schema.json",
+            serde_json::to_value(schema_for!(ComponentBackendContract))
+                .expect("component backend contract schema serializes"),
+        ),
+        (
+            "component-plan-contract.schema.json",
+            serde_json::to_value(schema_for!(ComponentPlanContract))
+                .expect("component plan contract schema serializes"),
         ),
         (
             "network-fault-backend.schema.json",
