@@ -39,6 +39,7 @@
     "network.partition",
     "network.heal",
     "component.logs",
+    "component.exec",
     "traffic.capture",
     "oracle.list",
     "oracle.run",

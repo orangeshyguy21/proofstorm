@@ -13,12 +13,12 @@ pub use adapter::{
 };
 pub use api::{
     ActionPhase, BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction,
-    ChannelRebalanceAction, ConservationOracleAction, LabAction, LabPhase, NetworkHealAction,
-    NetworkPartitionAction, NodeControlAction, PeerConnectAction, PeerDisconnectAction,
-    ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec, ProofstormLabActionStatus,
-    ProofstormLabSpec, ProofstormLabStatus, ReachabilityOracleAction, TeardownReceipt,
-    WalletBalanceAction, WalletFundAction, WalletInitializeAction, WalletInvoiceAction,
-    WalletPayAction, WalletRoundTripAction,
+    ChannelRebalanceAction, ConservationOracleAction, LabAction, LabPhase, NativeExecAction,
+    NetworkHealAction, NetworkPartitionAction, NodeControlAction, PeerConnectAction,
+    PeerDisconnectAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
+    ProofstormLabActionStatus, ProofstormLabSpec, ProofstormLabStatus, ReachabilityOracleAction,
+    TeardownReceipt, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
+    WalletInvoiceAction, WalletPayAction, WalletRoundTripAction,
 };
 pub use operation::{
     ActionRenderError, BootstrapJobSpec, ChannelCloseJobSpec, ChannelOpenJobSpec,

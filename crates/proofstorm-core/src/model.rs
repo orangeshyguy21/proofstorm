@@ -86,6 +86,8 @@ pub enum Capability {
     NetworkHeal,
     #[serde(rename = "component.logs")]
     ComponentLogs,
+    #[serde(rename = "component.exec")]
+    ComponentExec,
     #[serde(rename = "traffic.capture")]
     TrafficCapture,
     #[serde(rename = "oracle.list")]

@@ -40,6 +40,7 @@
         "network.partition",
         "network.heal",
         "component.logs",
+        "component.exec",
         "traffic.capture",
         "oracle.list",
         "oracle.run",
@@ -545,7 +546,8 @@
         "wallet_pay",
         "wallet_round_trip",
         "conservation_oracle",
-        "reachability_oracle"
+        "reachability_oracle",
+        "native_exec"
       ],
       "type": "string"
     },

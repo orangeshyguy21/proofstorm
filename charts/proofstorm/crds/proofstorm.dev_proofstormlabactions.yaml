@@ -48,6 +48,7 @@ spec:
                     - wallet_round_trip
                     - conservation_oracle
                     - reachability_oracle
+                    - native_exec
                     type: string
                   parameters:
                     properties:
@@ -128,7 +129,13 @@ spec:
                       recipientWallet:
                         nullable: true
                         type: string
+                      script:
+                        nullable: true
+                        type: string
                       service:
+                        nullable: true
+                        type: string
+                      targetComponent:
                         nullable: true
                         type: string
                       timeoutSeconds:
@@ -195,6 +202,7 @@ spec:
                 - network.partition
                 - network.heal
                 - component.logs
+                - component.exec
                 - traffic.capture
                 - oracle.list
                 - oracle.run

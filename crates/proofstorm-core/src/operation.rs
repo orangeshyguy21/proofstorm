@@ -27,6 +27,7 @@ pub enum OperationKind {
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,
+    NativeExec,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

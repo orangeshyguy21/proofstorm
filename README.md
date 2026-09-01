@@ -41,8 +41,9 @@ tools/proofstorm-cluster down
 ```
 
 The MCP configuration is operator-owned. Its principal and capability set are
-not agent inputs, and the agent receives neither kubeconfig nor component
-credentials.
+not agent inputs, and the agent never receives kubeconfig. A principal granted
+`component.exec` can inspect component-local credentials from inside that lab,
+so that capability must be treated as secret-bearing authority.
 
 Run the hermetic Slice 1 suite:
 
@@ -73,8 +74,7 @@ To enable the Kubernetes-backed lifecycle tools, add
 `lab.materialize,lab.status,lab.close` to the capability list and set
 `PROOFSTORM_CONTROL_NAMESPACE=proofstorm-system`. The MCP server then uses the
 operator's current Kubernetes client configuration; agents still receive only
-Proofstorm's typed lab interface and sanitized topology, never Kubernetes or
-component credentials.
+Proofstorm's MCP interface, never Kubernetes authority.
 
 Every component independently declares an implementation `version` and a
 required adapter `config_version`. The catalog advertises both. Publication
@@ -120,6 +120,46 @@ bash tests/kubernetes/slice5-e2e.sh
 tools/proofstorm-cluster down
 ```
 
+Proofstorm also exposes `proofstorm_component_exec` under the separate,
+high-authority `component.exec` capability. It runs an unrestricted
+non-interactive shell program in the selected component's exact digest-pinned
+image with its canonical lab-local state mounted. `component` selects that
+execution context; optional `target_component` selects which lab component's
+service metadata is exposed and defaults to the execution component. This lets
+one pinned Bitcoin CLI deliberately query any Bitcoin node in a multi-node lab.
+The command receives generic `PROOFSTORM_TARGET_*` identity, DNS, and named-port
+metadata plus implementation-native endpoint variables such as
+`BITCOIN_RPC_HOST` and `BITCOIN_RPC_PORT`; Proofstorm never parses or replaces
+the native command. Proofstorm still owns the
+namespace, image, volumes, pod identity, network policy, deadline, and output
+limit; the workload receives no Kubernetes service-account token, host mount,
+or cross-lab credential. The terminal artifact records the native exit code and
+up to 20 KiB of combined output. Use typed actions for portable orchestration
+and native exec when protocol fidelity or implementation-specific attack
+surfaces matter.
+
+Run the live native-protocol acceptance gate with:
+
+```bash
+tools/proofstorm-cluster setup
+bash tests/kubernetes/native-exec-e2e.sh
+tools/proofstorm-cluster down
+```
+
+The gate uses a unique workspace and instance identity per invocation. It runs
+native Bitcoin help, RPC against two independently selectable Bitcoin nodes,
+LND help, Nutshell help, and an in-workload
+service-account-token absence check; verifies action idempotency, locked images,
+network identity, bounded artifacts, canonical evidence, and verified teardown.
+
+Agents should use `proofstorm_lab_wait` after materialization or close and
+`proofstorm_operation_wait` after action submission. These calls perform
+server-side exponential backoff with a required 1–120 second bound.
+`proofstorm_lab_wait` returns only phase, readiness counts, message, and teardown
+receipt; `proofstorm_operation_wait` returns compact operation identity, phase,
+and the terminal artifact. This avoids repeated full topology and journal
+responses while preserving explicit timeouts and terminal evidence.
+
 For the alpha, one lab is a node-local scheduling unit. This permits isolated
 LND credential volumes to be used by bounded operation Jobs and scales separate
 labs across Kubernetes nodes, but one large lab cannot span nodes. A future
@@ -133,7 +173,8 @@ durable SQLite records with dedicated capabilities. Leases expire, carry a
 bounded action budget, and block conflicting leases, experiment close, and lab
 close. Slice 5 runtime operations now require a matching lease and are assigned
 an atomic experiment-wide sequence; `proofstorm_action_list` exposes bounded
-pages of that canonical journal.
+pages of that canonical journal in an object envelope with an explicit next
+sequence cursor.
 
 Liquidity bootstrap, wallet round trip, and conservation oracle are
 controller-owned typed actions. MCP records and submits a
@@ -304,7 +345,9 @@ authoritative recipient settlement may repair it to paid or settled. Adapter quo
 requests have no public field and remain inside the controller adapter. Quotes persist
 across MCP restarts, are bound to the experiment lease and principal, and are
 inspectable through capability-filtered `proofstorm_wallet_quote_status` and
-`proofstorm_wallet_quote_list` tools.
+`proofstorm_wallet_quote_list` tools. Quote-list pages use an object envelope
+with an explicit next-quote cursor so MCP clients never receive top-level array
+structured content.
 
 `proofstorm_wallet_invoice` and `proofstorm_wallet_pay` now execute that
 contract for the pinned Nutshell adapter. A controller-owned recipient Job

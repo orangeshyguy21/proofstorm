@@ -15,6 +15,7 @@ use thiserror::Error;
 use crate::{INSTANCE_LABEL, instance_namespace};
 
 const COMPONENT_LABEL: &str = "proofstorm.dev/component";
+const NETWORK_IDENTITY_LABEL: &str = "proofstorm.dev/network-identity";
 const RPC_USER: &str = "proofstorm";
 const RPC_PASSWORD: &str = "proofstorm-regtest-only";
 
@@ -549,7 +550,7 @@ pub fn render_component_network_policy(
     let mut peer_selector = json!({"matchLabels": {INSTANCE_LABEL: instance_key}});
     if !excluded_components.is_empty() {
         peer_selector["matchExpressions"] = json!([{
-            "key": COMPONENT_LABEL,
+            "key": NETWORK_IDENTITY_LABEL,
             "operator": "NotIn",
             "values": excluded_components
         }]);
@@ -557,7 +558,7 @@ pub fn render_component_network_policy(
     resource(json!({
         "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
         "metadata": metadata(component, instance_key, &namespace, Some(component)),
-        "spec": {"podSelector": {"matchLabels": {COMPONENT_LABEL: component}},
+        "spec": {"podSelector": {"matchLabels": {NETWORK_IDENTITY_LABEL: component}},
             "policyTypes": ["Ingress", "Egress"],
             "ingress": [{"from": [{"podSelector": peer_selector.clone()}]}],
             "egress": [
@@ -610,6 +611,7 @@ fn labels(instance_key: &str, component: Option<&str>) -> BTreeMap<String, Strin
     ]);
     if let Some(component) = component {
         labels.insert(COMPONENT_LABEL.to_owned(), component.to_owned());
+        labels.insert(NETWORK_IDENTITY_LABEL.to_owned(), component.to_owned());
     }
     labels
 }
@@ -769,10 +771,11 @@ mod tests {
         let value = serde_json::to_value(policy).expect("policy JSON");
         assert_eq!(value["metadata"]["name"], "mint-lnd");
         assert_eq!(
-            value["spec"]["podSelector"]["matchLabels"][COMPONENT_LABEL],
+            value["spec"]["podSelector"]["matchLabels"][NETWORK_IDENTITY_LABEL],
             "mint-lnd"
         );
         let ingress = &value["spec"]["ingress"][0]["from"][0]["podSelector"]["matchExpressions"][0];
+        assert_eq!(ingress["key"], NETWORK_IDENTITY_LABEL);
         assert_eq!(ingress["operator"], "NotIn");
         assert_eq!(
             ingress["values"],

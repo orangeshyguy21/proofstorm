@@ -119,6 +119,7 @@ pub enum LabAction {
     WalletRoundTrip(WalletRoundTripAction),
     ConservationOracle(ConservationOracleAction),
     ReachabilityOracle(ReachabilityOracleAction),
+    NativeExec(NativeExecAction),
 }
 
 // Kubernetes structural schemas cannot merge the different `kind` constants
@@ -157,6 +158,7 @@ enum LabActionKindSchema {
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,
+    NativeExec,
 }
 
 #[derive(JsonSchema)]
@@ -164,6 +166,7 @@ enum LabActionKindSchema {
 #[allow(dead_code)]
 struct LabActionParametersSchema {
     component: Option<String>,
+    target_component: Option<String>,
     chain: Option<String>,
     mint_lightning: Option<String>,
     payer_lightning: Option<String>,
@@ -190,12 +193,28 @@ struct LabActionParametersSchema {
     tolerance_sat: Option<u64>,
     service: Option<String>,
     attempts: Option<u32>,
+    script: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NodeControlAction {
     pub component: String,
+}
+
+/// An unrestricted shell program executed in a component's locked image.
+///
+/// The Kubernetes renderer, rather than the caller, owns namespace placement,
+/// credentials, volumes, service account, and pod security.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeExecAction {
+    pub component: String,
+    /// Component whose service metadata is exposed to the native command.
+    /// Defaults to the execution component at the MCP boundary.
+    pub target_component: String,
+    pub script: String,
+    pub timeout_seconds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

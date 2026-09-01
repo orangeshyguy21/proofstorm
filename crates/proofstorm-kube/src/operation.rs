@@ -1,15 +1,15 @@
 use k8s_openapi::api::batch::v1::Job;
 use kube::ResourceExt;
-use proofstorm_core::{Capability, ComponentKind};
+use proofstorm_core::{Capability, ComponentKind, LinkKind};
 use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
     BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction, ChannelRebalanceAction,
-    ConservationOracleAction, LabAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab,
-    ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
-    WalletInitializeAction, WalletInvoiceAction, WalletPayAction, WalletRoundTripAction,
-    component_ports, instance_namespace,
+    ConservationOracleAction, LabAction, NativeExecAction, PeerConnectAction, PeerDisconnectAction,
+    ProofstormLab, ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction,
+    WalletFundAction, WalletInitializeAction, WalletInvoiceAction, WalletPayAction,
+    WalletRoundTripAction, component_ports, instance_namespace,
 };
 
 const REACHABILITY_PROBE_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
@@ -207,6 +207,7 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::WalletPay(_)
         | LabAction::WalletRoundTrip(_) => "wallet",
         LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
+        LabAction::NativeExec(_) => "exec",
     }
 }
 
@@ -256,9 +257,252 @@ pub fn render_lab_action_job(
         LabAction::ReachabilityOracle(request) => {
             render_reachability_oracle_action(action, lab, request)?
         }
+        LabAction::NativeExec(request) => render_native_exec_action(action, lab, request)?,
     };
     mark_controller_owned(&mut job, &action.name_any());
     Ok(job)
+}
+
+fn render_native_exec_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &NativeExecAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::ComponentExec {
+        return Err(ActionRenderError::Capability);
+    }
+    if request.script.is_empty() || request.script.len() > 16 * 1024 {
+        return Err(ActionRenderError::Bounds(
+            "script must contain 1..=16384 UTF-8 bytes",
+        ));
+    }
+    if !(1..=300).contains(&request.timeout_seconds) {
+        return Err(ActionRenderError::Bounds(
+            "timeout_seconds must be in 1..=300",
+        ));
+    }
+
+    let component = lab
+        .spec
+        .lab
+        .components
+        .iter()
+        .find(|component| component.id == request.component)
+        .ok_or_else(|| ActionRenderError::UnknownComponent(request.component.clone()))?;
+    let (implementation, image) = locked_component(lab, &request.component, component.kind)?;
+    let target = lab
+        .spec
+        .lab
+        .components
+        .iter()
+        .find(|component| component.id == request.target_component)
+        .ok_or_else(|| ActionRenderError::UnknownComponent(request.target_component.clone()))?;
+    let (target_implementation, _) = locked_component(lab, &request.target_component, target.kind)?;
+    let context = native_exec_component_context(lab, component, implementation)?;
+    let mut environment = vec![
+        ("PROOFSTORM_COMPONENT".to_owned(), request.component.clone()),
+        (
+            "PROOFSTORM_EXEC_COMPONENT".to_owned(),
+            request.component.clone(),
+        ),
+        ("PROOFSTORM_SCRIPT".to_owned(), request.script.clone()),
+    ];
+    environment.extend(context.environment);
+    environment.extend(native_exec_target_environment(
+        &action.spec.instance_key,
+        target,
+        target_implementation,
+    ));
+
+    // A non-zero native exit is experiment data, not an infrastructure failure.
+    // The controller reads the bounded pod log and this small exit metadata.
+    let wrapper = "set +e; /bin/sh -c \"$PROOFSTORM_SCRIPT\"; code=$?; printf '{\"exit_code\":%s}' \"$code\" >/dev/termination-log; exit 0";
+    let pod = json!({
+        "restartPolicy": "Never",
+        "serviceAccountName": "proofstorm-workload",
+        "automountServiceAccountToken": false,
+        "enableServiceLinks": false,
+        "securityContext": pod_security(),
+        "affinity": instance_affinity(&action.spec.instance_key),
+        "containers": [container_with_env("exec", image, wrapper, &context.mounts, environment)],
+        "volumes": context.volumes,
+    });
+    let mut rendered = job(
+        &action.name_any(),
+        &instance_namespace(&action.spec.instance_key),
+        &action.spec.instance_key,
+        "native-exec",
+        i64::from(request.timeout_seconds) + 10,
+        &pod,
+    )
+    .map_err(ActionRenderError::from)?;
+    let labels = rendered
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.template.metadata.as_mut())
+        .and_then(|metadata| metadata.labels.as_mut())
+        .expect("internally rendered exec pod has labels");
+    // Native execution must observe the exact same network policy (including
+    // active partitions) as its execution component. A distinct service target
+    // does not change the caller's network identity or bypass a partition. It
+    // must not match the wider policy used by portable controller-action jobs.
+    labels.remove("proofstorm.dev/operation");
+    labels.insert(
+        "proofstorm.dev/network-identity".to_owned(),
+        request.component.clone(),
+    );
+    Ok(rendered)
+}
+
+struct NativeExecComponentContext {
+    mounts: Vec<Value>,
+    volumes: Vec<Value>,
+    environment: Vec<(String, String)>,
+}
+
+fn native_exec_component_context(
+    lab: &ProofstormLab,
+    component: &proofstorm_core::ComponentSpec,
+    implementation: &str,
+) -> Result<NativeExecComponentContext, ActionRenderError> {
+    let mut context = NativeExecComponentContext {
+        mounts: Vec::new(),
+        volumes: Vec::new(),
+        environment: Vec::new(),
+    };
+    match component.kind {
+        ComponentKind::Bitcoin => {
+            context
+                .mounts
+                .push(mount("data", "/home/bitcoin/.bitcoin", false));
+            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("data-{}-0", component.id)}}));
+            context
+                .environment
+                .push(("HOME".to_owned(), "/home/bitcoin".to_owned()));
+        }
+        ComponentKind::Lightning if implementation == "lnd" => {
+            context.mounts.push(mount("data", "/home/lnd/.lnd", false));
+            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("data-{}-0", component.id)}}));
+            context
+                .environment
+                .push(("HOME".to_owned(), "/home/lnd".to_owned()));
+        }
+        ComponentKind::Lightning if implementation == "cln" => {
+            context
+                .mounts
+                .push(mount("data", "/home/cln/.lightning", false));
+            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("data-{}-0", component.id)}}));
+            context
+                .environment
+                .push(("HOME".to_owned(), "/home/cln".to_owned()));
+        }
+        ComponentKind::Mint if implementation == "cdk" => {
+            let lightning = lab
+                .spec
+                .lab
+                .links
+                .iter()
+                .find(|link| link.from == component.id && link.kind == LinkKind::LightningBackend)
+                .ok_or(ActionRenderError::Bounds(
+                    "mint requires a Lightning backend link",
+                ))?;
+            context.mounts.extend([
+                mount("config", "/config", true),
+                mount("data", "/app/data", false),
+                mount("lnd", "/lnd", true),
+            ]);
+            context.volumes.extend([
+                json!({"name": "config", "configMap": {"name": format!("{}-config", component.id)}}),
+                json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("{}-data", component.id)}}),
+                json!({"name": "lnd", "persistentVolumeClaim": {"claimName": format!("data-{}-0", lightning.to)}}),
+            ]);
+            context.environment.extend([
+                ("HOME".to_owned(), "/app/data".to_owned()),
+                ("CDK_MINTD_WORK_DIR".to_owned(), "/app/data".to_owned()),
+            ]);
+        }
+        ComponentKind::Wallet => {
+            context.mounts.push(mount("data", "/wallet", false));
+            context.volumes.push(json!({"name": "data", "persistentVolumeClaim": {"claimName": format!("{}-data", component.id)}}));
+            context.environment.extend([
+                ("HOME".to_owned(), "/wallet".to_owned()),
+                ("PROOFSTORM_WALLET".to_owned(), component.id.clone()),
+            ]);
+        }
+        ComponentKind::Attacker => context
+            .environment
+            .push(("HOME".to_owned(), "/tmp".to_owned())),
+        _ => {
+            return Err(ActionRenderError::UnsupportedAdapter {
+                component: component.id.clone(),
+                adapter: implementation.to_owned(),
+            });
+        }
+    }
+    Ok(context)
+}
+
+fn native_exec_target_environment(
+    instance_key: &str,
+    target: &proofstorm_core::ComponentSpec,
+    target_implementation: &str,
+) -> Vec<(String, String)> {
+    let namespace = instance_namespace(instance_key);
+    let ports = component_ports(target);
+    let mut environment = vec![
+        ("PROOFSTORM_TARGET_COMPONENT".to_owned(), target.id.clone()),
+        (
+            "PROOFSTORM_TARGET_KIND".to_owned(),
+            serde_json::to_value(target.kind)
+                .expect("component kind serializes")
+                .as_str()
+                .expect("component kind is a string")
+                .to_owned(),
+        ),
+        (
+            "PROOFSTORM_TARGET_IMPLEMENTATION".to_owned(),
+            target_implementation.to_owned(),
+        ),
+        ("PROOFSTORM_TARGET_HOST".to_owned(), target.id.clone()),
+        (
+            "PROOFSTORM_TARGET_FQDN".to_owned(),
+            format!("{}.{namespace}.svc", target.id),
+        ),
+        (
+            "PROOFSTORM_TARGET_SERVICES_JSON".to_owned(),
+            serde_json::to_string(&ports).expect("component ports serialize"),
+        ),
+    ];
+    environment.extend(ports.iter().map(|(name, port)| {
+        (
+            format!("PROOFSTORM_TARGET_PORT_{}", name.to_ascii_uppercase()),
+            port.to_string(),
+        )
+    }));
+    match target.kind {
+        ComponentKind::Bitcoin => environment.extend([
+            ("BITCOIN_RPC_HOST".to_owned(), target.id.clone()),
+            ("BITCOIN_RPC_PORT".to_owned(), "18443".to_owned()),
+            ("BITCOIN_RPC_USER".to_owned(), "proofstorm".to_owned()),
+            (
+                "BITCOIN_RPC_PASSWORD".to_owned(),
+                "proofstorm-regtest-only".to_owned(),
+            ),
+        ]),
+        ComponentKind::Lightning if target_implementation == "lnd" => environment.extend([
+            ("LND_RPC_HOST".to_owned(), target.id.clone()),
+            ("LND_RPC_PORT".to_owned(), "10009".to_owned()),
+        ]),
+        ComponentKind::Lightning if target_implementation == "cln" => {
+            environment.push(("CLN_P2P_HOST".to_owned(), target.id.clone()));
+        }
+        ComponentKind::Mint => environment.push((
+            "CASHU_MINT_URL".to_owned(),
+            format!("http://{}:3338", target.id),
+        )),
+        _ => {}
+    }
+    environment
 }
 
 /// Render an idempotent controller-owned cleanup Job for private action state.
@@ -744,7 +988,7 @@ fn render_reachability_oracle_action(
     // this observation, including any active partitions.
     labels.remove("proofstorm.dev/operation");
     labels.insert(
-        "proofstorm.dev/component".to_owned(),
+        "proofstorm.dev/network-identity".to_owned(),
         request.from_component.clone(),
     );
     Ok(rendered)
@@ -1998,19 +2242,23 @@ fn mount(name: &str, path: &str, read_only: bool) -> Value {
 }
 
 fn container(name: &str, image: &str, script: &str, mounts: &[Value]) -> Value {
-    container_with_env(name, image, script, mounts, vec![])
+    container_with_env(name, image, script, mounts, Vec::<(&str, &str)>::new())
 }
 
-fn container_with_env(
+fn container_with_env<N, V>(
     name: &str,
     image: &str,
     script: &str,
     mounts: &[Value],
-    environment: Vec<(&str, &str)>,
-) -> Value {
+    environment: Vec<(N, V)>,
+) -> Value
+where
+    N: AsRef<str>,
+    V: AsRef<str>,
+{
     json!({"name": name, "image": image, "imagePullPolicy": "IfNotPresent",
         "command": ["/bin/sh", "-c", script], "volumeMounts": mounts,
-        "env": environment.into_iter().map(|(name, value)| json!({"name": name, "value": value})).collect::<Vec<_>>(),
+        "env": environment.into_iter().map(|(name, value)| json!({"name": name.as_ref(), "value": value.as_ref()})).collect::<Vec<_>>(),
         "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}})
 }
 
@@ -2047,6 +2295,7 @@ mod tests {
             name: "action-lab".into(),
             components: vec![
                 component("chain", ComponentKind::Bitcoin, "bitcoin-core"),
+                component("chain-b", ComponentKind::Bitcoin, "bitcoin-core"),
                 component("mint-lnd", ComponentKind::Lightning, "lnd"),
                 component("payer-lnd", ComponentKind::Lightning, "lnd"),
                 component("attacker-cln", ComponentKind::Lightning, "cln"),
@@ -2119,6 +2368,127 @@ mod tests {
         );
         let pod = &job.spec.expect("spec").template.spec.expect("pod");
         assert_eq!(pod.automount_service_account_token, Some(false));
+    }
+
+    #[test]
+    fn native_exec_uses_locked_component_image_data_and_uninterpolated_script() {
+        let (lab, mut action) = typed_bootstrap();
+        let locked_bitcoin = lab
+            .spec
+            .lock
+            .entries
+            .iter()
+            .find(|entry| entry.component_id == "chain")
+            .expect("bitcoin lock")
+            .image
+            .clone();
+        let script = "bitcoin-cli --help; printf '%s' '$NOT_EXPANDED_BY_RENDERER'";
+        action.spec.capability = Capability::ComponentExec;
+        action.spec.action = LabAction::NativeExec(NativeExecAction {
+            component: "chain".into(),
+            target_component: "chain".into(),
+            script: script.into(),
+            timeout_seconds: 30,
+        });
+
+        let job = render_lab_action_job(&action, &lab).expect("native exec job");
+        let spec = job.spec.as_ref().expect("job spec");
+        assert_eq!(spec.active_deadline_seconds, Some(40));
+        let pod = spec.template.spec.as_ref().expect("pod");
+        assert_eq!(pod.automount_service_account_token, Some(false));
+        let exec = &pod.containers[0];
+        assert_eq!(exec.name, "exec");
+        assert_eq!(exec.image.as_deref(), Some(locked_bitcoin.as_str()));
+        assert!(exec.command.as_ref().expect("wrapper command")[2].contains("$PROOFSTORM_SCRIPT"));
+        assert!(!exec.command.as_ref().expect("wrapper command")[2].contains(script));
+        assert_eq!(
+            exec.env
+                .as_ref()
+                .expect("exec environment")
+                .iter()
+                .find(|entry| entry.name == "PROOFSTORM_SCRIPT")
+                .and_then(|entry| entry.value.as_deref()),
+            Some(script)
+        );
+        assert_eq!(
+            pod.volumes.as_ref().expect("data volume")[0]
+                .persistent_volume_claim
+                .as_ref()
+                .map(|claim| claim.claim_name.as_str()),
+            Some("data-chain-0")
+        );
+        assert_eq!(action_result_container(&action.spec.action), "exec");
+        let pod_labels = job
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.template.metadata.as_ref())
+            .and_then(|metadata| metadata.labels.as_ref())
+            .expect("pod labels");
+        assert_eq!(
+            pod_labels
+                .get("proofstorm.dev/network-identity")
+                .map(String::as_str),
+            Some("chain")
+        );
+        assert!(!pod_labels.contains_key("proofstorm.dev/component"));
+        assert!(!pod_labels.contains_key("proofstorm.dev/operation"));
+    }
+
+    #[test]
+    fn native_exec_can_target_a_distinct_bitcoin_component() {
+        let (lab, mut action) = typed_bootstrap();
+        action.spec.capability = Capability::ComponentExec;
+        action.spec.action = LabAction::NativeExec(NativeExecAction {
+            component: "chain".into(),
+            target_component: "chain-b".into(),
+            script: "bitcoin-cli getblockchaininfo".into(),
+            timeout_seconds: 30,
+        });
+
+        let job = render_lab_action_job(&action, &lab).expect("targeted native exec job");
+        let pod = job
+            .spec
+            .as_ref()
+            .expect("job spec")
+            .template
+            .spec
+            .as_ref()
+            .expect("pod spec");
+        let environment = pod.containers[0]
+            .env
+            .as_ref()
+            .expect("target environment")
+            .iter()
+            .map(|entry| {
+                (
+                    entry.name.as_str(),
+                    entry.value.as_deref().unwrap_or_default(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(environment["PROOFSTORM_EXEC_COMPONENT"], "chain");
+        assert_eq!(environment["PROOFSTORM_TARGET_COMPONENT"], "chain-b");
+        assert_eq!(environment["PROOFSTORM_TARGET_HOST"], "chain-b");
+        assert_eq!(
+            environment["PROOFSTORM_TARGET_FQDN"],
+            "chain-b.proofstorm-i0123456789012345678.svc"
+        );
+        assert_eq!(environment["PROOFSTORM_TARGET_PORT_RPC"], "18443");
+        assert_eq!(environment["BITCOIN_RPC_HOST"], "chain-b");
+        assert_eq!(environment["BITCOIN_RPC_PORT"], "18443");
+        assert_eq!(environment["BITCOIN_RPC_USER"], "proofstorm");
+        assert_eq!(
+            environment["BITCOIN_RPC_PASSWORD"],
+            "proofstorm-regtest-only"
+        );
+        let labels = job
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.template.metadata.as_ref())
+            .and_then(|metadata| metadata.labels.as_ref())
+            .expect("pod labels");
+        assert_eq!(labels["proofstorm.dev/network-identity"], "chain");
+        assert!(!labels.contains_key("proofstorm.dev/component"));
     }
 
     #[test]
@@ -2797,9 +3167,12 @@ mod tests {
             .and_then(|metadata| metadata.labels.as_ref())
             .expect("pod labels");
         assert_eq!(
-            labels.get("proofstorm.dev/component").map(String::as_str),
+            labels
+                .get("proofstorm.dev/network-identity")
+                .map(String::as_str),
             Some("wallet")
         );
+        assert!(!labels.contains_key("proofstorm.dev/component"));
         assert!(!labels.contains_key("proofstorm.dev/operation"));
         let pod = template.spec.as_ref().expect("pod spec");
         assert!(!pod.automount_service_account_token.unwrap_or(true));

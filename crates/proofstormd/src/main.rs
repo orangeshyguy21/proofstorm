@@ -17,7 +17,7 @@ use k8s_openapi::api::{
 };
 use kube::{
     Api, Client, ResourceExt,
-    api::{DeleteParams, ListParams, Patch, PatchParams, PropagationPolicy},
+    api::{DeleteParams, ListParams, LogParams, Patch, PatchParams, PropagationPolicy},
     runtime::{
         Controller,
         controller::Action,
@@ -214,7 +214,8 @@ async fn reconcile_action(
         return Ok(Action::requeue(Duration::from_secs(2)));
     }
 
-    let pods = Api::<Pod>::namespaced(context.client.clone(), &instance_namespace)
+    let pod_api = Api::<Pod>::namespaced(context.client.clone(), &instance_namespace);
+    let pods = pod_api
         .list(&ListParams::default().labels(&format!("job-name={name}")))
         .await?;
     let started_at_unix = action
@@ -232,11 +233,16 @@ async fn reconcile_action(
             ..ProofstormLabActionStatus::default()
         }
     } else {
-        let artifact = pods
-            .items
-            .iter()
-            .find_map(|pod| termination_message(pod, action_result_container(&action.spec.action)))
-            .and_then(|message| serde_json::from_str(&message).ok());
+        let artifact = if matches!(action.spec.action, LabAction::NativeExec(_)) {
+            native_exec_artifact(&pod_api, action.as_ref(), &pods.items).await?
+        } else {
+            pods.items
+                .iter()
+                .find_map(|pod| {
+                    termination_message(pod, action_result_container(&action.spec.action))
+                })
+                .and_then(|message| serde_json::from_str(&message).ok())
+        };
         match artifact {
             Some(artifact) => ProofstormLabActionStatus {
                 phase: ActionPhase::Succeeded,
@@ -1394,6 +1400,65 @@ fn termination_message(pod: &Pod, target: &str) -> Option<String> {
         .as_ref()?
         .message
         .clone()
+}
+
+async fn native_exec_artifact(
+    pods: &Api<Pod>,
+    action: &ProofstormLabAction,
+    observed: &[Pod],
+) -> Result<Option<std::collections::BTreeMap<String, serde_json::Value>>, kube::Error> {
+    const LOG_LIMIT_BYTES: i64 = 20 * 1024;
+    const ARTIFACT_TARGET_BYTES: usize = 30 * 1024;
+
+    let LabAction::NativeExec(request) = &action.spec.action else {
+        return Ok(None);
+    };
+    let Some((pod, metadata)) = observed.iter().find_map(|pod| {
+        termination_message(pod, "exec")
+            .and_then(|message| serde_json::from_str::<serde_json::Value>(&message).ok())
+            .map(|metadata| (pod, metadata))
+    }) else {
+        return Ok(None);
+    };
+    let mut output = pods
+        .logs(
+            &pod.name_any(),
+            &LogParams {
+                container: Some("exec".into()),
+                limit_bytes: Some(LOG_LIMIT_BYTES),
+                ..LogParams::default()
+            },
+        )
+        .await?;
+    let mut truncated = output.len() >= usize::try_from(LOG_LIMIT_BYTES).unwrap_or(usize::MAX);
+    let exit_code = metadata
+        .get("exit_code")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(-1);
+
+    loop {
+        let artifact = status_object(serde_json::json!({
+            "component": request.component,
+            "target_component": request.target_component,
+            "exit_code": exit_code,
+            "combined_output": output,
+            "output_truncated": truncated,
+        }));
+        if serde_json::to_vec(&artifact)
+            .map_or(true, |encoded| encoded.len() <= ARTIFACT_TARGET_BYTES)
+        {
+            return Ok(Some(artifact));
+        }
+        truncated = true;
+        let target = output.len().saturating_mul(3) / 4;
+        let boundary = output
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= target)
+            .last()
+            .unwrap_or(0);
+        output.truncate(boundary);
+    }
 }
 
 fn container_failure(pod: &Pod) -> Option<serde_json::Value> {

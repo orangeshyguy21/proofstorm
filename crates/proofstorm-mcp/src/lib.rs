@@ -11,18 +11,19 @@ use proofstorm_core::{
     Experiment, ExperimentLease, ExperimentPhase, InstancePhase, LabInstance, LabInstanceStatus,
     LabOperation, LabSpec, LinkSpec, MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS,
     MAX_NETWORK_LOSS_BASIS_POINTS, NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature,
-    OperationKind, OperationPhase, PublishedRevision, TeardownReceipt as CoreTeardownReceipt,
-    ValidateLabRequest, ValidationReport, WalletQuote, WalletQuoteDirection, WalletQuotePhase,
-    default_catalog, network_policy_fault_backend, validate_lab,
+    OperationArtifact, OperationKind, OperationPhase, PublishedRevision,
+    TeardownReceipt as CoreTeardownReceipt, ValidateLabRequest, ValidationReport, WalletQuote,
+    WalletQuoteDirection, WalletQuotePhase, default_catalog, network_policy_fault_backend,
+    validate_lab,
 };
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionPhase, BootstrapLiquidityAction, ChannelCloseAction,
     ChannelOpenAction, ChannelRebalanceAction, ConservationOracleAction, LabAction, LabPhase,
-    NetworkHealAction, NetworkPartitionAction, NodeControlAction, PeerConnectAction,
-    PeerDisconnectAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
-    ProofstormLabSpec, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
-    WalletInitializeAction, WalletInvoiceAction, WalletPayAction, WalletRoundTripAction,
-    component_ports,
+    NativeExecAction, NetworkHealAction, NetworkPartitionAction, NodeControlAction,
+    PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
+    ProofstormLabActionSpec, ProofstormLabSpec, ReachabilityOracleAction, WalletBalanceAction,
+    WalletFundAction, WalletInitializeAction, WalletInvoiceAction, WalletPayAction,
+    WalletRoundTripAction, component_ports,
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
@@ -122,12 +123,80 @@ pub struct InstanceRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct LabWaitRequest {
+    pub instance_id: String,
+    /// Phase that ends the wait successfully. `ready` and `closed` are the
+    /// normal materialization and teardown targets.
+    pub target_phase: InstancePhase,
+    /// Server-side wait bound in 1..=120 seconds.
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabWaitResult {
+    pub instance_id: String,
+    pub phase: InstancePhase,
+    pub target_phase: InstancePhase,
+    pub reached: bool,
+    pub timed_out: bool,
+    pub ready_components: u32,
+    pub total_components: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teardown_receipt: Option<CoreTeardownReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OperationWaitRequest {
+    pub operation_id: String,
+    /// Server-side wait bound in 1..=120 seconds.
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OperationWaitResult {
+    pub operation_id: String,
+    pub sequence: u64,
+    pub kind: OperationKind,
+    pub phase: OperationPhase,
+    pub terminal: bool,
+    pub timed_out: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<OperationArtifact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NodeControlRequest {
     pub instance_id: String,
     pub experiment_id: String,
     pub lease_id: String,
     pub operation_id: String,
     pub component: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentExecRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub component: String,
+    /// Lab component whose native service endpoint should be exposed to the
+    /// command. When omitted, the execution component is also the target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_component: Option<String>,
+    /// An unrestricted non-interactive shell program run by `/bin/sh` inside
+    /// the component's pinned image. Native command failures are returned as
+    /// an exit code in the terminal artifact.
+    pub script: String,
+    pub timeout_seconds: u32,
     pub idempotency_key: String,
 }
 
@@ -462,6 +531,14 @@ pub struct ActionListRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ActionListResponse {
+    pub actions: Vec<LabOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after_sequence: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactExportRequest {
     pub experiment_id: String,
     /// Include full artifact bodies for conservation and reachability oracles.
@@ -495,6 +572,14 @@ pub struct WalletQuoteListRequest {
     pub after_quote_id: Option<String>,
     #[serde(default = "default_quote_list_limit")]
     pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WalletQuoteListResponse {
+    pub quotes: Vec<WalletQuote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after_quote_id: Option<String>,
 }
 
 const fn default_quote_list_limit() -> u32 {
@@ -895,6 +980,47 @@ impl ProofstormMcp {
         self.runtime()?.status(instance).await.map(Json)
     }
 
+    #[tool(
+        description = "Wait with bounded server-side exponential backoff for a lab to reach a target phase, returning only compact phase, readiness counts, message, and teardown receipt. timeout_seconds must be 1..=120"
+    )]
+    async fn proofstorm_lab_wait(
+        &self,
+        Parameters(request): Parameters<LabWaitRequest>,
+    ) -> Result<Json<LabWaitResult>, ErrorData> {
+        validate_wait_timeout(request.timeout_seconds)?;
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
+        let mut backoff = std::time::Duration::from_millis(250);
+        loop {
+            let status = self
+                .proofstorm_lab_status(Parameters(InstanceRequest {
+                    instance_id: request.instance_id.clone(),
+                }))
+                .await?
+                .0;
+            let reached = status.phase == request.target_phase;
+            if reached || lab_wait_terminal(status.phase) {
+                return Ok(Json(compact_lab_wait(
+                    status,
+                    request.target_phase,
+                    reached,
+                    false,
+                )));
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(Json(compact_lab_wait(
+                    status,
+                    request.target_phase,
+                    false,
+                    true,
+                )));
+            }
+            tokio::time::sleep(backoff.min(deadline - now)).await;
+            backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+        }
+    }
+
     #[tool(description = "Close a lab instance and begin verified Kubernetes teardown")]
     async fn proofstorm_lab_close(
         &self,
@@ -1056,6 +1182,83 @@ impl ProofstormMcp {
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.submit_node_control(request, OperationKind::NodeRestart)
             .await
+    }
+
+    #[tool(
+        description = "Run an unrestricted non-interactive shell program in a lab component's exact pinned image, with its component-local data and native CLI available. target_component optionally selects a distinct lab service and defaults to component; Proofstorm exposes generic PROOFSTORM_TARGET_* metadata plus native endpoint variables such as BITCOIN_RPC_HOST and BITCOIN_RPC_PORT without interpreting the command. The workload has no Kubernetes token, host access, or cross-lab credentials; combined output and exit code are journaled as a bounded experiment artifact"
+    )]
+    async fn proofstorm_component_exec(
+        &self,
+        Parameters(request): Parameters<ComponentExecRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ComponentExec)?;
+        if request.script.is_empty() || request.script.len() > 16 * 1024 {
+            return Err(invalid_operation(
+                "script must contain 1..=16384 UTF-8 bytes",
+            ));
+        }
+        if !(1..=300).contains(&request.timeout_seconds) {
+            return Err(invalid_operation("timeout_seconds must be in 1..=300"));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ComponentExec,
+            )
+            .map_err(store_error)?;
+        let component = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == request.component)
+            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+        component_image_any(&revision, &request.component, component.kind)?;
+        let target_component = request
+            .target_component
+            .as_deref()
+            .unwrap_or(&request.component)
+            .to_owned();
+        let target = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == target_component)
+            .ok_or_else(|| {
+                invalid_operation("target_component is not part of this lab revision")
+            })?;
+        component_image_any(&revision, &target_component, target.kind)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::NativeExec,
+            &request,
+            &request.idempotency_key,
+            Capability::ComponentExec,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::NativeExec(NativeExecAction {
+                component: request.component,
+                target_component,
+                script: request.script,
+                timeout_seconds: request.timeout_seconds,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
     }
 
     #[tool(description = "Fund two LND nodes and open a bounded payer-to-mint channel")]
@@ -2090,6 +2293,36 @@ impl ProofstormMcp {
         Ok(Json(completed))
     }
 
+    #[tool(
+        description = "Wait with bounded server-side exponential backoff for an operation to become terminal, returning compact identity, phase, and terminal artifact. timeout_seconds must be 1..=120"
+    )]
+    async fn proofstorm_operation_wait(
+        &self,
+        Parameters(request): Parameters<OperationWaitRequest>,
+    ) -> Result<Json<OperationWaitResult>, ErrorData> {
+        validate_wait_timeout(request.timeout_seconds)?;
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
+        let mut backoff = std::time::Duration::from_millis(250);
+        loop {
+            let operation = self
+                .proofstorm_operation_status(Parameters(OperationRequest {
+                    operation_id: request.operation_id.clone(),
+                }))
+                .await?
+                .0;
+            if operation_terminal(operation.phase) {
+                return Ok(Json(compact_operation_wait(operation, false)));
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(Json(compact_operation_wait(operation, true)));
+            }
+            tokio::time::sleep(backoff.min(deadline - now)).await;
+            backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+        }
+    }
+
     #[tool(description = "Request idempotent cancellation of an owned non-terminal action")]
     async fn proofstorm_action_cancel(
         &self,
@@ -2122,9 +2355,10 @@ impl ProofstormMcp {
     fn proofstorm_action_list(
         &self,
         Parameters(request): Parameters<ActionListRequest>,
-    ) -> Result<Json<Vec<LabOperation>>, ErrorData> {
+    ) -> Result<Json<ActionListResponse>, ErrorData> {
         self.authorize(Capability::ExperimentRead)?;
-        self.store
+        let actions = self
+            .store
             .actions(
                 &self.workspace,
                 &self.principal,
@@ -2132,8 +2366,12 @@ impl ProofstormMcp {
                 request.after_sequence,
                 request.limit,
             )
-            .map(Json)
-            .map_err(store_error)
+            .map_err(store_error)?;
+        let next_after_sequence = actions.last().map(|action| action.sequence);
+        Ok(Json(ActionListResponse {
+            actions,
+            next_after_sequence,
+        }))
     }
 
     #[tool(
@@ -2328,9 +2566,10 @@ impl ProofstormMcp {
     fn proofstorm_wallet_quote_list(
         &self,
         Parameters(request): Parameters<WalletQuoteListRequest>,
-    ) -> Result<Json<Vec<WalletQuote>>, ErrorData> {
+    ) -> Result<Json<WalletQuoteListResponse>, ErrorData> {
         self.authorize(Capability::ExperimentRead)?;
-        self.store
+        let quotes = self
+            .store
             .wallet_quotes(
                 &self.workspace,
                 &self.principal,
@@ -2338,8 +2577,12 @@ impl ProofstormMcp {
                 request.after_quote_id.as_deref(),
                 request.limit,
             )
-            .map(Json)
-            .map_err(store_error)
+            .map_err(store_error)?;
+        let next_after_quote_id = quotes.last().map(|quote| quote.id.clone());
+        Ok(Json(WalletQuoteListResponse {
+            quotes,
+            next_after_quote_id,
+        }))
     }
 
     #[tool(description = "Read an action and persist its bounded terminal artifact")]
@@ -2397,6 +2640,7 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_lab_publish", &[Capability::LabPublish]),
         ("proofstorm_lab_materialize", &[Capability::LabMaterialize]),
         ("proofstorm_lab_status", &[Capability::LabStatus]),
+        ("proofstorm_lab_wait", &[Capability::LabStatus]),
         ("proofstorm_lab_close", &[Capability::LabClose]),
         (
             "proofstorm_experiment_create",
@@ -2418,6 +2662,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_node_start", &[Capability::NodeControl]),
         ("proofstorm_node_stop", &[Capability::NodeControl]),
         ("proofstorm_node_restart", &[Capability::NodeControl]),
+        ("proofstorm_component_exec", &[Capability::ComponentExec]),
         (
             "proofstorm_liquidity_bootstrap",
             &[
@@ -2472,6 +2717,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_reachability_oracle", &[Capability::OracleRun]),
         ("proofstorm_action_cancel", &[Capability::ActionCancel]),
         ("proofstorm_operation_status", &[Capability::ArtifactRead]),
+        ("proofstorm_operation_wait", &[Capability::ArtifactRead]),
         ("proofstorm_action_list", &[Capability::ExperimentRead]),
         (
             "proofstorm_artifact_export",
@@ -3065,6 +3311,63 @@ fn validate_reachability_oracle_bounds(
     Ok(())
 }
 
+fn validate_wait_timeout(timeout_seconds: u32) -> Result<(), ErrorData> {
+    if (1..=120).contains(&timeout_seconds) {
+        return Ok(());
+    }
+    Err(ErrorData::invalid_request(
+        "timeout_seconds must be between 1 and 120".to_owned(),
+        Some(serde_json::json!({"code": "wait_timeout_invalid"})),
+    ))
+}
+
+const fn lab_wait_terminal(phase: InstancePhase) -> bool {
+    matches!(phase, InstancePhase::Closed | InstancePhase::CleanupBlocked)
+}
+
+const fn operation_terminal(phase: OperationPhase) -> bool {
+    matches!(
+        phase,
+        OperationPhase::Succeeded | OperationPhase::Failed | OperationPhase::Cancelled
+    )
+}
+
+fn compact_lab_wait(
+    status: LabInstanceStatus,
+    target_phase: InstancePhase,
+    reached: bool,
+    timed_out: bool,
+) -> LabWaitResult {
+    let ready_components = status
+        .components
+        .iter()
+        .filter(|component| component.ready)
+        .count();
+    LabWaitResult {
+        instance_id: status.instance.id,
+        phase: status.phase,
+        target_phase,
+        reached,
+        timed_out,
+        ready_components: u32::try_from(ready_components).unwrap_or(u32::MAX),
+        total_components: u32::try_from(status.components.len()).unwrap_or(u32::MAX),
+        teardown_receipt: status.teardown_receipt,
+        message: status.message,
+    }
+}
+
+fn compact_operation_wait(operation: LabOperation, timed_out: bool) -> OperationWaitResult {
+    OperationWaitResult {
+        operation_id: operation.id,
+        sequence: operation.sequence,
+        kind: operation.kind,
+        phase: operation.phase,
+        terminal: operation_terminal(operation.phase),
+        timed_out,
+        artifact: operation.artifact,
+    }
+}
+
 fn invalid_operation(message: &str) -> ErrorData {
     ErrorData::invalid_request(
         message.to_owned(),
@@ -3404,7 +3707,12 @@ mod tests {
         let designer =
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("designer session");
         let reader = ProofstormMcp::new(store, "alpha", "reader").expect("reader session");
-        assert_eq!(designer.tool_names().len(), 13);
+        assert_eq!(designer.tool_names().len(), 14);
+        assert!(
+            designer
+                .tool_names()
+                .contains(&"proofstorm_lab_wait".to_owned())
+        );
         let backend = designer
             .proofstorm_network_capabilities()
             .expect("network backend discovery")
@@ -3419,6 +3727,66 @@ mod tests {
                 "proofstorm_lab_read",
                 "proofstorm_workspace_read",
             ]
+        );
+    }
+
+    #[test]
+    fn native_exec_is_hidden_without_its_distinct_capability() {
+        let store = seeded_store();
+        let restricted =
+            ProofstormMcp::new(store.clone(), "alpha", "designer").expect("restricted session");
+        assert!(
+            !restricted
+                .tool_names()
+                .contains(&"proofstorm_component_exec".to_owned())
+        );
+
+        store
+            .grant("alpha", "designer", Capability::ComponentExec)
+            .expect("exec grant");
+        let authorized = ProofstormMcp::new(store, "alpha", "designer").expect("exec session");
+        assert!(
+            authorized
+                .tool_names()
+                .contains(&"proofstorm_component_exec".to_owned())
+        );
+    }
+
+    #[test]
+    fn wait_contracts_are_bounded_terminal_and_capability_filtered() {
+        assert!(validate_wait_timeout(1).is_ok());
+        assert!(validate_wait_timeout(120).is_ok());
+        for timeout in [0, 121] {
+            let error = validate_wait_timeout(timeout).expect_err("timeout must refuse");
+            assert_eq!(
+                error.data.expect("structured wait error")["code"],
+                "wait_timeout_invalid"
+            );
+        }
+        assert!(!lab_wait_terminal(InstancePhase::Ready));
+        assert!(lab_wait_terminal(InstancePhase::Closed));
+        assert!(lab_wait_terminal(InstancePhase::CleanupBlocked));
+        assert!(!operation_terminal(OperationPhase::Running));
+        assert!(operation_terminal(OperationPhase::Succeeded));
+        assert!(operation_terminal(OperationPhase::Failed));
+        assert!(operation_terminal(OperationPhase::Cancelled));
+
+        let store = seeded_store();
+        let restricted =
+            ProofstormMcp::new(store.clone(), "alpha", "designer").expect("restricted session");
+        assert!(
+            !restricted
+                .tool_names()
+                .contains(&"proofstorm_operation_wait".to_owned())
+        );
+        store
+            .grant("alpha", "designer", Capability::ArtifactRead)
+            .expect("artifact grant");
+        let authorized = ProofstormMcp::new(store, "alpha", "designer").expect("wait session");
+        assert!(
+            authorized
+                .tool_names()
+                .contains(&"proofstorm_operation_wait".to_owned())
         );
     }
 

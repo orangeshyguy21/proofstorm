@@ -1231,7 +1231,7 @@ if quote["phase"] != "settled" or quote.get("settled_at_unix") is None:
 quote_list = call(
     "proofstorm_wallet_quote_list",
     {"experiment_id": "slice5-experiment", "limit": 10},
-)
+)["quotes"]
 if quote_list != [cancelled_quote, quote]:
     fail(f"quote list is not canonical: {quote_list}")
 serialized_quote_flow = json.dumps(
@@ -2107,10 +2107,11 @@ if any(
 ):
     fail(f"reachability observations did not use typed runtime actions: {runtime_kinds}")
 
-journal = call(
+journal_page = call(
     "proofstorm_action_list",
     {"experiment_id": "slice5-experiment", "after_sequence": 0, "limit": 100},
 )
+journal = journal_page["actions"]
 if [action["sequence"] for action in journal] != list(range(1, 48)):
     fail(f"action journal is not canonical and ordered: {journal}")
 if (
