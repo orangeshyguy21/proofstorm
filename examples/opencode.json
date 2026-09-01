@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": "deny",
+    "edit": "deny",
+    "read": "deny",
+    "glob": "deny",
+    "grep": "deny",
+    "list": "deny",
+    "task": "deny",
+    "external_directory": "deny",
+    "webfetch": "deny",
+    "websearch": "deny"
+  },
+  "mcp": {
+    "proofstorm": {
+      "type": "local",
+      "command": ["./target/release/proofstorm-mcp"],
+      "enabled": true,
+      "timeout": 240000,
+      "environment": {
+        "PROOFSTORM_DB": ".proofstorm/proofstorm.sqlite3",
+        "PROOFSTORM_WORKSPACE": "local-lab",
+        "PROOFSTORM_PRINCIPAL": "designer-agent",
+        "PROOFSTORM_CAPABILITIES": "catalog.read,lab.read,lab.create,lab.edit,lab.clone,lab.validate,lab.publish,lab.materialize,lab.status,lab.close,experiment.create,experiment.read,experiment.close,lease.acquire,lease.release,action.cancel,topology.mutate,node.control,component.exec,chain.mine,wallet.create,wallet.control,wallet.fund,peer.connect,peer.disconnect,channel.open,channel.close,channel.force_close,channel.rebalance,network.delay,network.drop,network.partition,network.heal,oracle.run,artifact.read",
+        "PROOFSTORM_CONTROL_NAMESPACE": "proofstorm-system"
+      }
+    }
+  }
+}

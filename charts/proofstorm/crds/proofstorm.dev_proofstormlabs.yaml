@@ -1,0 +1,352 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: proofstormlabs.proofstorm.dev
+spec:
+  group: proofstorm.dev
+  names:
+    categories: []
+    kind: ProofstormLab
+    plural: proofstormlabs
+    shortNames:
+    - pslab
+    singular: proofstormlab
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns: []
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for ProofstormLabSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              instanceId:
+                type: string
+              instanceKey:
+                description: Stable opaque identity used to derive the instance namespace.
+                type: string
+              lab:
+                properties:
+                  api_version:
+                    type: string
+                  components:
+                    default: []
+                    items:
+                      properties:
+                        config:
+                          additionalProperties: true
+                          default: {}
+                          type: object
+                        config_version:
+                          description: Version of the implementation adapter's configuration contract.
+                          type: string
+                        control:
+                          enum:
+                          - laboratory
+                          - target
+                          - attacker
+                          - oracle
+                          type: string
+                        id:
+                          type: string
+                        implementation:
+                          type: string
+                        kind:
+                          enum:
+                          - bitcoin
+                          - lightning
+                          - mint
+                          - wallet
+                          - attacker
+                          - proxy
+                          - oracle
+                          type: string
+                        version:
+                          description: Version of the service binary, image, or implementation.
+                          nullable: true
+                          type: string
+                      required:
+                      - config_version
+                      - control
+                      - id
+                      - implementation
+                      - kind
+                      type: object
+                    type: array
+                  links:
+                    default: []
+                    items:
+                      properties:
+                        from:
+                          type: string
+                        kind:
+                          enum:
+                          - bitcoin_peer
+                          - lightning_peer
+                          - chain_backend
+                          - lightning_backend
+                          - network_path
+                          type: string
+                        to:
+                          type: string
+                      required:
+                      - from
+                      - kind
+                      - to
+                      type: object
+                    type: array
+                  name:
+                    type: string
+                  policy:
+                    default:
+                      allow: []
+                      limits:
+                        max_components: 64
+                        max_config_bytes: 65536
+                        max_links: 256
+                    properties:
+                      allow:
+                        default: []
+                        items:
+                          enum:
+                          - catalog.read
+                          - lab.read
+                          - lab.create
+                          - lab.edit
+                          - lab.clone
+                          - lab.validate
+                          - lab.publish
+                          - lab.materialize
+                          - lab.status
+                          - lab.close
+                          - experiment.create
+                          - experiment.read
+                          - experiment.close
+                          - lease.acquire
+                          - lease.release
+                          - action.cancel
+                          - topology.inspect
+                          - topology.mutate
+                          - node.add
+                          - node.remove
+                          - node.control
+                          - peer.connect
+                          - peer.disconnect
+                          - wallet.create
+                          - wallet.control
+                          - wallet.fund
+                          - channel.open
+                          - channel.close
+                          - channel.force_close
+                          - channel.rebalance
+                          - chain.mine
+                          - chain.fee
+                          - chain.reorg
+                          - network.delay
+                          - network.drop
+                          - network.partition
+                          - network.heal
+                          - component.logs
+                          - component.exec
+                          - traffic.capture
+                          - oracle.list
+                          - oracle.run
+                          - artifact.read
+                          - policy.read
+                          - policy.edit
+                          - snapshot.create
+                          - snapshot.restore
+                          type: string
+                        type: array
+                      limits:
+                        default:
+                          max_components: 64
+                          max_config_bytes: 65536
+                          max_links: 256
+                        properties:
+                          max_components:
+                            default: 64
+                            format: uint16
+                            maximum: 65535.0
+                            minimum: 0.0
+                            type: integer
+                          max_config_bytes:
+                            default: 65536
+                            format: uint32
+                            minimum: 0.0
+                            type: integer
+                          max_links:
+                            default: 256
+                            format: uint16
+                            maximum: 65535.0
+                            minimum: 0.0
+                            type: integer
+                        type: object
+                    type: object
+                required:
+                - api_version
+                - name
+                type: object
+              lock:
+                properties:
+                  api_version:
+                    type: string
+                  digest:
+                    type: string
+                  entries:
+                    items:
+                      properties:
+                        adapter_version:
+                          type: string
+                        catalog_id:
+                          type: string
+                        component_id:
+                          type: string
+                        config_digest:
+                          type: string
+                        config_version:
+                          type: string
+                        image:
+                          type: string
+                        source_digest:
+                          type: string
+                        version:
+                          type: string
+                      required:
+                      - adapter_version
+                      - catalog_id
+                      - component_id
+                      - config_digest
+                      - config_version
+                      - image
+                      - source_digest
+                      - version
+                      type: object
+                    type: array
+                required:
+                - api_version
+                - digest
+                - entries
+                type: object
+              revisionDigest:
+                description: Digest of the immutable resolved lab revision.
+                type: string
+              workspaceId:
+                type: string
+            required:
+            - instanceId
+            - instanceKey
+            - lab
+            - lock
+            - revisionDigest
+            - workspaceId
+            type: object
+          status:
+            nullable: true
+            properties:
+              components:
+                default: []
+                items:
+                  properties:
+                    id:
+                      type: string
+                    kind:
+                      enum:
+                      - bitcoin
+                      - lightning
+                      - mint
+                      - wallet
+                      - attacker
+                      - proxy
+                      - oracle
+                      type: string
+                    ports:
+                      additionalProperties:
+                        format: uint16
+                        maximum: 65535.0
+                        minimum: 0.0
+                        type: integer
+                      type: object
+                    ready:
+                      type: boolean
+                    service:
+                      type: string
+                  required:
+                  - id
+                  - kind
+                  - ports
+                  - ready
+                  - service
+                  type: object
+                type: array
+              instanceNamespace:
+                nullable: true
+                type: string
+              inventory:
+                default: []
+                items:
+                  properties:
+                    api_version:
+                      type: string
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  required:
+                  - api_version
+                  - kind
+                  - name
+                  - namespace
+                  type: object
+                type: array
+              inventoryDigest:
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              observedGeneration:
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                enum:
+                - Pending
+                - Ready
+                - Closing
+                - CleanupBlocked
+                type: string
+              teardownReceipt:
+                nullable: true
+                properties:
+                  checkedAt:
+                    type: string
+                  instanceId:
+                    type: string
+                  instanceNamespace:
+                    type: string
+                  inventoryDigest:
+                    type: string
+                  verifiedAbsent:
+                    type: boolean
+                required:
+                - checkedAt
+                - instanceId
+                - instanceNamespace
+                - inventoryDigest
+                - verifiedAbsent
+                type: object
+            required:
+            - phase
+            type: object
+        required:
+        - spec
+        title: ProofstormLab
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

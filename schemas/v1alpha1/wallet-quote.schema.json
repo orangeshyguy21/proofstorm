@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "WalletQuoteDirection": {
+      "description": "The economic direction of a wallet quote from the wallet's perspective.",
+      "enum": [
+        "receive",
+        "pay"
+      ],
+      "type": "string"
+    },
+    "WalletQuotePhase": {
+      "description": "Adapter-neutral quote progress. Adapter quote IDs and payment requests are\ndeliberately absent from the public contract.",
+      "enum": [
+        "requested",
+        "ready",
+        "pending",
+        "paid",
+        "settled",
+        "expired",
+        "failed",
+        "inconclusive",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A durable Proofstorm-owned handle for an adapter-private Cashu quote.",
+  "properties": {
+    "amount_sat": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "created_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "direction": {
+      "$ref": "#/$defs/WalletQuoteDirection"
+    },
+    "experiment_id": {
+      "type": "string"
+    },
+    "expires_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "instance_id": {
+      "type": "string"
+    },
+    "lease_id": {
+      "type": "string"
+    },
+    "mint_id": {
+      "type": "string"
+    },
+    "operation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phase": {
+      "$ref": "#/$defs/WalletQuotePhase"
+    },
+    "principal_id": {
+      "type": "string"
+    },
+    "settled_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "terminal_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "wallet_id": {
+      "type": "string"
+    },
+    "workspace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "instance_id",
+    "experiment_id",
+    "lease_id",
+    "principal_id",
+    "wallet_id",
+    "mint_id",
+    "direction",
+    "amount_sat",
+    "phase",
+    "created_at_unix",
+    "updated_at_unix"
+  ],
+  "title": "WalletQuote",
+  "type": "object"
+}

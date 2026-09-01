@@ -1,0 +1,27 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: proofstorm
+image: docker.io/rancher/k3s:v1.34.9-k3s1
+servers: 1
+agents: 1
+kubeAPI:
+  host: 127.0.0.1
+  hostPort: "6550"
+registries:
+  create:
+    name: proofstorm-registry.localhost
+    host: 0.0.0.0
+    hostPort: "5111"
+options:
+  k3s:
+    extraArgs:
+      - arg: --disable=traefik
+        nodeFilters:
+          - server:*
+      - arg: --disable=servicelb
+        nodeFilters:
+          - server:*
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true

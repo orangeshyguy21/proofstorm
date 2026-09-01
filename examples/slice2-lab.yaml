@@ -1,0 +1,25 @@
+apiVersion: proofstorm.dev/v1alpha1
+kind: ProofstormLab
+metadata:
+  name: slice2-security-spine
+  namespace: proofstorm-system
+spec:
+  workspaceId: slice2
+  instanceId: slice2-security-spine
+  instanceKey: 01slice2lab00
+  revisionDigest: sha256:slice2-placeholder
+  lock:
+    api_version: proofstorm/v1alpha1
+    digest: sha256:slice2-lock-placeholder
+    entries: []
+  lab:
+    api_version: proofstorm/v1alpha1
+    name: slice2-security-spine
+    components: []
+    links: []
+    policy:
+      allow: []
+      limits:
+        max_components: 64
+        max_links: 256
+        max_config_bytes: 65536

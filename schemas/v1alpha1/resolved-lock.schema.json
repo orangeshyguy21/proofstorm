@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "LockEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_version": {
+          "type": "string"
+        },
+        "catalog_id": {
+          "type": "string"
+        },
+        "component_id": {
+          "type": "string"
+        },
+        "config_digest": {
+          "type": "string"
+        },
+        "config_version": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "source_digest": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component_id",
+        "catalog_id",
+        "adapter_version",
+        "version",
+        "config_version",
+        "config_digest",
+        "image",
+        "source_digest"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/LockEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "api_version",
+    "digest",
+    "entries"
+  ],
+  "title": "ResolvedLock",
+  "type": "object"
+}

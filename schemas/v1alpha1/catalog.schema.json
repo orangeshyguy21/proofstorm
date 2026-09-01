@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "CatalogEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_version": {
+          "type": "string"
+        },
+        "allowed_control": {
+          "items": {
+            "$ref": "#/$defs/ControlClass"
+          },
+          "type": "array"
+        },
+        "config_schema": true,
+        "config_version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "source_digest": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "description",
+        "adapter_version",
+        "version",
+        "config_version",
+        "config_schema",
+        "image",
+        "source_digest",
+        "allowed_control"
+      ],
+      "type": "object"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ControlClass": {
+      "enum": [
+        "laboratory",
+        "target",
+        "attacker",
+        "oracle"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/CatalogEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "api_version",
+    "entries"
+  ],
+  "title": "CatalogResponse",
+  "type": "object"
+}

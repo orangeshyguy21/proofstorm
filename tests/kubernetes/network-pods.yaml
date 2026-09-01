@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: network-server
+  namespace: proofstorm-01slice2lab00
+  labels:
+    app: network-server
+spec:
+  automountServiceAccountToken: false
+  serviceAccountName: proofstorm-workload
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: tmp
+      emptyDir: {}
+  containers:
+    - name: server
+      image: busybox:1.36.1
+      command: ["sh", "-c", "mkdir -p /tmp/www && echo reachable > /tmp/www/index.html && httpd -f -p 8080 -h /tmp/www"]
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 8Mi
+        limits:
+          cpu: 50m
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: network-client
+  namespace: proofstorm-01slice2lab00
+spec:
+  automountServiceAccountToken: false
+  serviceAccountName: proofstorm-workload
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: client
+      image: busybox:1.36.1
+      command: ["sh", "-c", "sleep 3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 8Mi
+        limits:
+          cpu: 50m
+          memory: 32Mi

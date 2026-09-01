@@ -2,3 +2,7 @@
 .proofstorm-active
 *.log
 .DS_Store
+/dev/
+/target/
+/.tools/
+/.proofstorm/
