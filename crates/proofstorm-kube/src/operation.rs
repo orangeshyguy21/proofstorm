@@ -2381,12 +2381,11 @@ pub fn render_wallet_fund_job(spec: &WalletFundJobSpec<'_>) -> Result<Job, serde
         amount_sat,
     } = *spec;
     let namespace = instance_namespace(instance_key);
-    let wallet_script = format!(
-        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} >/shared/invoice.log 2>&1 & pid=$!; until test -f /shared/paid; do sleep 1; done; wait $pid; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"funded_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log; touch /shared/done"
+    let completion_script = format!(
+        "balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\" || fail balance balance_unavailable; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"funded_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log; touch /shared/done"
     );
-    let payer_script = format!(
-        "set -eu; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' /shared/invoice.log 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009 payinvoice --force \"$invoice\" >/dev/null; touch /shared/paid; until test -f /shared/done; do sleep 1; done"
-    );
+    let wallet_script = wallet_receive_script(wallet, mint, amount_sat, &completion_script);
+    let payer_script = wallet_payer_script(payer_lightning);
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
@@ -2509,12 +2508,11 @@ pub fn render_wallet_round_trip_job(
         tolerance_sat,
     } = *spec;
     let namespace = instance_namespace(instance_key);
-    let wallet_script = format!(
-        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} >/shared/invoice.log 2>&1 & pid=$!; until test -f /shared/paid; do sleep 1; done; wait $pid; before=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); cashu selfpay >/shared/swap.log 2>&1; after=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$before\"; test -n \"$after\"; test \"$after\" -le \"$before\"; test $((before-after)) -le {tolerance_sat}; printf '{{\"minted_sat\":%s,\"balance_before_swap_sat\":%s,\"balance_after_swap_sat\":%s,\"inflation\":false}}' '{amount_sat}' \"$before\" \"$after\" >/dev/termination-log; touch /shared/done"
+    let completion_script = format!(
+        "before=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$before\" || fail balance balance_unavailable; cashu selfpay >/shared/swap.log 2>&1 || fail selfpay selfpay_failed; after=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$after\" || fail balance balance_unavailable_after_selfpay; test \"$after\" -le \"$before\" || fail conservation balance_increased; test $((before-after)) -le {tolerance_sat} || fail conservation tolerance_exceeded; printf '{{\"minted_sat\":%s,\"balance_before_swap_sat\":%s,\"balance_after_swap_sat\":%s,\"inflation\":false}}' '{amount_sat}' \"$before\" \"$after\" >/dev/termination-log; touch /shared/done"
     );
-    let payer_script = format!(
-        "set -eu; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' /shared/invoice.log 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009 payinvoice --force \"$invoice\" >/dev/null; touch /shared/paid; until test -f /shared/done; do sleep 1; done"
-    );
+    let wallet_script = wallet_receive_script(wallet, mint, amount_sat, &completion_script);
+    let payer_script = wallet_payer_script(payer_lightning);
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
@@ -2535,6 +2533,40 @@ pub fn render_wallet_round_trip_job(
         "wallet-round-trip",
         240,
         &pod,
+    )
+}
+
+fn wallet_receive_script(
+    wallet: &str,
+    mint: &str,
+    amount_sat: u64,
+    completion_script: &str,
+) -> String {
+    format!(
+        concat!(
+            "set -eu; cd /app; pid=; watchdog_pid=; ",
+            "cleanup() {{ if test -n \"$watchdog_pid\"; then kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; fi; if test -n \"$pid\"; then kill \"$pid\" 2>/dev/null || true; wait \"$pid\" 2>/dev/null || true; fi; }}; ",
+            "trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; ",
+            "fail() {{ stage=\"$1\"; reason=\"$2\"; printf '{{\"code\":\"wallet_orchestration_failed\",\"stage\":\"%s\",\"reason\":\"%s\"}}' \"$stage\" \"$reason\" >/dev/termination-log; printf '%s:%s\\n' \"$stage\" \"$reason\" >/shared/wallet.failed; exit 1; }}; ",
+            "classify_log() {{ log=\"$1\"; last=$(tail -n 1 \"$log\"); if printf '%s' \"$last\" | grep -Eqi 'quote.*(not found|unknown)'; then printf quote_not_found; elif printf '%s' \"$last\" | grep -Eqi 'quote.*not paid|not paid.*quote'; then printf quote_not_paid; elif printf '%s' \"$last\" | grep -Eqi 'already.*issued|quote.*issued'; then printf quote_already_issued; elif printf '%s' \"$last\" | grep -Eqi 'database.*locked|locked.*database'; then printf wallet_database_locked; elif printf '%s' \"$last\" | grep -Eqi 'invalid.*signature|signature.*invalid'; then printf invalid_quote_signature; elif printf '%s' \"$last\" | grep -Eqi 'blind'; then printf invalid_blinded_output; elif printf '%s' \"$last\" | grep -Eqi 'proof'; then printf proof_error; elif printf '%s' \"$last\" | grep -Eqi 'keyset'; then printf keyset_error; elif printf '%s' \"$last\" | grep -Eqi 'amount|unit'; then printf amount_or_unit_error; elif printf '%s' \"$last\" | grep -Eqi 'connect|connection|timed out|timeout'; then printf mint_connection_failed; else printf command_failed; fi; }}; ",
+            "run_bounded() {{ duration=\"$1\"; marker=\"$2\"; shift 2; rm -f \"$marker\"; \"$@\" & pid=$!; (sleep \"$duration\"; if kill -0 \"$pid\" 2>/dev/null; then touch \"$marker\"; kill \"$pid\" 2>/dev/null || true; sleep 2; kill -9 \"$pid\" 2>/dev/null || true; fi) & watchdog_pid=$!; if wait \"$pid\"; then command_rc=0; else command_rc=$?; fi; pid=; kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; watchdog_pid=; return \"$command_rc\"; }}; ",
+            "cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; ",
+            "if run_bounded 30 /shared/invoice-request.timed-out cashu invoice {amount_sat} --no-check >/shared/invoice.log 2>&1; then :; else test ! -f /shared/invoice-request.timed-out || fail invoice invoice_request_timeout; invoice_reason=$(classify_log /shared/invoice.log); fail invoice \"$invoice_reason\"; fi; ",
+            "quote_id=$(sed -n 's/.*--id \\([^[:space:]]*\\).*/\\1/p' /shared/invoice.log | tail -1); test -n \"$quote_id\" || fail invoice quote_id_not_observed; ",
+            "elapsed=0; until test -f /shared/paid; do test ! -f /shared/payer.failed || fail payment payer_failed; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 105 || fail payment payment_wait_timeout; sleep 1; done; ",
+            "if run_bounded 35 /shared/invoice-settlement.timed-out cashu invoice {amount_sat} --id \"$quote_id\" >/shared/settlement.log 2>&1; then :; else test ! -f /shared/invoice-settlement.timed-out || fail settlement invoice_settlement_timeout; settlement_reason=$(classify_log /shared/settlement.log); fail settlement \"$settlement_reason\"; fi; ",
+            "{completion_script}"
+        ),
+        mint = mint,
+        wallet = wallet,
+        amount_sat = amount_sat,
+        completion_script = completion_script
+    )
+}
+
+fn wallet_payer_script(payer_lightning: &str) -> String {
+    format!(
+        "set -eu; pay_pid=; watchdog_pid=; cleanup() {{ if test -n \"$watchdog_pid\"; then kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; fi; if test -n \"$pay_pid\"; then kill \"$pay_pid\" 2>/dev/null || true; wait \"$pay_pid\" 2>/dev/null || true; fi; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; fail() {{ stage=\"$1\"; reason=\"$2\"; printf '{{\"code\":\"wallet_orchestration_failed\",\"stage\":\"%s\",\"reason\":\"%s\"}}' \"$stage\" \"$reason\" >/dev/termination-log; printf '%s:%s\\n' \"$stage\" \"$reason\" >/shared/payer.failed; exit 1; }}; elapsed=0; while :; do if invoice=$(grep -Eo 'ln(bcrt|bc|tb|tbs)[0-9a-z]+' /shared/invoice.log 2>/dev/null | head -1) && test -n \"$invoice\"; then break; fi; test ! -f /shared/wallet.failed || fail invoice wallet_failed; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 75 || fail invoice invoice_not_observed; sleep 1; done; lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009 payinvoice --force \"$invoice\" >/tmp/payment.log 2>&1 & pay_pid=$!; (sleep 60; if kill -0 \"$pay_pid\" 2>/dev/null; then touch /shared/payment.timed-out; kill \"$pay_pid\" 2>/dev/null || true; sleep 2; kill -9 \"$pay_pid\" 2>/dev/null || true; fi) & watchdog_pid=$!; set +e; wait \"$pay_pid\"; pay_rc=$?; set -e; pay_pid=; kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; watchdog_pid=; test ! -f /shared/payment.timed-out || fail payment payment_timeout; test \"$pay_rc\" -eq 0 || fail payment payment_failed; touch /shared/paid; elapsed=0; until test -f /shared/done; do test ! -f /shared/wallet.failed || fail settlement wallet_failed_after_payment; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 35 || fail settlement wallet_completion_timeout; sleep 1; done"
     )
 }
 
@@ -2650,6 +2682,8 @@ fn resource(value: Value) -> Result<Job, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    #[cfg(unix)]
+    use std::process::Command;
 
     use proofstorm_core::{
         API_VERSION, ComponentCondition, ComponentSpec, ComponentStatus, ControlClass, LabPolicy,
@@ -2657,6 +2691,17 @@ mod tests {
     };
 
     use super::*;
+
+    #[cfg(unix)]
+    fn assert_shell_syntax(script: &str) {
+        assert!(
+            Command::new("/bin/sh")
+                .args(["-n", "-c", script])
+                .status()
+                .expect("shell syntax check")
+                .success()
+        );
+    }
 
     fn typed_bootstrap() -> (ProofstormLab, ProofstormLabAction) {
         let component = |id: &str, kind: ComponentKind, implementation: &str| ComponentSpec {
@@ -3645,9 +3690,40 @@ mod tests {
             amount_sat: 1_000,
         });
         let funded = render_lab_action_job(&action, &lab).expect("fund job");
-        let pod = funded.spec.expect("spec").template.spec.expect("pod");
+        let funded_spec = funded.spec.expect("spec");
+        assert_eq!(funded_spec.active_deadline_seconds, Some(180));
+        let pod = funded_spec.template.spec.expect("pod");
         assert_eq!(pod.containers[0].name, "wallet");
         assert_eq!(pod.containers[1].name, "payer");
+        let wallet_script = pod.containers[0]
+            .command
+            .as_ref()
+            .expect("wallet command")
+            .last()
+            .expect("wallet script");
+        assert!(wallet_script.contains("invoice 1000 --no-check"));
+        assert!(wallet_script.contains("--id \"$quote_id\""));
+        assert!(wallet_script.contains("quote_id_not_observed"));
+        assert!(wallet_script.contains("quote_not_paid"));
+        assert!(wallet_script.contains("/shared/payer.failed"));
+        assert!(wallet_script.contains("payment_wait_timeout"));
+        assert!(wallet_script.contains("invoice_settlement_timeout"));
+        assert!(wallet_script.contains("wallet_orchestration_failed"));
+        #[cfg(unix)]
+        assert_shell_syntax(wallet_script);
+        let payer_script = pod.containers[1]
+            .command
+            .as_ref()
+            .expect("payer command")
+            .last()
+            .expect("payer script");
+        assert!(payer_script.contains("/shared/wallet.failed"));
+        assert!(payer_script.contains("invoice_not_observed"));
+        assert!(payer_script.contains("payment_timeout"));
+        assert!(payer_script.contains("wallet_completion_timeout"));
+        assert!(payer_script.contains("ln(bcrt|bc|tb|tbs)"));
+        #[cfg(unix)]
+        assert_shell_syntax(payer_script);
         let LabAction::WalletFund(request) = &mut action.spec.action else {
             panic!("fund action");
         };
@@ -3789,6 +3865,28 @@ mod tests {
                 .and_then(|spec| spec.active_deadline_seconds),
             Some(240)
         );
+        let round_trip_pod = round_trip
+            .spec
+            .expect("round trip spec")
+            .template
+            .spec
+            .expect("round trip pod");
+        let wallet_script = round_trip_pod.containers[0]
+            .command
+            .as_ref()
+            .expect("wallet command")
+            .last()
+            .expect("wallet script");
+        assert!(wallet_script.contains("/shared/payer.failed"));
+        assert!(wallet_script.contains("selfpay_failed"));
+        let payer_script = round_trip_pod.containers[1]
+            .command
+            .as_ref()
+            .expect("payer command")
+            .last()
+            .expect("payer script");
+        assert!(payer_script.contains("/shared/wallet.failed"));
+        assert!(payer_script.contains("payment_timeout"));
     }
 
     #[test]

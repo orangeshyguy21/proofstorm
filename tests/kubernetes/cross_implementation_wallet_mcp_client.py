@@ -122,7 +122,7 @@ lab = {
 }
 
 call("proofstorm_lab_create", {"draft_id": "cross-mint-wallet", "lab": lab, "idempotency_key": "create-cross-mint-wallet"})
-published = call("proofstorm_lab_publish", {"draft_id": "cross-mint-wallet", "expected_version": 1, "idempotency_key": "publish-cross-mint-wallet"})
+published = call("proofstorm_lab_publish", {"draft_id": "cross-mint-wallet", "expected_version": 1, "idempotency_key": "publish-cross-mint-wallet", "include_revision": True})
 locks = {entry["component_id"]: entry for entry in published["lock"]["entries"]}
 expected_locks = {
     "cache": ("redis", "8.10.1", "redis/8.10/v1"),
@@ -145,9 +145,13 @@ else:
     fail(f"cross-implementation lab did not become ready: {status}")
 
 expected_ready = {component["id"] for component in lab["components"]}
-actual_ready = {component["id"] for component in status["components"] if component["ready"]}
+component_status = call(
+    "proofstorm_lab_component_status_list",
+    {"instance_id": "cross-mint-wallet-instance", "limit": 50},
+)["components"]
+actual_ready = {component["id"] for component in component_status if component["ready"]}
 if actual_ready != expected_ready:
-    fail(f"cross-implementation topology is not fully ready: {status['components']}")
+    fail(f"cross-implementation topology is not fully ready: {component_status}")
 
 namespace = status["instance_namespace"]
 public_config = json.loads(kubectl("get", "configmap/nutshell-mint-config", "-n", namespace, "-o", "json"))["data"]

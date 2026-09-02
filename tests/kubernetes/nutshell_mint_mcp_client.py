@@ -145,7 +145,7 @@ call(2, "proofstorm_lab_create", {"draft_id": "nutshell-mint", "lab": lab, "idem
 published = call(
     3,
     "proofstorm_lab_publish",
-    {"draft_id": "nutshell-mint", "expected_version": 1, "idempotency_key": "publish-nutshell-mint"},
+    {"draft_id": "nutshell-mint", "expected_version": 1, "idempotency_key": "publish-nutshell-mint", "include_revision": True},
 )
 nutshell_lock = next(entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "nutshell")
 if nutshell_lock["version"] != "0.20.3" or nutshell_lock["config_version"] != "nutshell-mint/0.20/v1":

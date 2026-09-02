@@ -69,6 +69,11 @@ cargo run -p proofstorm-mcp
 
 The configured capability list replaces that principal's grants in the selected
 workspace. It is trusted operator configuration, never model-supplied input.
+Set `PROOFSTORM_TOOLSET=design`, `runtime`, or `evidence` to expose only the
+agent-facing tools for that phase; the default is `all`. A toolset only removes
+routes and is always intersected with the principal's durable capabilities, so
+it cannot grant authority. Focused toolsets reduce the MCP discovery schema
+loaded into an agent's context.
 
 To enable the Kubernetes-backed lifecycle tools, add
 `lab.materialize,lab.status,lab.close` to the capability list and set
@@ -82,6 +87,26 @@ refuses unsupported configuration versions, and the resolved lock records both
 versions plus a digest of that component's configuration. This lets adapter
 configuration evolve without pretending it is the same thing as upgrading the
 underlying Bitcoin, Lightning, mint, wallet, or attacker service.
+`proofstorm_lab_publish` returns only revision and lock digests plus a component
+count by default; `include_revision: true` explicitly embeds the complete lab
+and lock when a caller needs the bulk document.
+
+Catalog discovery is intentionally progressive. `proofstorm_catalog_list`
+returns only compact exact-version identities and accepts implementation, kind,
+feature, lifecycle, release-channel, and dependency filters with a digest-bound
+cursor. After selecting a version, use `proofstorm_catalog_entry_read` for its
+immutable image, compatibility, support matrix, and features, then
+`proofstorm_catalog_config_schema_read` for the complete configuration JSON
+Schema or one RFC 6901 fragment. Broad list calls never embed configuration
+schemas.
+
+Runtime observation follows the same pattern. `proofstorm_lab_status` is a
+compact receipt containing phase, revision and lock digests, readiness and
+inventory counts, and an inventory digest; it does not embed topology or
+Kubernetes inventory arrays. Use `proofstorm_lab_component_status_list` for
+cursor-paged component conditions and `proofstorm_lab_inventory_list` for
+cursor-paged sanitized object inventory. Both pages are capped at 50 items and
+shrink to a 32 KiB agent-response budget.
 
 Slice 2 introduces the Kubernetes security spine. Its pinned tool versions are
 in `tools/versions.env`; the local lifecycle is:
@@ -173,8 +198,10 @@ durable SQLite records with dedicated capabilities. Leases expire, carry a
 bounded action budget, and block conflicting leases, experiment close, and lab
 close. Slice 5 runtime operations now require a matching lease and are assigned
 an atomic experiment-wide sequence; `proofstorm_action_list` exposes bounded
-pages of that canonical journal in an object envelope with an explicit next
-sequence cursor.
+pages of compact canonical summaries in an object envelope with an explicit
+next sequence cursor. Summaries contain request and artifact digests, but omit
+stored request bodies, runtime resource names, and artifact content; use
+`proofstorm_operation_status` for one exact operation.
 
 Liquidity bootstrap, wallet round trip, and conservation oracle are
 controller-owned typed actions. MCP records and submits a
@@ -201,9 +228,11 @@ or remove logical components and add or remove typed links using optimistic
 draft versions and idempotency keys. Mutations resolve against the installed
 catalog, enforce implementation kind, control class, service version,
 configuration-contract version, configuration fields, topology compatibility,
-and policy limits, then store components and links in canonical order. Failed
-mutations are transactional, and component removal refuses until its links are
-removed explicitly.
+and policy limits, then store components and links in canonical order. Mutation
+tools return compact version, count, validation, and changed-path receipts;
+`proofstorm_lab_read` is the explicit full-document read. Failed mutations are
+transactional, and component removal refuses until its links are removed
+explicitly.
 
 The Kubernetes acceptance client constructs its seven-component, four-link lab
 from an empty draft through those MCP mutations before publishing it. That
@@ -296,20 +325,27 @@ heal; it does not pretend to support traffic shaping. The typed
 cannot exceed the delay. `proofstorm_network_loss` accepts 1–10,000 basis points
 of packet loss. With the current backend, both return
 `network_fault_unsupported` before operation admission, lease-budget
-consumption, or journal sequencing. The MCP surface now exposes 53 tools. The
+consumption, or journal sequencing. The MCP surface now exposes 61 tools. The
 live workflow records nine reachability observations spanning baseline,
 overlapping faults, controller reconstruction, and targeted heals, for a
 47-action canonical journal; the forty-eighth request is refused by the lease
 budget.
 
 `proofstorm_artifact_export` turns a closed experiment into a deterministic,
-content-hashed evidence bundle without consulting Kubernetes. It includes the
-complete immutable lab revision and resolved lock, a canonical projection of up
-to 100 terminal actions, all oracle artifact bodies by default, and up to 16
-explicitly selected sanitized artifacts. The bundle is capped at 512 KiB and
-omits runtime resource names, instance keys, component credentials, private
-payment material, and unbounded logs. Export requires both `experiment.read`
-and `artifact.read`; it does not consume a lease action.
+content-hashed evidence bundle without consulting Kubernetes. The default
+response is a compact manifest containing its identity, revision and lock
+digests, byte length, journal/artifact counts, and a stable `resource_uri`.
+Agents can read that URI through MCP `resources/read` when they deliberately
+need the complete bundle, or use `proofstorm_evidence_section_read` to inspect
+a bounded revision/lock JSON Pointer, a paged journal, or one selected artifact.
+`include_content: true` remains an explicit compatibility opt-in for embedding
+the complete immutable lab revision and
+resolved lock, a canonical projection of up to 100 terminal actions, all oracle
+artifact bodies by default, and up to 16 explicitly selected sanitized
+artifacts. The content is capped at 512 KiB and omits runtime resource names,
+instance keys, component credentials, private payment material, and unbounded
+logs. Export requires both `experiment.read` and `artifact.read`; it does not
+consume a lease action.
 
 The live k3d workflow exported the complete 47-action experiment after lease
 release and experiment close. The bundle contained the seven-component lab and
@@ -377,7 +413,11 @@ PostgreSQL credentials and the mint private key remain stable across controller 
 while database state survives both database and mint workload restarts. NUT-06
 metadata, quote lifetimes, proof/request limits, mint/melt and balance ceilings,
 fee reserve policy, rate limits, Redis cache TTL, MPP, and watchdog policy are
-agent-authorable and rollout-affecting. OIDC environment and topology wiring
+agent-authorable and rollout-affecting. Health checks do not spend that authored
+request budget: workload readiness calls `/v1/info` over Nutshell's
+rate-limit-exempt loopback path, while the credential-free lab protocol prober
+checks Service-DNS reachability over TCP. Probe policy remains controller-owned
+rather than agent-authorable. OIDC environment and topology wiring
 are complete: the
 exact Nutshell 0.20.3 NUT-21 clear-auth and NUT-22 blind-auth settings,
 PVC-backed authentication ledger, and discovery/client policy are typed and

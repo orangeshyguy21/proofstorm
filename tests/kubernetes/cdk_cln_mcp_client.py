@@ -132,7 +132,7 @@ call(2, "proofstorm_lab_create", {"draft_id": "cdk-cln", "lab": lab, "idempotenc
 published = call(
     3,
     "proofstorm_lab_publish",
-    {"draft_id": "cdk-cln", "expected_version": 1, "idempotency_key": "publish-cdk-cln"},
+    {"draft_id": "cdk-cln", "expected_version": 1, "idempotency_key": "publish-cdk-cln", "include_revision": True},
 )
 cdk_lock = next(entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "cdk")
 if cdk_lock["version"] != "0.17.6":

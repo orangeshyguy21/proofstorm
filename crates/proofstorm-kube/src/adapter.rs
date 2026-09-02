@@ -33,6 +33,10 @@ const COMPONENT_LABEL: &str = "proofstorm.dev/component";
 const NETWORK_IDENTITY_LABEL: &str = "proofstorm.dev/network-identity";
 const RPC_USER: &str = "proofstorm";
 const RPC_PASSWORD: &str = "proofstorm-regtest-only";
+const CDK_MINT_MNEMONIC: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const CDK_WALLET_MNEMONIC: &str =
+    "legal winner thank year wave sausage worth useful legal winner thank yellow";
 pub const PROTOCOL_PROBER_NAME: &str = "proofstorm-protocol-prober";
 pub const PROTOCOL_PROBER_LABEL: &str = "proofstorm.dev/prober";
 pub const PROTOCOL_PROBER_DIGEST_ANNOTATION: &str = "proofstorm.dev/prober-digest";
@@ -1689,13 +1693,32 @@ pub fn render_cdk_component(
     };
     let namespace = instance_namespace(&plan.instance_key);
     let config_name = format!("{}-config", plan.component_id);
+    let secret_name = format!("{}-secrets", plan.component_id);
     let data_name = format!("{}-data", plan.component_id);
-    let runtime = cdk_runtime_resources(plan, config, http_port, &config_name, &data_name)?;
+    let runtime = cdk_runtime_resources(
+        plan,
+        config,
+        http_port,
+        &config_name,
+        &secret_name,
+        &data_name,
+    )?;
     let mut rendered = RenderedComponent::default();
     rendered.config_maps.push(resource(json!({
         "apiVersion": "v1", "kind": "ConfigMap",
         "metadata": metadata(&config_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
         "data": {"config.toml": runtime.native_config}
+    }))?);
+    rendered.secrets.push(resource(json!({
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": metadata(&secret_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
+        "type": "Opaque",
+        "stringData": {
+            "PROOFSTORM_SECRET_KIND": "cdk-mint",
+            "mint-mnemonic": CDK_MINT_MNEMONIC,
+            "wallet-mnemonic": CDK_WALLET_MNEMONIC,
+            "bitcoin-rpc-password": RPC_PASSWORD
+        }
     }))?);
     rendered.persistent_volume_claims.push(resource(json!({
         "apiVersion": "v1", "kind": "PersistentVolumeClaim",
@@ -1708,8 +1731,8 @@ pub fn render_cdk_component(
         "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
             "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
-            "command": ["cdk-mintd"], "args": ["--config", "/config/config.toml"],
-            "env": [{"name": "CDK_MINTD_WORK_DIR", "value": "/app/data"}],
+            "command": ["cdk-mintd"],
+            "env": runtime.env,
             "ports": runtime.ports,
             "securityContext": container_security(),
             "readinessProbe": {"httpGet": {"path": "/v1/info", "port": http_port}, "periodSeconds": 3, "failureThreshold": 40},
@@ -1731,6 +1754,7 @@ pub fn render_cdk_component(
 
 struct CdkRuntimeResources {
     native_config: String,
+    env: Vec<Value>,
     volume_mounts: Vec<Value>,
     volumes: Vec<Value>,
     ports: Vec<Value>,
@@ -1746,54 +1770,35 @@ fn cdk_runtime_resources(
     config: &CdkMintConfig,
     http_port: u16,
     config_name: &str,
+    secret_name: &str,
     data_name: &str,
 ) -> Result<CdkRuntimeResources, AdapterError> {
     let database_secret = primary_database_secret(plan)?;
     let database_config = if database_secret.is_some() {
-        ""
+        "[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = \"env:CDK_MINTD_POSTGRES_URL\"\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
     } else {
         "[database]\nengine = \"sqlite\"\n"
     };
-    let (mut volume_mounts, mut volumes, init_containers) = if let Some(secret_name) =
-        database_secret
-    {
-        (
-            vec![
-                json!({"name": "config-runtime", "mountPath": "/config", "readOnly": true}),
-                json!({"name": "data", "mountPath": "/app/data"}),
-            ],
-            vec![
-                json!({"name": "config-public", "configMap": {"name": config_name}}),
-                json!({"name": "config-runtime", "emptyDir": {}}),
-                json!({"name": "database-secret", "secret": {"secretName": secret_name}}),
-                json!({"name": "data", "persistentVolumeClaim": {"claimName": data_name}}),
-            ],
-            vec![json!({
-                "name": "materialize-config",
-                "image": PROBER_IMAGE,
-                "imagePullPolicy": "IfNotPresent",
-                "command": ["sh", "-c", "cp /config-public/config.toml /config-runtime/config.toml && cat /database-secret/database.toml >> /config-runtime/config.toml"],
-                "securityContext": container_security(),
-                "volumeMounts": [
-                    {"name": "config-public", "mountPath": "/config-public", "readOnly": true},
-                    {"name": "database-secret", "mountPath": "/database-secret", "readOnly": true},
-                    {"name": "config-runtime", "mountPath": "/config-runtime"}
-                ]
-            })],
-        )
-    } else {
-        (
-            vec![
-                json!({"name": "config", "mountPath": "/config", "readOnly": true}),
-                json!({"name": "data", "mountPath": "/app/data"}),
-            ],
-            vec![
-                json!({"name": "config", "configMap": {"name": config_name}}),
-                json!({"name": "data", "persistentVolumeClaim": {"claimName": data_name}}),
-            ],
-            vec![],
-        )
-    };
+    let mut env = vec![
+        json!({"name": "CDK_MINTD_WORK_DIR", "value": "/app/data"}),
+        json!({"name": "CDK_MINTD_DATABASE", "value": if database_secret.is_some() { "postgres" } else { "sqlite" }}),
+    ];
+    if let Some(database_secret) = &database_secret {
+        env.push(json!({
+            "name": "CDK_MINTD_POSTGRES_URL",
+            "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "DATABASE_URL"}}
+        }));
+    }
+    let mut volume_mounts = vec![
+        json!({"name": "config", "mountPath": "/config", "readOnly": true}),
+        json!({"name": "mint-secrets", "mountPath": "/mint-secrets", "readOnly": true}),
+        json!({"name": "data", "mountPath": "/app/data"}),
+    ];
+    let mut volumes = vec![
+        json!({"name": "config", "configMap": {"name": config_name}}),
+        json!({"name": "mint-secrets", "secret": {"secretName": secret_name}}),
+        json!({"name": "data", "persistentVolumeClaim": {"claimName": data_name}}),
+    ];
     let mut ports = vec![json!({"name": "http", "containerPort": http_port})];
     let native_config = if plan.backend_id == "cdk-ldk" {
         let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
@@ -1871,8 +1876,18 @@ fn cdk_runtime_resources(
             database_config,
         )?
     };
+    let init_containers = vec![json!({
+        "name": "initialize-config",
+        "image": plan.execution_context.image,
+        "imagePullPolicy": "IfNotPresent",
+        "command": ["sh", "-ec", "if cdk-mintd config show >/dev/null 2>&1; then cdk-mintd config apply --file /config/config.toml --validate-only; else cdk-mintd config validate --file /config/config.toml && cdk-mintd config init --new-mint --file /config/config.toml; fi"],
+        "env": env,
+        "securityContext": container_security(),
+        "volumeMounts": volume_mounts
+    })];
     Ok(CdkRuntimeResources {
         native_config,
+        env,
         volume_mounts,
         volumes,
         ports,
@@ -2098,7 +2113,21 @@ pub fn render_nutshell_mint_component(
                     "env": env,
                     "ports": [{"name": "http", "containerPort": http_port}],
                     "securityContext": container_security(),
-                    "readinessProbe": {"httpGet": {"path": "/v1/info", "port": http_port}, "periodSeconds": 3, "failureThreshold": 40},
+                    // Nutshell excludes loopback from its HTTP rate limiter. An
+                    // exec probe keeps the application-level readiness check
+                    // local, so Kubernetes health traffic cannot consume a
+                    // user's global request quota. The separate protocol
+                    // prober checks the Service-DNS path over TCP.
+                    "readinessProbe": {
+                        "exec": {"command": [
+                            "python3", "-c",
+                            "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()",
+                            format!("http://127.0.0.1:{http_port}/v1/info")
+                        ]},
+                        "timeoutSeconds": 2,
+                        "periodSeconds": 3,
+                        "failureThreshold": 40
+                    },
                     "volumeMounts": [
                         {"name": "data", "mountPath": "/app/data"},
                         {"name": payment_mount.name, "mountPath": payment_mount.mount_path, "readOnly": true}
@@ -2853,7 +2882,7 @@ fn mint_config(
         "lnd" => {
             let lightning_rpc = target_port(lightning, "rpc")?;
             format!(
-                "[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[lnd]\naddress = \"https://{}:{lightning_rpc}\"\ncert_file = \"{mount_path}/tls.cert\"\nmacaroon_file = \"{mount_path}/data/chain/bitcoin/regtest/admin.macaroon\"\n",
+                "[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[lnd]\naddress = \"https://{}:{lightning_rpc}\"\ncert_file = \"{mount_path}/tls.cert\"\nmacaroon_file = \"{mount_path}/data/chain/bitcoin/regtest/admin.macaroon\"\n",
                 config.min_mint_sat,
                 config.max_mint_sat,
                 config.min_melt_sat,
@@ -2862,7 +2891,7 @@ fn mint_config(
             )
         }
         "cln" => format!(
-            "[ln]\nln_backend = \"cln\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[cln]\nrpc_path = \"{mount_path}/regtest/lightning-rpc\"\nbolt12 = false\nexpose_private_channels = false\nfee_percent = 0.02\nreserve_fee_min = 2\n",
+            "[payment_backend]\nbackend = \"cln\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[cln]\nrpc_path = \"{mount_path}/regtest/lightning-rpc\"\nbolt12 = false\nexpose_private_channels = false\nfee_percent = 0.02\nreserve_fee_min = 2\n",
             config.min_mint_sat, config.max_mint_sat, config.min_melt_sat, config.max_melt_sat
         ),
         backend => {
@@ -2889,7 +2918,7 @@ fn mint_ldk_config(
 ) -> String {
     let common = mint_common_config(component, http_port, config);
     format!(
-        "{common}[ln]\nln_backend = \"ldknode\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"{RPC_PASSWORD}\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = {p2p_port}\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"legal winner thank year wave sausage worth useful legal winner thank yellow\"\n\n{database_config}",
+        "{common}[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = {p2p_port}\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/wallet-mnemonic\"\n\n{database_config}",
         config.min_mint_sat,
         config.max_mint_sat,
         config.min_melt_sat,
@@ -2908,7 +2937,7 @@ fn mint_bdk_config(
 ) -> String {
     let common = mint_common_config(component, http_port, config);
     format!(
-        "{common}[ln]\nln_backend = \"none\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[bdk]\nmnemonic = \"legal winner thank year wave sausage worth useful legal winner thank yellow\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = {}\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"{RPC_PASSWORD}\"\n\n{database_config}",
+        "{common}[payment_backend]\nbackend = \"none\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[bdk]\nmnemonic = \"file:/mint-secrets/wallet-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = {}\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n\n{database_config}",
         config.min_mint_sat,
         config.max_mint_sat,
         config.min_melt_sat,
@@ -2924,7 +2953,7 @@ fn mint_bdk_config(
 
 fn mint_common_config(component: &str, http_port: u16, config: &CdkMintConfig) -> String {
     let mut rendered = format!(
-        "[info]\nurl = \"http://{component}:{http_port}\"\nlisten_host = \"0.0.0.0\"\nlisten_port = {http_port}\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\nenable_info_page = {}\ninput_fee_ppk = {}\nuse_keyset_v2 = {}\n\n[info.quote_ttl]\nmint_ttl = {}\nmelt_ttl = {}\n\n[info.http_cache]\nbackend = \"memory\"\nttl = {}\ntti = {}\n\n[mint_info]\nname = {:?}\ndescription = {:?}\n",
+        "[info]\nurl = \"http://{component}:{http_port}\"\nlisten_host = \"0.0.0.0\"\nlisten_port = {http_port}\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = {}\ninput_fee_ppk = {}\nuse_keyset_v2 = {}\n\n[info.quote_ttl]\nmint_ttl = {}\nmelt_ttl = {}\n\n[info.http_cache]\nbackend = \"memory\"\nttl = {}\ntti = {}\n\n[mint_info]\nname = {:?}\ndescription = {:?}\n",
         config.enable_info_page,
         config.input_fee_ppk,
         config.use_keyset_v2,

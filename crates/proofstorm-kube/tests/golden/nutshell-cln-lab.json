@@ -475,8 +475,7 @@
         }
       ],
       "protocol_probe": {
-        "kind": "http_get",
-        "path": "/v1/info",
+        "kind": "tcp",
         "port": 3338
       },
       "relevant_links": [
@@ -873,12 +872,17 @@
                     }
                   ],
                   "readinessProbe": {
-                    "failureThreshold": 40,
-                    "httpGet": {
-                      "path": "/v1/info",
-                      "port": 3338
+                    "exec": {
+                      "command": [
+                        "python3",
+                        "-c",
+                        "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()",
+                        "http://127.0.0.1:3338/v1/info"
+                      ]
                     },
-                    "periodSeconds": 3
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 2
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -935,7 +939,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:54077d95571f6132a86b5293d47cbb4c6fbe234ed56f7a58d5b5d33f00c5dfaf",
+            "proofstorm.dev/prober-digest": "sha256:0fd9703b0923d6bc019091cdb452163b049f74b09f203a0f50e6f81a242a048b",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -962,7 +966,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:54077d95571f6132a86b5293d47cbb4c6fbe234ed56f7a58d5b5d33f00c5dfaf",
+                "proofstorm.dev/prober-digest": "sha256:0fd9703b0923d6bc019091cdb452163b049f74b09f203a0f50e6f81a242a048b",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {
@@ -1047,13 +1051,12 @@
                   "readinessProbe": {
                     "exec": {
                       "command": [
-                        "wget",
-                        "-q",
-                        "-T",
+                        "nc",
+                        "-z",
+                        "-w",
                         "2",
-                        "-O",
-                        "/dev/null",
-                        "http://mint:3338/v1/info"
+                        "mint",
+                        "3338"
                       ]
                     },
                     "failureThreshold": 3,

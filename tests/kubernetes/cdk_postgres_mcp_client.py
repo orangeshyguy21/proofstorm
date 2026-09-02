@@ -84,11 +84,20 @@ request(
 process.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
 process.stdin.flush()
 
-catalog = call(2, "proofstorm_catalog_list", {})
-postgres = next((entry for entry in catalog["entries"] if entry["id"] == "postgresql"), None)
+catalog = call(
+    2,
+    "proofstorm_catalog_list",
+    {"implementations": ["cdk", "postgresql"]},
+)
+postgres = next((entry for entry in catalog["items"] if entry["id"] == "postgresql"), None)
 if not postgres or postgres["version"] != "17.11":
     fail(f"PostgreSQL 17.11 is absent from the catalog: {postgres}")
-cdk = next(entry for entry in catalog["entries"] if entry["id"] == "cdk")
+cdk_summary = next(entry for entry in catalog["items"] if entry["id"] == "cdk")
+cdk = call(
+    267,
+    "proofstorm_catalog_entry_read",
+    {"id": cdk_summary["id"], "version": cdk_summary["version"]},
+)
 if "postgres" not in cdk["features"] or "postgres" not in cdk["support_matrix"]["storage"]:
     fail("CDK does not advertise its typed PostgreSQL support")
 
@@ -179,6 +188,7 @@ published = call(
         "draft_id": "cdk-postgres",
         "expected_version": 1,
         "idempotency_key": "publish-cdk-postgres",
+        "include_revision": True,
     },
 )
 database_lock = next(

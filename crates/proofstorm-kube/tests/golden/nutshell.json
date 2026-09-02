@@ -220,8 +220,7 @@
       }
     ],
     "protocol_probe": {
-      "kind": "http_get",
-      "path": "/v1/info",
+      "kind": "tcp",
       "port": 3338
     },
     "relevant_links": [
@@ -422,12 +421,17 @@
                     }
                   ],
                   "readinessProbe": {
-                    "failureThreshold": 40,
-                    "httpGet": {
-                      "path": "/v1/info",
-                      "port": 3338
+                    "exec": {
+                      "command": [
+                        "python3",
+                        "-c",
+                        "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()",
+                        "http://127.0.0.1:3338/v1/info"
+                      ]
                     },
-                    "periodSeconds": 3
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 2
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,

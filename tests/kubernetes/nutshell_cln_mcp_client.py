@@ -97,8 +97,12 @@ request("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "cli
 process.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
 process.stdin.flush()
 
-catalog = call("proofstorm_catalog_list", {})
-nutshell = next(entry for entry in catalog["entries"] if entry["id"] == "nutshell")
+catalog = call("proofstorm_catalog_list", {"implementations": ["nutshell"]})
+nutshell_summary = catalog["items"][0]
+nutshell = call(
+    "proofstorm_catalog_entry_read",
+    {"id": nutshell_summary["id"], "version": nutshell_summary["version"]},
+)
 if set(nutshell["support_matrix"]["payment_backends"]) != {"cln", "lnd"}:
     fail(f"Nutshell does not advertise exact CLN and LND support: {nutshell['support_matrix']}")
 if not any(binding["backend"]["implementation"] == "cln" and binding["backend"]["versions"] == ["26.06.7"] for binding in nutshell["support_matrix"]["payment_bindings"]):
@@ -125,7 +129,7 @@ lab = {
 }
 
 call("proofstorm_lab_create", {"draft_id": "nutshell-cln", "lab": lab, "idempotency_key": "create-nutshell-cln"})
-published = call("proofstorm_lab_publish", {"draft_id": "nutshell-cln", "expected_version": 1, "idempotency_key": "publish-nutshell-cln"})
+published = call("proofstorm_lab_publish", {"draft_id": "nutshell-cln", "expected_version": 1, "idempotency_key": "publish-nutshell-cln", "include_revision": True})
 locks = {entry["component_id"]: entry for entry in published["lock"]["entries"]}
 if locks["mint"]["catalog_id"] != "nutshell" or locks["mint-cln"]["catalog_id"] != "cln":
     fail(f"unexpected Nutshell+CLN lock: {locks}")

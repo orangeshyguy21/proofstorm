@@ -1,7 +1,7 @@
 use anyhow::Context;
 use futures::{StreamExt, future};
 use proofstorm_core::Capability;
-use proofstorm_mcp::ProofstormMcp;
+use proofstorm_mcp::{ProofstormMcp, ProofstormToolset};
 use proofstorm_store::{Store, Workspace};
 use rmcp::{
     RoleServer, ServiceExt,
@@ -34,8 +34,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn configured_service() -> anyhow::Result<ProofstormMcp> {
+    let toolset = std::env::var("PROOFSTORM_TOOLSET")
+        .unwrap_or_else(|_| "all".into())
+        .parse::<ProofstormToolset>()
+        .map_err(anyhow::Error::msg)?;
     let Ok(database_path) = std::env::var("PROOFSTORM_DB") else {
-        return Ok(ProofstormMcp::default());
+        return Ok(ProofstormMcp::default().with_toolset(toolset));
     };
     let workspace = std::env::var("PROOFSTORM_WORKSPACE")
         .context("PROOFSTORM_WORKSPACE is required with PROOFSTORM_DB")?;
@@ -59,7 +63,7 @@ async fn configured_service() -> anyhow::Result<ProofstormMcp> {
     })?;
     store.put_principal(&principal)?;
     store.replace_grants(&workspace, &principal, capabilities)?;
-    let service = ProofstormMcp::new(store, workspace, principal)?;
+    let service = ProofstormMcp::new(store, workspace, principal)?.with_toolset(toolset);
     let Ok(control_namespace) = std::env::var("PROOFSTORM_CONTROL_NAMESPACE") else {
         return Ok(service);
     };

@@ -168,7 +168,7 @@ call(2, "proofstorm_lab_create", {"draft_id": "cdk-bdk", "lab": lab, "idempotenc
 published = call(
     3,
     "proofstorm_lab_publish",
-    {"draft_id": "cdk-bdk", "expected_version": 1, "idempotency_key": "publish-cdk-bdk"},
+    {"draft_id": "cdk-bdk", "expected_version": 1, "idempotency_key": "publish-cdk-bdk", "include_revision": True},
 )
 bdk_lock = next(entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "cdk-bdk")
 expected_image = "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00"

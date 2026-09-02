@@ -926,6 +926,13 @@ async fn reconcile_action_cancellation(
 }
 
 fn action_failure(status: &JobStatus, pods: &[Pod]) -> serde_json::Value {
+    if let Some(failure) = pods
+        .iter()
+        .filter_map(container_failure)
+        .find(|failure| failure.get("stage").is_some())
+    {
+        return failure;
+    }
     if status.conditions.as_ref().is_some_and(|conditions| {
         conditions.iter().any(|condition| {
             condition.status == "True" && condition.reason.as_deref() == Some("DeadlineExceeded")
@@ -1609,6 +1616,15 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
             .map(String::as_str);
         match secret_kind {
+            Some("cdk-mint") => {
+                secrets
+                    .patch(
+                        resource.metadata.name.as_deref().unwrap_or_default(),
+                        &patch,
+                        &Patch::Apply(resource),
+                    )
+                    .await?;
+            }
             Some("nutshell-mint") => {
                 ensure_generated_nutshell_secret(&secrets, resource, &patch).await?;
             }
@@ -2203,17 +2219,51 @@ fn container_failure(pod: &Pod) -> Option<serde_json::Value> {
         .iter()
         .chain(status.container_statuses.iter())
         .flatten()
-        .find_map(|container| {
+        .filter_map(|container| {
             let terminated = container.state.as_ref()?.terminated.as_ref()?;
             (terminated.exit_code != 0).then(|| {
-                serde_json::json!({
+                let mut failure = serde_json::json!({
                     "code": "container_failed",
                     "container": container.name,
                     "exit_code": terminated.exit_code,
                     "reason": terminated.reason,
-                })
+                });
+                if let Some(diagnostic) = terminated
+                    .message
+                    .as_deref()
+                    .and_then(|message| serde_json::from_str::<serde_json::Value>(message).ok())
+                    .filter(|diagnostic| {
+                        diagnostic.get("code").and_then(serde_json::Value::as_str)
+                            == Some("wallet_orchestration_failed")
+                    })
+                {
+                    for (source, target) in [
+                        ("code", "failure_code"),
+                        ("stage", "stage"),
+                        ("reason", "diagnostic_reason"),
+                    ] {
+                        if let Some(value) =
+                            diagnostic.get(source).and_then(serde_json::Value::as_str)
+                        {
+                            failure[target] = serde_json::json!(value);
+                        }
+                    }
+                }
+                failure
             })
         })
+        .max_by_key(container_failure_priority)
+}
+
+fn container_failure_priority(failure: &serde_json::Value) -> u8 {
+    match failure
+        .get("diagnostic_reason")
+        .and_then(serde_json::Value::as_str)
+    {
+        None => 0,
+        Some("payer_failed" | "wallet_failed" | "wallet_failed_after_payment") => 1,
+        Some(_) => 2,
+    }
 }
 
 fn now_unix() -> i64 {
@@ -2261,6 +2311,62 @@ mod tests {
             serde_json::json!({"code": "action_deadline_exceeded"})
         );
         assert!(is_terminal_action(ActionPhase::Cancelled));
+    }
+
+    #[test]
+    fn sanitized_stage_diagnostic_precedes_the_outer_deadline() {
+        let status = JobStatus {
+            conditions: Some(vec![k8s_openapi::api::batch::v1::JobCondition {
+                type_: "Failed".into(),
+                status: "True".into(),
+                reason: Some("DeadlineExceeded".into()),
+                ..Default::default()
+            }]),
+            ..JobStatus::default()
+        };
+        let pod = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": "wallet-fund"},
+            "status": {
+                "containerStatuses": [{
+                    "image": "wallet:test",
+                    "imageID": "wallet@test",
+                    "name": "wallet",
+                    "ready": false,
+                    "restartCount": 0,
+                    "state": {"terminated": {
+                        "exitCode": 1,
+                        "message": "{\"code\":\"wallet_orchestration_failed\",\"stage\":\"invoice\",\"reason\":\"invoice_exited_before_payment\",\"private\":\"not-forwarded\"}",
+                        "reason": "Error"
+                    }}
+                }, {
+                    "image": "lnd:test",
+                    "imageID": "lnd@test",
+                    "name": "payer",
+                    "ready": false,
+                    "restartCount": 0,
+                    "state": {"terminated": {
+                        "exitCode": 1,
+                        "message": "{\"code\":\"wallet_orchestration_failed\",\"stage\":\"invoice\",\"reason\":\"wallet_failed\"}",
+                        "reason": "Error"
+                    }}
+                }]
+            }
+        }))
+        .expect("pod");
+        assert_eq!(
+            action_failure(&status, &[pod]),
+            serde_json::json!({
+                "code": "container_failed",
+                "container": "wallet",
+                "diagnostic_reason": "invoice_exited_before_payment",
+                "exit_code": 1,
+                "failure_code": "wallet_orchestration_failed",
+                "reason": "Error",
+                "stage": "invoice"
+            })
+        );
     }
 
     #[test]

@@ -915,8 +915,7 @@
         }
       ],
       "protocol_probe": {
-        "kind": "http_get",
-        "path": "/v1/info",
+        "kind": "tcp",
         "port": 3338
       },
       "relevant_links": [
@@ -1276,12 +1275,17 @@
                     }
                   ],
                   "readinessProbe": {
-                    "failureThreshold": 40,
-                    "httpGet": {
-                      "path": "/v1/info",
-                      "port": 3338
+                    "exec": {
+                      "command": [
+                        "python3",
+                        "-c",
+                        "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()",
+                        "http://127.0.0.1:3338/v1/info"
+                      ]
                     },
-                    "periodSeconds": 3
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 2
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -1358,7 +1362,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:c85a7a28d00b86e66dec48e81fc5c0d8ef32b4fcaaf8393380488729d307f42e",
+            "proofstorm.dev/prober-digest": "sha256:4ca3fc9e165877c7c426347d12944f58e3a5f33d40f9224442a2794f9ad55b4b",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -1385,7 +1389,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:c85a7a28d00b86e66dec48e81fc5c0d8ef32b4fcaaf8393380488729d307f42e",
+                "proofstorm.dev/prober-digest": "sha256:4ca3fc9e165877c7c426347d12944f58e3a5f33d40f9224442a2794f9ad55b4b",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {
@@ -1605,13 +1609,12 @@
                   "readinessProbe": {
                     "exec": {
                       "command": [
-                        "wget",
-                        "-q",
-                        "-T",
+                        "nc",
+                        "-z",
+                        "-w",
                         "2",
-                        "-O",
-                        "/dev/null",
-                        "http://mint:3338/v1/info"
+                        "mint",
+                        "3338"
                       ]
                     },
                     "failureThreshold": 3,

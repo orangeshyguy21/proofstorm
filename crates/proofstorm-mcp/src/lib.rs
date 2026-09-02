@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use k8s_openapi::api::core::v1::ConfigMap;
 use kube::{
@@ -6,15 +6,17 @@ use kube::{
     api::{DeleteParams, Patch, PatchParams},
 };
 use proofstorm_core::{
-    Capability, CatalogResponse, ComponentKind, ComponentSpec, DraftMutation, EVIDENCE_API_VERSION,
-    EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent, EvidenceInstance,
-    Experiment, ExperimentLease, ExperimentPhase, InstancePhase, LabInstance, LabInstanceStatus,
-    LabOperation, LabSpec, LinkSpec, MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS,
-    MAX_NETWORK_LOSS_BASIS_POINTS, NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature,
-    OperationArtifact, OperationKind, OperationPhase, PublishedRevision,
+    Capability, CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogSupportMatrix,
+    ComponentKind, ComponentSpec, ComponentStatus, ControlClass, DraftMutation,
+    EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent,
+    EvidenceInstance, Experiment, ExperimentLease, ExperimentPhase, InstancePhase, InventoryEntry,
+    LabInstance, LabInstanceStatus, LabOperation, LabSpec, LinkKind, LinkSpec,
+    MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
+    NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature, OperationArtifact,
+    OperationKind, OperationPhase, PublishedRevision, ReleaseChannel, SupportLifecycle,
     TeardownReceipt as CoreTeardownReceipt, ValidateLabRequest, ValidationReport, WalletQuote,
-    WalletQuoteDirection, WalletQuotePhase, default_catalog, network_policy_fault_backend,
-    validate_lab,
+    WalletQuoteDirection, WalletQuotePhase, default_catalog, digest_json,
+    network_policy_fault_backend, validate_lab,
 };
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionPhase, BootstrapLiquidityAction, ChannelCloseAction,
@@ -27,8 +29,14 @@ use proofstorm_kube::{
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
-    ErrorData, Json, ServerHandler,
+    ErrorData, Json, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{
+        ListResourceTemplatesResult, PaginatedRequestParams, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, ResourceContents, ResourceTemplate,
+        ServerCapabilities, ServerInfo,
+    },
+    service::RequestContext,
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -50,11 +58,149 @@ pub struct ReadDraftRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct CatalogDependencyFilter {
+    pub link_kind: LinkKind,
+    pub implementation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogListRequest {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub implementations: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub kinds: BTreeSet<ComponentKind>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub features_all: BTreeSet<CatalogFeature>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub release_channels: BTreeSet<ReleaseChannel>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub support_lifecycles: BTreeSet<SupportLifecycle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency: Option<CatalogDependencyFilter>,
+    #[serde(default = "default_catalog_list_limit")]
+    #[schemars(range(min = 1, max = 50))]
+    pub limit: u32,
+    /// Opaque continuation token returned by a prior call with identical filters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+impl Default for CatalogListRequest {
+    fn default() -> Self {
+        Self {
+            implementations: BTreeSet::new(),
+            kinds: BTreeSet::new(),
+            features_all: BTreeSet::new(),
+            release_channels: BTreeSet::new(),
+            support_lifecycles: BTreeSet::new(),
+            dependency: None,
+            limit: default_catalog_list_limit(),
+            cursor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEntryRequest {
+    pub id: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogConfigSchemaRequest {
+    pub id: String,
+    pub version: String,
+    /// RFC 6901 JSON Pointer. Empty reads the complete configuration schema.
+    #[serde(default)]
+    pub pointer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEntrySummary {
+    pub id: String,
+    pub kind: ComponentKind,
+    pub version: String,
+    pub preferred: bool,
+    pub adapter_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_action_adapter_version: Option<String>,
+    pub config_version: String,
+    pub config_schema_digest: String,
+    pub release_channel: ReleaseChannel,
+    pub support_lifecycle: SupportLifecycle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogListResponse {
+    pub api_version: String,
+    pub catalog_digest: String,
+    pub items: Vec<CatalogEntrySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEntryDetail {
+    pub id: String,
+    pub kind: ComponentKind,
+    pub description: String,
+    pub adapter_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_action_adapter_version: Option<String>,
+    pub version: String,
+    pub preferred: bool,
+    pub release_channel: ReleaseChannel,
+    pub support_lifecycle: SupportLifecycle,
+    pub config_version: String,
+    pub config_schema_digest: String,
+    pub features: BTreeSet<CatalogFeature>,
+    pub compatible_dependencies: Vec<CatalogDependencySupport>,
+    pub support_matrix: CatalogSupportMatrix,
+    pub image: String,
+    pub source_digest: String,
+    pub allowed_control: Vec<ControlClass>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogConfigSchemaResponse {
+    pub id: String,
+    pub version: String,
+    pub config_version: String,
+    pub config_schema_digest: String,
+    pub pointer: String,
+    pub fragment: bool,
+    pub schema: serde_json::Value,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub referenced_schemas: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EditDraftRequest {
     pub draft_id: String,
     pub expected_version: u64,
     pub lab: LabSpec,
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DraftMutationResult {
+    pub draft_id: String,
+    pub version: u64,
+    pub component_count: u32,
+    pub link_count: u32,
+    pub valid: bool,
+    pub changed_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -105,6 +251,25 @@ pub struct PublishDraftRequest {
     pub draft_id: String,
     pub expected_version: u64,
     pub idempotency_key: String,
+    /// Explicitly embed the complete published lab and resolved lock.
+    #[serde(default)]
+    pub include_revision: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PublishDraftResponse {
+    pub workspace_id: String,
+    pub digest: String,
+    pub lock_digest: String,
+    pub component_count: u32,
+    pub revision_included: bool,
+    /// Schema-opaque bulk lab document, present only after explicit opt-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lab: Option<serde_json::Value>,
+    /// Schema-opaque bulk resolved lock, present only after explicit opt-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -119,6 +284,68 @@ pub struct MaterializeLabRequest {
 #[serde(deny_unknown_fields)]
 pub struct InstanceRequest {
     pub instance_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabStatusSummary {
+    pub instance_id: String,
+    pub revision_digest: String,
+    pub lock_digest: String,
+    pub phase: InstancePhase,
+    pub instance_namespace: String,
+    pub ready_components: u32,
+    pub total_components: u32,
+    pub inventory_count: u32,
+    pub inventory_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teardown_receipt: Option<CoreTeardownReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabComponentStatusListRequest {
+    pub instance_id: String,
+    #[serde(default = "default_status_list_limit")]
+    #[schemars(range(min = 1, max = 50))]
+    pub limit: u32,
+    /// Opaque continuation token returned by a prior component-status page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabComponentStatusListResponse {
+    pub instance_id: String,
+    pub revision_digest: String,
+    pub components: Vec<ComponentStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabInventoryListRequest {
+    pub instance_id: String,
+    #[serde(default = "default_status_list_limit")]
+    #[schemars(range(min = 1, max = 50))]
+    pub limit: u32,
+    /// Opaque continuation token returned by a prior inventory page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabInventoryListResponse {
+    pub instance_id: String,
+    pub inventory_digest: String,
+    pub inventory: Vec<InventoryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -526,15 +753,72 @@ pub struct ActionListRequest {
     #[serde(default)]
     pub after_sequence: u64,
     #[serde(default = "default_action_list_limit")]
+    #[schemars(range(min = 1, max = 100))]
     pub limit: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ActionListResponse {
-    pub actions: Vec<LabOperation>,
+    pub actions: Vec<ActionSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_after_sequence: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActionArtifactSummary {
+    pub media_type: String,
+    pub digest: String,
+    pub byte_length: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActionSummary {
+    pub id: String,
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub sequence: u64,
+    pub kind: OperationKind,
+    pub capability: Capability,
+    pub request_digest: String,
+    pub phase: OperationPhase,
+    pub accepted_at_unix: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ActionArtifactSummary>,
+}
+
+impl From<&LabOperation> for ActionSummary {
+    fn from(operation: &LabOperation) -> Self {
+        Self {
+            id: operation.id.clone(),
+            instance_id: operation.instance_id.clone(),
+            experiment_id: operation.experiment_id.clone(),
+            lease_id: operation.lease_id.clone(),
+            sequence: operation.sequence,
+            kind: operation.kind,
+            capability: operation.capability,
+            request_digest: operation.request_digest.clone(),
+            phase: operation.phase,
+            accepted_at_unix: operation.accepted_at_unix,
+            started_at_unix: operation.started_at_unix,
+            completed_at_unix: operation.completed_at_unix,
+            artifact: operation
+                .artifact
+                .as_ref()
+                .map(|artifact| ActionArtifactSummary {
+                    media_type: artifact.media_type.clone(),
+                    digest: artifact.digest.clone(),
+                    byte_length: artifact.byte_length,
+                }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -547,6 +831,74 @@ pub struct ArtifactExportRequest {
     /// Additional operation IDs whose already-sanitized artifacts should be included.
     #[serde(default)]
     pub artifact_operation_ids: Vec<String>,
+    /// Explicitly embed the complete bulk evidence document. The default returns only its manifest.
+    #[serde(default)]
+    pub include_content: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceExportResponse {
+    pub media_type: String,
+    pub digest: String,
+    pub byte_length: u32,
+    pub workspace_id: String,
+    pub experiment_id: String,
+    pub revision_digest: String,
+    pub lock_digest: String,
+    pub journal_count: u32,
+    pub artifact_count: u32,
+    /// Stable MCP resource URI for reading the complete deterministic bundle.
+    pub resource_uri: String,
+    pub content_included: bool,
+    /// Deliberately schema-opaque bulk content, present only after explicit opt-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceSection {
+    Revision,
+    Lock,
+    Journal,
+    Artifact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceSectionReadRequest {
+    pub experiment_id: String,
+    /// Must match the selection used for the evidence manifest.
+    #[serde(default = "default_true")]
+    pub include_oracle_artifacts: bool,
+    /// Must match the selection used for the evidence manifest.
+    #[serde(default)]
+    pub artifact_operation_ids: Vec<String>,
+    pub section: EvidenceSection,
+    /// RFC 6901 JSON Pointer within revision, lock, or one artifact. Empty reads that whole section.
+    #[serde(default)]
+    pub pointer: String,
+    /// Required for artifact reads and ignored for other sections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// Journal sequence boundary; ignored for other sections.
+    #[serde(default)]
+    pub after_sequence: u64,
+    /// Journal page size; ignored for other sections.
+    #[serde(default = "default_evidence_section_limit")]
+    #[schemars(range(min = 1, max = 50))]
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceSectionReadResponse {
+    pub evidence_digest: String,
+    pub section: EvidenceSection,
+    pub data: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after_sequence: Option<u64>,
 }
 
 const fn default_true() -> bool {
@@ -557,6 +909,10 @@ const MAX_EVIDENCE_ACTIONS: u32 = 100;
 const MAX_EXPLICIT_EVIDENCE_ARTIFACTS: usize = 16;
 const MAX_EVIDENCE_ARTIFACTS: usize = 32;
 const MAX_EVIDENCE_BUNDLE_BYTES: usize = 512 * 1024;
+
+const fn default_evidence_section_limit() -> u32 {
+    20
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -571,6 +927,7 @@ pub struct WalletQuoteListRequest {
     #[serde(default)]
     pub after_quote_id: Option<String>,
     #[serde(default = "default_quote_list_limit")]
+    #[schemars(range(min = 1, max = 100))]
     pub limit: u32,
 }
 
@@ -588,6 +945,107 @@ const fn default_quote_list_limit() -> u32 {
 
 const fn default_action_list_limit() -> u32 {
     50
+}
+
+const fn default_catalog_list_limit() -> u32 {
+    20
+}
+
+const fn default_status_list_limit() -> u32 {
+    20
+}
+
+const MAX_CATALOG_LIST_LIMIT: u32 = 50;
+const MAX_AGENT_RESPONSE_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProofstormToolset {
+    All,
+    Design,
+    Runtime,
+    Evidence,
+}
+
+impl std::str::FromStr for ProofstormToolset {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "all" => Ok(Self::All),
+            "design" => Ok(Self::Design),
+            "runtime" => Ok(Self::Runtime),
+            "evidence" => Ok(Self::Evidence),
+            _ => Err(format!(
+                "invalid PROOFSTORM_TOOLSET {value:?}; expected all, design, runtime, or evidence"
+            )),
+        }
+    }
+}
+
+impl ProofstormToolset {
+    fn includes(self, tool: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Design => matches!(
+                tool,
+                "proofstorm_workspace_read"
+                    | "proofstorm_catalog_list"
+                    | "proofstorm_catalog_entry_read"
+                    | "proofstorm_catalog_config_schema_read"
+                    | "proofstorm_network_capabilities"
+                    | "proofstorm_lab_create"
+                    | "proofstorm_lab_read"
+                    | "proofstorm_lab_edit"
+                    | "proofstorm_component_add"
+                    | "proofstorm_component_update"
+                    | "proofstorm_component_remove"
+                    | "proofstorm_link_add"
+                    | "proofstorm_link_remove"
+                    | "proofstorm_lab_clone"
+                    | "proofstorm_lab_validate"
+                    | "proofstorm_lab_diff"
+                    | "proofstorm_lab_publish"
+            ),
+            Self::Runtime => !matches!(
+                tool,
+                "proofstorm_lab_create"
+                    | "proofstorm_lab_edit"
+                    | "proofstorm_component_add"
+                    | "proofstorm_component_update"
+                    | "proofstorm_component_remove"
+                    | "proofstorm_link_add"
+                    | "proofstorm_link_remove"
+                    | "proofstorm_lab_clone"
+                    | "proofstorm_lab_validate"
+                    | "proofstorm_lab_diff"
+                    | "proofstorm_lab_publish"
+                    | "proofstorm_artifact_export"
+                    | "proofstorm_evidence_section_read"
+            ),
+            Self::Evidence => matches!(
+                tool,
+                "proofstorm_workspace_read"
+                    | "proofstorm_catalog_list"
+                    | "proofstorm_catalog_entry_read"
+                    | "proofstorm_catalog_config_schema_read"
+                    | "proofstorm_lab_read"
+                    | "proofstorm_lab_status"
+                    | "proofstorm_lab_component_status_list"
+                    | "proofstorm_lab_inventory_list"
+                    | "proofstorm_lab_wait"
+                    | "proofstorm_experiment_read"
+                    | "proofstorm_lease_read"
+                    | "proofstorm_operation_status"
+                    | "proofstorm_operation_wait"
+                    | "proofstorm_action_list"
+                    | "proofstorm_artifact_export"
+                    | "proofstorm_evidence_section_read"
+                    | "proofstorm_action_status"
+                    | "proofstorm_wallet_quote_status"
+                    | "proofstorm_wallet_quote_list"
+            ),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -682,6 +1140,16 @@ impl ProofstormMcp {
         self
     }
 
+    #[must_use]
+    pub fn with_toolset(mut self, toolset: ProofstormToolset) -> Self {
+        for (tool, _) in tool_capabilities() {
+            if !toolset.includes(tool) {
+                self.tool_router.disable_route(tool);
+            }
+        }
+        self
+    }
+
     fn authorize(&self, capability: Capability) -> Result<(), ErrorData> {
         self.store
             .authorize(&self.workspace, &self.principal, capability)
@@ -693,6 +1161,166 @@ impl ProofstormMcp {
             self.authorize(*capability)?;
         }
         Ok(())
+    }
+
+    async fn full_lab_status(&self, instance_id: &str) -> Result<LabInstanceStatus, ErrorData> {
+        self.authorize(Capability::LabStatus)?;
+        let instance = self
+            .store
+            .instance(&self.workspace, &self.principal, instance_id)
+            .map_err(store_error)?;
+        self.runtime()?.status(instance).await
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "evidence admission, selection, and final size checks stay visibly atomic"
+    )]
+    fn build_evidence_bundle(
+        &self,
+        request: &ArtifactExportRequest,
+    ) -> Result<EvidenceBundle, ErrorData> {
+        self.authorize_all(&[Capability::ExperimentRead, Capability::ArtifactRead])?;
+        if request.artifact_operation_ids.len() > MAX_EXPLICIT_EVIDENCE_ARTIFACTS {
+            return Err(evidence_error(
+                "evidence_artifact_limit",
+                "at most 16 explicit artifact operation IDs may be requested",
+            ));
+        }
+        let explicit = request
+            .artifact_operation_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if explicit.len() != request.artifact_operation_ids.len() {
+            return Err(evidence_error(
+                "evidence_artifact_duplicate",
+                "artifact operation IDs must be unique",
+            ));
+        }
+        let experiment = self
+            .store
+            .experiment(&self.workspace, &self.principal, &request.experiment_id)
+            .map_err(store_error)?;
+        if experiment.phase != ExperimentPhase::Closed {
+            return Err(evidence_error(
+                "evidence_experiment_active",
+                "evidence export requires a closed experiment",
+            ));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &experiment.instance_id,
+                Capability::ArtifactRead,
+            )
+            .map_err(store_error)?;
+        let actions = self
+            .store
+            .actions(
+                &self.workspace,
+                &self.principal,
+                &request.experiment_id,
+                0,
+                MAX_EVIDENCE_ACTIONS,
+            )
+            .map_err(store_error)?;
+        if actions.len() == MAX_EVIDENCE_ACTIONS as usize {
+            let after = actions.last().map_or(0, |action| action.sequence);
+            if !self
+                .store
+                .actions(
+                    &self.workspace,
+                    &self.principal,
+                    &request.experiment_id,
+                    after,
+                    1,
+                )
+                .map_err(store_error)?
+                .is_empty()
+            {
+                return Err(evidence_error(
+                    "evidence_action_limit",
+                    "experiment has more than 100 actions and cannot be exported as one bundle",
+                ));
+            }
+        }
+        if actions.iter().any(|action| {
+            matches!(
+                action.phase,
+                OperationPhase::Pending | OperationPhase::Running
+            )
+        }) {
+            return Err(evidence_error(
+                "evidence_journal_incomplete",
+                "all experiment actions must be terminal before evidence export",
+            ));
+        }
+        let known_ids = actions
+            .iter()
+            .map(|action| action.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if let Some(unknown) = explicit.iter().find(|id| !known_ids.contains(id.as_str())) {
+            return Err(evidence_error(
+                "evidence_artifact_unknown",
+                &format!("operation {unknown:?} is not in the experiment journal"),
+            ));
+        }
+        let selected = actions
+            .iter()
+            .filter(|action| {
+                explicit.contains(&action.id)
+                    || request.include_oracle_artifacts
+                        && matches!(
+                            action.kind,
+                            OperationKind::ConservationOracle | OperationKind::ReachabilityOracle
+                        )
+            })
+            .collect::<Vec<_>>();
+        if selected.len() > MAX_EVIDENCE_ARTIFACTS {
+            return Err(evidence_error(
+                "evidence_artifact_limit",
+                "at most 32 artifact bodies may be included in one evidence bundle",
+            ));
+        }
+        let mut artifacts = Vec::with_capacity(selected.len());
+        for action in selected {
+            let artifact = action.artifact.clone().ok_or_else(|| {
+                evidence_error(
+                    "evidence_artifact_missing",
+                    &format!("operation {:?} has no terminal artifact", action.id),
+                )
+            })?;
+            artifacts.push(EvidenceArtifact {
+                operation_id: action.id.clone(),
+                sequence: action.sequence,
+                kind: action.kind,
+                artifact,
+            });
+        }
+        let content = EvidenceBundleContent {
+            api_version: EVIDENCE_API_VERSION.to_owned(),
+            workspace_id: self.workspace.clone(),
+            experiment,
+            instance: EvidenceInstance {
+                id: instance.id,
+                revision_digest: instance.revision_digest,
+                lock_digest: instance.lock_digest,
+            },
+            revision,
+            journal: actions.iter().map(EvidenceAction::from).collect(),
+            artifacts,
+        };
+        let bundle = EvidenceBundle::from_content(content);
+        if bundle.byte_length as usize > MAX_EVIDENCE_BUNDLE_BYTES {
+            return Err(evidence_error(
+                "evidence_bundle_too_large",
+                "evidence bundle content exceeds 512 KiB",
+            ));
+        }
+        Ok(bundle)
     }
 }
 
@@ -714,11 +1342,43 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "List exact installed component versions, configuration contracts and schema digests, support lifecycle, immutable images, features, and compatible dependencies"
+        description = "List a bounded filtered page of compact installed component identities. Use catalog_entry_read and catalog_config_schema_read for exact details"
     )]
-    fn proofstorm_catalog_list(&self) -> Result<Json<CatalogResponse>, ErrorData> {
+    fn proofstorm_catalog_list(
+        &self,
+        Parameters(request): Parameters<CatalogListRequest>,
+    ) -> Result<Json<CatalogListResponse>, ErrorData> {
         self.authorize(Capability::CatalogRead)?;
-        Ok(Json(default_catalog()))
+        catalog_page(&request).map(Json)
+    }
+
+    #[tool(
+        description = "Read exact installed metadata, compatibility, immutable image, features, and support for one component version without its configuration schema"
+    )]
+    fn proofstorm_catalog_entry_read(
+        &self,
+        Parameters(request): Parameters<CatalogEntryRequest>,
+    ) -> Result<Json<CatalogEntryDetail>, ErrorData> {
+        self.authorize(Capability::CatalogRead)?;
+        let catalog = default_catalog();
+        let entry = exact_catalog_entry(&catalog.entries, &request.id, &request.version)?;
+        let preferred = catalog.implementations.iter().any(|support| {
+            support.implementation == entry.id && support.preferred_version == entry.version
+        });
+        bounded_agent_response(CatalogEntryDetail::from_entry(entry, preferred)).map(Json)
+    }
+
+    #[tool(
+        description = "Read the complete configuration JSON Schema or one RFC 6901 fragment for an exact installed component version"
+    )]
+    fn proofstorm_catalog_config_schema_read(
+        &self,
+        Parameters(request): Parameters<CatalogConfigSchemaRequest>,
+    ) -> Result<Json<CatalogConfigSchemaResponse>, ErrorData> {
+        self.authorize(Capability::CatalogRead)?;
+        catalog_config_schema(request)
+            .and_then(bounded_agent_response)
+            .map(Json)
     }
 
     #[tool(
@@ -729,11 +1389,11 @@ impl ProofstormMcp {
         Ok(Json(network_policy_fault_backend()))
     }
 
-    #[tool(description = "Create a versioned lab draft in the selected workspace")]
+    #[tool(description = "Create a versioned lab draft and return a compact mutation receipt")]
     fn proofstorm_lab_create(
         &self,
         Parameters(request): Parameters<CreateDraftRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::LabCreate)?;
         self.store
             .create_draft(
@@ -743,7 +1403,7 @@ impl ProofstormMcp {
                 &request.lab,
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
             .map_err(store_error)
     }
 
@@ -759,11 +1419,13 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Replace a lab draft using optimistic version and idempotency checks")]
+    #[tool(
+        description = "Replace a lab draft using optimistic version and idempotency checks, returning a compact mutation receipt"
+    )]
     fn proofstorm_lab_edit(
         &self,
         Parameters(request): Parameters<EditDraftRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::LabEdit)?;
         self.store
             .edit_draft(
@@ -774,16 +1436,19 @@ impl ProofstormMcp {
                 &request.lab,
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
             .map_err(store_error)
     }
 
-    #[tool(description = "Add an installed, versioned component to a lab draft")]
+    #[tool(
+        description = "Add an installed, versioned component and return a compact draft mutation receipt"
+    )]
     fn proofstorm_component_add(
         &self,
         Parameters(request): Parameters<MutateComponentRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::TopologyMutate)?;
+        let changed_path = format!("/components/{}", request.component.id);
         self.store
             .mutate_draft(
                 &self.workspace,
@@ -795,16 +1460,19 @@ impl ProofstormMcp {
                 },
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec![changed_path])))
             .map_err(store_error)
     }
 
-    #[tool(description = "Update an existing logical component in a lab draft")]
+    #[tool(
+        description = "Update an existing logical component and return a compact draft mutation receipt"
+    )]
     fn proofstorm_component_update(
         &self,
         Parameters(request): Parameters<MutateComponentRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::TopologyMutate)?;
+        let changed_path = format!("/components/{}", request.component.id);
         self.store
             .mutate_draft(
                 &self.workspace,
@@ -816,16 +1484,19 @@ impl ProofstormMcp {
                 },
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec![changed_path])))
             .map_err(store_error)
     }
 
-    #[tool(description = "Remove an unlinked component from a lab draft")]
+    #[tool(
+        description = "Remove an unlinked component and return a compact draft mutation receipt"
+    )]
     fn proofstorm_component_remove(
         &self,
         Parameters(request): Parameters<RemoveComponentRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::TopologyMutate)?;
+        let changed_path = format!("/components/{}", request.component_id);
         self.store
             .mutate_draft(
                 &self.workspace,
@@ -837,7 +1508,7 @@ impl ProofstormMcp {
                 },
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec![changed_path])))
             .map_err(store_error)
     }
 
@@ -847,8 +1518,9 @@ impl ProofstormMcp {
     fn proofstorm_link_add(
         &self,
         Parameters(request): Parameters<MutateLinkRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::TopologyMutate)?;
+        let changed_path = format!("/links/{}", request.link.id);
         self.store
             .mutate_draft(
                 &self.workspace,
@@ -858,7 +1530,7 @@ impl ProofstormMcp {
                 &DraftMutation::AddLink { link: request.link },
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec![changed_path])))
             .map_err(store_error)
     }
 
@@ -866,8 +1538,9 @@ impl ProofstormMcp {
     fn proofstorm_link_remove(
         &self,
         Parameters(request): Parameters<MutateLinkRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::TopologyMutate)?;
+        let changed_path = format!("/links/{}", request.link.id);
         self.store
             .mutate_draft(
                 &self.workspace,
@@ -877,15 +1550,15 @@ impl ProofstormMcp {
                 &DraftMutation::RemoveLink { link: request.link },
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec![changed_path])))
             .map_err(store_error)
     }
 
-    #[tool(description = "Clone a lab draft within the selected workspace")]
+    #[tool(description = "Clone a lab draft and return a compact mutation receipt")]
     fn proofstorm_lab_clone(
         &self,
         Parameters(request): Parameters<CloneDraftRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::LabClone)?;
         self.store
             .clone_draft(
@@ -895,7 +1568,7 @@ impl ProofstormMcp {
                 &request.target_draft_id,
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
             .map_err(store_error)
     }
 
@@ -925,11 +1598,13 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Publish an immutable lab revision with a deterministic catalog lock")]
+    #[tool(
+        description = "Publish an immutable lab revision and return a compact digest receipt. Set include_revision only for an explicit bulk read of the lab and resolved lock"
+    )]
     fn proofstorm_lab_publish(
         &self,
         Parameters(request): Parameters<PublishDraftRequest>,
-    ) -> Result<Json<PublishedRevision>, ErrorData> {
+    ) -> Result<Json<PublishDraftResponse>, ErrorData> {
         self.authorize(Capability::LabPublish)?;
         self.store
             .publish(
@@ -939,7 +1614,7 @@ impl ProofstormMcp {
                 request.expected_version,
                 &request.idempotency_key,
             )
-            .map(Json)
+            .map(|revision| Json(publish_draft_response(revision, request.include_revision)))
             .map_err(store_error)
     }
 
@@ -971,17 +1646,115 @@ impl ProofstormMcp {
             .map(Json)
     }
 
-    #[tool(description = "Read sanitized readiness, topology, and inventory for a lab instance")]
+    #[tool(
+        description = "Read a compact lab readiness receipt with component and inventory counts. Use the component-status and inventory list tools for paged detail"
+    )]
     async fn proofstorm_lab_status(
         &self,
         Parameters(request): Parameters<InstanceRequest>,
-    ) -> Result<Json<LabInstanceStatus>, ErrorData> {
-        self.authorize(Capability::LabStatus)?;
-        let instance = self
-            .store
-            .instance(&self.workspace, &self.principal, &request.instance_id)
-            .map_err(store_error)?;
-        self.runtime()?.status(instance).await.map(Json)
+    ) -> Result<Json<LabStatusSummary>, ErrorData> {
+        self.full_lab_status(&request.instance_id)
+            .await
+            .map(compact_lab_status)
+            .map(Json)
+    }
+
+    #[tool(
+        description = "List sanitized component readiness for a lab instance in bounded cursor pages"
+    )]
+    async fn proofstorm_lab_component_status_list(
+        &self,
+        Parameters(request): Parameters<LabComponentStatusListRequest>,
+    ) -> Result<Json<LabComponentStatusListResponse>, ErrorData> {
+        validate_status_list_limit(request.limit)?;
+        let status = self.full_lab_status(&request.instance_id).await?;
+        let mut components = status.components;
+        components.sort_by(|left, right| left.id.cmp(&right.id));
+        let snapshot_digest = digest_json(&components);
+        let start = status_page_start(request.cursor.as_deref(), &components, |component| {
+            status_cursor(
+                "component",
+                &request.instance_id,
+                &snapshot_digest,
+                &component.id,
+            )
+        })?;
+        let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
+        let mut end = (start + limit).min(components.len());
+        loop {
+            let response = LabComponentStatusListResponse {
+                instance_id: request.instance_id.clone(),
+                revision_digest: status.instance.revision_digest.clone(),
+                components: components[start..end].to_vec(),
+                next_cursor: (end < components.len() && end > start).then(|| {
+                    status_cursor(
+                        "component",
+                        &request.instance_id,
+                        &snapshot_digest,
+                        &components[end - 1].id,
+                    )
+                }),
+            };
+            if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
+                return Ok(Json(response));
+            }
+            if end <= start + 1 {
+                return Err(ErrorData::invalid_request(
+                    "one component status exceeds the agent response budget",
+                    Some(serde_json::json!({"code": "status_response_too_large"})),
+                ));
+            }
+            end -= 1;
+        }
+    }
+
+    #[tool(
+        description = "List sanitized Kubernetes inventory for a lab instance in bounded cursor pages"
+    )]
+    async fn proofstorm_lab_inventory_list(
+        &self,
+        Parameters(request): Parameters<LabInventoryListRequest>,
+    ) -> Result<Json<LabInventoryListResponse>, ErrorData> {
+        validate_status_list_limit(request.limit)?;
+        let status = self.full_lab_status(&request.instance_id).await?;
+        let mut inventory = status.inventory;
+        inventory.sort_by_key(inventory_key);
+        let inventory_digest = digest_json(&inventory);
+        let start = status_page_start(request.cursor.as_deref(), &inventory, |entry| {
+            status_cursor(
+                "inventory",
+                &request.instance_id,
+                &inventory_digest,
+                &inventory_key(entry),
+            )
+        })?;
+        let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
+        let mut end = (start + limit).min(inventory.len());
+        loop {
+            let response = LabInventoryListResponse {
+                instance_id: request.instance_id.clone(),
+                inventory_digest: inventory_digest.clone(),
+                inventory: inventory[start..end].to_vec(),
+                next_cursor: (end < inventory.len() && end > start).then(|| {
+                    status_cursor(
+                        "inventory",
+                        &request.instance_id,
+                        &inventory_digest,
+                        &inventory_key(&inventory[end - 1]),
+                    )
+                }),
+            };
+            if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
+                return Ok(Json(response));
+            }
+            if end <= start + 1 {
+                return Err(ErrorData::invalid_request(
+                    "one inventory entry exceeds the agent response budget",
+                    Some(serde_json::json!({"code": "status_response_too_large"})),
+                ));
+            }
+            end -= 1;
+        }
     }
 
     #[tool(
@@ -996,12 +1769,7 @@ impl ProofstormMcp {
             + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
         let mut backoff = std::time::Duration::from_millis(250);
         loop {
-            let status = self
-                .proofstorm_lab_status(Parameters(InstanceRequest {
-                    instance_id: request.instance_id.clone(),
-                }))
-                .await?
-                .0;
+            let status = self.full_lab_status(&request.instance_id).await?;
             let reached = status.phase == request.target_phase;
             if reached || lab_wait_terminal(status.phase) {
                 return Ok(Json(compact_lab_wait(
@@ -2355,7 +3123,9 @@ impl ProofstormMcp {
         Ok(Json(operation))
     }
 
-    #[tool(description = "Read a bounded page of the canonical experiment action journal")]
+    #[tool(
+        description = "Read a bounded page of compact canonical action summaries. Use operation_status for one request or artifact body"
+    )]
     fn proofstorm_action_list(
         &self,
         Parameters(request): Parameters<ActionListRequest>,
@@ -2371,165 +3141,156 @@ impl ProofstormMcp {
                 request.limit,
             )
             .map_err(store_error)?;
-        let next_after_sequence = actions.last().map(|action| action.sequence);
-        Ok(Json(ActionListResponse {
-            actions,
-            next_after_sequence,
-        }))
+        let source_has_more =
+            if actions.len() == usize::try_from(request.limit).unwrap_or(usize::MAX) {
+                let after = actions
+                    .last()
+                    .map_or(request.after_sequence, |action| action.sequence);
+                !self
+                    .store
+                    .actions(
+                        &self.workspace,
+                        &self.principal,
+                        &request.experiment_id,
+                        after,
+                        1,
+                    )
+                    .map_err(store_error)?
+                    .is_empty()
+            } else {
+                false
+            };
+        let summaries = actions.iter().map(ActionSummary::from).collect::<Vec<_>>();
+        let mut end = summaries.len();
+        loop {
+            let has_more = source_has_more || end < summaries.len();
+            let response = ActionListResponse {
+                actions: summaries[..end].to_vec(),
+                next_after_sequence: (has_more && end > 0).then(|| summaries[end - 1].sequence),
+            };
+            if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
+                return Ok(Json(response));
+            }
+            if end == 0 {
+                return Err(ErrorData::invalid_request(
+                    "action page envelope exceeds the agent response budget",
+                    Some(serde_json::json!({"code": "action_response_too_large"})),
+                ));
+            }
+            end -= 1;
+        }
     }
 
     #[tool(
-        description = "Export a deterministic bounded evidence bundle for a closed experiment, including the immutable revision, canonical journal, and selected sanitized artifacts"
-    )]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "evidence admission, selection, and final size checks stay visibly atomic"
+        description = "Export a compact deterministic evidence manifest for a closed experiment. Set include_content only for an explicit bulk download of the revision, journal, and selected artifacts"
     )]
     fn proofstorm_artifact_export(
         &self,
         Parameters(request): Parameters<ArtifactExportRequest>,
-    ) -> Result<Json<EvidenceBundle>, ErrorData> {
-        self.authorize_all(&[Capability::ExperimentRead, Capability::ArtifactRead])?;
-        if request.artifact_operation_ids.len() > MAX_EXPLICIT_EVIDENCE_ARTIFACTS {
-            return Err(evidence_error(
-                "evidence_artifact_limit",
-                "at most 16 explicit artifact operation IDs may be requested",
-            ));
-        }
-        let explicit = request
-            .artifact_operation_ids
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if explicit.len() != request.artifact_operation_ids.len() {
-            return Err(evidence_error(
-                "evidence_artifact_duplicate",
-                "artifact operation IDs must be unique",
-            ));
-        }
-        let experiment = self
-            .store
-            .experiment(&self.workspace, &self.principal, &request.experiment_id)
-            .map_err(store_error)?;
-        if experiment.phase != ExperimentPhase::Closed {
-            return Err(evidence_error(
-                "evidence_experiment_active",
-                "evidence export requires a closed experiment",
-            ));
-        }
-        let (instance, revision) = self
-            .store
-            .operation_context(
-                &self.workspace,
-                &self.principal,
-                &experiment.instance_id,
-                Capability::ArtifactRead,
-            )
-            .map_err(store_error)?;
-        let actions = self
-            .store
-            .actions(
-                &self.workspace,
-                &self.principal,
-                &request.experiment_id,
-                0,
-                MAX_EVIDENCE_ACTIONS,
-            )
-            .map_err(store_error)?;
-        if actions.len() == MAX_EVIDENCE_ACTIONS as usize {
-            let after = actions.last().map_or(0, |action| action.sequence);
-            if !self
-                .store
-                .actions(
-                    &self.workspace,
-                    &self.principal,
-                    &request.experiment_id,
-                    after,
-                    1,
-                )
-                .map_err(store_error)?
-                .is_empty()
-            {
+    ) -> Result<Json<EvidenceExportResponse>, ErrorData> {
+        let bundle = self.build_evidence_bundle(&request)?;
+        let resource_uri = evidence_resource_uri(&request, &bundle.digest);
+        Ok(Json(evidence_export_response(
+            bundle,
+            resource_uri,
+            request.include_content,
+        )))
+    }
+
+    #[tool(
+        description = "Read one bounded semantic section of a closed experiment's deterministic evidence bundle. Use JSON Pointer for large revision, lock, or artifact documents"
+    )]
+    fn proofstorm_evidence_section_read(
+        &self,
+        Parameters(request): Parameters<EvidenceSectionReadRequest>,
+    ) -> Result<Json<EvidenceSectionReadResponse>, ErrorData> {
+        let export_request = ArtifactExportRequest {
+            experiment_id: request.experiment_id,
+            include_oracle_artifacts: request.include_oracle_artifacts,
+            artifact_operation_ids: request.artifact_operation_ids,
+            include_content: false,
+        };
+        let bundle = self.build_evidence_bundle(&export_request)?;
+        if matches!(request.section, EvidenceSection::Journal) {
+            if !(1..=50).contains(&request.limit) {
                 return Err(evidence_error(
-                    "evidence_action_limit",
-                    "experiment has more than 100 actions and cannot be exported as one bundle",
+                    "evidence_section_limit_invalid",
+                    "journal limit must be between 1 and 50",
                 ));
             }
+            let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
+            let candidates = bundle
+                .content
+                .journal
+                .iter()
+                .filter(|action| action.sequence > request.after_sequence)
+                .take(limit + 1)
+                .cloned()
+                .collect::<Vec<_>>();
+            let source_has_more = candidates.len() > limit;
+            let page_len = candidates.len().min(limit);
+            let mut end = page_len;
+            loop {
+                let has_more = source_has_more || end < page_len;
+                let response = EvidenceSectionReadResponse {
+                    evidence_digest: bundle.digest.clone(),
+                    section: request.section,
+                    data: evidence_json(&candidates[..end])?,
+                    next_after_sequence: (has_more && end > 0)
+                        .then(|| candidates[end - 1].sequence),
+                };
+                if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
+                    return Ok(Json(response));
+                }
+                if end <= 1 {
+                    return Err(evidence_error(
+                        "evidence_action_too_large",
+                        "one evidence journal action exceeds the agent response budget",
+                    ));
+                }
+                end -= 1;
+            }
         }
-        if actions.iter().any(|action| {
-            matches!(
-                action.phase,
-                OperationPhase::Pending | OperationPhase::Running
-            )
-        }) {
-            return Err(evidence_error(
-                "evidence_journal_incomplete",
-                "all experiment actions must be terminal before evidence export",
-            ));
-        }
-        let known_ids = actions
-            .iter()
-            .map(|action| action.id.as_str())
-            .collect::<BTreeSet<_>>();
-        if let Some(unknown) = explicit.iter().find(|id| !known_ids.contains(id.as_str())) {
-            return Err(evidence_error(
-                "evidence_artifact_unknown",
-                &format!("operation {unknown:?} is not in the experiment journal"),
-            ));
-        }
-        let selected = actions
-            .iter()
-            .filter(|action| {
-                explicit.contains(&action.id)
-                    || request.include_oracle_artifacts
-                        && matches!(
-                            action.kind,
-                            OperationKind::ConservationOracle | OperationKind::ReachabilityOracle
+        let data = match request.section {
+            EvidenceSection::Revision => evidence_pointer(
+                evidence_json(&bundle.content.revision)?,
+                &request.pointer,
+                "revision",
+            )?,
+            EvidenceSection::Lock => evidence_pointer(
+                evidence_json(&bundle.content.revision.lock)?,
+                &request.pointer,
+                "lock",
+            )?,
+            EvidenceSection::Artifact => {
+                let operation_id = request.operation_id.as_deref().ok_or_else(|| {
+                    evidence_error(
+                        "evidence_operation_id_required",
+                        "operation_id is required for an artifact section read",
+                    )
+                })?;
+                let artifact = bundle
+                    .content
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.operation_id == operation_id)
+                    .ok_or_else(|| {
+                        evidence_error(
+                            "evidence_artifact_not_selected",
+                            "operation_id is not present in the selected evidence artifacts",
                         )
-            })
-            .collect::<Vec<_>>();
-        if selected.len() > MAX_EVIDENCE_ARTIFACTS {
-            return Err(evidence_error(
-                "evidence_artifact_limit",
-                "at most 32 artifact bodies may be included in one evidence bundle",
-            ));
-        }
-        let mut artifacts = Vec::with_capacity(selected.len());
-        for action in selected {
-            let artifact = action.artifact.clone().ok_or_else(|| {
-                evidence_error(
-                    "evidence_artifact_missing",
-                    &format!("operation {:?} has no terminal artifact", action.id),
-                )
-            })?;
-            artifacts.push(EvidenceArtifact {
-                operation_id: action.id.clone(),
-                sequence: action.sequence,
-                kind: action.kind,
-                artifact,
-            });
-        }
-        let content = EvidenceBundleContent {
-            api_version: EVIDENCE_API_VERSION.to_owned(),
-            workspace_id: self.workspace.clone(),
-            experiment,
-            instance: EvidenceInstance {
-                id: instance.id,
-                revision_digest: instance.revision_digest,
-                lock_digest: instance.lock_digest,
-            },
-            revision,
-            journal: actions.iter().map(EvidenceAction::from).collect(),
-            artifacts,
+                    })?;
+                evidence_pointer(evidence_json(artifact)?, &request.pointer, "artifact")?
+            }
+            EvidenceSection::Journal => unreachable!("journal returned above"),
         };
-        let bundle = EvidenceBundle::from_content(content);
-        if bundle.byte_length as usize > MAX_EVIDENCE_BUNDLE_BYTES {
-            return Err(evidence_error(
-                "evidence_bundle_too_large",
-                "evidence bundle content exceeds 512 KiB",
-            ));
-        }
-        Ok(Json(bundle))
+        bounded_agent_response(EvidenceSectionReadResponse {
+            evidence_digest: bundle.digest,
+            section: request.section,
+            data,
+            next_after_sequence: None,
+        })
+        .map(Json)
     }
 
     #[tool(description = "Read a sanitized durable wallet quote lifecycle by Proofstorm ID")]
@@ -2582,11 +3343,41 @@ impl ProofstormMcp {
                 request.limit,
             )
             .map_err(store_error)?;
-        let next_after_quote_id = quotes.last().map(|quote| quote.id.clone());
-        Ok(Json(WalletQuoteListResponse {
-            quotes,
-            next_after_quote_id,
-        }))
+        let source_has_more =
+            if quotes.len() == usize::try_from(request.limit).unwrap_or(usize::MAX) {
+                let after = quotes.last().map(|quote| quote.id.as_str());
+                !self
+                    .store
+                    .wallet_quotes(
+                        &self.workspace,
+                        &self.principal,
+                        &request.experiment_id,
+                        after,
+                        1,
+                    )
+                    .map_err(store_error)?
+                    .is_empty()
+            } else {
+                false
+            };
+        let mut end = quotes.len();
+        loop {
+            let has_more = source_has_more || end < quotes.len();
+            let response = WalletQuoteListResponse {
+                quotes: quotes[..end].to_vec(),
+                next_after_quote_id: (has_more && end > 0).then(|| quotes[end - 1].id.clone()),
+            };
+            if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
+                return Ok(Json(response));
+            }
+            if end == 0 {
+                return Err(ErrorData::invalid_request(
+                    "wallet quote page envelope exceeds the agent response budget",
+                    Some(serde_json::json!({"code": "wallet_quote_response_too_large"})),
+                ));
+            }
+            end -= 1;
+        }
     }
 
     #[tool(description = "Read an action and persist its bounded terminal artifact")]
@@ -2598,8 +3389,498 @@ impl ProofstormMcp {
     }
 }
 
+impl CatalogEntryDetail {
+    fn from_entry(entry: &CatalogEntry, preferred: bool) -> Self {
+        Self {
+            id: entry.id.clone(),
+            kind: entry.kind,
+            description: entry.description.clone(),
+            adapter_version: entry.adapter_version.clone(),
+            protocol_action_adapter_version: entry.protocol_action_adapter_version.clone(),
+            version: entry.version.clone(),
+            preferred,
+            release_channel: entry.release_channel,
+            support_lifecycle: entry.support_lifecycle,
+            config_version: entry.config_version.clone(),
+            config_schema_digest: entry.config_schema_digest.clone(),
+            features: entry.features.clone(),
+            compatible_dependencies: entry.compatible_dependencies.clone(),
+            support_matrix: entry.support_matrix.clone(),
+            image: entry.image.clone(),
+            source_digest: entry.source_digest.clone(),
+            allowed_control: entry.allowed_control.clone(),
+        }
+    }
+}
+
+fn compact_draft_mutation(draft: Draft, changed_paths: Vec<String>) -> DraftMutationResult {
+    DraftMutationResult {
+        draft_id: draft.id,
+        version: draft.version,
+        component_count: u32::try_from(draft.lab.components.len()).unwrap_or(u32::MAX),
+        link_count: u32::try_from(draft.lab.links.len()).unwrap_or(u32::MAX),
+        valid: validate_lab(&draft.lab).valid,
+        changed_paths,
+    }
+}
+
+fn evidence_export_response(
+    bundle: EvidenceBundle,
+    resource_uri: String,
+    include_content: bool,
+) -> EvidenceExportResponse {
+    EvidenceExportResponse {
+        media_type: bundle.media_type,
+        digest: bundle.digest,
+        byte_length: bundle.byte_length,
+        workspace_id: bundle.content.workspace_id.clone(),
+        experiment_id: bundle.content.experiment.id.clone(),
+        revision_digest: bundle.content.instance.revision_digest.clone(),
+        lock_digest: bundle.content.instance.lock_digest.clone(),
+        journal_count: u32::try_from(bundle.content.journal.len()).unwrap_or(u32::MAX),
+        artifact_count: u32::try_from(bundle.content.artifacts.len()).unwrap_or(u32::MAX),
+        resource_uri,
+        content_included: include_content,
+        content: include_content
+            .then(|| serde_json::to_value(bundle.content).expect("typed evidence serializes")),
+    }
+}
+
+fn evidence_resource_uri(request: &ArtifactExportRequest, digest: &str) -> String {
+    let mut artifact_ids = request.artifact_operation_ids.clone();
+    artifact_ids.sort();
+    format!(
+        "proofstorm://evidence/{}/{}?oracles={}&artifacts={}",
+        request.experiment_id,
+        digest,
+        u8::from(request.include_oracle_artifacts),
+        artifact_ids.join(",")
+    )
+}
+
+fn parse_evidence_resource_uri(uri: &str) -> Result<(ArtifactExportRequest, String), ErrorData> {
+    let remainder = uri
+        .strip_prefix("proofstorm://evidence/")
+        .ok_or_else(|| ErrorData::resource_not_found("unknown Proofstorm resource URI", None))?;
+    let (path, query) = remainder
+        .split_once('?')
+        .ok_or_else(|| ErrorData::resource_not_found("invalid evidence resource URI", None))?;
+    let (experiment_id, digest) = path
+        .split_once('/')
+        .filter(|(experiment_id, digest)| {
+            !experiment_id.is_empty() && !digest.is_empty() && !digest.contains('/')
+        })
+        .ok_or_else(|| ErrorData::resource_not_found("invalid evidence resource URI", None))?;
+    let mut oracles = None;
+    let mut artifacts = None;
+    for pair in query.split('&') {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| ErrorData::resource_not_found("invalid evidence resource URI", None))?;
+        match key {
+            "oracles" if oracles.is_none() => {
+                oracles = Some(match value {
+                    "0" => false,
+                    "1" => true,
+                    _ => {
+                        return Err(ErrorData::resource_not_found(
+                            "invalid evidence resource URI",
+                            None,
+                        ));
+                    }
+                });
+            }
+            "artifacts" if artifacts.is_none() => {
+                artifacts = Some(if value.is_empty() {
+                    Vec::new()
+                } else {
+                    value.split(',').map(str::to_owned).collect()
+                });
+            }
+            _ => {
+                return Err(ErrorData::resource_not_found(
+                    "invalid evidence resource URI",
+                    None,
+                ));
+            }
+        }
+    }
+    Ok((
+        ArtifactExportRequest {
+            experiment_id: experiment_id.to_owned(),
+            include_oracle_artifacts: oracles.ok_or_else(|| {
+                ErrorData::resource_not_found("invalid evidence resource URI", None)
+            })?,
+            artifact_operation_ids: artifacts.ok_or_else(|| {
+                ErrorData::resource_not_found("invalid evidence resource URI", None)
+            })?,
+            include_content: false,
+        },
+        digest.to_owned(),
+    ))
+}
+
+fn evidence_json<T: Serialize + ?Sized>(value: &T) -> Result<serde_json::Value, ErrorData> {
+    serde_json::to_value(value).map_err(|error| {
+        ErrorData::internal_error(
+            format!("failed to serialize evidence section: {error}"),
+            Some(serde_json::json!({"code": "evidence_serialization_failed"})),
+        )
+    })
+}
+
+fn evidence_pointer(
+    value: serde_json::Value,
+    pointer: &str,
+    section: &str,
+) -> Result<serde_json::Value, ErrorData> {
+    if pointer.is_empty() {
+        return Ok(value);
+    }
+    if !pointer.starts_with('/') {
+        return Err(evidence_error(
+            "evidence_pointer_invalid",
+            "JSON Pointer must be empty or start with '/'",
+        ));
+    }
+    value.pointer(pointer).cloned().ok_or_else(|| {
+        evidence_error(
+            "evidence_pointer_not_found",
+            &format!("JSON Pointer {pointer:?} does not exist in the {section} section"),
+        )
+    })
+}
+
+fn publish_draft_response(
+    revision: PublishedRevision,
+    include_revision: bool,
+) -> PublishDraftResponse {
+    PublishDraftResponse {
+        workspace_id: revision.workspace_id,
+        digest: revision.digest,
+        lock_digest: revision.lock.digest.clone(),
+        component_count: u32::try_from(revision.lab.components.len()).unwrap_or(u32::MAX),
+        revision_included: include_revision,
+        lab: include_revision
+            .then(|| serde_json::to_value(revision.lab).expect("typed lab serializes")),
+        lock: include_revision
+            .then(|| serde_json::to_value(revision.lock).expect("typed lock serializes")),
+    }
+}
+
+fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, ErrorData> {
+    if !(1..=MAX_CATALOG_LIST_LIMIT).contains(&request.limit) {
+        return Err(catalog_error(
+            "catalog_limit_invalid",
+            "catalog list limit must be in 1..=50",
+        ));
+    }
+    let catalog = default_catalog();
+    let catalog_digest = digest_json(&catalog);
+    let filter_digest = catalog_filter_digest(request);
+    let mut entries = catalog
+        .entries
+        .iter()
+        .filter(|entry| catalog_entry_matches(entry, request))
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| left.version.cmp(&right.version))
+    });
+    let start = match request.cursor.as_deref() {
+        None => 0,
+        Some(cursor) => entries
+            .iter()
+            .position(|entry| catalog_cursor(&catalog_digest, &filter_digest, entry) == cursor)
+            .map(|position| position + 1)
+            .ok_or_else(|| {
+                catalog_error(
+                    "catalog_cursor_invalid",
+                    "catalog cursor is invalid, stale, or belongs to different filters",
+                )
+            })?,
+    };
+    let preferred = catalog
+        .implementations
+        .iter()
+        .map(|support| (&support.implementation, &support.preferred_version))
+        .collect::<BTreeSet<_>>();
+    let summaries = entries
+        .iter()
+        .skip(start)
+        .take(usize::try_from(request.limit).unwrap_or(usize::MAX))
+        .map(|entry| CatalogEntrySummary {
+            id: entry.id.clone(),
+            kind: entry.kind,
+            version: entry.version.clone(),
+            preferred: preferred.contains(&(&entry.id, &entry.version)),
+            adapter_version: entry.adapter_version.clone(),
+            protocol_action_adapter_version: entry.protocol_action_adapter_version.clone(),
+            config_version: entry.config_version.clone(),
+            config_schema_digest: entry.config_schema_digest.clone(),
+            release_channel: entry.release_channel,
+            support_lifecycle: entry.support_lifecycle,
+        })
+        .collect::<Vec<_>>();
+    let mut end = summaries.len();
+    loop {
+        let has_more = start + end < entries.len();
+        let next_cursor = has_more && end > 0;
+        let response = CatalogListResponse {
+            api_version: catalog.api_version.clone(),
+            catalog_digest: catalog_digest.clone(),
+            items: summaries[..end].to_vec(),
+            next_cursor: next_cursor
+                .then(|| catalog_cursor(&catalog_digest, &filter_digest, entries[start + end - 1])),
+        };
+        if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
+            return Ok(response);
+        }
+        if end == 0 {
+            return Err(catalog_error(
+                "catalog_response_too_large",
+                "catalog page envelope exceeds the agent response budget",
+            ));
+        }
+        end -= 1;
+    }
+}
+
+fn catalog_filter_digest(request: &CatalogListRequest) -> String {
+    digest_json(&(
+        "proofstorm/catalog-filter/v1",
+        &request.implementations,
+        &request.kinds,
+        &request.features_all,
+        &request.release_channels,
+        &request.support_lifecycles,
+        &request.dependency,
+    ))
+}
+
+fn catalog_entry_matches(entry: &CatalogEntry, request: &CatalogListRequest) -> bool {
+    (request.implementations.is_empty() || request.implementations.contains(&entry.id))
+        && (request.kinds.is_empty() || request.kinds.contains(&entry.kind))
+        && request.features_all.is_subset(&entry.features)
+        && (request.release_channels.is_empty()
+            || request.release_channels.contains(&entry.release_channel))
+        && (request.support_lifecycles.is_empty()
+            || request
+                .support_lifecycles
+                .contains(&entry.support_lifecycle))
+        && request.dependency.as_ref().is_none_or(|filter| {
+            entry.compatible_dependencies.iter().any(|dependency| {
+                dependency.link_kind == filter.link_kind
+                    && dependency.implementation == filter.implementation
+                    && filter
+                        .version
+                        .as_ref()
+                        .is_none_or(|version| dependency.versions.contains(version))
+            })
+        })
+}
+
+fn catalog_cursor(catalog_digest: &str, filter_digest: &str, entry: &CatalogEntry) -> String {
+    digest_json(&(
+        "proofstorm/catalog-cursor/v1",
+        catalog_digest,
+        filter_digest,
+        &entry.id,
+        &entry.version,
+    ))
+}
+
+fn exact_catalog_entry<'a>(
+    entries: &'a [CatalogEntry],
+    id: &str,
+    version: &str,
+) -> Result<&'a CatalogEntry, ErrorData> {
+    entries
+        .iter()
+        .find(|entry| entry.id == id && entry.version == version)
+        .ok_or_else(|| {
+            ErrorData::resource_not_found(
+                format!("catalog entry {id:?} version {version:?} was not found"),
+                Some(serde_json::json!({"code": "catalog_entry_not_found"})),
+            )
+        })
+}
+
+fn catalog_config_schema(
+    request: CatalogConfigSchemaRequest,
+) -> Result<CatalogConfigSchemaResponse, ErrorData> {
+    if !request.pointer.is_empty() && !request.pointer.starts_with('/') {
+        return Err(catalog_error(
+            "catalog_schema_pointer_invalid",
+            "configuration schema pointer must be empty or begin with '/'",
+        ));
+    }
+    let catalog = default_catalog();
+    let entry = exact_catalog_entry(&catalog.entries, &request.id, &request.version)?;
+    let schema = if request.pointer.is_empty() {
+        entry.config_schema.clone()
+    } else {
+        entry
+            .config_schema
+            .pointer(&request.pointer)
+            .cloned()
+            .ok_or_else(|| {
+                ErrorData::resource_not_found(
+                    format!(
+                        "configuration schema pointer {:?} was not found for {:?} version {:?}",
+                        request.pointer, request.id, request.version
+                    ),
+                    Some(serde_json::json!({"code": "catalog_schema_pointer_not_found"})),
+                )
+            })?
+    };
+    let mut referenced_schemas = BTreeMap::new();
+    collect_local_schema_references(&schema, &entry.config_schema, &mut referenced_schemas)?;
+    Ok(CatalogConfigSchemaResponse {
+        id: entry.id.clone(),
+        version: entry.version.clone(),
+        config_version: entry.config_version.clone(),
+        config_schema_digest: entry.config_schema_digest.clone(),
+        fragment: !request.pointer.is_empty(),
+        pointer: request.pointer,
+        schema,
+        referenced_schemas,
+    })
+}
+
+fn collect_local_schema_references(
+    value: &serde_json::Value,
+    root: &serde_json::Value,
+    referenced: &mut BTreeMap<String, serde_json::Value>,
+) -> Result<(), ErrorData> {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_local_schema_references(value, root, referenced)?;
+            }
+        }
+        serde_json::Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str)
+                && let Some(pointer) = reference.strip_prefix('#')
+                && !referenced.contains_key(reference)
+            {
+                let target = if pointer.is_empty() {
+                    root
+                } else {
+                    root.pointer(pointer).ok_or_else(|| {
+                        catalog_error(
+                            "catalog_schema_reference_invalid",
+                            &format!(
+                                "configuration schema contains unresolved reference {reference:?}"
+                            ),
+                        )
+                    })?
+                };
+                referenced.insert(reference.to_owned(), target.clone());
+                collect_local_schema_references(target, root, referenced)?;
+            }
+            for nested in object.values() {
+                collect_local_schema_references(nested, root, referenced)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn bounded_agent_response<T: Serialize>(value: T) -> Result<T, ErrorData> {
+    let size = serialized_size(&value)?;
+    if size > MAX_AGENT_RESPONSE_BYTES {
+        return Err(ErrorData::invalid_request(
+            format!("agent response is {size} bytes; maximum is {MAX_AGENT_RESPONSE_BYTES} bytes"),
+            Some(serde_json::json!({
+                "code": "agent_response_too_large",
+                "actual_bytes": size,
+                "maximum_bytes": MAX_AGENT_RESPONSE_BYTES,
+            })),
+        ));
+    }
+    Ok(value)
+}
+
+fn serialized_size(value: &impl Serialize) -> Result<usize, ErrorData> {
+    serde_json::to_vec(value)
+        .map(|encoded| encoded.len())
+        .map_err(|error| {
+            ErrorData::internal_error(
+                format!("failed to measure agent response: {error}"),
+                Some(serde_json::json!({"code": "response_serialization_failed"})),
+            )
+        })
+}
+
+fn catalog_error(code: &str, message: &str) -> ErrorData {
+    ErrorData::invalid_request(message.to_owned(), Some(serde_json::json!({"code": code})))
+}
+
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for ProofstormMcp {}
+impl ServerHandler for ProofstormMcp {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(
+            "Use compact list and receipt tools for discovery. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection.",
+        )
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        Ok(ListResourceTemplatesResult::with_all_items(vec![
+            ResourceTemplate::new(
+                "proofstorm://evidence/{experiment_id}/{digest}{?oracles,artifacts}",
+                "proofstorm-evidence-bundle",
+            )
+            .with_title("Proofstorm evidence bundle")
+            .with_description(
+                "Complete deterministic evidence bundle identified by a manifest returned from proofstorm_artifact_export",
+            )
+            .with_mime_type("application/vnd.proofstorm.evidence.v1alpha1+json"),
+        ]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let (export_request, expected_digest) = parse_evidence_resource_uri(&request.uri)?;
+        let bundle = self.build_evidence_bundle(&export_request)?;
+        if bundle.digest != expected_digest {
+            return Err(ErrorData::resource_not_found(
+                "evidence resource digest does not match current durable content",
+                Some(serde_json::json!({"code": "evidence_digest_mismatch"})),
+            ));
+        }
+        let text = serde_json::to_string(&bundle).map_err(|error| {
+            ErrorData::internal_error(
+                format!("failed to serialize evidence resource: {error}"),
+                Some(serde_json::json!({"code": "evidence_serialization_failed"})),
+            )
+        })?;
+        Ok(ReadResourceResult::new(vec![
+            ResourceContents::text(text, request.uri)
+                .with_mime_type("application/vnd.proofstorm.evidence.v1alpha1+json"),
+        ])
+        .into())
+    }
+}
 
 fn tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     let mut tools = design_tool_capabilities();
@@ -2611,6 +3892,11 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
         ("proofstorm_workspace_read", &[Capability::LabRead]),
         ("proofstorm_catalog_list", &[Capability::CatalogRead]),
+        ("proofstorm_catalog_entry_read", &[Capability::CatalogRead]),
+        (
+            "proofstorm_catalog_config_schema_read",
+            &[Capability::CatalogRead],
+        ),
         (
             "proofstorm_network_capabilities",
             &[Capability::CatalogRead],
@@ -2644,6 +3930,11 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_lab_publish", &[Capability::LabPublish]),
         ("proofstorm_lab_materialize", &[Capability::LabMaterialize]),
         ("proofstorm_lab_status", &[Capability::LabStatus]),
+        (
+            "proofstorm_lab_component_status_list",
+            &[Capability::LabStatus],
+        ),
+        ("proofstorm_lab_inventory_list", &[Capability::LabStatus]),
         ("proofstorm_lab_wait", &[Capability::LabStatus]),
         ("proofstorm_lab_close", &[Capability::LabClose]),
         (
@@ -2725,6 +4016,10 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_action_list", &[Capability::ExperimentRead]),
         (
             "proofstorm_artifact_export",
+            &[Capability::ExperimentRead, Capability::ArtifactRead],
+        ),
+        (
+            "proofstorm_evidence_section_read",
             &[Capability::ExperimentRead, Capability::ArtifactRead],
         ),
         ("proofstorm_action_status", &[Capability::ArtifactRead]),
@@ -3336,6 +4631,75 @@ const fn operation_terminal(phase: OperationPhase) -> bool {
     )
 }
 
+fn validate_status_list_limit(limit: u32) -> Result<(), ErrorData> {
+    if (1..=50).contains(&limit) {
+        return Ok(());
+    }
+    Err(ErrorData::invalid_request(
+        "status list limit must be between 1 and 50".to_owned(),
+        Some(serde_json::json!({"code": "status_list_limit_invalid"})),
+    ))
+}
+
+fn status_page_start<T>(
+    cursor: Option<&str>,
+    items: &[T],
+    cursor_for: impl Fn(&T) -> String,
+) -> Result<usize, ErrorData> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+    items
+        .iter()
+        .position(|item| cursor_for(item) == cursor)
+        .map(|position| position + 1)
+        .ok_or_else(|| {
+            ErrorData::invalid_request(
+                "status cursor is invalid or belongs to an older snapshot".to_owned(),
+                Some(serde_json::json!({"code": "status_cursor_invalid"})),
+            )
+        })
+}
+
+fn status_cursor(kind: &str, instance_id: &str, snapshot_digest: &str, boundary: &str) -> String {
+    digest_json(&(
+        "proofstorm-status-cursor/v1",
+        kind,
+        instance_id,
+        snapshot_digest,
+        boundary,
+    ))
+}
+
+fn inventory_key(entry: &InventoryEntry) -> String {
+    format!(
+        "{}\u{0}{}\u{0}{}\u{0}{}",
+        entry.api_version, entry.kind, entry.namespace, entry.name
+    )
+}
+
+fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
+    let ready_components = status
+        .components
+        .iter()
+        .filter(|component| component.ready)
+        .count();
+    status.inventory.sort_by_key(inventory_key);
+    LabStatusSummary {
+        instance_id: status.instance.id,
+        revision_digest: status.instance.revision_digest,
+        lock_digest: status.instance.lock_digest,
+        phase: status.phase,
+        instance_namespace: status.instance_namespace,
+        ready_components: u32::try_from(ready_components).unwrap_or(u32::MAX),
+        total_components: u32::try_from(status.components.len()).unwrap_or(u32::MAX),
+        inventory_count: u32::try_from(status.inventory.len()).unwrap_or(u32::MAX),
+        inventory_digest: digest_json(&status.inventory),
+        teardown_receipt: status.teardown_receipt,
+        message: status.message,
+    }
+}
+
 fn compact_lab_wait(
     status: LabInstanceStatus,
     target_phase: InstancePhase,
@@ -3711,7 +5075,7 @@ mod tests {
         let designer =
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("designer session");
         let reader = ProofstormMcp::new(store, "alpha", "reader").expect("reader session");
-        assert_eq!(designer.tool_names().len(), 14);
+        assert_eq!(designer.tool_names().len(), 18);
         assert!(
             designer
                 .tool_names()
@@ -3724,10 +5088,7 @@ mod tests {
         assert_eq!(backend.id, "kubernetes-network-policy");
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
-        let catalog = designer
-            .proofstorm_catalog_list()
-            .expect("catalog discovery")
-            .0;
+        let catalog = default_catalog();
         assert_eq!(catalog.entries.len(), 12);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
@@ -3821,6 +5182,208 @@ mod tests {
                 .contains(&proofstorm_core::PaymentMethod::Bolt12)
         );
         assert!(cdk_ldk.support_matrix.payment_bindings.is_empty());
+    }
+
+    #[test]
+    fn catalog_summary_then_exact_detail_and_schema_is_progressive() {
+        let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
+        let page = service
+            .proofstorm_catalog_list(Parameters(CatalogListRequest::default()))
+            .expect("catalog discovery")
+            .0;
+        assert_eq!(page.items.len(), 12);
+        assert!(page.next_cursor.is_none());
+        assert!(serialized_size(&page).expect("page size") < 8 * 1024);
+        assert!(page.items.iter().all(|entry| {
+            entry.config_version.contains('/')
+                && entry.config_schema_digest.starts_with("sha256:")
+                && entry.support_lifecycle == SupportLifecycle::Preferred
+        }));
+        let summary = page
+            .items
+            .iter()
+            .find(|entry| entry.id == "nutshell")
+            .expect("Nutshell summary");
+        let detail = service
+            .proofstorm_catalog_entry_read(Parameters(CatalogEntryRequest {
+                id: summary.id.clone(),
+                version: summary.version.clone(),
+            }))
+            .expect("Nutshell detail")
+            .0;
+        assert!(detail.image.contains("@sha256:"));
+        assert_eq!(detail.config_schema_digest, summary.config_schema_digest);
+        let schema = service
+            .proofstorm_catalog_config_schema_read(Parameters(CatalogConfigSchemaRequest {
+                id: summary.id.clone(),
+                version: summary.version.clone(),
+                pointer: "/properties".into(),
+            }))
+            .expect("Nutshell schema properties")
+            .0;
+        assert!(schema.fragment);
+        assert_eq!(schema.config_schema_digest, summary.config_schema_digest);
+        assert!(schema.schema.get("auth_rate_limit_per_minute").is_some());
+    }
+
+    #[test]
+    fn catalog_pages_are_filtered_bounded_and_cursor_stable() {
+        let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
+        let first = service
+            .proofstorm_catalog_list(Parameters(CatalogListRequest {
+                limit: 5,
+                ..CatalogListRequest::default()
+            }))
+            .expect("first page")
+            .0;
+        assert_eq!(first.items.len(), 5);
+        assert!(serialized_size(&first).expect("first size") <= MAX_AGENT_RESPONSE_BYTES);
+        let cursor = first.next_cursor.clone().expect("continuation cursor");
+        let second = service
+            .proofstorm_catalog_list(Parameters(CatalogListRequest {
+                limit: 5,
+                cursor: Some(cursor.clone()),
+                ..CatalogListRequest::default()
+            }))
+            .expect("second page")
+            .0;
+        assert_eq!(second.items.len(), 5);
+        assert!(
+            first
+                .items
+                .iter()
+                .all(|left| second.items.iter().all(|right| {
+                    (left.id.as_str(), left.version.as_str())
+                        != (right.id.as_str(), right.version.as_str())
+                }))
+        );
+
+        let filtered = service
+            .proofstorm_catalog_list(Parameters(CatalogListRequest {
+                implementations: ["nutshell".into()].into(),
+                features_all: [CatalogFeature::RedisCache].into(),
+                ..CatalogListRequest::default()
+            }))
+            .expect("filtered catalog")
+            .0;
+        assert_eq!(filtered.items.len(), 1);
+        assert_eq!(filtered.items[0].id, "nutshell");
+        assert!(filtered.next_cursor.is_none());
+
+        let stale = service.proofstorm_catalog_list(Parameters(CatalogListRequest {
+            implementations: ["nutshell".into()].into(),
+            cursor: Some(cursor),
+            ..CatalogListRequest::default()
+        }));
+        let Err(stale) = stale else {
+            panic!("cursor must be bound to filters");
+        };
+        assert_eq!(
+            stale.data.expect("cursor error data")["code"],
+            "catalog_cursor_invalid"
+        );
+    }
+
+    #[test]
+    fn draft_mutations_return_compact_receipts() {
+        let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
+        let receipt = service
+            .proofstorm_lab_create(Parameters(CreateDraftRequest {
+                draft_id: "compact-draft".into(),
+                lab: lab("compact-draft"),
+                idempotency_key: "create-compact-draft".into(),
+            }))
+            .expect("create draft")
+            .0;
+        assert_eq!(receipt.draft_id, "compact-draft");
+        assert_eq!(receipt.version, 1);
+        assert_eq!(receipt.component_count, 0);
+        assert_eq!(receipt.link_count, 0);
+        assert!(receipt.valid);
+        assert_eq!(receipt.changed_paths, ["/"]);
+        let encoded = serde_json::to_string(&receipt).expect("serialize receipt");
+        assert!(!encoded.contains("api_version"));
+        assert!(serialized_size(&receipt).expect("receipt size") < 1024);
+
+        let draft = service
+            .proofstorm_lab_read(Parameters(ReadDraftRequest {
+                draft_id: "compact-draft".into(),
+            }))
+            .expect("explicit full draft")
+            .0;
+        assert_eq!(draft.lab.name, "compact-draft");
+
+        let published = service
+            .proofstorm_lab_publish(Parameters(PublishDraftRequest {
+                draft_id: "compact-draft".into(),
+                expected_version: 1,
+                idempotency_key: "publish-compact-draft".into(),
+                include_revision: false,
+            }))
+            .expect("publish receipt")
+            .0;
+        assert!(!published.revision_included);
+        assert!(published.lab.is_none());
+        assert!(published.lock.is_none());
+        assert!(published.digest.starts_with("sha256:"));
+        assert!(published.lock_digest.starts_with("sha256:"));
+        assert!(serialized_size(&published).expect("publish size") < 1024);
+    }
+
+    #[test]
+    fn fully_authorized_tool_discovery_has_a_regression_budget() {
+        let store = seeded_store();
+        let capabilities = tool_capabilities()
+            .into_iter()
+            .flat_map(|(_, required)| required.iter().copied())
+            .collect::<BTreeSet<_>>();
+        for capability in capabilities {
+            store
+                .grant("alpha", "designer", capability)
+                .expect("full discovery grant");
+        }
+        let service = ProofstormMcp::new(store, "alpha", "designer").expect("service");
+        let encoded = serde_json::to_vec(&service.tool_router.list_all()).expect("tool discovery");
+        eprintln!(
+            "all tool discovery: {} tools, {} bytes",
+            service.tool_names().len(),
+            encoded.len()
+        );
+        assert_eq!(service.tool_names().len(), 61);
+        assert!(
+            encoded.len() < 190 * 1024,
+            "fully authorized tool discovery is {} bytes",
+            encoded.len()
+        );
+        for (toolset, maximum) in [
+            (ProofstormToolset::Design, 100 * 1024),
+            (ProofstormToolset::Runtime, 160 * 1024),
+            (ProofstormToolset::Evidence, 100 * 1024),
+        ] {
+            let focused = service.clone().with_toolset(toolset);
+            let tools = focused.tool_names();
+            let size = serde_json::to_vec(&focused.tool_router.list_all())
+                .expect("focused tool discovery")
+                .len();
+            eprintln!(
+                "{toolset:?} tool discovery: {} tools, {size} bytes",
+                tools.len()
+            );
+            assert!(size < maximum, "{toolset:?} discovery is {size} bytes");
+            assert!(tools.contains(&"proofstorm_catalog_list".to_owned()));
+        }
+        let design = service.clone().with_toolset(ProofstormToolset::Design);
+        assert!(
+            !design
+                .tool_names()
+                .contains(&"proofstorm_component_exec".to_owned())
+        );
+        let evidence = service.with_toolset(ProofstormToolset::Evidence);
+        assert!(
+            !evidence
+                .tool_names()
+                .contains(&"proofstorm_wallet_pay".to_owned())
+        );
     }
 
     fn assert_nutshell_support(catalog: &proofstorm_core::CatalogResponse) {
@@ -3918,6 +5481,62 @@ mod tests {
             authorized
                 .tool_names()
                 .contains(&"proofstorm_operation_wait".to_owned())
+        );
+    }
+
+    #[test]
+    fn lab_status_receipt_and_page_cursors_are_compact_and_snapshot_bound() {
+        let status = LabInstanceStatus {
+            instance: LabInstance {
+                id: "instance-one".into(),
+                workspace_id: "alpha".into(),
+                revision_digest: "sha256:revision".into(),
+                lock_digest: "sha256:lock".into(),
+                instance_key: "secret-routing-key".into(),
+                resource_name: "proofstorm-resource".into(),
+            },
+            phase: InstancePhase::Ready,
+            instance_namespace: "proofstorm-instance-one".into(),
+            components: vec![],
+            inventory: vec![InventoryEntry {
+                api_version: "v1".into(),
+                kind: "Service".into(),
+                namespace: "proofstorm-instance-one".into(),
+                name: "service-one".into(),
+            }],
+            teardown_receipt: None,
+            message: None,
+        };
+        let receipt = compact_lab_status(status);
+        assert_eq!(receipt.total_components, 0);
+        assert_eq!(receipt.inventory_count, 1);
+        assert!(receipt.inventory_digest.starts_with("sha256:"));
+        let encoded = serde_json::to_string(&receipt).expect("status receipt");
+        assert!(!encoded.contains("\"components\":["));
+        assert!(!encoded.contains("inventory\":"));
+        assert!(!encoded.contains("secret-routing-key"));
+        assert!(serialized_size(&receipt).expect("status size") < 1024);
+
+        let items = vec!["alpha", "beta", "gamma"];
+        let snapshot = digest_json(&items);
+        let cursor = status_cursor("component", "instance-one", &snapshot, "alpha");
+        assert_eq!(
+            status_page_start(Some(&cursor), &items, |item| status_cursor(
+                "component",
+                "instance-one",
+                &snapshot,
+                item
+            ))
+            .expect("valid cursor"),
+            1
+        );
+        let stale = status_page_start(Some(&cursor), &items, |item| {
+            status_cursor("component", "instance-one", "sha256:new", item)
+        })
+        .expect_err("stale cursor");
+        assert_eq!(
+            stale.data.expect("cursor data")["code"],
+            "status_cursor_invalid"
         );
     }
 
@@ -4283,6 +5902,7 @@ mod tests {
             experiment_id: "evidence-experiment".into(),
             include_oracle_artifacts: true,
             artifact_operation_ids: vec![],
+            include_content: false,
         })) else {
             panic!("active experiment evidence must refuse");
         };
@@ -4312,6 +5932,7 @@ mod tests {
             experiment_id: "evidence-experiment".into(),
             include_oracle_artifacts: true,
             artifact_operation_ids: vec![],
+            include_content: true,
         };
         let first = restarted
             .proofstorm_artifact_export(Parameters(request.clone()))
@@ -4322,19 +5943,108 @@ mod tests {
             .expect("second export")
             .0;
         assert_eq!(first, second);
-        assert_eq!(first.digest, proofstorm_core::digest_json(&first.content));
-        assert_eq!(first.content.journal.len(), 1);
-        assert_eq!(first.content.artifacts.len(), 1);
-        assert_eq!(first.content.revision.digest, revision.digest);
-        assert_eq!(
-            first.content.instance.lock_digest,
-            first.content.revision.lock.digest
-        );
+        assert!(first.content_included);
+        let content = serde_json::from_value::<EvidenceBundleContent>(
+            first.content.clone().expect("explicit bulk content"),
+        )
+        .expect("typed evidence content");
+        assert_eq!(first.digest, proofstorm_core::digest_json(&content));
+        assert_eq!(content.journal.len(), 1);
+        assert_eq!(content.artifacts.len(), 1);
+        assert_eq!(content.revision.digest, revision.digest);
+        assert_eq!(content.instance.lock_digest, content.revision.lock.digest);
         assert!(first.byte_length as usize <= MAX_EVIDENCE_BUNDLE_BYTES);
         let encoded = serde_json::to_string(&first).expect("serialize evidence");
         assert!(!encoded.contains("resource_name"));
         assert!(!encoded.contains("instance_key"));
         assert!(!encoded.contains("kubernetes"));
+
+        let journal = restarted
+            .proofstorm_action_list(Parameters(ActionListRequest {
+                experiment_id: "evidence-experiment".into(),
+                after_sequence: 0,
+                limit: 100,
+            }))
+            .expect("summary journal")
+            .0;
+        assert_eq!(journal.actions.len(), 1);
+        assert!(journal.next_after_sequence.is_none());
+        assert_eq!(journal.actions[0].sequence, 1);
+        assert_eq!(
+            journal.actions[0]
+                .artifact
+                .as_ref()
+                .expect("artifact descriptor")
+                .digest,
+            content.artifacts[0].artifact.digest
+        );
+        let encoded_journal = serde_json::to_string(&journal).expect("serialize journal");
+        assert!(!encoded_journal.contains("expected_sat"));
+        assert!(!encoded_journal.contains("resource_name"));
+        assert!(serialized_size(&journal).expect("journal size") <= MAX_AGENT_RESPONSE_BYTES);
+
+        let manifest = restarted
+            .proofstorm_artifact_export(Parameters(ArtifactExportRequest {
+                experiment_id: "evidence-experiment".into(),
+                include_oracle_artifacts: true,
+                artifact_operation_ids: vec![],
+                include_content: false,
+            }))
+            .expect("compact evidence manifest")
+            .0;
+        assert_eq!(manifest.digest, first.digest);
+        assert_eq!(manifest.byte_length, first.byte_length);
+        assert!(!manifest.content_included);
+        assert!(manifest.content.is_none());
+        assert!(
+            manifest
+                .resource_uri
+                .starts_with("proofstorm://evidence/evidence-experiment/sha256:")
+        );
+        let (resource_request, resource_digest) =
+            parse_evidence_resource_uri(&manifest.resource_uri).expect("resource URI");
+        assert_eq!(resource_digest, manifest.digest);
+        assert_eq!(resource_request.experiment_id, "evidence-experiment");
+        assert!(resource_request.include_oracle_artifacts);
+        assert!(resource_request.artifact_operation_ids.is_empty());
+        let resource_bundle = restarted
+            .build_evidence_bundle(&resource_request)
+            .expect("resource bundle");
+        assert_eq!(resource_bundle.digest, resource_digest);
+        assert!(serialized_size(&manifest).expect("manifest size") < 1024);
+
+        let revision_section = restarted
+            .proofstorm_evidence_section_read(Parameters(EvidenceSectionReadRequest {
+                experiment_id: "evidence-experiment".into(),
+                include_oracle_artifacts: true,
+                artifact_operation_ids: vec![],
+                section: EvidenceSection::Revision,
+                pointer: "/digest".into(),
+                operation_id: None,
+                after_sequence: 0,
+                limit: 20,
+            }))
+            .expect("revision section")
+            .0;
+        assert_eq!(revision_section.evidence_digest, manifest.digest);
+        assert_eq!(revision_section.data, revision.digest);
+        assert!(serialized_size(&revision_section).expect("section size") < 1024);
+
+        let journal_section = restarted
+            .proofstorm_evidence_section_read(Parameters(EvidenceSectionReadRequest {
+                experiment_id: "evidence-experiment".into(),
+                include_oracle_artifacts: true,
+                artifact_operation_ids: vec![],
+                section: EvidenceSection::Journal,
+                pointer: String::new(),
+                operation_id: None,
+                after_sequence: 0,
+                limit: 1,
+            }))
+            .expect("journal section")
+            .0;
+        assert_eq!(journal_section.data.as_array().map(Vec::len), Some(1));
+        assert!(journal_section.next_after_sequence.is_none());
     }
 
     #[tokio::test]

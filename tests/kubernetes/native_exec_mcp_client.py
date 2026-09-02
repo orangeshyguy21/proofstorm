@@ -170,7 +170,8 @@ draft = call(
     "proofstorm_lab_create",
     {"draft_id": draft_id, "lab": lab, "idempotency_key": f"create-{run_id}"},
 )
-validation = call("proofstorm_lab_validate", {"lab": draft["lab"]})
+draft_document = call("proofstorm_lab_read", {"draft_id": draft_id})
+validation = call("proofstorm_lab_validate", {"lab": draft_document["lab"]})
 if not validation["valid"]:
     fail(f"native exec lab is invalid: {validation}")
 published = call(
@@ -179,6 +180,7 @@ published = call(
         "draft_id": draft_id,
         "expected_version": draft["version"],
         "idempotency_key": f"publish-{run_id}",
+        "include_revision": True,
     },
 )
 locks = {entry["component_id"]: entry["image"] for entry in published["lock"]["entries"]}
@@ -388,6 +390,7 @@ evidence = call(
     {
         "experiment_id": experiment_id,
         "include_oracle_artifacts": False,
+        "include_content": True,
         "artifact_operation_ids": [operation["id"] for operation in operations],
     },
 )

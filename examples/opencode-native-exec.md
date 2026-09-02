@@ -11,7 +11,8 @@ Give the agent this request:
 > Use Proofstorm MCP only; do not invoke host Docker, Kubernetes, Helm, or local
 > component CLIs. Generate one unique run suffix and use it consistently in
 > every draft, instance, experiment, lease, operation, and idempotency ID.
-> Discover the catalog, create and materialize a minimal lab
+> Discover compact catalog identities, read only the exact selected entries and
+> configuration schemas, then create and materialize a minimal lab
 > with two Bitcoin Core nodes, one LND node linked to the first Bitcoin node, a
 > CDK mint linked to LND, and a Nutshell wallet. Include `component.exec` in the
 > lab policy. Create an
@@ -28,8 +29,9 @@ Give the agent this request:
 > the exec workload has no Kubernetes service-account token at
 > `/var/run/secrets/kubernetes.io/serviceaccount/token`; treat the expected
 > missing file as experiment data. Use `proofstorm_lab_wait` for readiness and
-> teardown and `proofstorm_operation_wait` for every submitted command; do not
-> tightly poll status tools. Do not print mnemonics, macaroons, proofs, or
+> teardown, and use the paged component-status tool only when exact component
+> conditions are needed. Use `proofstorm_operation_wait` for every submitted
+> command; do not tightly poll status tools. Do not print mnemonics, macaroons, proofs, or
 > private keys. Release the lease, close the experiment, export evidence, close
 > the lab, and report the evidence digest and verified teardown receipt. Read
 > the canonical journal through `proofstorm_action_list` and confirm its

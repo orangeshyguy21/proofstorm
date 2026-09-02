@@ -874,6 +874,43 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
         mint.pointer("/spec/template/spec/containers/0/command/2"),
         Some(&json!("from cashu.mint.main import main; main()"))
     );
+    assert_eq!(
+        mint.pointer("/spec/template/spec/containers/0/readinessProbe/exec/command/3"),
+        Some(&json!("http://127.0.0.1:3338/v1/info")),
+        "Nutshell readiness must use its rate-limit-exempt loopback path"
+    );
+    assert!(
+        mint.pointer("/spec/template/spec/containers/0/readinessProbe/httpGet")
+            .is_none(),
+        "a kubelet HTTP probe would consume Nutshell's global request quota"
+    );
+    let protocol_prober = rendered
+        .deployments
+        .iter()
+        .find(|deployment| {
+            deployment.metadata.name.as_deref() == Some("proofstorm-protocol-prober")
+        })
+        .map(serde_json::to_value)
+        .transpose()
+        .expect("protocol prober JSON")
+        .expect("protocol prober deployment");
+    let mint_probe = protocol_prober
+        .pointer("/spec/template/spec/containers")
+        .and_then(Value::as_array)
+        .and_then(|containers| {
+            containers.iter().find(|container| {
+                container
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name.starts_with("probe-mint-"))
+            })
+        })
+        .expect("Nutshell protocol probe");
+    assert_eq!(
+        mint_probe.pointer("/readinessProbe/exec/command/0"),
+        Some(&json!("nc")),
+        "the remote probe must verify reachability without making an HTTP request"
+    );
     assert_golden(
         "nutshell-keycloak-lab",
         &json!({

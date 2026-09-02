@@ -11,7 +11,8 @@ Give the agent this request:
 
 > Use only the Proofstorm MCP tools for laboratory and network control. Do not
 > invoke Docker, Kubernetes, Helm, or component CLIs. Discover the installed
-> component catalog and network-fault backend. Do not request latency or packet
+> component catalog with filtered compact list calls, then read exact selected
+> entries and their configuration schemas; also discover the network-fault backend. Do not request latency or packet
 > loss unless that backend explicitly advertises the feature, direction, and
 > required bound. Then create an empty lab draft containing Bitcoin Core, two LND
 > nodes, one Core Lightning attacker node, one CDK mint, and two independent
@@ -52,7 +53,9 @@ Give the agent this request:
 > journal and run a conservation oracle using the observed balance. Finally release the lease,
 > close the experiment, and export its Proofstorm evidence bundle with all oracle
 > artifacts plus the wallet payment artifact. Verify its revision and lock
-> digests and canonical journal before closing the lab. Then report the evidence
+> digests and canonical journal through bounded section reads (use the evidence
+> resource URI only if the complete bundle is deliberately needed) before
+> closing the lab. Then report the evidence
 > digest and verified teardown receipt. Reuse an idempotency key only
 > when retrying the exact same request.
 

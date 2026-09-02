@@ -2791,9 +2791,17 @@ fn protocol_probe_contract(backend: &str) -> Option<ProtocolProbeContract> {
             port_name: "http".into(),
             path: "/realms/proofstorm/.well-known/openid-configuration".into(),
         }),
-        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" => Some(ProtocolProbeContract::HttpGet {
+        "cdk" | "cdk-ldk" | "cdk-bdk" => Some(ProtocolProbeContract::HttpGet {
             port_name: "http".into(),
             path: "/v1/info".into(),
+        }),
+        // Nutshell applies its global elastic-expiry rate limiter to /v1/info.
+        // A recurring remote HTTP probe would therefore consume application
+        // quota and eventually lock out its own stable probe identity. The
+        // component-local readiness probe verifies HTTP; this probe verifies
+        // the Service-DNS and network path without spending request quota.
+        "nutshell" => Some(ProtocolProbeContract::Tcp {
+            port_name: "http".into(),
         }),
         _ => None,
     }
@@ -3578,6 +3586,20 @@ mod tests {
                     .is_some_and(|reasons| !reasons.is_empty())
             }));
         }
+    }
+
+    #[test]
+    fn rate_limited_nutshell_uses_a_quota_free_remote_probe() {
+        let registry = default_backend_registry();
+        let nutshell = registry.require("nutshell").expect("Nutshell backend");
+
+        assert_eq!(
+            nutshell.protocol_probe,
+            Some(ProtocolProbeContract::Tcp {
+                port_name: "http".into(),
+            }),
+            "remote health traffic must not consume Nutshell's HTTP rate limit"
+        );
     }
 
     #[test]

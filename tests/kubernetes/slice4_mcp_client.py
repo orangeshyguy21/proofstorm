@@ -120,7 +120,7 @@ call(2, "proofstorm_lab_create", {"draft_id": "slice4", "lab": lab, "idempotency
 published = call(
     3,
     "proofstorm_lab_publish",
-    {"draft_id": "slice4", "expected_version": 1, "idempotency_key": "publish-slice4"},
+    {"draft_id": "slice4", "expected_version": 1, "idempotency_key": "publish-slice4", "include_revision": True},
 )
 if not all("@sha256:" in entry["image"] for entry in published["lock"]["entries"]):
     fail("published lock contains an unpinned image")
@@ -142,12 +142,17 @@ for identifier in range(5, 125):
 else:
     fail(f"lab did not become ready: {status}")
 
-if sorted(component["id"] for component in status["components"] if component["ready"]) != [
+component_status = call(
+    1000,
+    "proofstorm_lab_component_status_list",
+    {"instance_id": "slice4-instance", "limit": 50},
+)["components"]
+if sorted(component["id"] for component in component_status if component["ready"]) != [
     "chain",
     "lightning",
     "mint",
 ]:
-    fail(f"sanitized topology is not ready: {status['components']}")
+    fail(f"sanitized topology is not ready: {component_status}")
 encoded = json.dumps(status)
 if "macaroon" in encoded or "proofstorm-regtest-only" in encoded:
     fail("sanitized status leaked a credential")

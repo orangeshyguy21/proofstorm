@@ -219,6 +219,7 @@ published = call(
         "draft_id": "nutshell-oidc",
         "expected_version": 1,
         "idempotency_key": "publish-nutshell-oidc",
+        "include_revision": True,
     },
 )
 locks = {entry["catalog_id"]: entry for entry in published["lock"]["entries"]}
