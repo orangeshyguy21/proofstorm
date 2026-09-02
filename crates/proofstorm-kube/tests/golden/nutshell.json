@@ -82,6 +82,9 @@
     ],
     "effective_config": {
       "config": {
+        "auth_max_blind_tokens": 100,
+        "auth_rate_limit_per_minute": 5,
+        "clnrest_enable_mpp": true,
         "contact_email": "",
         "contact_nostr_public_key": "",
         "database_lock_timeout_ms": 30000,
@@ -105,9 +108,12 @@
         "mint_quote_ttl_seconds": 600,
         "motd": "",
         "name": "Proofstorm Nutshell mint",
+        "oidc_client_id": "cashu-client",
+        "oidc_discovery_url": "",
         "quote_backend_check_rate_limit_seconds": 10,
         "rate_limit": true,
         "rate_limit_proxy_trust": false,
+        "redis_cache_ttl_seconds": 604800,
         "regular_tasks_interval_seconds": 3600,
         "tos_url": "",
         "transaction_rate_limit_per_minute": 20,
@@ -232,7 +238,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:2d16c320bbeece788802244c0986ac280eb3003e9fb5cec10689f37af724af39",
+    "rollout_digest": "sha256:2682f9f1e86235f8889bce0eb814a80eccaaef6f732e9b2baaf4c2c5a8dd302d",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -262,6 +268,9 @@
           "LIGHTNING_FEE_PERCENT": "1",
           "LIGHTNING_RESERVE_FEE_MIN": "2",
           "MELT_QUOTE_TTL": "120",
+          "MINT_AUTH_DATABASE": "/app/data",
+          "MINT_AUTH_MAX_BLIND_TOKENS": "100",
+          "MINT_AUTH_RATE_LIMIT_PER_MINUTE": "5",
           "MINT_BACKEND_BOLT11_SAT": "LndRestWallet",
           "MINT_BOLT11_DISABLE_MELT": "FALSE",
           "MINT_BOLT11_DISABLE_MINT": "FALSE",
@@ -296,7 +305,9 @@
           "MINT_QUOTE_TTL": "600",
           "MINT_RATE_LIMIT": "TRUE",
           "MINT_RATE_LIMIT_PROXY_TRUST": "FALSE",
+          "MINT_REDIS_CACHE_CLUSTER": "FALSE",
           "MINT_REDIS_CACHE_ENABLED": "FALSE",
+          "MINT_REDIS_CACHE_TTL": "604800",
           "MINT_REGULAR_TASKS_INTERVAL_SECONDS": "3600",
           "MINT_REQUIRE_AUTH": "FALSE",
           "MINT_RPC_SERVER_ENABLE": "FALSE",
@@ -351,7 +362,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:2d16c320bbeece788802244c0986ac280eb3003e9fb5cec10689f37af724af39"
+                "proofstorm.dev/rollout-digest": "sha256:2682f9f1e86235f8889bce0eb814a80eccaaef6f732e9b2baaf4c2c5a8dd302d"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

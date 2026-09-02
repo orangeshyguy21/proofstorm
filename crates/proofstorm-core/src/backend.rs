@@ -416,9 +416,15 @@ pub struct NutshellMintConfig {
     pub global_rate_limit_per_minute: u64,
     pub transaction_rate_limit_per_minute: u64,
     pub quote_backend_check_rate_limit_seconds: u64,
+    pub oidc_discovery_url: String,
+    pub oidc_client_id: String,
+    pub auth_rate_limit_per_minute: u64,
+    pub auth_max_blind_tokens: u64,
     pub lightning_fee_percent: f64,
     pub lightning_reserve_fee_min_sat: u64,
+    pub clnrest_enable_mpp: bool,
     pub lnd_enable_mpp: bool,
+    pub redis_cache_ttl_seconds: u64,
     pub watchdog_enabled: bool,
     pub watchdog_balance_check_interval_seconds: u64,
     pub database_lock_timeout_ms: u64,
@@ -431,6 +437,18 @@ pub struct NutshellMintConfig {
 pub struct PostgresConfig {
     pub database_name: String,
     pub storage_size: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RedisConfig {
+    pub maxmemory_mb: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeycloakConfig {
+    pub access_token_lifespan_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -452,6 +470,10 @@ pub enum EffectiveComponentConfig {
     Nutshell(NutshellMintConfig),
     #[serde(rename = "postgresql")]
     Postgres(PostgresConfig),
+    #[serde(rename = "redis")]
+    Redis(RedisConfig),
+    #[serde(rename = "keycloak")]
+    Keycloak(KeycloakConfig),
     #[serde(rename = "nutshell-wallet")]
     NutshellWallet,
     #[serde(rename = "attacker-workspace")]
@@ -768,9 +790,15 @@ impl EffectiveComponentConfig {
                 quote_backend_check_rate_limit_seconds: integer(
                     "quote_backend_check_rate_limit_seconds",
                 )?,
+                oidc_discovery_url: string("oidc_discovery_url")?,
+                oidc_client_id: string("oidc_client_id")?,
+                auth_rate_limit_per_minute: integer("auth_rate_limit_per_minute")?,
+                auth_max_blind_tokens: integer("auth_max_blind_tokens")?,
                 lightning_fee_percent: number("lightning_fee_percent")?,
                 lightning_reserve_fee_min_sat: integer("lightning_reserve_fee_min_sat")?,
+                clnrest_enable_mpp: boolean("clnrest_enable_mpp")?,
                 lnd_enable_mpp: boolean("lnd_enable_mpp")?,
+                redis_cache_ttl_seconds: integer("redis_cache_ttl_seconds")?,
                 watchdog_enabled: boolean("watchdog_enabled")?,
                 watchdog_balance_check_interval_seconds: integer(
                     "watchdog_balance_check_interval_seconds",
@@ -814,6 +842,19 @@ impl EffectiveComponentConfig {
                     storage_size: string("storage_size")?,
                 }))
             }
+            "redis" => Ok(Self::Redis(RedisConfig {
+                maxmemory_mb: required_config_value(component, "maxmemory_mb")?
+                    .as_u64()
+                    .ok_or_else(|| typed_config_error(component, "maxmemory_mb"))?,
+            })),
+            "keycloak" => Ok(Self::Keycloak(KeycloakConfig {
+                access_token_lifespan_seconds: required_config_value(
+                    component,
+                    "access_token_lifespan_seconds",
+                )?
+                .as_u64()
+                .ok_or_else(|| typed_config_error(component, "access_token_lifespan_seconds"))?,
+            })),
             "nutshell-wallet" => Ok(Self::NutshellWallet),
             "attacker-workspace" => Ok(Self::AttackerWorkspace),
             implementation => Err(format!(
@@ -929,6 +970,22 @@ impl ComponentBackendContract {
                 component,
                 "database_name",
                 "must begin with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, or '_'",
+            ));
+        }
+        if self.id == "nutshell"
+            && let Some(discovery_url) = component
+                .config
+                .get("oidc_discovery_url")
+                .and_then(Value::as_str)
+            && !discovery_url.is_empty()
+            && (!(discovery_url.starts_with("http://") || discovery_url.starts_with("https://"))
+                || !discovery_url.ends_with("/.well-known/openid-configuration"))
+        {
+            return Err(config_diagnostic(
+                "oidc_discovery_url_invalid",
+                component,
+                "oidc_discovery_url",
+                "must be an HTTP(S) OpenID Connect discovery URL ending in /.well-known/openid-configuration",
             ));
         }
         if effective {
@@ -1490,7 +1547,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
                 )
                 .with_string_bounds(1, 32),
             )]),
-            BTreeMap::from([("p2p".into(), 9_735)]),
+            BTreeMap::from([("p2p".into(), 9_735), ("rest".into(), 3_010)]),
             "proofstorm/cln-state/v1",
             service_conditions(true, false),
         ),
@@ -1544,6 +1601,40 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             BTreeMap::from([("http".into(), 3_338)]),
             "proofstorm/nutshell-mint-state/v1",
             service_conditions(true, true),
+        ),
+        contract(
+            "redis",
+            ComponentKind::Database,
+            "redis/8.10/v1",
+            BTreeMap::from([(
+                "maxmemory_mb".into(),
+                config_field(
+                    "Maximum in-memory cache size",
+                    ConfigValueKind::Integer,
+                    ConfigDefault::Literal(json!(64)),
+                )
+                .with_numeric_bounds(16.0, 1_024.0),
+            )]),
+            BTreeMap::from([("redis".into(), 6_379)]),
+            "proofstorm/redis-cache-state/v1",
+            ephemeral_service_conditions(),
+        ),
+        contract(
+            "keycloak",
+            ComponentKind::IdentityProvider,
+            "keycloak/25/v1",
+            BTreeMap::from([(
+                "access_token_lifespan_seconds".into(),
+                config_field(
+                    "OIDC access-token lifetime",
+                    ConfigValueKind::Integer,
+                    ConfigDefault::Literal(json!(300)),
+                )
+                .with_numeric_bounds(60.0, 3_600.0),
+            )]),
+            BTreeMap::from([("http".into(), 8_080)]),
+            "proofstorm/keycloak-oidc-state/v1",
+            ephemeral_dependency_service_conditions(),
         ),
         contract(
             "postgresql",
@@ -1815,6 +1906,24 @@ fn nutshell_config_fields() -> BTreeMap<String, ConfigFieldContract> {
     };
     BTreeMap::from([
         (
+            "auth_max_blind_tokens".into(),
+            integer(
+                "Maximum NUT-22 blind-auth tokens issued per authenticated request",
+                100,
+                1,
+                100_000,
+            ),
+        ),
+        (
+            "auth_rate_limit_per_minute".into(),
+            integer(
+                "Maximum NUT-21 authentication attempts per user per minute",
+                5,
+                1,
+                100_000,
+            ),
+        ),
+        (
             "contact_email".into(),
             string("NUT-06 operator email; empty omits it", "", 0, 254),
         ),
@@ -1883,6 +1992,10 @@ fn nutshell_config_fields() -> BTreeMap<String, ConfigFieldContract> {
             integer("Minimum Lightning fee reserve", 2, 0, 1_000_000),
         ),
         (
+            "clnrest_enable_mpp".into(),
+            boolean("Allow multi-part Core Lightning REST payments", true),
+        ),
+        (
             "lnd_enable_mpp".into(),
             boolean("Allow multi-part LND payments", true),
         ),
@@ -1937,6 +2050,24 @@ fn nutshell_config_fields() -> BTreeMap<String, ConfigFieldContract> {
             ),
         ),
         (
+            "oidc_client_id".into(),
+            string(
+                "OIDC public client identifier used to validate the token authorized party",
+                "cashu-client",
+                1,
+                255,
+            ),
+        ),
+        (
+            "oidc_discovery_url".into(),
+            string(
+                "NUT-21 OpenID Connect discovery URL; empty disables NUT-21 and NUT-22 authentication",
+                "",
+                0,
+                2_048,
+            ),
+        ),
+        (
             "quote_backend_check_rate_limit_seconds".into(),
             integer(
                 "Minimum interval between unpaid quote backend checks",
@@ -1952,6 +2083,10 @@ fn nutshell_config_fields() -> BTreeMap<String, ConfigFieldContract> {
         (
             "rate_limit_proxy_trust".into(),
             boolean("Trust proxy-supplied client IP headers", false),
+        ),
+        (
+            "redis_cache_ttl_seconds".into(),
+            integer("Redis response-cache lifetime", 604_800, 1, 31_536_000),
         ),
         (
             "regular_tasks_interval_seconds".into(),
@@ -2333,13 +2468,23 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             (
                 "authentication".into(),
                 string(
-                    "Disabled until an OIDC dependency contract is installed",
+                    "NUT-21 clear auth and NUT-22 blind auth enabled when an OIDC discovery URL is configured",
                     Policy,
                 ),
             ),
             (
+                "authentication_database".into(),
+                string(
+                    "Persistent auth ledger colocated with the selected primary mint storage",
+                    Topology,
+                ),
+            ),
+            (
                 "backend_kind".into(),
-                string("Topology-selected LndRestWallet backend", Topology),
+                string(
+                    "Topology-selected LndRestWallet or CLNRestWallet backend",
+                    Topology,
+                ),
             ),
             (
                 "database".into(),
@@ -2362,11 +2507,14 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "lightning_backend_credentials".into(),
-                string("Linked LND TLS certificate and macaroon", Secret),
+                string(
+                    "Linked LND TLS/macaroon or method-restricted CLN rune",
+                    Secret,
+                ),
             ),
             (
                 "lightning_backend_endpoint".into(),
-                string("Linked LND REST endpoint", Topology),
+                string("Linked LND or Core Lightning REST endpoint", Topology),
             ),
             (
                 "listen_address".into(),
@@ -2386,10 +2534,11 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "redis_cache".into(),
-                string(
-                    "Disabled until a Redis dependency contract is installed",
-                    Policy,
-                ),
+                string("Topology-selected Redis cache endpoint", Topology),
+            ),
+            (
+                "redis_cache_credentials".into(),
+                string("Controller-generated Redis password", Secret),
             ),
             (
                 "tor".into(),
@@ -2454,6 +2603,63 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Isolated-lab transport policy", Policy),
             ),
         ]),
+        "redis" => BTreeMap::from([
+            (
+                "credentials".into(),
+                string("Controller-generated cache credentials", Secret),
+            ),
+            (
+                "eviction_policy".into(),
+                string("Fixed allkeys-lru cache eviction policy", Policy),
+            ),
+            (
+                "listen_endpoint".into(),
+                string("Derived Redis service endpoint", Topology),
+            ),
+            (
+                "persistence".into(),
+                string(
+                    "Disabled because Redis is non-authoritative cache state",
+                    Policy,
+                ),
+            ),
+        ]),
+        "keycloak" => BTreeMap::from([
+            (
+                "administrator_credentials".into(),
+                string(
+                    "Controller-generated Keycloak administrator credentials",
+                    Secret,
+                ),
+            ),
+            (
+                "client_id".into(),
+                string("Fixed public OIDC client identifier cashu-client", Policy),
+            ),
+            (
+                "database_credentials".into(),
+                string("Linked PostgreSQL credentials", Secret),
+            ),
+            (
+                "database_endpoint".into(),
+                string("Topology-selected PostgreSQL endpoint", Topology),
+            ),
+            (
+                "realm".into(),
+                string("Fixed disposable-lab OIDC realm proofstorm", Policy),
+            ),
+            (
+                "realm_import".into(),
+                string("Controller-generated realm and test-user bootstrap", Secret),
+            ),
+            (
+                "test_user_credentials".into(),
+                string(
+                    "Controller-generated disposable acceptance-user credentials",
+                    Secret,
+                ),
+            ),
+        ]),
         _ => BTreeMap::new(),
     }
 }
@@ -2495,6 +2701,18 @@ fn service_conditions(
     if has_credential_projection {
         conditions.insert(ComponentConditionType::CredentialsReady);
     }
+    conditions
+}
+
+fn ephemeral_service_conditions() -> BTreeSet<ComponentConditionType> {
+    let mut conditions = service_conditions(false, false);
+    conditions.remove(&ComponentConditionType::StorageReady);
+    conditions
+}
+
+fn ephemeral_dependency_service_conditions() -> BTreeSet<ComponentConditionType> {
+    let mut conditions = service_conditions(false, true);
+    conditions.remove(&ComponentConditionType::StorageReady);
     conditions
 }
 
@@ -2565,6 +2783,13 @@ fn protocol_probe_contract(backend: &str) -> Option<ProtocolProbeContract> {
         }),
         "postgresql" => Some(ProtocolProbeContract::Tcp {
             port_name: "postgres".into(),
+        }),
+        "redis" => Some(ProtocolProbeContract::Tcp {
+            port_name: "redis".into(),
+        }),
+        "keycloak" => Some(ProtocolProbeContract::HttpGet {
+            port_name: "http".into(),
+            path: "/realms/proofstorm/.well-known/openid-configuration".into(),
         }),
         "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" => Some(ProtocolProbeContract::HttpGet {
             port_name: "http".into(),
@@ -2734,10 +2959,11 @@ fn execution_contract(
         "nutshell" => (
             vec![
                 binding("data", "/app/data", false, Source::ComponentPersistentData),
-                binding(
+                alternative_binding(
                     "lnd",
                     "/lnd",
                     true,
+                    "payment-backend",
                     Source::LinkedStatefulData {
                         link_kind: crate::LinkKind::PaymentBackend,
                         binding: crate::DependencyBinding::Payment {
@@ -2745,6 +2971,20 @@ fn execution_contract(
                             unit: "sat".into(),
                         },
                         target_implementation: "lnd".into(),
+                    },
+                ),
+                alternative_binding(
+                    "cln",
+                    "/cln",
+                    true,
+                    "payment-backend",
+                    Source::LinkedStatefulData {
+                        link_kind: crate::LinkKind::PaymentBackend,
+                        binding: crate::DependencyBinding::Payment {
+                            method: crate::PaymentMethod::Bolt11,
+                            unit: "sat".into(),
+                        },
+                        target_implementation: "cln".into(),
                     },
                 ),
             ],
@@ -2931,6 +3171,8 @@ mod tests {
                 "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
                 "nutshell" => "nutshell-mint/0.20/v1",
                 "postgresql" => "postgresql/17/v1",
+                "redis" => "redis/8.10/v1",
+                "keycloak" => "keycloak/25/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
                 "attacker-workspace" => "attacker-workspace/0.1/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),
@@ -2981,6 +3223,23 @@ mod tests {
             .expect("default BDK limits");
         assert_eq!(bdk.config["min_mint_sat"], json!(1_000));
         assert_eq!(bdk.config["max_mint_sat"], json!(1_000_000));
+
+        let nutshell = registry
+            .resolve_effective_component(&component("mint", "nutshell", ComponentKind::Mint))
+            .expect("default Nutshell authentication policy");
+        assert_eq!(nutshell.config["oidc_discovery_url"], json!(""));
+        assert_eq!(nutshell.config["oidc_client_id"], json!("cashu-client"));
+        assert_eq!(nutshell.config["auth_rate_limit_per_minute"], json!(5));
+        assert_eq!(nutshell.config["auth_max_blind_tokens"], json!(100));
+
+        let keycloak = registry
+            .resolve_effective_component(&component(
+                "identity",
+                "keycloak",
+                ComponentKind::IdentityProvider,
+            ))
+            .expect("default Keycloak policy");
+        assert_eq!(keycloak.config["access_token_lifespan_seconds"], json!(300));
 
         let mut invalid = component("mint", "cdk", ComponentKind::Mint);
         invalid.config.insert("min_mint_sat".into(), json!(10));
@@ -3089,6 +3348,27 @@ mod tests {
                     "config_managed_field: component \"chain\" field /config/rpc_credentials:"
                 )
         );
+
+        let mut nutshell = component("mint", "nutshell", ComponentKind::Mint);
+        nutshell.config.insert(
+            "oidc_discovery_url".into(),
+            json!("https://issuer.example/realm"),
+        );
+        assert!(
+            registry
+                .validate_component_config(&nutshell)
+                .expect_err("malformed discovery URL")
+                .starts_with(
+                    "config_oidc_discovery_url_invalid: component \"mint\" field /config/oidc_discovery_url:"
+                )
+        );
+        nutshell.config.insert(
+            "oidc_discovery_url".into(),
+            json!("https://issuer.example/realm/.well-known/openid-configuration"),
+        );
+        registry
+            .validate_component_config(&nutshell)
+            .expect("valid discovery URL");
     }
 
     #[test]

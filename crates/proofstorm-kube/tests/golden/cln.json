@@ -185,7 +185,8 @@
       "component_id": "lightning",
       "kind": "lightning",
       "ports": {
-        "p2p": 9735
+        "p2p": 9735,
+        "rest": 3010
       },
       "version": "26.06.7"
     },
@@ -220,6 +221,11 @@
               "name": "p2p",
               "port": 9735,
               "targetPort": 9735
+            },
+            {
+              "name": "rest",
+              "port": 3010,
+              "targetPort": 3010
             }
           ],
           "selector": {
@@ -300,6 +306,9 @@
                     "--autoconnect-seeker-peers=0",
                     "--bind-addr=0.0.0.0:9735",
                     "--announce-addr=lightning:9735",
+                    "--clnrest-host=0.0.0.0",
+                    "--clnrest-port=3010",
+                    "--clnrest-protocol=http",
                     "--bitcoin-rpcconnect=chain",
                     "--bitcoin-rpcport=18443",
                     "--bitcoin-rpcuser=proofstorm",

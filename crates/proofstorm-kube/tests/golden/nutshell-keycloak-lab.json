@@ -1,330 +1,23 @@
 {
-  "crossTargetNativeExec": {
-    "apiVersion": "batch/v1",
-    "kind": "Job",
-    "metadata": {
-      "labels": {
-        "app.kubernetes.io/managed-by": "proofstormd",
-        "proofstorm.dev/action": "golden-native-exec",
-        "proofstorm.dev/instance": "i-golden-b2",
-        "proofstorm.dev/operation": "native-exec"
-      },
-      "name": "golden-native-exec",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    "spec": {
-      "activeDeadlineSeconds": 40,
-      "backoffLimit": 0,
-      "template": {
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/action": "golden-native-exec",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-a"
-          }
-        },
-        "spec": {
-          "affinity": {
-            "podAffinity": {
-              "requiredDuringSchedulingIgnoredDuringExecution": [
-                {
-                  "labelSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  },
-                  "topologyKey": "kubernetes.io/hostname"
-                }
-              ]
-            }
-          },
-          "automountServiceAccountToken": false,
-          "containers": [
-            {
-              "command": [
-                "/bin/sh",
-                "-c",
-                "set +e; /bin/sh -c \"$PROOFSTORM_SCRIPT\"; code=$?; printf '{\"exit_code\":%s}' \"$code\" >/dev/termination-log; exit 0"
-              ],
-              "env": [
-                {
-                  "name": "PROOFSTORM_COMPONENT",
-                  "value": "chain-a"
-                },
-                {
-                  "name": "PROOFSTORM_EXEC_COMPONENT",
-                  "value": "chain-a"
-                },
-                {
-                  "name": "PROOFSTORM_SCRIPT",
-                  "value": "bitcoin-cli getblockchaininfo"
-                },
-                {
-                  "name": "HOME",
-                  "value": "/home/bitcoin"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_COMPONENT",
-                  "value": "chain-b"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_KIND",
-                  "value": "bitcoin"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_IMPLEMENTATION",
-                  "value": "bitcoin-core"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_HOST",
-                  "value": "chain-b"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_FQDN",
-                  "value": "chain-b.proofstorm-i-golden-b2.svc"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_SERVICES_JSON",
-                  "value": "{\"p2p\":18444,\"rpc\":18443,\"zmq_block\":28334,\"zmq_tx\":28335}"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_PORT_P2P",
-                  "value": "18444"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_PORT_RPC",
-                  "value": "18443"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_PORT_ZMQ_BLOCK",
-                  "value": "28334"
-                },
-                {
-                  "name": "PROOFSTORM_TARGET_PORT_ZMQ_TX",
-                  "value": "28335"
-                },
-                {
-                  "name": "BITCOIN_RPC_HOST",
-                  "value": "chain-b"
-                },
-                {
-                  "name": "BITCOIN_RPC_PORT",
-                  "value": "18443"
-                },
-                {
-                  "name": "BITCOIN_RPC_USER",
-                  "value": "proofstorm"
-                },
-                {
-                  "name": "BITCOIN_RPC_PASSWORD",
-                  "value": "proofstorm-regtest-only"
-                }
-              ],
-              "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
-              "imagePullPolicy": "IfNotPresent",
-              "name": "exec",
-              "securityContext": {
-                "allowPrivilegeEscalation": false,
-                "capabilities": {
-                  "drop": [
-                    "ALL"
-                  ]
-                }
-              },
-              "volumeMounts": [
-                {
-                  "mountPath": "/home/bitcoin/.bitcoin",
-                  "name": "data",
-                  "readOnly": false
-                }
-              ]
-            }
-          ],
-          "enableServiceLinks": false,
-          "restartPolicy": "Never",
-          "securityContext": {
-            "fsGroup": 1000,
-            "runAsGroup": 1000,
-            "runAsNonRoot": true,
-            "runAsUser": 1000,
-            "seccompProfile": {
-              "type": "RuntimeDefault"
-            }
-          },
-          "serviceAccountName": "proofstorm-workload",
-          "volumes": [
-            {
-              "name": "data",
-              "persistentVolumeClaim": {
-                "claimName": "data-chain-a-0"
-              }
-            }
-          ]
-        }
-      },
-      "ttlSecondsAfterFinished": 600
-    }
-  },
-  "inventory": [
-    {
-      "api_version": "apps/v1",
-      "kind": "Deployment",
-      "name": "attacker",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "Deployment",
-      "name": "mint",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "Deployment",
-      "name": "proofstorm-protocol-prober",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "Deployment",
-      "name": "wallet",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "StatefulSet",
-      "name": "chain-a",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "StatefulSet",
-      "name": "chain-b",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "StatefulSet",
-      "name": "cln",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "StatefulSet",
-      "name": "lnd",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "allow-controller-actions",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "attacker",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "chain-a",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "chain-b",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "cln",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "lnd",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "mint",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "wallet",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "ConfigMap",
-      "name": "mint-config",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "PersistentVolumeClaim",
-      "name": "mint-data",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "PersistentVolumeClaim",
-      "name": "wallet-data",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "Service",
-      "name": "chain-a",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "Service",
-      "name": "chain-b",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "Service",
-      "name": "cln",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "Service",
-      "name": "lnd",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "v1",
-      "kind": "Service",
-      "name": "mint",
-      "namespace": "proofstorm-i-golden-b2"
-    }
-  ],
   "plans": [
     {
       "applicable_conditions": [
         "workload_ready",
+        "storage_ready",
+        "service_ready",
+        "protocol_ready",
         "component_ready",
         "experiment_controllable"
       ],
-      "backend_id": "attacker-workspace",
-      "component_id": "attacker",
+      "backend_id": "bitcoin-core",
+      "component_id": "chain",
       "condition_aggregation": [
         {
           "all_of": [
-            "workload_ready"
+            "workload_ready",
+            "storage_ready",
+            "service_ready",
+            "protocol_ready"
           ],
           "condition": "component_ready"
         }
@@ -340,6 +33,22 @@
           "control_available",
           "control_unavailable"
         ],
+        "protocol_ready": [
+          "protocol_responding",
+          "protocol_probe_pending",
+          "protocol_probe_failed",
+          "intentionally_stopped"
+        ],
+        "service_ready": [
+          "not_observed",
+          "endpoints_ready",
+          "endpoints_missing"
+        ],
+        "storage_ready": [
+          "not_observed",
+          "storage_bound",
+          "storage_pending"
+        ],
         "workload_ready": [
           "not_observed",
           "stale_revision",
@@ -350,531 +59,197 @@
       },
       "credentials": [],
       "effective_config": {
-        "implementation": "attacker-workspace"
+        "config": {
+          "fallback_fee": 0.0002,
+          "txindex": true
+        },
+        "implementation": "bitcoin-core"
       },
       "execution_context": {
-        "component_id": "attacker",
+        "component_id": "chain",
         "environment": {
-          "HOME": "/tmp"
+          "HOME": "/home/bitcoin"
         },
-        "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+        "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+        "mounts": [
+          {
+            "mount_path": "/home/bitcoin/.bitcoin",
+            "name": "data",
+            "read_only": false,
+            "source": {
+              "source": "stateful_data"
+            }
+          }
+        ],
+        "state_contract": "proofstorm/bitcoin-core-state/v1"
+      },
+      "instance_key": "i-golden-b2",
+      "kind": "bitcoin",
+      "linked_targets": {},
+      "operation_admission": [
+        {
+          "operation": "inspect",
+          "prerequisites": [
+            "accepted_identity"
+          ]
+        },
+        {
+          "operation": "start",
+          "prerequisites": [
+            "accepted_identity",
+            "storage"
+          ]
+        },
+        {
+          "operation": "stop",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "restart",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "native_exec",
+          "prerequisites": [
+            "execution_context"
+          ]
+        },
+        {
+          "operation": "network_heal",
+          "prerequisites": [
+            "fault_identity"
+          ]
+        },
+        {
+          "operation": "peer_channel_mutation",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        }
+      ],
+      "protocol_probe": {
+        "kind": "tcp",
+        "port": 18443
+      },
+      "relevant_links": [],
+      "revision_digest": "sha256:b2-golden-revision",
+      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
+      "storage": [
+        {
+          "claim_name": "data-chain-0"
+        }
+      ],
+      "target_descriptor": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
+        "ports": {
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
+        },
+        "version": "30.0"
+      },
+      "workload": {
+        "desired_replicas": 1,
+        "kind": "stateful_set",
+        "name": "chain"
+      }
+    },
+    {
+      "applicable_conditions": [
+        "workload_ready",
+        "credentials_ready",
+        "service_ready",
+        "protocol_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "backend_id": "keycloak",
+      "component_id": "identity",
+      "condition_aggregation": [
+        {
+          "all_of": [
+            "workload_ready",
+            "service_ready",
+            "protocol_ready"
+          ],
+          "condition": "component_ready"
+        }
+      ],
+      "condition_reasons": {
+        "component_ready": [
+          "stale_revision",
+          "component_operational",
+          "component_not_operational",
+          "intentionally_stopped"
+        ],
+        "credentials_ready": [
+          "not_observed",
+          "credentials_projected",
+          "credentials_missing"
+        ],
+        "experiment_controllable": [
+          "control_available",
+          "control_unavailable"
+        ],
+        "protocol_ready": [
+          "protocol_responding",
+          "protocol_probe_pending",
+          "protocol_probe_failed",
+          "intentionally_stopped"
+        ],
+        "service_ready": [
+          "not_observed",
+          "endpoints_ready",
+          "endpoints_missing"
+        ],
+        "workload_ready": [
+          "not_observed",
+          "stale_revision",
+          "workload_available",
+          "workload_unavailable",
+          "intentionally_stopped"
+        ]
+      },
+      "credentials": [],
+      "effective_config": {
+        "config": {
+          "access_token_lifespan_seconds": 300
+        },
+        "implementation": "keycloak"
+      },
+      "execution_context": {
+        "component_id": "identity",
+        "environment": {},
+        "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
         "mounts": [],
-        "state_contract": "proofstorm/attacker-workspace-state/v1"
+        "state_contract": "proofstorm/keycloak-oidc-state/v1"
       },
       "instance_key": "i-golden-b2",
-      "kind": "attacker",
-      "linked_targets": {},
-      "operation_admission": [
-        {
-          "operation": "inspect",
-          "prerequisites": [
-            "accepted_identity"
-          ]
-        },
-        {
-          "operation": "start",
-          "prerequisites": [
-            "accepted_identity",
-            "storage"
-          ]
-        },
-        {
-          "operation": "stop",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "restart",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "native_exec",
-          "prerequisites": [
-            "execution_context"
-          ]
-        },
-        {
-          "operation": "network_heal",
-          "prerequisites": [
-            "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        }
-      ],
-      "relevant_links": [],
-      "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3",
-      "storage": [],
-      "target_descriptor": {
-        "backend_id": "attacker-workspace",
-        "component_id": "attacker",
-        "kind": "attacker",
-        "ports": {},
-        "version": "0.1.0-alpha.1"
-      },
-      "workload": {
-        "desired_replicas": 1,
-        "kind": "deployment",
-        "name": "attacker"
-      }
-    },
-    {
-      "applicable_conditions": [
-        "workload_ready",
-        "storage_ready",
-        "service_ready",
-        "protocol_ready",
-        "component_ready",
-        "experiment_controllable"
-      ],
-      "backend_id": "bitcoin-core",
-      "component_id": "chain-a",
-      "condition_aggregation": [
-        {
-          "all_of": [
-            "workload_ready",
-            "storage_ready",
-            "service_ready",
-            "protocol_ready"
-          ],
-          "condition": "component_ready"
-        }
-      ],
-      "condition_reasons": {
-        "component_ready": [
-          "stale_revision",
-          "component_operational",
-          "component_not_operational",
-          "intentionally_stopped"
-        ],
-        "experiment_controllable": [
-          "control_available",
-          "control_unavailable"
-        ],
-        "protocol_ready": [
-          "protocol_responding",
-          "protocol_probe_pending",
-          "protocol_probe_failed",
-          "intentionally_stopped"
-        ],
-        "service_ready": [
-          "not_observed",
-          "endpoints_ready",
-          "endpoints_missing"
-        ],
-        "storage_ready": [
-          "not_observed",
-          "storage_bound",
-          "storage_pending"
-        ],
-        "workload_ready": [
-          "not_observed",
-          "stale_revision",
-          "workload_available",
-          "workload_unavailable",
-          "intentionally_stopped"
-        ]
-      },
-      "credentials": [],
-      "effective_config": {
-        "config": {
-          "fallback_fee": 0.0002,
-          "txindex": true
-        },
-        "implementation": "bitcoin-core"
-      },
-      "execution_context": {
-        "component_id": "chain-a",
-        "environment": {
-          "HOME": "/home/bitcoin"
-        },
-        "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
-        "mounts": [
-          {
-            "mount_path": "/home/bitcoin/.bitcoin",
-            "name": "data",
-            "read_only": false,
-            "source": {
-              "source": "stateful_data"
-            }
-          }
-        ],
-        "state_contract": "proofstorm/bitcoin-core-state/v1"
-      },
-      "instance_key": "i-golden-b2",
-      "kind": "bitcoin",
-      "linked_targets": {},
-      "operation_admission": [
-        {
-          "operation": "inspect",
-          "prerequisites": [
-            "accepted_identity"
-          ]
-        },
-        {
-          "operation": "start",
-          "prerequisites": [
-            "accepted_identity",
-            "storage"
-          ]
-        },
-        {
-          "operation": "stop",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "restart",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "native_exec",
-          "prerequisites": [
-            "execution_context"
-          ]
-        },
-        {
-          "operation": "network_heal",
-          "prerequisites": [
-            "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        }
-      ],
-      "protocol_probe": {
-        "kind": "tcp",
-        "port": 18443
-      },
-      "relevant_links": [],
-      "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
-      "storage": [
-        {
-          "claim_name": "data-chain-a-0"
-        }
-      ],
-      "target_descriptor": {
-        "backend_id": "bitcoin-core",
-        "component_id": "chain-a",
-        "kind": "bitcoin",
-        "ports": {
-          "p2p": 18444,
-          "rpc": 18443,
-          "zmq_block": 28334,
-          "zmq_tx": 28335
-        },
-        "version": "30.0"
-      },
-      "workload": {
-        "desired_replicas": 1,
-        "kind": "stateful_set",
-        "name": "chain-a"
-      }
-    },
-    {
-      "applicable_conditions": [
-        "workload_ready",
-        "storage_ready",
-        "service_ready",
-        "protocol_ready",
-        "component_ready",
-        "experiment_controllable"
-      ],
-      "backend_id": "bitcoin-core",
-      "component_id": "chain-b",
-      "condition_aggregation": [
-        {
-          "all_of": [
-            "workload_ready",
-            "storage_ready",
-            "service_ready",
-            "protocol_ready"
-          ],
-          "condition": "component_ready"
-        }
-      ],
-      "condition_reasons": {
-        "component_ready": [
-          "stale_revision",
-          "component_operational",
-          "component_not_operational",
-          "intentionally_stopped"
-        ],
-        "experiment_controllable": [
-          "control_available",
-          "control_unavailable"
-        ],
-        "protocol_ready": [
-          "protocol_responding",
-          "protocol_probe_pending",
-          "protocol_probe_failed",
-          "intentionally_stopped"
-        ],
-        "service_ready": [
-          "not_observed",
-          "endpoints_ready",
-          "endpoints_missing"
-        ],
-        "storage_ready": [
-          "not_observed",
-          "storage_bound",
-          "storage_pending"
-        ],
-        "workload_ready": [
-          "not_observed",
-          "stale_revision",
-          "workload_available",
-          "workload_unavailable",
-          "intentionally_stopped"
-        ]
-      },
-      "credentials": [],
-      "effective_config": {
-        "config": {
-          "fallback_fee": 0.0002,
-          "txindex": true
-        },
-        "implementation": "bitcoin-core"
-      },
-      "execution_context": {
-        "component_id": "chain-b",
-        "environment": {
-          "HOME": "/home/bitcoin"
-        },
-        "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
-        "mounts": [
-          {
-            "mount_path": "/home/bitcoin/.bitcoin",
-            "name": "data",
-            "read_only": false,
-            "source": {
-              "source": "stateful_data"
-            }
-          }
-        ],
-        "state_contract": "proofstorm/bitcoin-core-state/v1"
-      },
-      "instance_key": "i-golden-b2",
-      "kind": "bitcoin",
-      "linked_targets": {},
-      "operation_admission": [
-        {
-          "operation": "inspect",
-          "prerequisites": [
-            "accepted_identity"
-          ]
-        },
-        {
-          "operation": "start",
-          "prerequisites": [
-            "accepted_identity",
-            "storage"
-          ]
-        },
-        {
-          "operation": "stop",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "restart",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "native_exec",
-          "prerequisites": [
-            "execution_context"
-          ]
-        },
-        {
-          "operation": "network_heal",
-          "prerequisites": [
-            "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        }
-      ],
-      "protocol_probe": {
-        "kind": "tcp",
-        "port": 18443
-      },
-      "relevant_links": [],
-      "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
-      "storage": [
-        {
-          "claim_name": "data-chain-b-0"
-        }
-      ],
-      "target_descriptor": {
-        "backend_id": "bitcoin-core",
-        "component_id": "chain-b",
-        "kind": "bitcoin",
-        "ports": {
-          "p2p": 18444,
-          "rpc": 18443,
-          "zmq_block": 28334,
-          "zmq_tx": 28335
-        },
-        "version": "30.0"
-      },
-      "workload": {
-        "desired_replicas": 1,
-        "kind": "stateful_set",
-        "name": "chain-b"
-      }
-    },
-    {
-      "applicable_conditions": [
-        "workload_ready",
-        "storage_ready",
-        "service_ready",
-        "protocol_ready",
-        "dependencies_ready",
-        "component_ready",
-        "experiment_controllable"
-      ],
-      "backend_id": "cln",
-      "component_id": "cln",
-      "condition_aggregation": [
-        {
-          "all_of": [
-            "workload_ready",
-            "storage_ready",
-            "service_ready",
-            "protocol_ready",
-            "dependencies_ready"
-          ],
-          "condition": "component_ready"
-        }
-      ],
-      "condition_reasons": {
-        "component_ready": [
-          "stale_revision",
-          "component_operational",
-          "component_not_operational",
-          "intentionally_stopped"
-        ],
-        "dependencies_ready": [
-          "not_observed",
-          "dependencies_satisfied",
-          "dependencies_unsatisfied"
-        ],
-        "experiment_controllable": [
-          "control_available",
-          "control_unavailable"
-        ],
-        "protocol_ready": [
-          "protocol_responding",
-          "protocol_probe_pending",
-          "protocol_probe_failed",
-          "intentionally_stopped"
-        ],
-        "service_ready": [
-          "not_observed",
-          "endpoints_ready",
-          "endpoints_missing"
-        ],
-        "storage_ready": [
-          "not_observed",
-          "storage_bound",
-          "storage_pending"
-        ],
-        "workload_ready": [
-          "not_observed",
-          "stale_revision",
-          "workload_available",
-          "workload_unavailable",
-          "intentionally_stopped"
-        ]
-      },
-      "credentials": [],
-      "effective_config": {
-        "config": {
-          "alias": "cln"
-        },
-        "implementation": "cln"
-      },
-      "execution_context": {
-        "component_id": "cln",
-        "environment": {
-          "HOME": "/home/cln"
-        },
-        "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
-        "mounts": [
-          {
-            "mount_path": "/home/cln/.lightning",
-            "name": "data",
-            "read_only": false,
-            "source": {
-              "source": "stateful_data"
-            }
-          }
-        ],
-        "state_contract": "proofstorm/cln-state/v1"
-      },
-      "instance_key": "i-golden-b2",
-      "kind": "lightning",
+      "kind": "identity_provider",
       "linked_targets": {
-        "cln-chain-a-chain": {
-          "backend_id": "bitcoin-core",
-          "component_id": "chain-a",
-          "kind": "bitcoin",
+        "identity-identity-db-database": {
+          "backend_id": "postgresql",
+          "component_id": "identity-db",
+          "kind": "database",
           "ports": {
-            "p2p": 18444,
-            "rpc": 18443,
-            "zmq_block": 28334,
-            "zmq_tx": 28335
+            "postgres": 5432
           },
-          "version": "30.0"
+          "version": "17.11"
         }
       },
       "operation_admission": [
@@ -931,42 +306,204 @@
         }
       ],
       "protocol_probe": {
-        "kind": "tcp",
-        "port": 9735
+        "kind": "http_get",
+        "path": "/realms/proofstorm/.well-known/openid-configuration",
+        "port": 8080
       },
       "relevant_links": [
         {
           "binding": {
-            "network": "regtest",
-            "type": "chain"
+            "role": "primary",
+            "type": "database"
           },
-          "from": "cln",
-          "id": "cln-chain-a-chain",
-          "kind": "chain_backend",
-          "to": "chain-a"
+          "from": "identity",
+          "id": "identity-identity-db-database",
+          "kind": "database_backend",
+          "to": "identity-db"
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:bc08b8a0ec74b362ee8ddf3f7003b3d9763f57d488fcb890f45f4c0bdd883c1b",
+      "rollout_digest": "sha256:0c570c6bd8d44b9190412996d5b62b432889a1d9716c3a290b16834e966edb09",
+      "storage": [],
+      "target_descriptor": {
+        "backend_id": "keycloak",
+        "component_id": "identity",
+        "kind": "identity_provider",
+        "ports": {
+          "http": 8080
+        },
+        "version": "25.0.6"
+      },
+      "workload": {
+        "desired_replicas": 1,
+        "kind": "deployment",
+        "name": "identity"
+      }
+    },
+    {
+      "applicable_conditions": [
+        "workload_ready",
+        "storage_ready",
+        "service_ready",
+        "protocol_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "backend_id": "postgresql",
+      "component_id": "identity-db",
+      "condition_aggregation": [
+        {
+          "all_of": [
+            "workload_ready",
+            "storage_ready",
+            "service_ready",
+            "protocol_ready"
+          ],
+          "condition": "component_ready"
+        }
+      ],
+      "condition_reasons": {
+        "component_ready": [
+          "stale_revision",
+          "component_operational",
+          "component_not_operational",
+          "intentionally_stopped"
+        ],
+        "experiment_controllable": [
+          "control_available",
+          "control_unavailable"
+        ],
+        "protocol_ready": [
+          "protocol_responding",
+          "protocol_probe_pending",
+          "protocol_probe_failed",
+          "intentionally_stopped"
+        ],
+        "service_ready": [
+          "not_observed",
+          "endpoints_ready",
+          "endpoints_missing"
+        ],
+        "storage_ready": [
+          "not_observed",
+          "storage_bound",
+          "storage_pending"
+        ],
+        "workload_ready": [
+          "not_observed",
+          "stale_revision",
+          "workload_available",
+          "workload_unavailable",
+          "intentionally_stopped"
+        ]
+      },
+      "credentials": [],
+      "effective_config": {
+        "config": {
+          "database_name": "cdk_mint",
+          "storage_size": "1Gi"
+        },
+        "implementation": "postgresql"
+      },
+      "execution_context": {
+        "component_id": "identity-db",
+        "environment": {
+          "PGDATA": "/var/lib/postgresql/data/pgdata"
+        },
+        "image": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+        "mounts": [
+          {
+            "mount_path": "/var/lib/postgresql/data",
+            "name": "data",
+            "read_only": false,
+            "source": {
+              "source": "stateful_data"
+            }
+          }
+        ],
+        "state_contract": "proofstorm/postgresql-state/v1"
+      },
+      "instance_key": "i-golden-b2",
+      "kind": "database",
+      "linked_targets": {},
+      "operation_admission": [
+        {
+          "operation": "inspect",
+          "prerequisites": [
+            "accepted_identity"
+          ]
+        },
+        {
+          "operation": "start",
+          "prerequisites": [
+            "accepted_identity",
+            "storage"
+          ]
+        },
+        {
+          "operation": "stop",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "restart",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "native_exec",
+          "prerequisites": [
+            "execution_context"
+          ]
+        },
+        {
+          "operation": "network_heal",
+          "prerequisites": [
+            "fault_identity"
+          ]
+        },
+        {
+          "operation": "peer_channel_mutation",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        }
+      ],
+      "protocol_probe": {
+        "kind": "tcp",
+        "port": 5432
+      },
+      "relevant_links": [],
+      "revision_digest": "sha256:b2-golden-revision",
+      "rollout_digest": "sha256:1c9ae523d44e66407f252d1a0394956ce94d7d94e4a39dffe759d85aad61dcdb",
       "storage": [
         {
-          "claim_name": "data-cln-0"
+          "claim_name": "data-identity-db-0"
         }
       ],
       "target_descriptor": {
-        "backend_id": "cln",
-        "component_id": "cln",
-        "kind": "lightning",
+        "backend_id": "postgresql",
+        "component_id": "identity-db",
+        "kind": "database",
         "ports": {
-          "p2p": 9735,
-          "rest": 3010
+          "postgres": 5432
         },
-        "version": "26.06.7"
+        "version": "17.11"
       },
       "workload": {
         "desired_replicas": 1,
         "kind": "stateful_set",
-        "name": "cln"
+        "name": "identity-db"
       }
     },
     {
@@ -980,7 +517,7 @@
         "experiment_controllable"
       ],
       "backend_id": "lnd",
-      "component_id": "lnd",
+      "component_id": "lightning",
       "condition_aggregation": [
         {
           "all_of": [
@@ -1036,12 +573,12 @@
       "credentials": [],
       "effective_config": {
         "config": {
-          "alias": "lnd"
+          "alias": "lightning"
         },
         "implementation": "lnd"
       },
       "execution_context": {
-        "component_id": "lnd",
+        "component_id": "lightning",
         "environment": {
           "HOME": "/home/lnd"
         },
@@ -1061,9 +598,9 @@
       "instance_key": "i-golden-b2",
       "kind": "lightning",
       "linked_targets": {
-        "lnd-chain-a-chain": {
+        "lightning-chain-chain": {
           "backend_id": "bitcoin-core",
-          "component_id": "chain-a",
+          "component_id": "chain",
           "kind": "bitcoin",
           "ports": {
             "p2p": 18444,
@@ -1137,22 +674,22 @@
             "network": "regtest",
             "type": "chain"
           },
-          "from": "lnd",
-          "id": "lnd-chain-a-chain",
+          "from": "lightning",
+          "id": "lightning-chain-chain",
           "kind": "chain_backend",
-          "to": "chain-a"
+          "to": "chain"
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:c70d6a9694097b28f41d45225936bf29d8ef2025682e10899d42a4bc872081a4",
+      "rollout_digest": "sha256:fc72b15ad6e7108211be7f7b341261e4b0a3b73603e5b0b8983b1cd119a1956a",
       "storage": [
         {
-          "claim_name": "data-lnd-0"
+          "claim_name": "data-lightning-0"
         }
       ],
       "target_descriptor": {
         "backend_id": "lnd",
-        "component_id": "lnd",
+        "component_id": "lightning",
         "kind": "lightning",
         "ports": {
           "p2p": 9735,
@@ -1164,7 +701,7 @@
       "workload": {
         "desired_replicas": 1,
         "kind": "stateful_set",
-        "name": "lnd"
+        "name": "lightning"
       }
     },
     {
@@ -1178,7 +715,7 @@
         "component_ready",
         "experiment_controllable"
       ],
-      "backend_id": "cdk",
+      "backend_id": "nutshell",
       "component_id": "mint",
       "condition_aggregation": [
         {
@@ -1239,57 +776,66 @@
       },
       "credentials": [
         {
-          "claim_name": "data-lnd-0",
-          "identity": "lnd:mint-lnd-lightning:lnd:data-lnd-0",
+          "claim_name": "data-lightning-0",
+          "identity": "lnd:mint-lightning-lightning:lightning:data-lightning-0",
           "mount_name": "lnd",
           "mount_path": "/lnd",
           "read_only": true,
-          "source_component_id": "lnd",
+          "source_component_id": "lightning",
           "source_state_contract": "proofstorm/lnd-state/v1"
         }
       ],
       "effective_config": {
         "config": {
+          "auth_max_blind_tokens": 100,
+          "auth_rate_limit_per_minute": 5,
+          "clnrest_enable_mpp": true,
           "contact_email": "",
           "contact_nostr_public_key": "",
-          "description": "Proofstorm regtest CDK mint",
+          "database_lock_timeout_ms": 30000,
+          "description": "Proofstorm regtest Nutshell mint",
           "description_long": "",
-          "enable_info_page": false,
-          "http_cache_tti_seconds": 60,
-          "http_cache_ttl_seconds": 60,
+          "disable_melt": false,
+          "disable_mint": false,
+          "global_rate_limit_per_minute": 60,
           "icon_url": "",
           "input_fee_ppk": 100,
-          "max_inputs": 1000,
+          "lightning_fee_percent": 1.0,
+          "lightning_reserve_fee_min_sat": 2,
+          "lnd_enable_mpp": true,
+          "max_balance_sat": 10000000,
           "max_melt_sat": 500000,
           "max_mint_sat": 500000,
-          "max_outputs": 1000,
+          "max_request_length": 1000,
+          "max_secret_length": 1024,
+          "max_witness_length": 1024,
           "melt_quote_ttl_seconds": 120,
-          "min_melt_sat": 1,
-          "min_mint_sat": 1,
           "mint_quote_ttl_seconds": 600,
           "motd": "",
-          "name": "Proofstorm CDK mint",
+          "name": "Proofstorm Nutshell mint",
+          "oidc_client_id": "cashu-client",
+          "oidc_discovery_url": "",
+          "quote_backend_check_rate_limit_seconds": 10,
+          "rate_limit": true,
+          "rate_limit_proxy_trust": false,
+          "redis_cache_ttl_seconds": 604800,
+          "regular_tasks_interval_seconds": 3600,
           "tos_url": "",
-          "use_keyset_v2": true
+          "transaction_rate_limit_per_minute": 20,
+          "watchdog_balance_check_interval_seconds": 60,
+          "watchdog_enabled": false,
+          "websocket_read_timeout_seconds": 600
         },
-        "implementation": "cdk"
+        "implementation": "nutshell"
       },
       "execution_context": {
         "component_id": "mint",
         "environment": {
-          "CDK_MINTD_WORK_DIR": "/app/data",
+          "CASHU_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
+        "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
         "mounts": [
-          {
-            "mount_path": "/config",
-            "name": "config",
-            "read_only": true,
-            "source": {
-              "source": "component_config"
-            }
-          },
           {
             "mount_path": "/app/data",
             "name": "data",
@@ -1303,19 +849,28 @@
             "name": "lnd",
             "read_only": true,
             "source": {
-              "link_id": "mint-lnd-lightning",
+              "link_id": "mint-lightning-lightning",
               "source": "linked_stateful_data"
             }
           }
         ],
-        "state_contract": "proofstorm/cdk-mint-state/v1"
+        "state_contract": "proofstorm/nutshell-mint-state/v1"
       },
       "instance_key": "i-golden-b2",
       "kind": "mint",
       "linked_targets": {
-        "mint-lnd-lightning": {
+        "mint-identity-authentication": {
+          "backend_id": "keycloak",
+          "component_id": "identity",
+          "kind": "identity_provider",
+          "ports": {
+            "http": 8080
+          },
+          "version": "25.0.6"
+        },
+        "mint-lightning-lightning": {
           "backend_id": "lnd",
-          "component_id": "lnd",
+          "component_id": "lightning",
           "kind": "lightning",
           "ports": {
             "p2p": 9735,
@@ -1386,178 +941,46 @@
       "relevant_links": [
         {
           "binding": {
+            "protocol": "oidc",
+            "type": "authentication"
+          },
+          "from": "mint",
+          "id": "mint-identity-authentication",
+          "kind": "authentication_backend",
+          "to": "identity"
+        },
+        {
+          "binding": {
             "method": "bolt11",
             "type": "payment",
             "unit": "sat"
           },
           "from": "mint",
-          "id": "mint-lnd-lightning",
+          "id": "mint-lightning-lightning",
           "kind": "payment_backend",
-          "to": "lnd"
+          "to": "lightning"
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:23e077429f81a378cf5de236755b850c5616181a204649b6ffc5287d2866a6f8",
+      "rollout_digest": "sha256:97295eb1e34d5c39bdd2da197f1c9b5461ad56076eaaf222990fdfad1fbd2405",
       "storage": [
         {
           "claim_name": "mint-data"
         }
       ],
       "target_descriptor": {
-        "backend_id": "cdk",
+        "backend_id": "nutshell",
         "component_id": "mint",
         "kind": "mint",
         "ports": {
           "http": 3338
         },
-        "version": "0.17.6"
-      },
-      "workload": {
-        "desired_replicas": 1,
-        "kind": "deployment",
-        "name": "mint"
-      }
-    },
-    {
-      "applicable_conditions": [
-        "workload_ready",
-        "storage_ready",
-        "component_ready",
-        "experiment_controllable"
-      ],
-      "backend_id": "nutshell-wallet",
-      "component_id": "wallet",
-      "condition_aggregation": [
-        {
-          "all_of": [
-            "workload_ready",
-            "storage_ready"
-          ],
-          "condition": "component_ready"
-        }
-      ],
-      "condition_reasons": {
-        "component_ready": [
-          "stale_revision",
-          "component_operational",
-          "component_not_operational",
-          "intentionally_stopped"
-        ],
-        "experiment_controllable": [
-          "control_available",
-          "control_unavailable"
-        ],
-        "storage_ready": [
-          "not_observed",
-          "storage_bound",
-          "storage_pending"
-        ],
-        "workload_ready": [
-          "not_observed",
-          "stale_revision",
-          "workload_available",
-          "workload_unavailable",
-          "intentionally_stopped"
-        ]
-      },
-      "credentials": [],
-      "effective_config": {
-        "implementation": "nutshell-wallet"
-      },
-      "execution_context": {
-        "component_id": "wallet",
-        "environment": {
-          "HOME": "/wallet",
-          "PROOFSTORM_WALLET": "{component_id}"
-        },
-        "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
-        "mounts": [
-          {
-            "mount_path": "/wallet",
-            "name": "wallet",
-            "read_only": false,
-            "source": {
-              "source": "component_persistent_data"
-            }
-          }
-        ],
-        "state_contract": "proofstorm/nutshell-wallet-state/v1"
-      },
-      "instance_key": "i-golden-b2",
-      "kind": "wallet",
-      "linked_targets": {},
-      "operation_admission": [
-        {
-          "operation": "inspect",
-          "prerequisites": [
-            "accepted_identity"
-          ]
-        },
-        {
-          "operation": "start",
-          "prerequisites": [
-            "accepted_identity",
-            "storage"
-          ]
-        },
-        {
-          "operation": "stop",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "restart",
-          "prerequisites": [
-            "workload_identity"
-          ]
-        },
-        {
-          "operation": "native_exec",
-          "prerequisites": [
-            "execution_context"
-          ]
-        },
-        {
-          "operation": "network_heal",
-          "prerequisites": [
-            "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        }
-      ],
-      "relevant_links": [],
-      "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:0b01dea715440f691d9211b5a747f1eba43bce1b1d1324affbe07fa1f3ba6a83",
-      "storage": [
-        {
-          "claim_name": "wallet-data"
-        }
-      ],
-      "target_descriptor": {
-        "backend_id": "nutshell-wallet",
-        "component_id": "wallet",
-        "kind": "wallet",
-        "ports": {},
         "version": "0.20.2"
       },
       "workload": {
         "desired_replicas": 1,
         "kind": "deployment",
-        "name": "wallet"
+        "name": "mint"
       }
     }
   ],
@@ -1566,7 +989,60 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\nurls = [\"http://mint:3338\"]\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lnd:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
+          "CASHU_DIR": "/app/data",
+          "LIGHTNING_FEE_PERCENT": "1",
+          "LIGHTNING_RESERVE_FEE_MIN": "2",
+          "MELT_QUOTE_TTL": "120",
+          "MINT_AUTH_DATABASE": "/app/data",
+          "MINT_AUTH_MAX_BLIND_TOKENS": "100",
+          "MINT_AUTH_OICD_CLIENT_ID": "cashu-client",
+          "MINT_AUTH_OICD_DISCOVERY_URL": "http://identity:8080/realms/proofstorm/.well-known/openid-configuration",
+          "MINT_AUTH_RATE_LIMIT_PER_MINUTE": "5",
+          "MINT_BACKEND_BOLT11_SAT": "LndRestWallet",
+          "MINT_BOLT11_DISABLE_MELT": "FALSE",
+          "MINT_BOLT11_DISABLE_MINT": "FALSE",
+          "MINT_DATABASE": "/app/data",
+          "MINT_DATABASE_LOCK_TIMEOUT": "30000",
+          "MINT_DERIVATION_PATH": "m/0'/0'/0'",
+          "MINT_FORWARDED_ALLOW_IPS": "127.0.0.1",
+          "MINT_GLOBAL_RATE_LIMIT_PER_MINUTE": "60",
+          "MINT_INFO_CONTACT": "[]",
+          "MINT_INFO_DESCRIPTION": "Proofstorm regtest Nutshell mint",
+          "MINT_INFO_DESCRIPTION_LONG": "",
+          "MINT_INFO_ICON_URL": "",
+          "MINT_INFO_MOTD": "",
+          "MINT_INFO_NAME": "Proofstorm Nutshell mint",
+          "MINT_INFO_TOS_URL": "",
+          "MINT_INFO_URLS": "[\"http://mint:3338\"]",
+          "MINT_INPUT_FEE_PPK": "100",
+          "MINT_LISTEN_HOST": "0.0.0.0",
+          "MINT_LISTEN_PORT": "3338",
+          "MINT_LND_ENABLE_MPP": "TRUE",
+          "MINT_LND_REST_CERT": "/lnd/tls.cert",
+          "MINT_LND_REST_CERT_VERIFY": "TRUE",
+          "MINT_LND_REST_ENDPOINT": "https://lightning:8080",
+          "MINT_LND_REST_MACAROON": "/lnd/data/chain/bitcoin/regtest/admin.macaroon",
+          "MINT_MAX_BALANCE": "10000000",
+          "MINT_MAX_MELT_BOLT11_SAT": "500000",
+          "MINT_MAX_MINT_BOLT11_SAT": "500000",
+          "MINT_MAX_REQUEST_LENGTH": "1000",
+          "MINT_MAX_SECRET_LENGTH": "1024",
+          "MINT_MAX_WITNESS_LENGTH": "1024",
+          "MINT_QUOTE_BACKEND_CHECK_RATE_LIMIT": "10",
+          "MINT_QUOTE_TTL": "600",
+          "MINT_RATE_LIMIT": "TRUE",
+          "MINT_RATE_LIMIT_PROXY_TRUST": "FALSE",
+          "MINT_REDIS_CACHE_CLUSTER": "FALSE",
+          "MINT_REDIS_CACHE_ENABLED": "FALSE",
+          "MINT_REDIS_CACHE_TTL": "604800",
+          "MINT_REGULAR_TASKS_INTERVAL_SECONDS": "3600",
+          "MINT_REQUIRE_AUTH": "TRUE",
+          "MINT_RPC_SERVER_ENABLE": "FALSE",
+          "MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE": "20",
+          "MINT_WATCHDOG_BALANCE_CHECK_INTERVAL_SECONDS": "60",
+          "MINT_WATCHDOG_ENABLED": "FALSE",
+          "MINT_WEBSOCKET_READ_TIMEOUT": "600",
+          "TOR": "FALSE"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -1587,17 +1063,17 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/backend-id": "attacker-workspace",
-            "proofstorm.dev/execution-state-contract": "proofstorm/attacker-workspace-state/v1",
+            "proofstorm.dev/backend-id": "keycloak",
+            "proofstorm.dev/execution-state-contract": "proofstorm/keycloak-oidc-state/v1",
             "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
           },
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "attacker",
+            "proofstorm.dev/component": "identity",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "attacker"
+            "proofstorm.dev/network-identity": "identity"
           },
-          "name": "attacker",
+          "name": "identity",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -1605,21 +1081,21 @@
           "selector": {
             "matchLabels": {
               "app.kubernetes.io/managed-by": "proofstormd",
-              "proofstorm.dev/component": "attacker",
+              "proofstorm.dev/component": "identity",
               "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/network-identity": "attacker"
+              "proofstorm.dev/network-identity": "identity"
             }
           },
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3"
+                "proofstorm.dev/rollout-digest": "sha256:0c570c6bd8d44b9190412996d5b62b432889a1d9716c3a290b16834e966edb09"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/component": "attacker",
+                "proofstorm.dev/component": "identity",
                 "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "attacker"
+                "proofstorm.dev/network-identity": "identity"
               }
             },
             "spec": {
@@ -1640,14 +1116,101 @@
               "automountServiceAccountToken": false,
               "containers": [
                 {
-                  "command": [
-                    "sh",
-                    "-c",
-                    "trap : TERM INT; sleep infinity & wait"
+                  "args": [
+                    "start-dev",
+                    "--import-realm"
                   ],
-                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "env": [
+                    {
+                      "name": "KC_DB",
+                      "value": "postgres"
+                    },
+                    {
+                      "name": "KC_DB_URL_HOST",
+                      "value": "identity-db"
+                    },
+                    {
+                      "name": "KC_DB_URL_PORT",
+                      "value": "5432"
+                    },
+                    {
+                      "name": "KC_DB_URL_DATABASE",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_DB",
+                          "name": "identity-db-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "KC_DB_USERNAME",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_USER",
+                          "name": "identity-db-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "KC_DB_PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "identity-db-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "KC_HOSTNAME",
+                      "value": "http://identity:8080"
+                    },
+                    {
+                      "name": "KC_HOSTNAME_STRICT",
+                      "value": "false"
+                    },
+                    {
+                      "name": "KC_HTTP_ENABLED",
+                      "value": "true"
+                    },
+                    {
+                      "name": "KC_HEALTH_ENABLED",
+                      "value": "true"
+                    },
+                    {
+                      "name": "JAVA_OPTS_KC_HEAP",
+                      "value": "-XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=45"
+                    },
+                    {
+                      "name": "KEYCLOAK_ADMIN",
+                      "value": "proofstorm-admin"
+                    },
+                    {
+                      "name": "KEYCLOAK_ADMIN_PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "KEYCLOAK_ADMIN_PASSWORD",
+                          "name": "identity-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 8080,
+                      "name": "http"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "failureThreshold": 60,
+                    "httpGet": {
+                      "path": "/realms/proofstorm/.well-known/openid-configuration",
+                      "port": 8080
+                    },
+                    "periodSeconds": 3
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1655,7 +1218,15 @@
                         "ALL"
                       ]
                     }
-                  }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/keycloak/data/import/realm.json",
+                      "name": "realm-import",
+                      "readOnly": true,
+                      "subPath": "realm.json"
+                    }
+                  ]
                 }
               ],
               "enableServiceLinks": false,
@@ -1668,7 +1239,16 @@
                   "type": "RuntimeDefault"
                 }
               },
-              "serviceAccountName": "proofstorm-workload"
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "realm-import",
+                  "secret": {
+                    "defaultMode": 288,
+                    "secretName": "identity-credentials"
+                  }
+                }
+              ]
             }
           }
         }
@@ -1678,8 +1258,8 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/backend-id": "cdk",
-            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-mint-state/v1",
+            "proofstorm.dev/backend-id": "nutshell",
+            "proofstorm.dev/execution-state-contract": "proofstorm/nutshell-mint-state/v1",
             "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
           },
           "labels": {
@@ -1704,7 +1284,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:23e077429f81a378cf5de236755b850c5616181a204649b6ffc5287d2866a6f8"
+                "proofstorm.dev/rollout-digest": "sha256:97295eb1e34d5c39bdd2da197f1c9b5461ad56076eaaf222990fdfad1fbd2405"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1731,20 +1311,30 @@
               "automountServiceAccountToken": false,
               "containers": [
                 {
-                  "args": [
-                    "--config",
-                    "/config/config.toml"
-                  ],
                   "command": [
-                    "cdk-mintd"
+                    "python3",
+                    "-c",
+                    "from cashu.mint.auth import migrations as proofstorm_auth_migrations\n\nasync def m004_proofstorm_current_promises_schema(db):\n    async with db.connect() as conn:\n        promises = db.table_with_schema(\"promises\")\n        legacy = db.table_with_schema(\"promises_proofstorm_legacy\")\n        await conn.execute(f\"ALTER TABLE {promises} RENAME TO promises_proofstorm_legacy\")\n        await conn.execute(f\"\"\"\n            CREATE TABLE {promises} (\n                id TEXT NOT NULL,\n                amount {db.big_int} NOT NULL,\n                b_ TEXT NOT NULL,\n                c_ TEXT,\n                dleq_e TEXT,\n                dleq_s TEXT,\n                created TIMESTAMP,\n                signed_at TIMESTAMP,\n                mint_quote TEXT,\n                melt_quote TEXT,\n                swap_id TEXT,\n                order_index INTEGER DEFAULT 0,\n                UNIQUE (b_)\n            )\n        \"\"\")\n        await conn.execute(f\"\"\"\n            INSERT INTO {promises} (id, amount, b_, c_, dleq_e, dleq_s, created)\n            SELECT id, amount, b_, c_, dleq_e, dleq_s, created FROM {legacy}\n        \"\"\")\n        await conn.execute(f\"DROP TABLE {legacy}\")\n\nproofstorm_auth_migrations.m004_proofstorm_current_promises_schema = m004_proofstorm_current_promises_schema\n\nfrom cashu.mint.main import main; main()"
                   ],
                   "env": [
                     {
-                      "name": "CDK_MINTD_WORK_DIR",
-                      "value": "/app/data"
+                      "name": "MINT_PRIVATE_KEY",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "MINT_PRIVATE_KEY",
+                          "name": "mint-credentials"
+                        }
+                      }
                     }
                   ],
-                  "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
+                  "envFrom": [
+                    {
+                      "configMapRef": {
+                        "name": "mint-config"
+                      }
+                    }
+                  ],
+                  "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -1771,11 +1361,6 @@
                   },
                   "volumeMounts": [
                     {
-                      "mountPath": "/config",
-                      "name": "config",
-                      "readOnly": true
-                    },
-                    {
                       "mountPath": "/app/data",
                       "name": "data"
                     },
@@ -1788,6 +1373,28 @@
                 }
               ],
               "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "args": [
+                    "until wget -q -O /dev/null http://identity:8080/realms/proofstorm/.well-known/openid-configuration; do sleep 1; done"
+                  ],
+                  "command": [
+                    "sh",
+                    "-c"
+                  ],
+                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "wait-for-oidc",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  }
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -1800,12 +1407,6 @@
               "serviceAccountName": "proofstorm-workload",
               "volumes": [
                 {
-                  "configMap": {
-                    "name": "mint-config"
-                  },
-                  "name": "config"
-                },
-                {
                   "name": "data",
                   "persistentVolumeClaim": {
                     "claimName": "mint-data"
@@ -1814,7 +1415,7 @@
                 {
                   "name": "lnd",
                   "persistentVolumeClaim": {
-                    "claimName": "data-lnd-0"
+                    "claimName": "data-lightning-0"
                   }
                 }
               ]
@@ -1827,7 +1428,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:82f0fcd310f1b1fb1989a1c44b2f3f545879115d9502bc3a1b8f4cdb4b242563",
+            "proofstorm.dev/prober-digest": "sha256:62bf715085b5c5bb201ca5b997f251537a44f3dc5842955eef8cbe69d5da9baa",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -1854,7 +1455,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:82f0fcd310f1b1fb1989a1c44b2f3f545879115d9502bc3a1b8f4cdb4b242563",
+                "proofstorm.dev/prober-digest": "sha256:62bf715085b5c5bb201ca5b997f251537a44f3dc5842955eef8cbe69d5da9baa",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {
@@ -1890,7 +1491,7 @@
                   ],
                   "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-chain-a-3964513b",
+                  "name": "probe-chain-6123e71c",
                   "readinessProbe": {
                     "exec": {
                       "command": [
@@ -1898,7 +1499,7 @@
                         "-z",
                         "-w",
                         "2",
-                        "chain-a",
+                        "chain",
                         "18443"
                       ]
                     },
@@ -1935,16 +1536,17 @@
                   ],
                   "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-chain-b-3cc91cdf",
+                  "name": "probe-identity-edc16df8",
                   "readinessProbe": {
                     "exec": {
                       "command": [
-                        "nc",
-                        "-z",
-                        "-w",
+                        "wget",
+                        "-q",
+                        "-T",
                         "2",
-                        "chain-b",
-                        "18443"
+                        "-O",
+                        "/dev/null",
+                        "http://identity:8080/realms/proofstorm/.well-known/openid-configuration"
                       ]
                     },
                     "failureThreshold": 3,
@@ -1980,7 +1582,7 @@
                   ],
                   "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-cln-a20575fb",
+                  "name": "probe-identity-db-5caef653",
                   "readinessProbe": {
                     "exec": {
                       "command": [
@@ -1988,8 +1590,8 @@
                         "-z",
                         "-w",
                         "2",
-                        "cln",
-                        "9735"
+                        "identity-db",
+                        "5432"
                       ]
                     },
                     "failureThreshold": 3,
@@ -2025,7 +1627,7 @@
                   ],
                   "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-lnd-783f1672",
+                  "name": "probe-lightning-7d50d4b8",
                   "readinessProbe": {
                     "exec": {
                       "command": [
@@ -2033,7 +1635,7 @@
                         "-z",
                         "-w",
                         "2",
-                        "lnd",
+                        "lightning",
                         "10009"
                       ]
                     },
@@ -2124,121 +1726,6 @@
             }
           }
         }
-      },
-      {
-        "apiVersion": "apps/v1",
-        "kind": "Deployment",
-        "metadata": {
-          "annotations": {
-            "proofstorm.dev/backend-id": "nutshell-wallet",
-            "proofstorm.dev/execution-state-contract": "proofstorm/nutshell-wallet-state/v1",
-            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
-          },
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "wallet",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "wallet"
-          },
-          "name": "wallet",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "replicas": 1,
-          "selector": {
-            "matchLabels": {
-              "app.kubernetes.io/managed-by": "proofstormd",
-              "proofstorm.dev/component": "wallet",
-              "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/network-identity": "wallet"
-            }
-          },
-          "template": {
-            "metadata": {
-              "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:0b01dea715440f691d9211b5a747f1eba43bce1b1d1324affbe07fa1f3ba6a83"
-              },
-              "labels": {
-                "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/component": "wallet",
-                "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "wallet"
-              }
-            },
-            "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
-              "automountServiceAccountToken": false,
-              "containers": [
-                {
-                  "command": [
-                    "/bin/sh",
-                    "-c",
-                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
-                  ],
-                  "env": [
-                    {
-                      "name": "HOME",
-                      "value": "/wallet"
-                    },
-                    {
-                      "name": "PROOFSTORM_WALLET",
-                      "value": "wallet"
-                    }
-                  ],
-                  "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
-                  "imagePullPolicy": "IfNotPresent",
-                  "name": "component",
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "capabilities": {
-                      "drop": [
-                        "ALL"
-                      ]
-                    }
-                  },
-                  "volumeMounts": [
-                    {
-                      "mountPath": "/wallet",
-                      "name": "wallet"
-                    }
-                  ]
-                }
-              ],
-              "enableServiceLinks": false,
-              "securityContext": {
-                "fsGroup": 1000,
-                "runAsGroup": 1000,
-                "runAsNonRoot": true,
-                "runAsUser": 1000,
-                "seccompProfile": {
-                  "type": "RuntimeDefault"
-                }
-              },
-              "serviceAccountName": "proofstorm-workload",
-              "volumes": [
-                {
-                  "name": "wallet",
-                  "persistentVolumeClaim": {
-                    "claimName": "wallet-data"
-                  }
-                }
-              ]
-            }
-          }
-        }
       }
     ],
     "networkPolicies": [
@@ -2321,11 +1808,11 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "attacker",
+            "proofstorm.dev/component": "chain",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "attacker"
+            "proofstorm.dev/network-identity": "chain"
           },
-          "name": "attacker",
+          "name": "chain",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -2378,7 +1865,7 @@
           ],
           "podSelector": {
             "matchLabels": {
-              "proofstorm.dev/network-identity": "attacker"
+              "proofstorm.dev/network-identity": "chain"
             }
           },
           "policyTypes": [
@@ -2393,11 +1880,11 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-a",
+            "proofstorm.dev/component": "identity",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-a"
+            "proofstorm.dev/network-identity": "identity"
           },
-          "name": "chain-a",
+          "name": "identity",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -2450,7 +1937,7 @@
           ],
           "podSelector": {
             "matchLabels": {
-              "proofstorm.dev/network-identity": "chain-a"
+              "proofstorm.dev/network-identity": "identity"
             }
           },
           "policyTypes": [
@@ -2465,11 +1952,11 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-b",
+            "proofstorm.dev/component": "identity-db",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-b"
+            "proofstorm.dev/network-identity": "identity-db"
           },
-          "name": "chain-b",
+          "name": "identity-db",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -2522,7 +2009,7 @@
           ],
           "podSelector": {
             "matchLabels": {
-              "proofstorm.dev/network-identity": "chain-b"
+              "proofstorm.dev/network-identity": "identity-db"
             }
           },
           "policyTypes": [
@@ -2537,11 +2024,11 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "cln",
+            "proofstorm.dev/component": "lightning",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "cln"
+            "proofstorm.dev/network-identity": "lightning"
           },
-          "name": "cln",
+          "name": "lightning",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -2594,79 +2081,7 @@
           ],
           "podSelector": {
             "matchLabels": {
-              "proofstorm.dev/network-identity": "cln"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "lnd",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "lnd"
-          },
-          "name": "lnd",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "lnd"
+              "proofstorm.dev/network-identity": "lightning"
             }
           },
           "policyTypes": [
@@ -2746,78 +2161,6 @@
             "Egress"
           ]
         }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "wallet",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "wallet"
-          },
-          "name": "wallet",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "wallet"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
       }
     ],
     "persistentVolumeClaims": [
@@ -2844,30 +2187,64 @@
             }
           }
         }
-      },
+      }
+    ],
+    "secrets": [
       {
         "apiVersion": "v1",
-        "kind": "PersistentVolumeClaim",
+        "kind": "Secret",
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "wallet",
+            "proofstorm.dev/component": "identity",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "wallet"
+            "proofstorm.dev/network-identity": "identity"
           },
-          "name": "wallet-data",
+          "name": "identity-credentials",
           "namespace": "proofstorm-i-golden-b2"
         },
-        "spec": {
-          "accessModes": [
-            "ReadWriteOnce"
-          ],
-          "resources": {
-            "requests": {
-              "storage": "1Gi"
-            }
-          }
-        }
+        "stringData": {
+          "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS": "300",
+          "PROOFSTORM_SECRET_KIND": "keycloak-oidc"
+        },
+        "type": "Opaque"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "identity-db",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "identity-db"
+          },
+          "name": "identity-db-credentials",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "POSTGRES_DB": "cdk_mint",
+          "POSTGRES_USER": "proofstorm"
+        },
+        "type": "Opaque"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-credentials",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "nutshell-mint"
+        },
+        "type": "Opaque"
       }
     ],
     "services": [
@@ -2877,11 +2254,11 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-a",
+            "proofstorm.dev/component": "chain",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-a"
+            "proofstorm.dev/network-identity": "chain"
           },
-          "name": "chain-a",
+          "name": "chain",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -2909,9 +2286,9 @@
           ],
           "selector": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-a",
+            "proofstorm.dev/component": "chain",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-a"
+            "proofstorm.dev/network-identity": "chain"
           }
         }
       },
@@ -2921,41 +2298,26 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-b",
+            "proofstorm.dev/component": "identity",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-b"
+            "proofstorm.dev/network-identity": "identity"
           },
-          "name": "chain-b",
+          "name": "identity",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
           "ports": [
             {
-              "name": "p2p",
-              "port": 18444,
-              "targetPort": 18444
-            },
-            {
-              "name": "rpc",
-              "port": 18443,
-              "targetPort": 18443
-            },
-            {
-              "name": "zmq-block",
-              "port": 28334,
-              "targetPort": 28334
-            },
-            {
-              "name": "zmq-tx",
-              "port": 28335,
-              "targetPort": 28335
+              "name": "http",
+              "port": 8080,
+              "targetPort": 8080
             }
           ],
           "selector": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-b",
+            "proofstorm.dev/component": "identity",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-b"
+            "proofstorm.dev/network-identity": "identity"
           }
         }
       },
@@ -2965,31 +2327,26 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "cln",
+            "proofstorm.dev/component": "identity-db",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "cln"
+            "proofstorm.dev/network-identity": "identity-db"
           },
-          "name": "cln",
+          "name": "identity-db",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
           "ports": [
             {
-              "name": "p2p",
-              "port": 9735,
-              "targetPort": 9735
-            },
-            {
-              "name": "rest",
-              "port": 3010,
-              "targetPort": 3010
+              "name": "postgres",
+              "port": 5432,
+              "targetPort": 5432
             }
           ],
           "selector": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "cln",
+            "proofstorm.dev/component": "identity-db",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "cln"
+            "proofstorm.dev/network-identity": "identity-db"
           }
         }
       },
@@ -2999,11 +2356,11 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "lnd",
+            "proofstorm.dev/component": "lightning",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "lnd"
+            "proofstorm.dev/network-identity": "lightning"
           },
-          "name": "lnd",
+          "name": "lightning",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -3026,9 +2383,9 @@
           ],
           "selector": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "lnd",
+            "proofstorm.dev/component": "lightning",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "lnd"
+            "proofstorm.dev/network-identity": "lightning"
           }
         }
       },
@@ -3074,11 +2431,11 @@
           },
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-a",
+            "proofstorm.dev/component": "chain",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-a"
+            "proofstorm.dev/network-identity": "chain"
           },
-          "name": "chain-a",
+          "name": "chain",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -3086,12 +2443,12 @@
           "selector": {
             "matchLabels": {
               "app.kubernetes.io/managed-by": "proofstormd",
-              "proofstorm.dev/component": "chain-a",
+              "proofstorm.dev/component": "chain",
               "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/network-identity": "chain-a"
+              "proofstorm.dev/network-identity": "chain"
             }
           },
-          "serviceName": "chain-a",
+          "serviceName": "chain",
           "template": {
             "metadata": {
               "annotations": {
@@ -3099,9 +2456,9 @@
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/component": "chain-a",
+                "proofstorm.dev/component": "chain",
                 "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "chain-a"
+                "proofstorm.dev/network-identity": "chain"
               }
             },
             "spec": {
@@ -3192,9 +2549,9 @@
               "metadata": {
                 "labels": {
                   "app.kubernetes.io/managed-by": "proofstormd",
-                  "proofstorm.dev/component": "chain-a",
+                  "proofstorm.dev/component": "chain",
                   "proofstorm.dev/instance": "i-golden-b2",
-                  "proofstorm.dev/network-identity": "chain-a"
+                  "proofstorm.dev/network-identity": "chain"
                 },
                 "name": "data"
               },
@@ -3217,17 +2574,17 @@
         "kind": "StatefulSet",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/backend-id": "bitcoin-core",
-            "proofstorm.dev/execution-state-contract": "proofstorm/bitcoin-core-state/v1",
+            "proofstorm.dev/backend-id": "postgresql",
+            "proofstorm.dev/execution-state-contract": "proofstorm/postgresql-state/v1",
             "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
           },
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-b",
+            "proofstorm.dev/component": "identity-db",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-b"
+            "proofstorm.dev/network-identity": "identity-db"
           },
-          "name": "chain-b",
+          "name": "identity-db",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -3235,22 +2592,22 @@
           "selector": {
             "matchLabels": {
               "app.kubernetes.io/managed-by": "proofstormd",
-              "proofstorm.dev/component": "chain-b",
+              "proofstorm.dev/component": "identity-db",
               "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/network-identity": "chain-b"
+              "proofstorm.dev/network-identity": "identity-db"
             }
           },
-          "serviceName": "chain-b",
+          "serviceName": "identity-db",
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e"
+                "proofstorm.dev/rollout-digest": "sha256:1c9ae523d44e66407f252d1a0394956ce94d7d94e4a39dffe759d85aad61dcdb"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/component": "chain-b",
+                "proofstorm.dev/component": "identity-db",
                 "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "chain-b"
+                "proofstorm.dev/network-identity": "identity-db"
               }
             },
             "spec": {
@@ -3271,187 +2628,56 @@
               "automountServiceAccountToken": false,
               "containers": [
                 {
-                  "args": [
-                    "-regtest",
-                    "-datadir=/home/bitcoin/.bitcoin",
-                    "-server=1",
-                    "-rpcbind=0.0.0.0",
-                    "-rpcallowip=0.0.0.0/0",
-                    "-rpcuser=proofstorm",
-                    "-rpcpassword=proofstorm-regtest-only",
-                    "-rpcport=18443",
-                    "-txindex=1",
-                    "-zmqpubrawblock=tcp://0.0.0.0:28334",
-                    "-zmqpubrawtx=tcp://0.0.0.0:28335",
-                    "-fallbackfee=0.0002",
-                    "-debug=0"
-                  ],
-                  "command": [
-                    "bitcoind"
-                  ],
-                  "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
-                  "imagePullPolicy": "IfNotPresent",
-                  "name": "component",
-                  "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "bitcoin-cli",
-                        "-regtest",
-                        "-rpcuser=proofstorm",
-                        "-rpcpassword=proofstorm-regtest-only",
-                        "getblockchaininfo"
-                      ]
+                  "env": [
+                    {
+                      "name": "PGDATA",
+                      "value": "/var/lib/postgresql/data/pgdata"
                     },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3
-                  },
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "capabilities": {
-                      "drop": [
-                        "ALL"
-                      ]
-                    }
-                  },
-                  "volumeMounts": [
                     {
-                      "mountPath": "/home/bitcoin/.bitcoin",
-                      "name": "data"
-                    }
-                  ]
-                }
-              ],
-              "enableServiceLinks": false,
-              "securityContext": {
-                "fsGroup": 1000,
-                "runAsGroup": 1000,
-                "runAsNonRoot": true,
-                "runAsUser": 1000,
-                "seccompProfile": {
-                  "type": "RuntimeDefault"
-                }
-              },
-              "serviceAccountName": "proofstorm-workload"
-            }
-          },
-          "volumeClaimTemplates": [
-            {
-              "apiVersion": "v1",
-              "kind": "PersistentVolumeClaim",
-              "metadata": {
-                "labels": {
-                  "app.kubernetes.io/managed-by": "proofstormd",
-                  "proofstorm.dev/component": "chain-b",
-                  "proofstorm.dev/instance": "i-golden-b2",
-                  "proofstorm.dev/network-identity": "chain-b"
-                },
-                "name": "data"
-              },
-              "spec": {
-                "accessModes": [
-                  "ReadWriteOnce"
-                ],
-                "resources": {
-                  "requests": {
-                    "storage": "1Gi"
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      {
-        "apiVersion": "apps/v1",
-        "kind": "StatefulSet",
-        "metadata": {
-          "annotations": {
-            "proofstorm.dev/backend-id": "cln",
-            "proofstorm.dev/execution-state-contract": "proofstorm/cln-state/v1",
-            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
-          },
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "cln",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "cln"
-          },
-          "name": "cln",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "replicas": 1,
-          "selector": {
-            "matchLabels": {
-              "app.kubernetes.io/managed-by": "proofstormd",
-              "proofstorm.dev/component": "cln",
-              "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/network-identity": "cln"
-            }
-          },
-          "serviceName": "cln",
-          "template": {
-            "metadata": {
-              "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:bc08b8a0ec74b362ee8ddf3f7003b3d9763f57d488fcb890f45f4c0bdd883c1b"
-              },
-              "labels": {
-                "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/component": "cln",
-                "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "cln"
-              }
-            },
-            "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
+                      "name": "POSTGRES_USER",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_USER",
+                          "name": "identity-db-credentials"
                         }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
+                      }
+                    },
+                    {
+                      "name": "POSTGRES_PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "identity-db-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "POSTGRES_DB",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_DB",
+                          "name": "identity-db-credentials"
+                        }
+                      }
                     }
-                  ]
-                }
-              },
-              "automountServiceAccountToken": false,
-              "containers": [
-                {
-                  "args": [
-                    "--lightning-dir=/home/cln/.lightning",
-                    "--network=regtest",
-                    "--alias=cln",
-                    "--developer",
-                    "--dev-no-reconnect",
-                    "--autoconnect-seeker-peers=0",
-                    "--bind-addr=0.0.0.0:9735",
-                    "--announce-addr=cln:9735",
-                    "--clnrest-host=0.0.0.0",
-                    "--clnrest-port=3010",
-                    "--clnrest-protocol=http",
-                    "--bitcoin-rpcconnect=chain-a",
-                    "--bitcoin-rpcport=18443",
-                    "--bitcoin-rpcuser=proofstorm",
-                    "--bitcoin-rpcpassword=proofstorm-regtest-only",
-                    "--bitcoin-retry-timeout=60",
-                    "--log-level=info"
                   ],
-                  "command": [
-                    "lightningd"
-                  ],
-                  "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+                  "image": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 5432,
+                      "name": "postgres"
+                    }
+                  ],
                   "readinessProbe": {
                     "exec": {
                       "command": [
-                        "lightning-cli",
-                        "--lightning-dir=/home/cln/.lightning",
-                        "--network=regtest",
-                        "getinfo"
+                        "pg_isready",
+                        "-U",
+                        "proofstorm",
+                        "-d",
+                        "cdk_mint"
                       ]
                     },
                     "failureThreshold": 40,
@@ -3467,7 +2693,7 @@
                   },
                   "volumeMounts": [
                     {
-                      "mountPath": "/home/cln/.lightning",
+                      "mountPath": "/var/lib/postgresql/data",
                       "name": "data"
                     }
                   ]
@@ -3475,10 +2701,10 @@
               ],
               "enableServiceLinks": false,
               "securityContext": {
-                "fsGroup": 1000,
-                "runAsGroup": 1000,
+                "fsGroup": 70,
+                "runAsGroup": 70,
                 "runAsNonRoot": true,
-                "runAsUser": 1000,
+                "runAsUser": 70,
                 "seccompProfile": {
                   "type": "RuntimeDefault"
                 }
@@ -3493,9 +2719,9 @@
               "metadata": {
                 "labels": {
                   "app.kubernetes.io/managed-by": "proofstormd",
-                  "proofstorm.dev/component": "cln",
+                  "proofstorm.dev/component": "identity-db",
                   "proofstorm.dev/instance": "i-golden-b2",
-                  "proofstorm.dev/network-identity": "cln"
+                  "proofstorm.dev/network-identity": "identity-db"
                 },
                 "name": "data"
               },
@@ -3524,11 +2750,11 @@
           },
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "lnd",
+            "proofstorm.dev/component": "lightning",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "lnd"
+            "proofstorm.dev/network-identity": "lightning"
           },
-          "name": "lnd",
+          "name": "lightning",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -3536,22 +2762,22 @@
           "selector": {
             "matchLabels": {
               "app.kubernetes.io/managed-by": "proofstormd",
-              "proofstorm.dev/component": "lnd",
+              "proofstorm.dev/component": "lightning",
               "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/network-identity": "lnd"
+              "proofstorm.dev/network-identity": "lightning"
             }
           },
-          "serviceName": "lnd",
+          "serviceName": "lightning",
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:c70d6a9694097b28f41d45225936bf29d8ef2025682e10899d42a4bc872081a4"
+                "proofstorm.dev/rollout-digest": "sha256:fc72b15ad6e7108211be7f7b341261e4b0a3b73603e5b0b8983b1cd119a1956a"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/component": "lnd",
+                "proofstorm.dev/component": "lightning",
                 "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "lnd"
+                "proofstorm.dev/network-identity": "lightning"
               }
             },
             "spec": {
@@ -3575,20 +2801,20 @@
                   "args": [
                     "--lnddir=/home/lnd/.lnd",
                     "--noseedbackup",
-                    "--alias=lnd",
-                    "--externalip=lnd",
+                    "--alias=lightning",
+                    "--externalip=lightning",
                     "--listen=0.0.0.0:9735",
                     "--rpclisten=0.0.0.0:10009",
                     "--restlisten=0.0.0.0:8080",
                     "--bitcoin.active",
                     "--bitcoin.regtest",
                     "--bitcoin.node=bitcoind",
-                    "--bitcoind.rpchost=chain-a:18443",
+                    "--bitcoind.rpchost=chain:18443",
                     "--bitcoind.rpcuser=proofstorm",
                     "--bitcoind.rpcpass=proofstorm-regtest-only",
-                    "--bitcoind.zmqpubrawblock=tcp://chain-a:28334",
-                    "--bitcoind.zmqpubrawtx=tcp://chain-a:28335",
-                    "--tlsextradomain=lnd",
+                    "--bitcoind.zmqpubrawblock=tcp://chain:28334",
+                    "--bitcoind.zmqpubrawtx=tcp://chain:28335",
+                    "--tlsextradomain=lightning",
                     "--accept-keysend",
                     "--debuglevel=info"
                   ],
@@ -3646,9 +2872,9 @@
               "metadata": {
                 "labels": {
                   "app.kubernetes.io/managed-by": "proofstormd",
-                  "proofstorm.dev/component": "lnd",
+                  "proofstorm.dev/component": "lightning",
                   "proofstorm.dev/instance": "i-golden-b2",
-                  "proofstorm.dev/network-identity": "lnd"
+                  "proofstorm.dev/network-identity": "lightning"
                 },
                 "name": "data"
               },
@@ -3667,141 +2893,5 @@
         }
       }
     ]
-  },
-  "securitySpine": {
-    "defaultDeny": {
-      "apiVersion": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "default-deny-all",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "spec": {
-        "egress": [],
-        "ingress": [],
-        "policyTypes": [
-          "Ingress",
-          "Egress"
-        ]
-      }
-    },
-    "limits": {
-      "apiVersion": "v1",
-      "kind": "LimitRange",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-container-limits",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "spec": {
-        "limits": [
-          {
-            "default": {
-              "cpu": "500m",
-              "memory": "512Mi"
-            },
-            "defaultRequest": {
-              "cpu": "100m",
-              "memory": "128Mi"
-            },
-            "type": "Container"
-          }
-        ]
-      }
-    },
-    "namespace": {
-      "apiVersion": "v1",
-      "kind": "Namespace",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "pod-security.kubernetes.io/audit": "restricted",
-          "pod-security.kubernetes.io/enforce": "restricted",
-          "pod-security.kubernetes.io/enforce-version": "latest",
-          "pod-security.kubernetes.io/warn": "restricted",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-i-golden-b2"
-      }
-    },
-    "quota": {
-      "apiVersion": "v1",
-      "kind": "ResourceQuota",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-instance-quota",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "spec": {
-        "hard": {
-          "limits.cpu": "8",
-          "limits.memory": "8Gi",
-          "persistentvolumeclaims": "12",
-          "pods": "40",
-          "requests.cpu": "2",
-          "requests.memory": "4Gi"
-        }
-      }
-    },
-    "role": {
-      "apiVersion": "rbac.authorization.k8s.io/v1",
-      "kind": "Role",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-workload",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "rules": []
-    },
-    "roleBinding": {
-      "apiVersion": "rbac.authorization.k8s.io/v1",
-      "kind": "RoleBinding",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-workload",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "roleRef": {
-        "apiGroup": "rbac.authorization.k8s.io",
-        "kind": "Role",
-        "name": "proofstorm-workload"
-      },
-      "subjects": [
-        {
-          "kind": "ServiceAccount",
-          "name": "proofstorm-workload",
-          "namespace": "proofstorm-i-golden-b2"
-        }
-      ]
-    },
-    "serviceAccount": {
-      "apiVersion": "v1",
-      "automountServiceAccountToken": false,
-      "kind": "ServiceAccount",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-workload",
-        "namespace": "proofstorm-i-golden-b2"
-      }
-    }
   }
 }

@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:fe6cc5c3817599da1589e78d7b845c67817af743cd0707f6d2f439d031613e48",
+  "catalog_digest": "sha256:8a95761bc9c6a3d05157c196b65609883c77af0990463c04878260208d771b86",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -825,6 +825,68 @@
       ]
     },
     {
+      "implementation": "keycloak",
+      "kind": "identity_provider",
+      "upstream_version": "25.0.6",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "keycloak/25/v1",
+      "config_schema_digest": "sha256:c97d8e8af9c1a96ada4a3592af33d6ad08923284db346a44166d1963dc7e3f60",
+      "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+      "fields": {
+        "access_token_lifespan_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "administrator_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "client_id": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "database_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "database_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "realm": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "realm_import": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "test_user_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [],
+        "payment_methods": [],
+        "payment_backends": [],
+        "units": [],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
+          ]
+        }
+      ]
+    },
+    {
       "implementation": "lnd",
       "kind": "lightning",
       "upstream_version": "0.20.0-beta",
@@ -919,15 +981,31 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
-      "config_schema_digest": "sha256:6330543690cb53cac25af391b592a59a0c3871a9ea98c0c9086dedc6e1a3d864",
+      "config_schema_digest": "sha256:60e97661e243d5733b37af04de5417b6b1dc3b201343620c9bfe936bbdfc312e",
       "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
       "fields": {
+        "auth_max_blind_tokens": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "auth_rate_limit_per_minute": {
+          "classification": "agent_authorable",
+          "required": true
+        },
         "authentication": {
           "classification": "runtime_policy",
           "required": true
         },
+        "authentication_database": {
+          "classification": "topology_derived",
+          "required": true
+        },
         "backend_kind": {
           "classification": "topology_derived",
+          "required": true
+        },
+        "clnrest_enable_mpp": {
+          "classification": "agent_authorable",
           "required": true
         },
         "contact_email": {
@@ -1058,6 +1136,14 @@
           "classification": "agent_authorable",
           "required": true
         },
+        "oidc_client_id": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "oidc_discovery_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
         "public_url": {
           "classification": "topology_derived",
           "required": true
@@ -1075,7 +1161,15 @@
           "required": true
         },
         "redis_cache": {
-          "classification": "runtime_policy",
+          "classification": "topology_derived",
+          "required": true
+        },
+        "redis_cache_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "redis_cache_ttl_seconds": {
+          "classification": "agent_authorable",
           "required": true
         },
         "regular_tasks_interval_seconds": {
@@ -1120,12 +1214,23 @@
           "bolt11"
         ],
         "payment_backends": [
+          "cln",
           "lnd"
         ],
         "units": [
           "sat"
         ],
         "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cln",
+              "versions": [
+                "26.06.7"
+              ]
+            }
+          },
           {
             "method": "bolt11",
             "unit": "sat",
@@ -1138,7 +1243,9 @@
           }
         ],
         "authentication": [
-          "unauthenticated"
+          "unauthenticated",
+          "nut21_clear",
+          "nut22_blind"
         ],
         "compatible_wallet_adapters": [
           {
@@ -1158,10 +1265,31 @@
           ]
         },
         {
+          "link_kind": "payment_backend",
+          "implementation": "cln",
+          "versions": [
+            "26.06.7"
+          ]
+        },
+        {
           "link_kind": "database_backend",
           "implementation": "postgresql",
           "versions": [
             "17.11"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "redis",
+          "versions": [
+            "8.10.1"
+          ]
+        },
+        {
+          "link_kind": "authentication_backend",
+          "implementation": "keycloak",
+          "versions": [
+            "25.0.6"
           ]
         }
       ]
@@ -1254,6 +1382,50 @@
       "support": {
         "storage": [
           "persistent_volume"
+        ],
+        "payment_methods": [],
+        "payment_backends": [],
+        "units": [],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
+    },
+    {
+      "implementation": "redis",
+      "kind": "database",
+      "upstream_version": "8.10.1",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "redis/8.10/v1",
+      "config_schema_digest": "sha256:338876fa399504a6168471adad43dc480f9b240dfd733ac1a36868c7b8f20250",
+      "image": "docker.io/library/redis@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
+      "fields": {
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "eviction_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "listen_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "maxmemory_mb": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "persistence": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "ephemeral"
         ],
         "payment_methods": [],
         "payment_backends": [],

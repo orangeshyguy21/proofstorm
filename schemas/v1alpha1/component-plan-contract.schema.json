@@ -188,6 +188,7 @@
         "lightning",
         "mint",
         "database",
+        "identity_provider",
         "wallet",
         "attacker",
         "proxy",
@@ -253,7 +254,7 @@
     },
     "DependencyBinding": {
       "additionalProperties": false,
-      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role. Proofstorm validates the discriminator-specific fields before publication.",
+      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
       "properties": {
         "method": {
           "enum": [
@@ -269,9 +270,16 @@
           ],
           "type": "string"
         },
+        "protocol": {
+          "enum": [
+            "oidc"
+          ],
+          "type": "string"
+        },
         "role": {
           "enum": [
             "primary",
+            "cache",
             "authentication"
           ],
           "type": "string"
@@ -280,7 +288,8 @@
           "enum": [
             "chain",
             "payment",
-            "database"
+            "database",
+            "authentication"
           ],
           "type": "string"
         },
@@ -297,8 +306,8 @@
       "type": "object",
       "x-kubernetes-validations": [
         {
-          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role",
-          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) : has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit))"
+          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol",
+          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))"
         }
       ]
     },
@@ -423,6 +432,38 @@
             },
             "implementation": {
               "const": "postgresql",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/RedisConfig"
+            },
+            "implementation": {
+              "const": "redis",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/KeycloakConfig"
+            },
+            "implementation": {
+              "const": "keycloak",
               "type": "string"
             }
           },
@@ -572,6 +613,20 @@
         }
       ]
     },
+    "KeycloakConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "access_token_lifespan_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "access_token_lifespan_seconds"
+      ],
+      "type": "object"
+    },
     "LinkKind": {
       "enum": [
         "bitcoin_peer",
@@ -579,6 +634,7 @@
         "chain_backend",
         "payment_backend",
         "database_backend",
+        "authentication_backend",
         "network_path"
       ],
       "type": "string"
@@ -620,7 +676,7 @@
       "x-kubernetes-validations": [
         {
           "message": "backend links require a binding; peer and network-path links forbid one",
-          "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend') ? has(self.binding) : !has(self.binding)"
+          "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend' || self.kind == 'authentication_backend') ? has(self.binding) : !has(self.binding)"
         }
       ]
     },
@@ -639,6 +695,19 @@
     "NutshellMintConfig": {
       "additionalProperties": false,
       "properties": {
+        "auth_max_blind_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "auth_rate_limit_per_minute": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "clnrest_enable_mpp": {
+          "type": "boolean"
+        },
         "contact_email": {
           "type": "string"
         },
@@ -733,6 +802,12 @@
         "name": {
           "type": "string"
         },
+        "oidc_client_id": {
+          "type": "string"
+        },
+        "oidc_discovery_url": {
+          "type": "string"
+        },
         "quote_backend_check_rate_limit_seconds": {
           "format": "uint64",
           "minimum": 0,
@@ -743,6 +818,11 @@
         },
         "rate_limit_proxy_trust": {
           "type": "boolean"
+        },
+        "redis_cache_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "regular_tasks_interval_seconds": {
           "format": "uint64",
@@ -796,9 +876,15 @@
         "global_rate_limit_per_minute",
         "transaction_rate_limit_per_minute",
         "quote_backend_check_rate_limit_seconds",
+        "oidc_discovery_url",
+        "oidc_client_id",
+        "auth_rate_limit_per_minute",
+        "auth_max_blind_tokens",
         "lightning_fee_percent",
         "lightning_reserve_fee_min_sat",
+        "clnrest_enable_mpp",
         "lnd_enable_mpp",
+        "redis_cache_ttl_seconds",
         "watchdog_enabled",
         "watchdog_balance_check_interval_seconds",
         "database_lock_timeout_ms",
@@ -914,6 +1000,20 @@
         "protocol"
       ],
       "type": "string"
+    },
+    "RedisConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "maxmemory_mb": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxmemory_mb"
+      ],
+      "type": "object"
     },
     "StorageObservationContract": {
       "additionalProperties": false,

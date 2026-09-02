@@ -83,8 +83,85 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
         .collect::<BTreeMap<_, _>>();
 
     validate_links(lab, &ids, &kinds, &mut issues);
+    validate_authentication_topology(lab, &mut issues);
 
     ValidationReport::from_issues(issues)
+}
+
+fn validate_authentication_topology(lab: &LabSpec, issues: &mut Vec<ValidationIssue>) {
+    for (index, component) in lab.components.iter().enumerate() {
+        if component.implementation == "keycloak" {
+            let primary_databases = lab
+                .links
+                .iter()
+                .filter(|link| {
+                    link.from == component.id
+                        && link.kind == LinkKind::DatabaseBackend
+                        && matches!(
+                            link.binding,
+                            Some(DependencyBinding::Database {
+                                role: crate::DatabaseRole::Primary
+                            })
+                        )
+                })
+                .count();
+            if primary_databases != 1 {
+                issue(
+                    issues,
+                    "keycloak_primary_database_required",
+                    format!("/components/{index}"),
+                    "Keycloak requires exactly one primary PostgreSQL dependency",
+                );
+            }
+        }
+        if component.implementation != "nutshell" {
+            continue;
+        }
+        let authentication_links = lab
+            .links
+            .iter()
+            .filter(|link| {
+                link.from == component.id && link.kind == LinkKind::AuthenticationBackend
+            })
+            .count();
+        if authentication_links > 1 {
+            issue(
+                issues,
+                "duplicate_authentication_provider",
+                format!("/components/{index}"),
+                "Nutshell accepts at most one authentication provider",
+            );
+        }
+        if authentication_links == 0 {
+            continue;
+        }
+        if component
+            .config
+            .get("oidc_discovery_url")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|url| !url.is_empty())
+        {
+            issue(
+                issues,
+                "ambiguous_oidc_discovery",
+                format!("/components/{index}/config/oidc_discovery_url"),
+                "linked authentication derives the discovery URL; remove the authored URL",
+            );
+        }
+        if component
+            .config
+            .get("oidc_client_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|client| client != "cashu-client")
+        {
+            issue(
+                issues,
+                "linked_oidc_client_mismatch",
+                format!("/components/{index}/config/oidc_client_id"),
+                "the in-lab Keycloak contract uses the fixed public client cashu-client",
+            );
+        }
+    }
 }
 
 fn validate_links(
@@ -97,40 +174,7 @@ fn validate_links(
     for (index, link) in lab.links.iter().enumerate() {
         validate_link_identity(index, link, &mut link_ids, issues);
         validate_binding(index, link, issues);
-        if matches!(
-            link.binding,
-            Some(DependencyBinding::Database {
-                role: crate::DatabaseRole::Authentication
-            })
-        ) {
-            issue(
-                issues,
-                "unsupported_database_role",
-                format!("/links/{index}/binding/role"),
-                "authentication databases are reserved for a future CDK auth slice",
-            );
-        }
-        if matches!(
-            link.binding,
-            Some(DependencyBinding::Database {
-                role: crate::DatabaseRole::Primary
-            })
-        ) && lab.links[..index].iter().any(|candidate| {
-            candidate.from == link.from
-                && matches!(
-                    candidate.binding,
-                    Some(DependencyBinding::Database {
-                        role: crate::DatabaseRole::Primary
-                    })
-                )
-        }) {
-            issue(
-                issues,
-                "duplicate_primary_database",
-                format!("/links/{index}"),
-                "a component can bind exactly one primary database",
-            );
-        }
+        validate_database_role(index, link, &lab.links[..index], issues);
         if link.from == link.to {
             issue(
                 issues,
@@ -178,7 +222,11 @@ fn validate_links(
                         }
                 }
                 LinkKind::DatabaseBackend => {
-                    from == ComponentKind::Mint && to == ComponentKind::Database
+                    matches!(from, ComponentKind::Mint | ComponentKind::IdentityProvider)
+                        && to == ComponentKind::Database
+                }
+                LinkKind::AuthenticationBackend => {
+                    from == ComponentKind::Mint && to == ComponentKind::IdentityProvider
                 }
                 LinkKind::NetworkPath => true,
             };
@@ -194,13 +242,63 @@ fn validate_links(
     }
 }
 
+fn validate_database_role(
+    index: usize,
+    link: &LinkSpec,
+    previous: &[LinkSpec],
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(DependencyBinding::Database { role }) = link.binding else {
+        return;
+    };
+    if role == crate::DatabaseRole::Authentication {
+        issue(
+            issues,
+            "unsupported_database_role",
+            format!("/links/{index}/binding/role"),
+            "authentication databases are reserved for a future CDK auth slice",
+        );
+        return;
+    }
+    let duplicated = previous.iter().any(|candidate| {
+        candidate.from == link.from
+            && matches!(
+                candidate.binding,
+                Some(DependencyBinding::Database {
+                    role: candidate_role
+                }) if candidate_role == role
+            )
+    });
+    if duplicated {
+        let (code, message) = match role {
+            crate::DatabaseRole::Primary => (
+                "duplicate_primary_database",
+                "a component can bind exactly one primary database",
+            ),
+            crate::DatabaseRole::Cache => (
+                "duplicate_cache_database",
+                "a component can bind exactly one cache database",
+            ),
+            crate::DatabaseRole::Authentication => unreachable!(),
+        };
+        issue(issues, code, format!("/links/{index}"), message);
+    }
+}
+
 fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIssue>) {
     let path = format!("/links/{index}/binding");
     match (&link.kind, &link.binding) {
         (LinkKind::ChainBackend, Some(DependencyBinding::Chain { .. }))
         | (LinkKind::PaymentBackend, Some(DependencyBinding::Payment { .. }))
-        | (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { .. })) => {}
-        (LinkKind::ChainBackend | LinkKind::PaymentBackend | LinkKind::DatabaseBackend, None) => {
+        | (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { .. }))
+        | (LinkKind::AuthenticationBackend, Some(DependencyBinding::Authentication { .. })) => {}
+        (
+            LinkKind::ChainBackend
+            | LinkKind::PaymentBackend
+            | LinkKind::DatabaseBackend
+            | LinkKind::AuthenticationBackend,
+            None,
+        ) => {
             issue(
                 issues,
                 "missing_dependency_binding",
@@ -209,7 +307,10 @@ fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIs
             );
         }
         (
-            LinkKind::ChainBackend | LinkKind::PaymentBackend | LinkKind::DatabaseBackend,
+            LinkKind::ChainBackend
+            | LinkKind::PaymentBackend
+            | LinkKind::DatabaseBackend
+            | LinkKind::AuthenticationBackend,
             Some(_),
         ) => issue(
             issues,
@@ -553,6 +654,66 @@ mod tests {
                 issue.code == "incompatible_link_kinds" && issue.path == "/links/1"
             })
         );
+    }
+
+    #[test]
+    fn keycloak_requires_primary_storage_and_linked_nutshell_refuses_oidc_overrides() {
+        let mut lab = valid_lab();
+        lab.components.extend([
+            ComponentSpec {
+                id: "identity-db".into(),
+                kind: ComponentKind::Database,
+                implementation: "postgresql".into(),
+                version: None,
+                config_version: "postgresql/17/v1".into(),
+                control: ControlClass::Laboratory,
+                config: BTreeMap::new(),
+            },
+            ComponentSpec {
+                id: "identity".into(),
+                kind: ComponentKind::IdentityProvider,
+                implementation: "keycloak".into(),
+                version: None,
+                config_version: "keycloak/25/v1".into(),
+                control: ControlClass::Laboratory,
+                config: BTreeMap::new(),
+            },
+        ]);
+        lab.components[2].implementation = "nutshell".into();
+        lab.components[2].config_version = "nutshell-mint/0.20/v1".into();
+        lab.components[2].config.insert(
+            "oidc_discovery_url".into(),
+            serde_json::json!("https://issuer.example/realm/.well-known/openid-configuration"),
+        );
+        lab.links.push(LinkSpec {
+            id: "mint-authentication".into(),
+            kind: LinkKind::AuthenticationBackend,
+            from: "target".into(),
+            to: "identity".into(),
+            binding: Some(DependencyBinding::Authentication {
+                protocol: crate::AuthenticationProtocol::Oidc,
+            }),
+        });
+        let report = validate_lab(&lab);
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "keycloak_primary_database_required" && issue.path == "/components/4"
+        }));
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "ambiguous_oidc_discovery"
+                && issue.path == "/components/2/config/oidc_discovery_url"
+        }));
+
+        lab.components[2].config.clear();
+        lab.links.push(LinkSpec {
+            id: "identity-database".into(),
+            kind: LinkKind::DatabaseBackend,
+            from: "identity".into(),
+            to: "identity-db".into(),
+            binding: Some(DependencyBinding::Database {
+                role: crate::DatabaseRole::Primary,
+            }),
+        });
+        assert_eq!(validate_lab(&lab), ValidationReport::from_issues(vec![]));
     }
 
     #[test]

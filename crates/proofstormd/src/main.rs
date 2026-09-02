@@ -1361,6 +1361,186 @@ async fn ensure_generated_nutshell_secret(
     Ok(())
 }
 
+async fn ensure_generated_redis_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in ["PROOFSTORM_SECRET_KIND", "REDIS_PASSWORD", "REDIS_URL"] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let kind = template
+        .string_data
+        .as_ref()
+        .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"));
+    if kind.map(String::as_str) != Some("redis-cache") {
+        return Err(Error::SecretContract(format!(
+            "Secret template {name:?} is not a Redis cache secret"
+        )));
+    }
+    let component = template
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get("proofstorm.dev/component"))
+        .ok_or_else(|| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has no component identity"
+            ))
+        })?;
+    let mut entropy = [0_u8; 32];
+    getrandom::fill(&mut entropy).map_err(|error| {
+        Error::SecretContract(format!(
+            "could not generate credentials for {name:?}: {error}"
+        ))
+    })?;
+    let password = entropy
+        .iter()
+        .fold(String::with_capacity(64), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+            encoded
+        });
+    let url = format!("redis://:{password}@{component}:6379/0");
+    let mut desired = template.clone();
+    desired.string_data.get_or_insert_default().extend([
+        ("REDIS_PASSWORD".into(), password),
+        ("REDIS_URL".into(), url),
+    ]);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the generated Keycloak secret is one atomic administrator, realm, client, and test-user bootstrap contract"
+)]
+async fn ensure_generated_keycloak_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in [
+            "PROOFSTORM_SECRET_KIND",
+            "KEYCLOAK_ADMIN_PASSWORD",
+            "OIDC_TEST_USERNAME",
+            "OIDC_TEST_PASSWORD",
+            "realm.json",
+        ] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let template_data = template.string_data.as_ref().ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no stringData"))
+    })?;
+    if template_data
+        .get("PROOFSTORM_SECRET_KIND")
+        .map(String::as_str)
+        != Some("keycloak-oidc")
+    {
+        return Err(Error::SecretContract(format!(
+            "Secret template {name:?} is not a Keycloak OIDC secret"
+        )));
+    }
+    let access_token_lifespan = template_data
+        .get("OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS")
+        .ok_or_else(|| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has no OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS"
+            ))
+        })?
+        .parse::<u64>()
+        .map_err(|error| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has an invalid OIDC token lifespan: {error}"
+            ))
+        })?;
+    let generate_password = || -> Result<String, Error> {
+        let mut entropy = [0_u8; 32];
+        getrandom::fill(&mut entropy).map_err(|error| {
+            Error::SecretContract(format!(
+                "could not generate credentials for {name:?}: {error}"
+            ))
+        })?;
+        Ok(entropy
+            .iter()
+            .fold(String::with_capacity(64), |mut encoded, byte| {
+                use std::fmt::Write as _;
+                write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+                encoded
+            }))
+    };
+    let administrator_password = generate_password()?;
+    let test_password = generate_password()?;
+    let test_username = "proofstorm-user";
+    let realm = serde_json::to_string_pretty(&serde_json::json!({
+        "realm": "proofstorm",
+        "enabled": true,
+        "sslRequired": "none",
+        "accessTokenLifespan": access_token_lifespan,
+        "clients": [{
+            "clientId": "cashu-client",
+            "protocol": "openid-connect",
+            "enabled": true,
+            "publicClient": true,
+            "standardFlowEnabled": true,
+            "directAccessGrantsEnabled": true,
+            "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "basic", "email"],
+            "optionalClientScopes": ["offline_access"],
+            "redirectUris": ["http://127.0.0.1:*", "http://localhost:*"],
+            "webOrigins": ["*"]
+        }],
+        "users": [{
+            "username": test_username,
+            "email": "proofstorm-user@example.invalid",
+            "firstName": "Proofstorm",
+            "lastName": "User",
+            "enabled": true,
+            "emailVerified": true,
+            "requiredActions": [],
+            "realmRoles": ["offline_access"],
+            "credentials": [{
+                "type": "password",
+                "value": test_password,
+                "temporary": false
+            }]
+        }]
+    }))
+    .map_err(|error| {
+        Error::SecretContract(format!("could not render realm for {name:?}: {error}"))
+    })?;
+    let mut desired = template.clone();
+    desired.string_data.get_or_insert_default().extend([
+        ("KEYCLOAK_ADMIN_PASSWORD".into(), administrator_password),
+        ("OIDC_TEST_USERNAME".into(), test_username.into()),
+        ("OIDC_TEST_PASSWORD".into(), test_password),
+        ("realm.json".into(), realm),
+    ]);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "one reconciliation pass visibly applies the complete bounded instance inventory"
@@ -1423,15 +1603,22 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     let client = context.client.clone();
     let secrets = Api::<Secret>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.secrets {
-        if resource
+        let secret_kind = resource
             .string_data
             .as_ref()
             .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
-            .is_some_and(|kind| kind == "nutshell-mint")
-        {
-            ensure_generated_nutshell_secret(&secrets, resource, &patch).await?;
-        } else {
-            ensure_generated_postgres_secret(&secrets, resource, &patch).await?;
+            .map(String::as_str);
+        match secret_kind {
+            Some("nutshell-mint") => {
+                ensure_generated_nutshell_secret(&secrets, resource, &patch).await?;
+            }
+            Some("redis-cache") => {
+                ensure_generated_redis_secret(&secrets, resource, &patch).await?;
+            }
+            Some("keycloak-oidc") => {
+                ensure_generated_keycloak_secret(&secrets, resource, &patch).await?;
+            }
+            _ => ensure_generated_postgres_secret(&secrets, resource, &patch).await?,
         }
     }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);

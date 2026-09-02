@@ -22,11 +22,11 @@ pub use backend::{
     ConfigFieldContract, ConfigRule, ConfigSettingClass, ConfigValueKind,
     CredentialObservationContract, EffectiveComponentConfig, ExecutionContextContract,
     ExecutionMountContract, ExecutionMountTemplateContract, ExecutionStorageSource,
-    ExecutionStorageTemplateSource, LinkedStateObservationContract, LndConfig, NutshellMintConfig,
-    OperationAdmissionContract, OperationClass, PostgresConfig, ProtocolProbeContract,
-    ProtocolProbePlan, ReadinessPrerequisite, StorageObservationContract,
-    StorageRequirementTemplate, TargetDescriptorContract, WorkloadControllerKind,
-    WorkloadObservationContract, default_backend_registry,
+    ExecutionStorageTemplateSource, KeycloakConfig, LinkedStateObservationContract, LndConfig,
+    NutshellMintConfig, OperationAdmissionContract, OperationClass, PostgresConfig,
+    ProtocolProbeContract, ProtocolProbePlan, ReadinessPrerequisite, RedisConfig,
+    StorageObservationContract, StorageRequirementTemplate, TargetDescriptorContract,
+    WorkloadControllerKind, WorkloadObservationContract, default_backend_registry,
 };
 pub use catalog::{
     AuthenticationMode, CatalogDependencySupport, CatalogEntry, CatalogFeature,
@@ -48,9 +48,9 @@ pub use instance::{
     LabInstanceStatus, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, TeardownReceipt,
 };
 pub use model::{
-    API_VERSION, BitcoinNetwork, Capability, ComponentKind, ComponentSpec, ControlClass,
-    DatabaseRole, DependencyBinding, LabLimits, LabPolicy, LabSpec, LinkKind, LinkSpec,
-    PaymentMethod, ValidateLabRequest,
+    API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, ComponentKind, ComponentSpec,
+    ControlClass, DatabaseRole, DependencyBinding, LabLimits, LabPolicy, LabSpec, LinkKind,
+    LinkSpec, PaymentMethod, ValidateLabRequest,
 };
 pub use mutation::{DraftMutation, apply_draft_mutation};
 pub use network::{

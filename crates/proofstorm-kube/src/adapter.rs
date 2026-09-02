@@ -11,12 +11,13 @@ use k8s_openapi::api::{
     networking::v1::NetworkPolicy,
 };
 use proofstorm_core::{
-    CdkMintConfig, ComponentCondition, ComponentConditionReason, ComponentConditionState,
-    ComponentConditionType, ComponentKind, ComponentPlanContract, ComponentPlanInput,
-    ComponentSpec, ComponentStatus, CredentialObservationContract, DatabaseRole, DependencyBinding,
-    EffectiveComponentConfig, ExecutionStorageSource, InventoryEntry, LabSpec, LinkKind,
+    AuthenticationProtocol, CdkMintConfig, ComponentCondition, ComponentConditionReason,
+    ComponentConditionState, ComponentConditionType, ComponentKind, ComponentPlanContract,
+    ComponentPlanInput, ComponentSpec, ComponentStatus, CredentialObservationContract,
+    DatabaseRole, DependencyBinding, EffectiveComponentConfig, ExecutionMountContract,
+    ExecutionStorageSource, InventoryEntry, KeycloakConfig, LabSpec, LinkKind,
     LinkedStateObservationContract, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES,
-    NutshellMintConfig, ProtocolProbePlan, ResolvedLock, TargetDescriptorContract,
+    NutshellMintConfig, ProtocolProbePlan, RedisConfig, ResolvedLock, TargetDescriptorContract,
     WorkloadControllerKind, default_backend_registry,
 };
 use serde::de::DeserializeOwned;
@@ -53,10 +54,12 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("cdk-ldk", render_cdk_component),
             ("cdk-bdk", render_cdk_component),
             ("cln", render_cln_component),
+            ("keycloak", render_keycloak_component),
             ("lnd", render_lnd_component),
             ("nutshell", render_nutshell_mint_component),
             ("nutshell-wallet", render_wallet_component),
             ("postgresql", render_postgres_component),
+            ("redis", render_redis_component),
         ])
     });
 
@@ -1327,6 +1330,158 @@ fn postgres_secret_name(component: &str) -> String {
     format!("{component}-credentials")
 }
 
+/// Render a disposable Keycloak OIDC provider backed by linked `PostgreSQL`.
+///
+/// # Errors
+///
+/// Returns an error when the plan is not the pinned Keycloak backend, lacks
+/// its typed configuration, or does not resolve exactly one primary `PostgreSQL`
+/// dependency.
+pub fn render_keycloak_component(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
+    require_plan_backend(plan, "keycloak", ComponentKind::IdentityProvider)?;
+    let EffectiveComponentConfig::Keycloak(KeycloakConfig {
+        access_token_lifespan_seconds,
+    }) = &plan.effective_config
+    else {
+        return Err(AdapterError::InvalidPlan(
+            "Keycloak plan does not carry Keycloak configuration".into(),
+        ));
+    };
+    let database = plan_linked_target(plan, LinkKind::DatabaseBackend)?;
+    let database_link = plan
+        .relevant_links
+        .iter()
+        .find(|link| link.kind == LinkKind::DatabaseBackend && link.from == plan.component_id)
+        .ok_or_else(|| AdapterError::MissingLink {
+            component: plan.component_id.clone(),
+            link: LinkKind::DatabaseBackend,
+        })?;
+    if !matches!(
+        database_link.binding,
+        Some(DependencyBinding::Database {
+            role: DatabaseRole::Primary
+        })
+    ) || database.backend_id != "postgresql"
+        || database.kind != ComponentKind::Database
+    {
+        return Err(AdapterError::InvalidPlan(format!(
+            "Keycloak component {:?} requires one primary PostgreSQL binding",
+            plan.component_id
+        )));
+    }
+    let database_port = target_port(database, "postgres")?;
+    let database_secret = postgres_secret_name(&database.component_id);
+    let http_port = target_port(&plan.target_descriptor, "http")?;
+    let namespace = instance_namespace(&plan.instance_key);
+    let secret_name = format!("{}-credentials", plan.component_id);
+    let labels = labels(&plan.instance_key, Some(&plan.component_id));
+    let mut rendered = RenderedComponent::default();
+    rendered.secrets.push(resource(json!({
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": metadata(&secret_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
+        "type": "Opaque",
+        "stringData": {
+            "PROOFSTORM_SECRET_KIND": "keycloak-oidc",
+            "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS": access_token_lifespan_seconds.to_string()
+        }
+    }))?);
+    rendered.services.push(resource(service_from_plan(plan))?);
+    rendered.deployments.push(resource(json!({
+        "apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": plan_workload_metadata(plan),
+        "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
+            "metadata": plan_pod_metadata(plan, &labels), "spec": {
+                "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                    "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
+                    "args": ["start-dev", "--import-realm"],
+                    "env": [
+                        {"name": "KC_DB", "value": "postgres"},
+                        {"name": "KC_DB_URL_HOST", "value": database.component_id},
+                        {"name": "KC_DB_URL_PORT", "value": database_port.to_string()},
+                        {"name": "KC_DB_URL_DATABASE", "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "POSTGRES_DB"}}},
+                        {"name": "KC_DB_USERNAME", "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "POSTGRES_USER"}}},
+                        {"name": "KC_DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "POSTGRES_PASSWORD"}}},
+                        {"name": "KC_HOSTNAME", "value": format!("http://{}:{http_port}", plan.component_id)},
+                        {"name": "KC_HOSTNAME_STRICT", "value": "false"},
+                        {"name": "KC_HTTP_ENABLED", "value": "true"},
+                        {"name": "KC_HEALTH_ENABLED", "value": "true"},
+                        {"name": "JAVA_OPTS_KC_HEAP", "value": "-XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=45"},
+                        {"name": "KEYCLOAK_ADMIN", "value": "proofstorm-admin"},
+                        {"name": "KEYCLOAK_ADMIN_PASSWORD", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "KEYCLOAK_ADMIN_PASSWORD"}}}
+                    ],
+                    "ports": [{"name": "http", "containerPort": http_port}],
+                    "securityContext": container_security(),
+                    "readinessProbe": {"httpGet": {"path": "/realms/proofstorm/.well-known/openid-configuration", "port": http_port}, "periodSeconds": 3, "failureThreshold": 60},
+                    "volumeMounts": [{"name": "realm-import", "mountPath": "/opt/keycloak/data/import/realm.json", "subPath": "realm.json", "readOnly": true}]
+                }],
+                "volumes": [{"name": "realm-import", "secret": {"secretName": secret_name, "defaultMode": 288}}]
+            }
+        }}
+    }))?);
+    Ok(rendered)
+}
+
+/// Render an authenticated, ephemeral Redis service for non-authoritative
+/// application caching.
+///
+/// # Errors
+///
+/// Returns an error when the plan does not select the Redis backend or its
+/// typed configuration is absent.
+pub fn render_redis_component(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
+    require_plan_backend(plan, "redis", ComponentKind::Database)?;
+    let EffectiveComponentConfig::Redis(RedisConfig { maxmemory_mb }) = &plan.effective_config
+    else {
+        return Err(AdapterError::InvalidPlan(
+            "Redis plan does not carry Redis configuration".into(),
+        ));
+    };
+    let namespace = instance_namespace(&plan.instance_key);
+    let secret_name = redis_secret_name(&plan.component_id);
+    let labels = labels(&plan.instance_key, Some(&plan.component_id));
+    let redis_port = target_port(&plan.target_descriptor, "redis")?;
+    let mut rendered = RenderedComponent::default();
+    rendered.secrets.push(resource(json!({
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": metadata(&secret_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
+        "type": "Opaque",
+        "stringData": {"PROOFSTORM_SECRET_KIND": "redis-cache"}
+    }))?);
+    rendered.services.push(resource(service_from_plan(plan))?);
+    rendered.deployments.push(resource(json!({
+        "apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": plan_workload_metadata(plan),
+        "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
+            "metadata": plan_pod_metadata(plan, &labels), "spec": {
+                "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                    "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
+                    "command": ["sh", "-c"],
+                    "args": [format!("exec redis-server --bind 0.0.0.0 --protected-mode yes --port {redis_port} --save '' --appendonly no --requirepass \"$REDIS_PASSWORD\" --maxmemory {maxmemory_mb}mb --maxmemory-policy allkeys-lru")],
+                    "env": [{"name": "REDIS_PASSWORD", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "REDIS_PASSWORD"}}}],
+                    "ports": [{"name": "redis", "containerPort": redis_port}],
+                    "securityContext": container_security(),
+                    "readinessProbe": {
+                        "exec": {"command": ["sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -qx PONG"]},
+                        "periodSeconds": 3,
+                        "failureThreshold": 40
+                    }
+                }]
+            }
+        }}
+    }))?);
+    Ok(rendered)
+}
+
+fn redis_secret_name(component: &str) -> String {
+    format!("{component}-credentials")
+}
+
 /// Render Bitcoin Core resources from a compiled plan without cluster I/O.
 ///
 /// # Errors
@@ -1471,6 +1626,9 @@ pub fn render_cln_component(
         "--autoconnect-seeker-peers=0".to_owned(),
         "--bind-addr=0.0.0.0:9735".to_owned(),
         format!("--announce-addr={}:9735", plan.component_id),
+        "--clnrest-host=0.0.0.0".to_owned(),
+        "--clnrest-port=3010".to_owned(),
+        "--clnrest-protocol=http".to_owned(),
         format!("--bitcoin-rpcconnect={}", chain.component_id),
         format!("--bitcoin-rpcport={chain_rpc}"),
         format!("--bitcoin-rpcuser={RPC_USER}"),
@@ -1778,13 +1936,64 @@ fn primary_database_secret(plan: &ComponentPlanContract) -> Result<Option<String
     Ok(Some(postgres_secret_name(&target.component_id)))
 }
 
-/// Render a persistent Nutshell mint with an exact LND REST payment binding.
+fn cache_database_context(
+    plan: &ComponentPlanContract,
+) -> Result<Option<(String, String, u16)>, AdapterError> {
+    let cache = plan
+        .relevant_links
+        .iter()
+        .filter(|link| {
+            link.kind == LinkKind::DatabaseBackend
+                && link.from == plan.component_id
+                && matches!(
+                    link.binding,
+                    Some(DependencyBinding::Database {
+                        role: DatabaseRole::Cache
+                    })
+                )
+        })
+        .collect::<Vec<_>>();
+    let Some(link) = cache.first() else {
+        return Ok(None);
+    };
+    if cache.len() != 1 {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} has {} cache database bindings",
+            plan.component_id,
+            cache.len()
+        )));
+    }
+    let target = plan
+        .linked_targets
+        .get(&link.id)
+        .ok_or_else(|| AdapterError::MissingTarget {
+            component: plan.component_id.clone(),
+            target: link.to.clone(),
+        })?;
+    if target.backend_id != "redis" || target.kind != ComponentKind::Database {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} cache binding {:?} does not resolve to Redis",
+            plan.component_id, link.id
+        )));
+    }
+    Ok(Some((
+        redis_secret_name(&target.component_id),
+        target.component_id.clone(),
+        target_port(target, "redis")?,
+    )))
+}
+
+/// Render a persistent Nutshell mint with an exact Lightning REST binding.
 ///
 /// # Errors
 ///
 /// Returns an error when the plan does not select Nutshell 0.20, does not
-/// resolve exactly one LND payment backend, or selects an unsupported database
-/// binding.
+/// resolve exactly one supported Lightning REST backend, or selects an
+/// unsupported database binding.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exact-version renderer keeps topology-derived auth, payment, storage, and cache wiring together"
+)]
 pub fn render_nutshell_mint_component(
     plan: &ComponentPlanContract,
 ) -> Result<RenderedComponent, AdapterError> {
@@ -1795,29 +2004,28 @@ pub fn render_nutshell_mint_component(
         ));
     };
     let http_port = target_port(&plan.target_descriptor, "http")?;
-    let payment_mounts = plan
-        .execution_context
-        .mounts
-        .iter()
-        .filter(|mount| mount.name == "lnd")
-        .collect::<Vec<_>>();
-    let [payment_mount] = payment_mounts.as_slice() else {
-        return Err(AdapterError::InvalidPlan(format!(
-            "nutshell_simultaneous_payment_backends_not_supported: component {:?} requires exactly one compiled LND payment backend, found {}",
-            plan.component_id,
-            payment_mounts.len()
-        )));
-    };
-    let lightning = plan_execution_target(plan, &payment_mount.name)?;
-    let credential = plan_execution_credential(plan, &payment_mount.name)?;
-    if lightning.backend_id != "lnd" || credential.source_component_id != lightning.component_id {
-        return Err(AdapterError::InvalidPlan(format!(
-            "component {:?} compiled Nutshell payment target and credential identities disagree",
-            plan.component_id
-        )));
-    }
-    let lnd_rest_port = target_port(lightning, "rest")?;
+    let (payment_mount, lightning, credential, lightning_rest_port) =
+        nutshell_payment_context(plan)?;
     let database_secret = primary_database_secret(plan)?;
+    let cache = cache_database_context(plan)?;
+    let authentication = authentication_provider_context(plan)?;
+    let oidc_discovery_url = if let Some(authentication) = authentication {
+        if !config.oidc_discovery_url.is_empty() || config.oidc_client_id != "cashu-client" {
+            return Err(AdapterError::InvalidPlan(format!(
+                "Nutshell component {:?} cannot override OIDC discovery or client identity when linked to Keycloak",
+                plan.component_id
+            )));
+        }
+        Some(format!(
+            "http://{}:{}/realms/proofstorm/.well-known/openid-configuration",
+            authentication.component_id,
+            target_port(authentication, "http")?
+        ))
+    } else if config.oidc_discovery_url.is_empty() {
+        None
+    } else {
+        Some(config.oidc_discovery_url.clone())
+    };
     let namespace = instance_namespace(&plan.instance_key);
     let config_name = format!("{}-config", plan.component_id);
     let secret_name = format!("{}-credentials", plan.component_id);
@@ -1826,10 +2034,13 @@ pub fn render_nutshell_mint_component(
         &plan.component_id,
         http_port,
         lightning,
-        lnd_rest_port,
+        lightning_rest_port,
         payment_mount,
         config,
+        cache.is_some(),
+        oidc_discovery_url.as_deref(),
     );
+    environment.insert("MINT_AUTH_DATABASE".into(), "/app/data".into());
     if database_secret.is_none() {
         environment.insert("MINT_DATABASE".into(), "/app/data".into());
     }
@@ -1843,6 +2054,20 @@ pub fn render_nutshell_mint_component(
             "name": "MINT_DATABASE",
             "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "DATABASE_URL"}}
         }));
+    }
+    if let Some((cache_secret, _, _)) = &cache {
+        env.push(json!({
+            "name": "MINT_REDIS_CACHE_URL",
+            "valueFrom": {"secretKeyRef": {"name": cache_secret, "key": "REDIS_URL"}}
+        }));
+    }
+    let mut command_script = if lightning.backend_id == "cln" {
+        NUTSHELL_CLN_BOOTSTRAP.to_owned()
+    } else {
+        "from cashu.mint.main import main; main()".to_owned()
+    };
+    if authentication.is_some() {
+        command_script = format!("{NUTSHELL_AUTH_SCHEMA_COMPATIBILITY}\n{command_script}");
     }
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut rendered = RenderedComponent::default();
@@ -1863,7 +2088,7 @@ pub fn render_nutshell_mint_component(
         "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}}
     }))?);
     rendered.services.push(resource(service_from_plan(plan))?);
-    rendered.deployments.push(resource(json!({
+    let mut deployment = json!({
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": plan_workload_metadata(plan),
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
@@ -1871,7 +2096,7 @@ pub fn render_nutshell_mint_component(
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
                 "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
-                    "command": ["python3", "-c", "from cashu.mint.main import main; main()"],
+                    "command": ["python3", "-c", command_script],
                     "envFrom": [{"configMapRef": {"name": config_name}}],
                     "env": env,
                     "ports": [{"name": "http", "containerPort": http_port}],
@@ -1879,19 +2104,161 @@ pub fn render_nutshell_mint_component(
                     "readinessProbe": {"httpGet": {"path": "/v1/info", "port": http_port}, "periodSeconds": 3, "failureThreshold": 40},
                     "volumeMounts": [
                         {"name": "data", "mountPath": "/app/data"},
-                        {"name": "lnd", "mountPath": payment_mount.mount_path, "readOnly": true}
+                        {"name": payment_mount.name, "mountPath": payment_mount.mount_path, "readOnly": true}
                     ]
                 }], "volumes": [
                     {"name": "data", "persistentVolumeClaim": {"claimName": data_name}},
-                    {"name": "lnd", "persistentVolumeClaim": {"claimName": credential.claim_name}}
+                    {"name": payment_mount.name, "persistentVolumeClaim": {"claimName": credential.claim_name}}
                 ]
             }
         }}
-    }))?);
+    });
+    add_nutshell_cache_init_container(&mut deployment, cache);
+    add_nutshell_auth_init_container(&mut deployment, authentication);
+    rendered.deployments.push(resource(deployment)?);
     Ok(rendered)
 }
 
+fn add_nutshell_auth_init_container(
+    deployment: &mut Value,
+    authentication: Option<&TargetDescriptorContract>,
+) {
+    let Some(authentication) = authentication else {
+        return;
+    };
+    let Some(port) = authentication.ports.get("http") else {
+        return;
+    };
+    append_init_container(
+        deployment,
+        json!({
+            "name": "wait-for-oidc",
+            "image": PROBER_IMAGE,
+            "imagePullPolicy": "IfNotPresent",
+            "command": ["sh", "-c"],
+            "args": [format!(
+                "until wget -q -O /dev/null http://{}:{port}/realms/proofstorm/.well-known/openid-configuration; do sleep 1; done",
+                authentication.component_id
+            )],
+            "securityContext": container_security()
+        }),
+    );
+}
+
+fn add_nutshell_cache_init_container(deployment: &mut Value, cache: Option<(String, String, u16)>) {
+    let Some((_, cache_host, cache_port)) = cache else {
+        return;
+    };
+    append_init_container(
+        deployment,
+        json!({
+            "name": "wait-for-cache",
+            "image": PROBER_IMAGE,
+            "imagePullPolicy": "IfNotPresent",
+            "command": ["sh", "-c", format!("until nc -z {cache_host} {cache_port}; do sleep 1; done")],
+            "securityContext": container_security()
+        }),
+    );
+}
+
+fn append_init_container(deployment: &mut Value, container: Value) {
+    let init_containers = &mut deployment["spec"]["template"]["spec"]["initContainers"];
+    if init_containers.is_null() {
+        *init_containers = Value::Array(Vec::new());
+    }
+    init_containers
+        .as_array_mut()
+        .expect("deployment initContainers is an array")
+        .push(container);
+}
+
+fn authentication_provider_context(
+    plan: &ComponentPlanContract,
+) -> Result<Option<&TargetDescriptorContract>, AdapterError> {
+    let links = plan
+        .relevant_links
+        .iter()
+        .filter(|link| {
+            link.kind == LinkKind::AuthenticationBackend && link.from == plan.component_id
+        })
+        .collect::<Vec<_>>();
+    let Some(link) = links.first() else {
+        return Ok(None);
+    };
+    if links.len() != 1 {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} has {} authentication provider bindings",
+            plan.component_id,
+            links.len()
+        )));
+    }
+    if !matches!(
+        link.binding,
+        Some(DependencyBinding::Authentication {
+            protocol: AuthenticationProtocol::Oidc
+        })
+    ) {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} authentication binding {:?} is not OIDC",
+            plan.component_id, link.id
+        )));
+    }
+    let target = plan
+        .linked_targets
+        .get(&link.id)
+        .ok_or_else(|| AdapterError::MissingTarget {
+            component: plan.component_id.clone(),
+            target: link.to.clone(),
+        })?;
+    if target.backend_id != "keycloak" || target.kind != ComponentKind::IdentityProvider {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} authentication binding {:?} does not resolve to Keycloak",
+            plan.component_id, link.id
+        )));
+    }
+    Ok(Some(target))
+}
+
+fn nutshell_payment_context(
+    plan: &ComponentPlanContract,
+) -> Result<
+    (
+        &ExecutionMountContract,
+        &TargetDescriptorContract,
+        &CredentialObservationContract,
+        u16,
+    ),
+    AdapterError,
+> {
+    let payment_mounts = plan
+        .execution_context
+        .mounts
+        .iter()
+        .filter(|mount| matches!(mount.name.as_str(), "cln" | "lnd"))
+        .collect::<Vec<_>>();
+    let [payment_mount] = payment_mounts.as_slice() else {
+        return Err(AdapterError::InvalidPlan(format!(
+            "nutshell_simultaneous_payment_backends_not_supported: component {:?} requires exactly one compiled Lightning REST payment backend, found {}",
+            plan.component_id,
+            payment_mounts.len()
+        )));
+    };
+    let lightning = plan_execution_target(plan, &payment_mount.name)?;
+    let credential = plan_execution_credential(plan, &payment_mount.name)?;
+    if lightning.backend_id != payment_mount.name
+        || credential.source_component_id != lightning.component_id
+    {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} compiled Nutshell payment target and credential identities disagree",
+            plan.component_id
+        )));
+    }
+    let lightning_rest_port = target_port(lightning, "rest")?;
+    Ok((payment_mount, lightning, credential, lightning_rest_port))
+}
+
 #[allow(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "the exact-version environment renderer keeps the complete supported Nutshell setting projection auditable"
 )]
@@ -1899,9 +2266,11 @@ fn nutshell_mint_environment(
     component: &str,
     http_port: u16,
     lightning: &TargetDescriptorContract,
-    lnd_rest_port: u16,
+    lightning_rest_port: u16,
     payment_mount: &proofstorm_core::ExecutionMountContract,
     config: &NutshellMintConfig,
+    redis_cache_enabled: bool,
+    oidc_discovery_url: Option<&str>,
 ) -> BTreeMap<String, String> {
     let bool_string = |value: bool| if value { "TRUE" } else { "FALSE" }.to_owned();
     let mut contacts = Vec::<Vec<&str>>::new();
@@ -1911,7 +2280,7 @@ fn nutshell_mint_environment(
     if !config.contact_nostr_public_key.is_empty() {
         contacts.push(vec!["nostr", config.contact_nostr_public_key.as_str()]);
     }
-    BTreeMap::from([
+    let mut environment = BTreeMap::from([
         ("CASHU_DIR".into(), "/app/data".into()),
         (
             "LIGHTNING_FEE_PERCENT".into(),
@@ -1925,7 +2294,6 @@ fn nutshell_mint_environment(
             "MELT_QUOTE_TTL".into(),
             config.melt_quote_ttl_seconds.to_string(),
         ),
-        ("MINT_BACKEND_BOLT11_SAT".into(), "LndRestWallet".into()),
         (
             "MINT_BOLT11_DISABLE_MELT".into(),
             bool_string(config.disable_melt),
@@ -1933,6 +2301,14 @@ fn nutshell_mint_environment(
         (
             "MINT_BOLT11_DISABLE_MINT".into(),
             bool_string(config.disable_mint),
+        ),
+        (
+            "MINT_AUTH_MAX_BLIND_TOKENS".into(),
+            config.auth_max_blind_tokens.to_string(),
+        ),
+        (
+            "MINT_AUTH_RATE_LIMIT_PER_MINUTE".into(),
+            config.auth_rate_limit_per_minute.to_string(),
         ),
         (
             "MINT_DATABASE_LOCK_TIMEOUT".into(),
@@ -1967,26 +2343,6 @@ fn nutshell_mint_environment(
         ),
         ("MINT_LISTEN_HOST".into(), "0.0.0.0".into()),
         ("MINT_LISTEN_PORT".into(), http_port.to_string()),
-        (
-            "MINT_LND_ENABLE_MPP".into(),
-            bool_string(config.lnd_enable_mpp),
-        ),
-        (
-            "MINT_LND_REST_CERT".into(),
-            format!("{}/tls.cert", payment_mount.mount_path),
-        ),
-        ("MINT_LND_REST_CERT_VERIFY".into(), "TRUE".into()),
-        (
-            "MINT_LND_REST_ENDPOINT".into(),
-            format!("https://{}:{lnd_rest_port}", lightning.component_id),
-        ),
-        (
-            "MINT_LND_REST_MACAROON".into(),
-            format!(
-                "{}/data/chain/bitcoin/regtest/admin.macaroon",
-                payment_mount.mount_path
-            ),
-        ),
         (
             "MINT_MAX_BALANCE".into(),
             config.max_balance_sat.to_string(),
@@ -2024,12 +2380,23 @@ fn nutshell_mint_environment(
             "MINT_RATE_LIMIT_PROXY_TRUST".into(),
             bool_string(config.rate_limit_proxy_trust),
         ),
-        ("MINT_REDIS_CACHE_ENABLED".into(), "FALSE".into()),
+        ("MINT_REDIS_CACHE_CLUSTER".into(), "FALSE".into()),
+        (
+            "MINT_REDIS_CACHE_ENABLED".into(),
+            bool_string(redis_cache_enabled),
+        ),
+        (
+            "MINT_REDIS_CACHE_TTL".into(),
+            config.redis_cache_ttl_seconds.to_string(),
+        ),
         (
             "MINT_REGULAR_TASKS_INTERVAL_SECONDS".into(),
             config.regular_tasks_interval_seconds.to_string(),
         ),
-        ("MINT_REQUIRE_AUTH".into(), "FALSE".into()),
+        (
+            "MINT_REQUIRE_AUTH".into(),
+            bool_string(oidc_discovery_url.is_some()),
+        ),
         ("MINT_RPC_SERVER_ENABLE".into(), "FALSE".into()),
         (
             "MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE".into(),
@@ -2048,8 +2415,160 @@ fn nutshell_mint_environment(
             config.websocket_read_timeout_seconds.to_string(),
         ),
         ("TOR".into(), "FALSE".into()),
-    ])
+    ]);
+    if let Some(oidc_discovery_url) = oidc_discovery_url {
+        // Nutshell 0.20.2 spells these upstream environment variables `OICD`.
+        // Keep Proofstorm's authoring fields correctly named and translate only
+        // at this exact-version adapter boundary.
+        environment.extend([
+            (
+                "MINT_AUTH_OICD_CLIENT_ID".into(),
+                config.oidc_client_id.clone(),
+            ),
+            (
+                "MINT_AUTH_OICD_DISCOVERY_URL".into(),
+                oidc_discovery_url.into(),
+            ),
+        ]);
+    }
+    if lightning.backend_id == "cln" {
+        environment.extend([
+            ("MINT_BACKEND_BOLT11_SAT".into(), "CLNRestWallet".into()),
+            (
+                "MINT_CLNREST_ENABLE_MPP".into(),
+                bool_string(config.clnrest_enable_mpp),
+            ),
+            (
+                "MINT_CLNREST_RUNE".into(),
+                "/app/data/.proofstorm/cln.rune".into(),
+            ),
+            (
+                "MINT_CLNREST_URL".into(),
+                format!("http://{}:{lightning_rest_port}", lightning.component_id),
+            ),
+        ]);
+    } else {
+        environment.extend([
+            ("MINT_BACKEND_BOLT11_SAT".into(), "LndRestWallet".into()),
+            (
+                "MINT_LND_ENABLE_MPP".into(),
+                bool_string(config.lnd_enable_mpp),
+            ),
+            (
+                "MINT_LND_REST_CERT".into(),
+                format!("{}/tls.cert", payment_mount.mount_path),
+            ),
+            ("MINT_LND_REST_CERT_VERIFY".into(), "TRUE".into()),
+            (
+                "MINT_LND_REST_ENDPOINT".into(),
+                format!("https://{}:{lightning_rest_port}", lightning.component_id),
+            ),
+            (
+                "MINT_LND_REST_MACAROON".into(),
+                format!(
+                    "{}/data/chain/bitcoin/regtest/admin.macaroon",
+                    payment_mount.mount_path
+                ),
+            ),
+        ]);
+    }
+    environment
 }
+
+// Nutshell 0.20.2's auth migrations create the pre-0.20 `promises` shape,
+// while its AuthLedger is wired to the current LedgerCrudSqlite write path.
+// Register one additional auth migration before importing the ASGI app so the
+// private auth database can persist BAT issuance and replay state correctly.
+const NUTSHELL_AUTH_SCHEMA_COMPATIBILITY: &str = r#"from cashu.mint.auth import migrations as proofstorm_auth_migrations
+
+async def m004_proofstorm_current_promises_schema(db):
+    async with db.connect() as conn:
+        promises = db.table_with_schema("promises")
+        legacy = db.table_with_schema("promises_proofstorm_legacy")
+        await conn.execute(f"ALTER TABLE {promises} RENAME TO promises_proofstorm_legacy")
+        await conn.execute(f"""
+            CREATE TABLE {promises} (
+                id TEXT NOT NULL,
+                amount {db.big_int} NOT NULL,
+                b_ TEXT NOT NULL,
+                c_ TEXT,
+                dleq_e TEXT,
+                dleq_s TEXT,
+                created TIMESTAMP,
+                signed_at TIMESTAMP,
+                mint_quote TEXT,
+                melt_quote TEXT,
+                swap_id TEXT,
+                order_index INTEGER DEFAULT 0,
+                UNIQUE (b_)
+            )
+        """)
+        await conn.execute(f"""
+            INSERT INTO {promises} (id, amount, b_, c_, dleq_e, dleq_s, created)
+            SELECT id, amount, b_, c_, dleq_e, dleq_s, created FROM {legacy}
+        """)
+        await conn.execute(f"DROP TABLE {legacy}")
+
+proofstorm_auth_migrations.m004_proofstorm_current_promises_schema = m004_proofstorm_current_promises_schema
+"#;
+
+const NUTSHELL_CLN_BOOTSTRAP: &str = r#"import json
+import os
+import socket
+import time
+
+socket_path = "/cln/regtest/lightning-rpc"
+rune_directory = "/app/data/.proofstorm"
+rune_path = f"{rune_directory}/cln.rune"
+if not os.path.exists(rune_path) or os.path.getsize(rune_path) == 0:
+    os.makedirs(rune_directory, mode=0o700, exist_ok=True)
+    for attempt in range(180):
+        try:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(10)
+            connection.connect(socket_path)
+            break
+        except OSError:
+            connection.close()
+            if attempt == 179:
+                raise
+            time.sleep(1)
+    request = {
+        "jsonrpc": "2.0",
+        "id": "proofstorm-nutshell",
+        "method": "createrune",
+        "params": {
+            "restrictions": [[
+                "method=listfunds",
+                "method=invoice",
+                "method=pay",
+                "method=listinvoices",
+                "method=listpays",
+                "method=waitanyinvoice",
+            ]]
+        },
+    }
+    connection.sendall(json.dumps(request, separators=(",", ":")).encode() + b"\n\n")
+    response = b""
+    while b"\n\n" not in response:
+        chunk = connection.recv(65536)
+        if not chunk:
+            raise RuntimeError("Core Lightning closed the rune request")
+        response += chunk
+    connection.close()
+    result = json.loads(response.split(b"\n\n", 1)[0])
+    if "error" in result:
+        raise RuntimeError(f"Core Lightning rune creation failed: {result['error']}")
+    rune = result["result"]["rune"]
+    temporary_path = f"{rune_path}.tmp"
+    descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as rune_file:
+        rune_file.write(rune)
+    os.replace(temporary_path, rune_path)
+
+from cashu.mint.main import main
+main()
+"#;
 
 /// Render a disposable attacker workspace from a compiled plan without
 /// cluster I/O.
@@ -2598,6 +3117,7 @@ pub fn component_ports(component: &ComponentSpec) -> BTreeMap<String, u16> {
             ("rpc".into(), 10_009),
         ]),
         ComponentKind::Mint => BTreeMap::from([("http".into(), 3_338)]),
+        ComponentKind::IdentityProvider => BTreeMap::from([("http".into(), 8_080)]),
         _ => BTreeMap::new(),
     }
 }

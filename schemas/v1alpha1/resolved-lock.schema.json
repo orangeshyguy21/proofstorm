@@ -36,6 +36,8 @@
         "blind_auth",
         "sqlite",
         "postgres",
+        "redis_cache",
+        "oidc_provider",
         "wallet_operations"
       ],
       "type": "string"
@@ -47,6 +49,7 @@
         "chain_backend",
         "payment_backend",
         "database_backend",
+        "authentication_backend",
         "network_path"
       ],
       "type": "string"

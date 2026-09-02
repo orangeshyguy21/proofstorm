@@ -1,16 +1,17 @@
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use proofstorm_core::{
-    API_VERSION, BitcoinNetwork, Capability, ComponentKind, ComponentSpec, ControlClass,
-    DatabaseRole, DependencyBinding, LabPolicy, LabSpec, LinkKind, LinkSpec, PaymentMethod,
-    default_backend_registry, default_catalog, resolve_lock,
+    API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, ComponentKind, ComponentSpec,
+    ControlClass, DatabaseRole, DependencyBinding, LabPolicy, LabSpec, LinkKind, LinkSpec,
+    PaymentMethod, default_backend_registry, default_catalog, resolve_lock,
 };
 use proofstorm_kube::{
     LabAction, NativeExecAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
     ProofstormLabSpec, RenderedComponent, compile_component_plans, render_attacker_component,
-    render_bitcoin_component, render_cdk_component, render_cln_component, render_lab,
-    render_lab_action_job, render_lnd_component, render_nutshell_mint_component,
-    render_postgres_component, render_security_spine, render_wallet_component,
+    render_bitcoin_component, render_cdk_component, render_cln_component,
+    render_keycloak_component, render_lab, render_lab_action_job, render_lnd_component,
+    render_nutshell_mint_component, render_postgres_component, render_redis_component,
+    render_security_spine, render_wallet_component,
 };
 use serde_json::{Value, json};
 
@@ -37,6 +38,8 @@ fn component(
             "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
             "nutshell" => "nutshell-mint/0.20/v1",
             "postgresql" => "postgresql/17/v1",
+            "redis" => "redis/8.10/v1",
+            "keycloak" => "keycloak/25/v1",
             "nutshell-wallet" => "nutshell-wallet/0.20/v1",
             "attacker-workspace" => "attacker-workspace/0.1/v1",
             _ => panic!("unknown test implementation {implementation:?}"),
@@ -90,6 +93,30 @@ fn database_link(from: &str, to: &str) -> LinkSpec {
         to: to.into(),
         binding: Some(DependencyBinding::Database {
             role: DatabaseRole::Primary,
+        }),
+    }
+}
+
+fn cache_link(from: &str, to: &str) -> LinkSpec {
+    LinkSpec {
+        id: format!("{from}-{to}-cache"),
+        kind: LinkKind::DatabaseBackend,
+        from: from.into(),
+        to: to.into(),
+        binding: Some(DependencyBinding::Database {
+            role: DatabaseRole::Cache,
+        }),
+    }
+}
+
+fn authentication_link(from: &str, to: &str) -> LinkSpec {
+    LinkSpec {
+        id: format!("{from}-{to}-authentication"),
+        kind: LinkKind::AuthenticationBackend,
+        from: from.into(),
+        to: to.into(),
+        binding: Some(DependencyBinding::Authentication {
+            protocol: AuthenticationProtocol::Oidc,
         }),
     }
 }
@@ -217,6 +244,40 @@ fn backend_lab(backend_id: &str) -> (LabSpec, &'static str) {
             ),
             "database",
         ),
+        "redis" => (
+            lab(
+                "golden-redis",
+                vec![component(
+                    "cache",
+                    ComponentKind::Database,
+                    "redis",
+                    ControlClass::Laboratory,
+                )],
+                vec![],
+            ),
+            "cache",
+        ),
+        "keycloak" => (
+            lab(
+                "golden-keycloak",
+                vec![
+                    component(
+                        "database",
+                        ComponentKind::Database,
+                        "postgresql",
+                        ControlClass::Laboratory,
+                    ),
+                    component(
+                        "identity",
+                        ComponentKind::IdentityProvider,
+                        "keycloak",
+                        ControlClass::Laboratory,
+                    ),
+                ],
+                vec![database_link("identity", "database")],
+            ),
+            "identity",
+        ),
         "attacker-workspace" => (
             lab(
                 "golden-attacker",
@@ -289,6 +350,8 @@ fn render_backend(backend_id: &str) -> Value {
         "nutshell" => render_nutshell_mint_component(plan),
         "nutshell-wallet" => render_wallet_component(plan),
         "postgresql" => render_postgres_component(plan),
+        "redis" => render_redis_component(plan),
+        "keycloak" => render_keycloak_component(plan),
         "attacker-workspace" => render_attacker_component(plan),
         _ => panic!("uncharacterized backend {backend_id}"),
     }
@@ -437,6 +500,36 @@ fn cdk_cln_lab() -> LabSpec {
     )
 }
 
+fn nutshell_cln_lab() -> LabSpec {
+    lab(
+        "golden-nutshell-cln",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "mint-cln",
+                ComponentKind::Lightning,
+                "cln",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "mint",
+                ComponentKind::Mint,
+                "nutshell",
+                ControlClass::Target,
+            ),
+        ],
+        vec![
+            chain_link("mint-cln", "chain"),
+            lightning_link("mint", "mint-cln"),
+        ],
+    )
+}
+
 #[test]
 fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
     let spec = lab(
@@ -559,6 +652,7 @@ fn nutshell_postgres_binding_keeps_database_and_mint_secrets_out_of_public_confi
         .expect("Nutshell public configuration");
     assert!(!public_config.contains_key("MINT_DATABASE"));
     assert!(!public_config.contains_key("MINT_PRIVATE_KEY"));
+    assert_eq!(public_config["MINT_AUTH_DATABASE"], "/app/data");
     let mint_secret = rendered
         .secrets
         .iter()
@@ -590,10 +684,321 @@ fn nutshell_postgres_binding_keeps_database_and_mint_secrets_out_of_public_confi
             && entry["valueFrom"]["secretKeyRef"]["name"] == "database-credentials"
             && entry["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_URL"
     }));
+    assert!(
+        !env.iter()
+            .any(|entry| entry["name"] == "MINT_AUTH_DATABASE")
+    );
     assert!(env.iter().any(|entry| {
         entry["name"] == "MINT_PRIVATE_KEY"
             && entry["valueFrom"]["secretKeyRef"]["name"] == "mint-credentials"
     }));
+}
+
+#[test]
+fn nutshell_oidc_auth_projects_exact_upstream_contract_and_persistent_auth_ledger() {
+    let mut mint = component(
+        "mint",
+        ComponentKind::Mint,
+        "nutshell",
+        ControlClass::Target,
+    );
+    mint.config.insert(
+        "oidc_discovery_url".into(),
+        json!("http://identity:8080/realms/proofstorm/.well-known/openid-configuration"),
+    );
+    mint.config
+        .insert("oidc_client_id".into(), json!("proofstorm-wallet"));
+    mint.config
+        .insert("auth_rate_limit_per_minute".into(), json!(7));
+    mint.config
+        .insert("auth_max_blind_tokens".into(), json!(64));
+    let spec = lab(
+        "golden-nutshell-oidc",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "lightning",
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Laboratory,
+            ),
+            mint,
+        ],
+        vec![
+            chain_link("lightning", "chain"),
+            lightning_link("mint", "lightning"),
+        ],
+    );
+    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell OIDC lock");
+    let rendered =
+        render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell OIDC render");
+    let public_config = rendered
+        .config_maps
+        .iter()
+        .find(|config| config.metadata.name.as_deref() == Some("mint-config"))
+        .and_then(|config| config.data.as_ref())
+        .expect("Nutshell public configuration");
+    assert_eq!(public_config["MINT_REQUIRE_AUTH"], "TRUE");
+    assert_eq!(
+        public_config["MINT_AUTH_OICD_DISCOVERY_URL"],
+        "http://identity:8080/realms/proofstorm/.well-known/openid-configuration"
+    );
+    assert_eq!(
+        public_config["MINT_AUTH_OICD_CLIENT_ID"],
+        "proofstorm-wallet"
+    );
+    assert_eq!(public_config["MINT_AUTH_RATE_LIMIT_PER_MINUTE"], "7");
+    assert_eq!(public_config["MINT_AUTH_MAX_BLIND_TOKENS"], "64");
+    assert_eq!(public_config["MINT_AUTH_DATABASE"], "/app/data");
+    assert_golden(
+        "nutshell-oidc-lab",
+        &json!({
+            "plans": &rendered.plans,
+            "resources": {
+                "configMaps": &rendered.config_maps,
+                "secrets": &rendered.secrets,
+                "services": &rendered.services,
+                "statefulSets": &rendered.stateful_sets,
+                "deployments": &rendered.deployments,
+                "persistentVolumeClaims": &rendered.persistent_volume_claims,
+                "networkPolicies": &rendered.network_policies,
+            }
+        }),
+    );
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the OIDC golden keeps provider topology, secret boundaries, and mint projection in one contract"
+)]
+fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_private() {
+    let spec = lab(
+        "golden-nutshell-keycloak",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "lightning",
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "identity-db",
+                ComponentKind::Database,
+                "postgresql",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "identity",
+                ComponentKind::IdentityProvider,
+                "keycloak",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "mint",
+                ComponentKind::Mint,
+                "nutshell",
+                ControlClass::Target,
+            ),
+        ],
+        vec![
+            chain_link("lightning", "chain"),
+            lightning_link("mint", "lightning"),
+            database_link("identity", "identity-db"),
+            authentication_link("mint", "identity"),
+        ],
+    );
+    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell Keycloak lock");
+    let rendered =
+        render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Keycloak render");
+    let mint_config = rendered
+        .config_maps
+        .iter()
+        .find(|config| config.metadata.name.as_deref() == Some("mint-config"))
+        .and_then(|config| config.data.as_ref())
+        .expect("Nutshell public configuration");
+    assert_eq!(mint_config["MINT_REQUIRE_AUTH"], "TRUE");
+    assert_eq!(mint_config["MINT_AUTH_DATABASE"], "/app/data");
+    assert_eq!(
+        mint_config["MINT_AUTH_OICD_DISCOVERY_URL"],
+        "http://identity:8080/realms/proofstorm/.well-known/openid-configuration"
+    );
+    let identity_secret = rendered
+        .secrets
+        .iter()
+        .find(|secret| secret.metadata.name.as_deref() == Some("identity-credentials"))
+        .expect("Keycloak generated secret template");
+    assert_eq!(
+        identity_secret.string_data.as_ref().unwrap(),
+        &BTreeMap::from([
+            ("OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS".into(), "300".into(),),
+            ("PROOFSTORM_SECRET_KIND".into(), "keycloak-oidc".into()),
+        ])
+    );
+    let identity = rendered
+        .deployments
+        .iter()
+        .find(|deployment| deployment.metadata.name.as_deref() == Some("identity"))
+        .map(serde_json::to_value)
+        .transpose()
+        .expect("Keycloak deployment JSON")
+        .expect("Keycloak deployment");
+    assert_eq!(
+        identity.pointer("/spec/template/spec/volumes/0/secret/secretName"),
+        Some(&json!("identity-credentials"))
+    );
+    let mint = rendered
+        .deployments
+        .iter()
+        .find(|deployment| deployment.metadata.name.as_deref() == Some("mint"))
+        .map(serde_json::to_value)
+        .transpose()
+        .expect("Nutshell deployment JSON")
+        .expect("Nutshell deployment");
+    assert_eq!(
+        mint.pointer("/spec/template/spec/initContainers/0/name"),
+        Some(&json!("wait-for-oidc"))
+    );
+    assert!(
+        mint.pointer("/spec/template/spec/containers/0/command/2")
+            .and_then(Value::as_str)
+            .is_some_and(|command| command.contains("m004_proofstorm_current_promises_schema"))
+    );
+    assert_golden(
+        "nutshell-keycloak-lab",
+        &json!({
+            "plans": &rendered.plans,
+            "resources": {
+                "configMaps": &rendered.config_maps,
+                "secrets": &rendered.secrets,
+                "services": &rendered.services,
+                "statefulSets": &rendered.stateful_sets,
+                "deployments": &rendered.deployments,
+                "persistentVolumeClaims": &rendered.persistent_volume_claims,
+                "networkPolicies": &rendered.network_policies,
+            }
+        }),
+    );
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the Redis golden contract keeps topology, public settings, and secret projections together"
+)]
+fn nutshell_redis_binding_is_private_typed_and_independent_of_primary_storage() {
+    let mut mint = component(
+        "mint",
+        ComponentKind::Mint,
+        "nutshell",
+        ControlClass::Target,
+    );
+    mint.config
+        .insert("redis_cache_ttl_seconds".into(), json!(900));
+    let spec = lab(
+        "golden-nutshell-redis",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "lightning",
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "database",
+                ComponentKind::Database,
+                "postgresql",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "cache",
+                ComponentKind::Database,
+                "redis",
+                ControlClass::Laboratory,
+            ),
+            mint,
+        ],
+        vec![
+            chain_link("lightning", "chain"),
+            lightning_link("mint", "lightning"),
+            database_link("mint", "database"),
+            cache_link("mint", "cache"),
+        ],
+    );
+    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell Redis lock");
+    let rendered =
+        render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Redis render");
+    let public_config = rendered
+        .config_maps
+        .iter()
+        .find(|config| config.metadata.name.as_deref() == Some("mint-config"))
+        .and_then(|config| config.data.as_ref())
+        .expect("Nutshell public configuration");
+    assert_eq!(public_config["MINT_REDIS_CACHE_ENABLED"], "TRUE");
+    assert_eq!(public_config["MINT_REDIS_CACHE_CLUSTER"], "FALSE");
+    assert_eq!(public_config["MINT_REDIS_CACHE_TTL"], "900");
+    assert!(!public_config.contains_key("MINT_REDIS_CACHE_URL"));
+    assert!(!public_config.contains_key("MINT_DATABASE"));
+    let cache_secret = rendered
+        .secrets
+        .iter()
+        .find(|secret| secret.metadata.name.as_deref() == Some("cache-credentials"))
+        .expect("Redis generated secret template");
+    assert_eq!(
+        cache_secret.string_data.as_ref().unwrap(),
+        &BTreeMap::from([("PROOFSTORM_SECRET_KIND".into(), "redis-cache".into())])
+    );
+    let deployment = rendered
+        .deployments
+        .iter()
+        .find(|deployment| deployment.metadata.name.as_deref() == Some("mint"))
+        .expect("Nutshell deployment");
+    let deployment = serde_json::to_value(deployment).expect("deployment JSON");
+    let env = deployment
+        .pointer("/spec/template/spec/containers/0/env")
+        .and_then(Value::as_array)
+        .expect("secret-backed environment");
+    assert!(env.iter().any(|entry| {
+        entry["name"] == "MINT_DATABASE"
+            && entry["valueFrom"]["secretKeyRef"]["name"] == "database-credentials"
+    }));
+    assert!(env.iter().any(|entry| {
+        entry["name"] == "MINT_REDIS_CACHE_URL"
+            && entry["valueFrom"]["secretKeyRef"]["name"] == "cache-credentials"
+            && entry["valueFrom"]["secretKeyRef"]["key"] == "REDIS_URL"
+    }));
+    assert_golden(
+        "nutshell-redis-lab",
+        &json!({
+            "plans": &rendered.plans,
+            "resources": {
+                "configMaps": &rendered.config_maps,
+                "secrets": &rendered.secrets,
+                "services": &rendered.services,
+                "statefulSets": &rendered.stateful_sets,
+                "deployments": &rendered.deployments,
+                "persistentVolumeClaims": &rendered.persistent_volume_claims,
+                "networkPolicies": &rendered.network_policies,
+            }
+        }),
+    );
 }
 
 fn golden_path(name: &str) -> PathBuf {
@@ -631,10 +1036,12 @@ fn every_registered_backend_matches_its_golden_contract() {
         "cdk-bdk",
         "cdk-ldk",
         "cln",
+        "keycloak",
         "lnd",
         "nutshell",
         "nutshell-wallet",
         "postgresql",
+        "redis",
     ];
     assert_eq!(
         default_backend_registry().ids().collect::<Vec<_>>(),
@@ -759,6 +1166,65 @@ fn cdk_cln_lab_matches_its_golden_contract() {
         render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("CDK+CLN full render");
     assert_golden(
         "cdk-cln-lab",
+        &json!({
+            "plans": &rendered.plans,
+            "inventory": rendered.inventory(),
+            "resources": {
+                "configMaps": &rendered.config_maps,
+                "services": &rendered.services,
+                "statefulSets": &rendered.stateful_sets,
+                "deployments": &rendered.deployments,
+                "persistentVolumeClaims": &rendered.persistent_volume_claims,
+                "networkPolicies": &rendered.network_policies,
+            },
+        }),
+    );
+}
+
+#[test]
+fn nutshell_cln_lab_uses_restricted_runtime_rune_contract() {
+    let spec = nutshell_cln_lab();
+    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell+CLN lock");
+    let rendered =
+        render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell+CLN full render");
+    let mint_config = rendered
+        .config_maps
+        .iter()
+        .find(|config| config.metadata.name.as_deref() == Some("mint-config"))
+        .and_then(|config| config.data.as_ref())
+        .expect("Nutshell+CLN configuration");
+    assert_eq!(mint_config["MINT_BACKEND_BOLT11_SAT"], "CLNRestWallet");
+    assert_eq!(mint_config["MINT_CLNREST_URL"], "http://mint-cln:3010");
+    assert_eq!(
+        mint_config["MINT_CLNREST_RUNE"],
+        "/app/data/.proofstorm/cln.rune"
+    );
+    assert!(!mint_config.contains_key("MINT_LND_REST_MACAROON"));
+    let mint = rendered
+        .deployments
+        .iter()
+        .find(|deployment| deployment.metadata.name.as_deref() == Some("mint"))
+        .expect("Nutshell deployment");
+    let mint = serde_json::to_value(mint).expect("Nutshell deployment JSON");
+    let command = mint
+        .pointer("/spec/template/spec/containers/0/command/2")
+        .and_then(Value::as_str)
+        .expect("Nutshell CLN bootstrap command");
+    for method in [
+        "listfunds",
+        "invoice",
+        "pay",
+        "listinvoices",
+        "listpays",
+        "waitanyinvoice",
+    ] {
+        assert!(command.contains(&format!("method={method}")));
+    }
+    for forbidden_method in ["createrune", "withdraw", "stop"] {
+        assert!(!command.contains(&format!("method={forbidden_method}")));
+    }
+    assert_golden(
+        "nutshell-cln-lab",
         &json!({
             "plans": &rendered.plans,
             "inventory": rendered.inventory(),

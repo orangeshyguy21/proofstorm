@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogResponse, DependencyBinding,
-    LabSpec, LinkKind, LinkSpec, default_backend_registry, validate_catalog_component,
+    CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogResponse, DatabaseRole,
+    DependencyBinding, LabSpec, LinkKind, LinkSpec, default_backend_registry,
+    validate_catalog_component,
 };
 
 pub const LOCK_API_VERSION: &str = "proofstorm/lock/v2alpha1";
@@ -107,16 +108,7 @@ pub fn resolve_lock(lab: &LabSpec, catalog: &CatalogResponse) -> Result<Resolved
             let relevant_links = effective
                 .links
                 .iter()
-                .filter(|link| {
-                    link.from == component.id
-                        && matches!(
-                            link.kind,
-                            LinkKind::ChainBackend
-                                | LinkKind::PaymentBackend
-                                | LinkKind::DatabaseBackend
-                                | LinkKind::NetworkPath
-                        )
-                })
+                .filter(|link| link.from == component.id && is_rollout_relevant_link(link.kind))
                 .collect::<Vec<_>>();
             let linked_target_contracts = relevant_links
                 .iter()
@@ -186,6 +178,17 @@ pub fn resolve_lock(lab: &LabSpec, catalog: &CatalogResponse) -> Result<Resolved
     })
 }
 
+fn is_rollout_relevant_link(kind: LinkKind) -> bool {
+    matches!(
+        kind,
+        LinkKind::ChainBackend
+            | LinkKind::PaymentBackend
+            | LinkKind::DatabaseBackend
+            | LinkKind::AuthenticationBackend
+            | LinkKind::NetworkPath
+    )
+}
+
 fn require_compatible_dependency(
     component_id: &str,
     entry: &CatalogEntry,
@@ -194,7 +197,10 @@ fn require_compatible_dependency(
 ) -> Result<(), String> {
     if matches!(
         link.kind,
-        LinkKind::ChainBackend | LinkKind::PaymentBackend | LinkKind::DatabaseBackend
+        LinkKind::ChainBackend
+            | LinkKind::PaymentBackend
+            | LinkKind::DatabaseBackend
+            | LinkKind::AuthenticationBackend
     ) && !entry.compatible_dependencies.iter().any(|support| {
         support.link_kind == link.kind
             && support.implementation == target.id
@@ -220,6 +226,42 @@ fn require_compatible_dependency(
         }) {
             return Err(format!(
                 "component {component_id:?} version {:?} binding {:?} does not support payment tuple method {method:?}, unit {unit:?}, backend {:?} version {:?}",
+                entry.version, link.id, target.id, target.version
+            ));
+        }
+    }
+    if link.kind == LinkKind::DatabaseBackend {
+        let Some(DependencyBinding::Database { role }) = link.binding else {
+            return Err(format!(
+                "component {component_id:?} binding {:?} lacks a typed database role",
+                link.id
+            ));
+        };
+        let supported = match role {
+            DatabaseRole::Primary => target.id == "postgresql",
+            DatabaseRole::Cache => entry.id == "nutshell" && target.id == "redis",
+            DatabaseRole::Authentication => false,
+        };
+        if !supported {
+            return Err(format!(
+                "component {component_id:?} version {:?} binding {:?} does not support database role {role:?} with backend {:?} version {:?}",
+                entry.version, link.id, target.id, target.version
+            ));
+        }
+    }
+    if link.kind == LinkKind::AuthenticationBackend {
+        let Some(crate::DependencyBinding::Authentication { protocol }) = link.binding else {
+            return Err(format!(
+                "component {component_id:?} binding {:?} lacks a typed authentication protocol",
+                link.id
+            ));
+        };
+        if entry.id != "nutshell"
+            || target.id != "keycloak"
+            || protocol != crate::AuthenticationProtocol::Oidc
+        {
+            return Err(format!(
+                "component {component_id:?} version {:?} binding {:?} does not support authentication protocol {protocol:?} with backend {:?} version {:?}",
                 entry.version, link.id, target.id, target.version
             ));
         }
@@ -257,6 +299,9 @@ mod tests {
             "bitcoin-core" => "bitcoin-core/30/v1",
             "lnd" => "lnd/0.20/v1",
             "cdk" => "cdk-mintd/0.17/v1",
+            "nutshell" => "nutshell-mint/0.20/v1",
+            "postgresql" => "postgresql/17/v1",
+            "redis" => "redis/8.10/v1",
             _ => panic!("unknown test implementation {implementation:?}"),
         }
     }
@@ -361,6 +406,66 @@ mod tests {
         )
         .expect_err("unsupported unit must refuse publication");
         assert!(unit_error.contains("unit \"msat\""));
+    }
+
+    #[test]
+    fn database_roles_refuse_crossed_primary_and_cache_implementations() {
+        let component = |id: &str, implementation: &str, kind, control| ComponentSpec {
+            id: id.into(),
+            kind,
+            implementation: implementation.into(),
+            version: None,
+            config_version: test_config_version(implementation).into(),
+            control,
+            config: BTreeMap::new(),
+        };
+        let mut lab = LabSpec {
+            api_version: crate::API_VERSION.into(),
+            name: "database-roles".into(),
+            components: vec![
+                component(
+                    "mint",
+                    "nutshell",
+                    ComponentKind::Mint,
+                    ControlClass::Target,
+                ),
+                component(
+                    "cache",
+                    "redis",
+                    ComponentKind::Database,
+                    ControlClass::Laboratory,
+                ),
+            ],
+            links: vec![LinkSpec {
+                id: "mint-cache".into(),
+                kind: LinkKind::DatabaseBackend,
+                from: "mint".into(),
+                to: "cache".into(),
+                binding: Some(DependencyBinding::Database {
+                    role: DatabaseRole::Cache,
+                }),
+            }],
+            policy: LabPolicy::default(),
+        };
+        resolve_lock(&lab, &default_catalog()).expect("Nutshell Redis cache binding");
+
+        lab.links[0].binding = Some(DependencyBinding::Database {
+            role: DatabaseRole::Primary,
+        });
+        let error = resolve_lock(&lab, &default_catalog()).expect_err("Redis cannot be primary");
+        assert!(error.contains("does not support database role Primary"));
+
+        lab.components[1] = component(
+            "cache",
+            "postgresql",
+            ComponentKind::Database,
+            ControlClass::Laboratory,
+        );
+        lab.links[0].binding = Some(DependencyBinding::Database {
+            role: DatabaseRole::Cache,
+        });
+        let error = resolve_lock(&lab, &default_catalog()).expect_err("PostgreSQL cannot be cache");
+        assert!(error.contains("does not support database role Cache"));
     }
 
     #[test]

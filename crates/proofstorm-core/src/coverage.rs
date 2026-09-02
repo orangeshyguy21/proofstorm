@@ -116,7 +116,7 @@ mod tests {
         let manifest =
             configuration_coverage_manifest(&default_catalog(), &default_backend_registry())
                 .expect("coverage manifest");
-        assert_eq!(manifest.entries.len(), 10);
+        assert_eq!(manifest.entries.len(), 12);
         let cdk = manifest
             .entries
             .iter()
@@ -184,9 +184,70 @@ mod tests {
             nutshell.support.storage,
             [StorageBackend::Sqlite, StorageBackend::Postgres].into()
         );
-        assert_eq!(nutshell.support.payment_backends, ["lnd".into()].into());
+        assert_eq!(
+            nutshell.support.payment_backends,
+            ["cln".into(), "lnd".into()].into()
+        );
+        assert_eq!(
+            nutshell.fields["clnrest_enable_mpp"].classification,
+            ConfigSettingClass::AgentAuthorable
+        );
         assert_eq!(
             nutshell.fields["mint_private_key"].classification,
+            ConfigSettingClass::GeneratedInstanceSecret
+        );
+        assert_eq!(
+            nutshell.support.authentication,
+            [
+                AuthenticationMode::Unauthenticated,
+                AuthenticationMode::Nut21Clear,
+                AuthenticationMode::Nut22Blind,
+            ]
+            .into()
+        );
+        assert_eq!(
+            nutshell.fields["oidc_discovery_url"].classification,
+            ConfigSettingClass::AgentAuthorable
+        );
+        assert_eq!(
+            nutshell.fields["authentication_database"].classification,
+            ConfigSettingClass::TopologyDerived
+        );
+    }
+
+    #[test]
+    fn manifest_maps_nutshell_redis_cache_ownership_and_compatibility() {
+        let manifest =
+            configuration_coverage_manifest(&default_catalog(), &default_backend_registry())
+                .expect("coverage manifest");
+        let nutshell = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.implementation == "nutshell")
+            .expect("Nutshell mint coverage");
+        assert_eq!(
+            nutshell.fields["redis_cache_ttl_seconds"].classification,
+            ConfigSettingClass::AgentAuthorable
+        );
+        assert_eq!(
+            nutshell.fields["redis_cache_credentials"].classification,
+            ConfigSettingClass::GeneratedInstanceSecret
+        );
+        assert!(nutshell.compatible_dependencies.iter().any(|dependency| {
+            dependency.link_kind == crate::LinkKind::DatabaseBackend
+                && dependency.implementation == "redis"
+                && dependency.versions.contains("8.10.1")
+        }));
+        let redis = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.implementation == "redis")
+            .expect("Redis coverage");
+        assert_eq!(redis.upstream_version, "8.10.1");
+        assert_eq!(redis.config_version, "redis/8.10/v1");
+        assert_eq!(redis.support.storage, [StorageBackend::Ephemeral].into());
+        assert_eq!(
+            redis.fields["credentials"].classification,
             ConfigSettingClass::GeneratedInstanceSecret
         );
     }

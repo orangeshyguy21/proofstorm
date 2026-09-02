@@ -58,6 +58,7 @@ spec:
                           - lightning
                           - mint
                           - database
+                          - identity_provider
                           - wallet
                           - attacker
                           - proxy
@@ -80,7 +81,7 @@ spec:
                     items:
                       properties:
                         binding:
-                          description: Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role. Proofstorm validates the discriminator-specific fields before publication.
+                          description: Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.
                           nullable: true
                           properties:
                             method:
@@ -93,9 +94,14 @@ spec:
                               enum:
                               - regtest
                               type: string
+                            protocol:
+                              enum:
+                              - oidc
+                              type: string
                             role:
                               enum:
                               - primary
+                              - cache
                               - authentication
                               type: string
                             type:
@@ -103,6 +109,7 @@ spec:
                               - chain
                               - payment
                               - database
+                              - authentication
                               type: string
                             unit:
                               maxLength: 16
@@ -113,8 +120,8 @@ spec:
                           - type
                           type: object
                           x-kubernetes-validations:
-                          - message: chain bindings require only network; payment bindings require only method and unit; database bindings require only role
-                            rule: 'self.type == ''chain'' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) : (self.type == ''payment'' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) : has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit))'
+                          - message: chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol
+                            rule: 'self.type == ''chain'' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == ''payment'' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == ''database'' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))'
                         from:
                           type: string
                         id:
@@ -127,6 +134,7 @@ spec:
                           - chain_backend
                           - payment_backend
                           - database_backend
+                          - authentication_backend
                           - network_path
                           type: string
                         to:
@@ -139,7 +147,7 @@ spec:
                       type: object
                       x-kubernetes-validations:
                       - message: backend links require a binding; peer and network-path links forbid one
-                        rule: '(self.kind == ''chain_backend'' || self.kind == ''payment_backend'' || self.kind == ''database_backend'') ? has(self.binding) : !has(self.binding)'
+                        rule: '(self.kind == ''chain_backend'' || self.kind == ''payment_backend'' || self.kind == ''database_backend'' || self.kind == ''authentication_backend'') ? has(self.binding) : !has(self.binding)'
                     type: array
                   name:
                     type: string
@@ -258,6 +266,7 @@ spec:
                                 - chain_backend
                                 - payment_backend
                                 - database_backend
+                                - authentication_backend
                                 - network_path
                                 type: string
                               versions:
@@ -291,6 +300,8 @@ spec:
                             - blind_auth
                             - sqlite
                             - postgres
+                            - redis_cache
+                            - oidc_provider
                             - wallet_operations
                             type: string
                           type: array
@@ -412,6 +423,7 @@ spec:
                       - lightning
                       - mint
                       - database
+                      - identity_provider
                       - wallet
                       - attacker
                       - proxy

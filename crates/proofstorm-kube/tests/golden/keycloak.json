@@ -1,0 +1,427 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "credentials_ready",
+      "service_ready",
+      "protocol_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "keycloak",
+    "component_id": "identity",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "service_ready",
+          "protocol_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "credentials_ready": [
+        "not_observed",
+        "credentials_projected",
+        "credentials_missing"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "config": {
+        "access_token_lifespan_seconds": 300
+      },
+      "implementation": "keycloak"
+    },
+    "execution_context": {
+      "component_id": "identity",
+      "environment": {},
+      "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+      "mounts": [],
+      "state_contract": "proofstorm/keycloak-oidc-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "identity_provider",
+    "linked_targets": {
+      "identity-database-database": {
+        "backend_id": "postgresql",
+        "component_id": "database",
+        "kind": "database",
+        "ports": {
+          "postgres": 5432
+        },
+        "version": "17.11"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "peer_channel_mutation",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "wallet_payment",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "http_get",
+      "path": "/realms/proofstorm/.well-known/openid-configuration",
+      "port": 8080
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "role": "primary",
+          "type": "database"
+        },
+        "from": "identity",
+        "id": "identity-database-database",
+        "kind": "database_backend",
+        "to": "database"
+      }
+    ],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:c81c21bb981cb00855c279b109b7d31efd785dd4a2b34ed4026add7eb545ad8a",
+    "storage": [],
+    "target_descriptor": {
+      "backend_id": "keycloak",
+      "component_id": "identity",
+      "kind": "identity_provider",
+      "ports": {
+        "http": 8080
+      },
+      "version": "25.0.6"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "deployment",
+      "name": "identity"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "keycloak",
+            "proofstorm.dev/execution-state-contract": "proofstorm/keycloak-oidc-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "identity",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "identity"
+          },
+          "name": "identity",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "identity",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "identity"
+            }
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:c81c21bb981cb00855c279b109b7d31efd785dd4a2b34ed4026add7eb545ad8a"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "identity",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "identity"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [
+                    "start-dev",
+                    "--import-realm"
+                  ],
+                  "env": [
+                    {
+                      "name": "KC_DB",
+                      "value": "postgres"
+                    },
+                    {
+                      "name": "KC_DB_URL_HOST",
+                      "value": "database"
+                    },
+                    {
+                      "name": "KC_DB_URL_PORT",
+                      "value": "5432"
+                    },
+                    {
+                      "name": "KC_DB_URL_DATABASE",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_DB",
+                          "name": "database-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "KC_DB_USERNAME",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_USER",
+                          "name": "database-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "KC_DB_PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "database-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "KC_HOSTNAME",
+                      "value": "http://identity:8080"
+                    },
+                    {
+                      "name": "KC_HOSTNAME_STRICT",
+                      "value": "false"
+                    },
+                    {
+                      "name": "KC_HTTP_ENABLED",
+                      "value": "true"
+                    },
+                    {
+                      "name": "KC_HEALTH_ENABLED",
+                      "value": "true"
+                    },
+                    {
+                      "name": "JAVA_OPTS_KC_HEAP",
+                      "value": "-XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=45"
+                    },
+                    {
+                      "name": "KEYCLOAK_ADMIN",
+                      "value": "proofstorm-admin"
+                    },
+                    {
+                      "name": "KEYCLOAK_ADMIN_PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "KEYCLOAK_ADMIN_PASSWORD",
+                          "name": "identity-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 8080,
+                      "name": "http"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "failureThreshold": 60,
+                    "httpGet": {
+                      "path": "/realms/proofstorm/.well-known/openid-configuration",
+                      "port": 8080
+                    },
+                    "periodSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/keycloak/data/import/realm.json",
+                      "name": "realm-import",
+                      "readOnly": true,
+                      "subPath": "realm.json"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "realm-import",
+                  "secret": {
+                    "defaultMode": 288,
+                    "secretName": "identity-credentials"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "persistentVolumeClaims": [],
+    "secrets": [
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "identity",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "identity"
+          },
+          "name": "identity-credentials",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS": "300",
+          "PROOFSTORM_SECRET_KIND": "keycloak-oidc"
+        },
+        "type": "Opaque"
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "identity",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "identity"
+          },
+          "name": "identity",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "http",
+              "port": 8080,
+              "targetPort": 8080
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "identity",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "identity"
+          }
+        }
+      }
+    ],
+    "statefulSets": []
+  }
+}

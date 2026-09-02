@@ -170,6 +170,7 @@
         "lightning",
         "mint",
         "database",
+        "identity_provider",
         "wallet",
         "attacker",
         "proxy",
@@ -268,6 +269,7 @@
         "chain_backend",
         "payment_backend",
         "database_backend",
+        "authentication_backend",
         "network_path"
       ],
       "type": "string"

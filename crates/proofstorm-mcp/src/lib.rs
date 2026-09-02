@@ -3728,14 +3728,14 @@ mod tests {
             .proofstorm_catalog_list()
             .expect("catalog discovery")
             .0;
-        assert_eq!(catalog.entries.len(), 10);
+        assert_eq!(catalog.entries.len(), 12);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.support_lifecycle == proofstorm_core::SupportLifecycle::Preferred
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 10);
+        assert_eq!(catalog.implementations.len(), 12);
         assert!(catalog.implementations.iter().all(|support| {
             support.minimum_supported == support.preferred_version
                 && support.supported_versions.len() == 1
@@ -3832,13 +3832,33 @@ mod tests {
         assert_eq!(nutshell.config_version, "nutshell-mint/0.20/v1");
         assert_eq!(
             nutshell.support_matrix.payment_backends,
-            ["lnd".into()].into()
+            ["cln".into(), "lnd".into()].into()
         );
         assert!(
             nutshell.config_schema["x-proofstorm-managed-settings"]
                 .get("mint_private_key")
                 .is_some()
         );
+        assert!(
+            nutshell
+                .features
+                .contains(&proofstorm_core::CatalogFeature::RedisCache)
+        );
+        assert!(
+            nutshell
+                .features
+                .contains(&proofstorm_core::CatalogFeature::ClearAuth)
+        );
+        assert!(
+            nutshell
+                .features
+                .contains(&proofstorm_core::CatalogFeature::BlindAuth)
+        );
+        assert!(nutshell.compatible_dependencies.iter().any(|dependency| {
+            dependency.link_kind == proofstorm_core::LinkKind::DatabaseBackend
+                && dependency.implementation == "redis"
+                && dependency.versions.contains("8.10.1")
+        }));
     }
 
     #[test]
