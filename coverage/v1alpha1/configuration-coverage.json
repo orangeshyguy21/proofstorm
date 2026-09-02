@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:5af6341efc4a430d07e65579e81f27f2bfb496fb54529d00ef6a7bc55eb90672",
+  "catalog_digest": "sha256:fe6cc5c3817599da1589e78d7b845c67817af743cd0707f6d2f439d031613e48",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -908,6 +908,260 @@
           "implementation": "bitcoin-core",
           "versions": [
             "30.0"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "nutshell",
+      "kind": "mint",
+      "upstream_version": "0.20.2",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "nutshell-mint/0.20/v1",
+      "config_schema_digest": "sha256:6330543690cb53cac25af391b592a59a0c3871a9ea98c0c9086dedc6e1a3d864",
+      "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+      "fields": {
+        "authentication": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "backend_kind": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "contact_email": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "contact_nostr_public_key": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "database": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "database_lock_timeout_ms": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "derivation_path": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "description": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "description_long": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "disable_melt": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "disable_mint": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "forwarded_allow_ips": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "global_rate_limit_per_minute": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "icon_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "input_fee_ppk": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "lightning_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "lightning_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "lightning_fee_percent": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "lightning_reserve_fee_min_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "listen_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "lnd_enable_mpp": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_balance_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_request_length": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_secret_length": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_witness_length": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "melt_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "mint_private_key": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "mint_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "motd": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "name": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "public_url": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "quote_backend_check_rate_limit_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "rate_limit": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "rate_limit_proxy_trust": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "redis_cache": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "regular_tasks_interval_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "tor": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "tos_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "transaction_rate_limit_per_minute": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "unit": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "watchdog_balance_check_interval_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "watchdog_enabled": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "websocket_read_timeout_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "sqlite",
+          "postgres"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [
+          "lnd"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "lnd",
+              "versions": [
+                "0.20.0-beta"
+              ]
+            }
+          }
+        ],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": [
+          {
+            "implementation": "nutshell-wallet",
+            "versions": [
+              "0.20.2"
+            ]
+          }
+        ]
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "payment_backend",
+          "implementation": "lnd",
+          "versions": [
+            "0.20.0-beta"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
           ]
         }
       ]

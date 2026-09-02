@@ -9,8 +9,8 @@ use proofstorm_kube::{
     LabAction, NativeExecAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
     ProofstormLabSpec, RenderedComponent, compile_component_plans, render_attacker_component,
     render_bitcoin_component, render_cdk_component, render_cln_component, render_lab,
-    render_lab_action_job, render_lnd_component, render_postgres_component, render_security_spine,
-    render_wallet_component,
+    render_lab_action_job, render_lnd_component, render_nutshell_mint_component,
+    render_postgres_component, render_security_spine, render_wallet_component,
 };
 use serde_json::{Value, json};
 
@@ -35,6 +35,7 @@ fn component(
             "cdk" => "cdk-mintd/0.17/v1",
             "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
             "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+            "nutshell" => "nutshell-mint/0.20/v1",
             "postgresql" => "postgresql/17/v1",
             "nutshell-wallet" => "nutshell-wallet/0.20/v1",
             "attacker-workspace" => "attacker-workspace/0.1/v1",
@@ -160,6 +161,36 @@ fn backend_lab(backend_id: &str) -> (LabSpec, &'static str) {
         ),
         "cdk-ldk" => cdk_ldk_backend_lab(),
         "cdk-bdk" => cdk_bdk_backend_lab(),
+        "nutshell" => (
+            lab(
+                "golden-nutshell",
+                vec![
+                    component(
+                        "chain",
+                        ComponentKind::Bitcoin,
+                        "bitcoin-core",
+                        ControlClass::Laboratory,
+                    ),
+                    component(
+                        "lightning",
+                        ComponentKind::Lightning,
+                        "lnd",
+                        ControlClass::Laboratory,
+                    ),
+                    component(
+                        "mint",
+                        ComponentKind::Mint,
+                        "nutshell",
+                        ControlClass::Target,
+                    ),
+                ],
+                vec![
+                    chain_link("lightning", "chain"),
+                    lightning_link("mint", "lightning"),
+                ],
+            ),
+            "mint",
+        ),
         "nutshell-wallet" => (
             lab(
                 "golden-wallet",
@@ -255,6 +286,7 @@ fn render_backend(backend_id: &str) -> Value {
         "lnd" => render_lnd_component(plan),
         "cln" => render_cln_component(plan),
         "cdk" | "cdk-ldk" | "cdk-bdk" => render_cdk_component(plan),
+        "nutshell" => render_nutshell_mint_component(plan),
         "nutshell-wallet" => render_wallet_component(plan),
         "postgresql" => render_postgres_component(plan),
         "attacker-workspace" => render_attacker_component(plan),
@@ -480,6 +512,90 @@ fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
     );
 }
 
+#[test]
+fn nutshell_postgres_binding_keeps_database_and_mint_secrets_out_of_public_config() {
+    let spec = lab(
+        "golden-nutshell-postgres",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "lightning",
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "database",
+                ComponentKind::Database,
+                "postgresql",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "mint",
+                ComponentKind::Mint,
+                "nutshell",
+                ControlClass::Target,
+            ),
+        ],
+        vec![
+            chain_link("lightning", "chain"),
+            lightning_link("mint", "lightning"),
+            database_link("mint", "database"),
+        ],
+    );
+    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell PostgreSQL lock");
+    let rendered = render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock)
+        .expect("Nutshell PostgreSQL render");
+    let public_config = rendered
+        .config_maps
+        .iter()
+        .find(|config| config.metadata.name.as_deref() == Some("mint-config"))
+        .and_then(|config| config.data.as_ref())
+        .expect("Nutshell public configuration");
+    assert!(!public_config.contains_key("MINT_DATABASE"));
+    assert!(!public_config.contains_key("MINT_PRIVATE_KEY"));
+    let mint_secret = rendered
+        .secrets
+        .iter()
+        .find(|secret| secret.metadata.name.as_deref() == Some("mint-credentials"))
+        .expect("Nutshell generated secret template");
+    assert_eq!(
+        mint_secret.string_data.as_ref().unwrap()["PROOFSTORM_SECRET_KIND"],
+        "nutshell-mint"
+    );
+    assert!(
+        !mint_secret
+            .string_data
+            .as_ref()
+            .unwrap()
+            .contains_key("MINT_PRIVATE_KEY")
+    );
+    let deployment = rendered
+        .deployments
+        .iter()
+        .find(|deployment| deployment.metadata.name.as_deref() == Some("mint"))
+        .expect("Nutshell deployment");
+    let deployment = serde_json::to_value(deployment).expect("deployment JSON");
+    let env = deployment
+        .pointer("/spec/template/spec/containers/0/env")
+        .and_then(Value::as_array)
+        .expect("secret-backed environment");
+    assert!(env.iter().any(|entry| {
+        entry["name"] == "MINT_DATABASE"
+            && entry["valueFrom"]["secretKeyRef"]["name"] == "database-credentials"
+            && entry["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_URL"
+    }));
+    assert!(env.iter().any(|entry| {
+        entry["name"] == "MINT_PRIVATE_KEY"
+            && entry["valueFrom"]["secretKeyRef"]["name"] == "mint-credentials"
+    }));
+}
+
 fn golden_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -516,6 +632,7 @@ fn every_registered_backend_matches_its_golden_contract() {
         "cdk-ldk",
         "cln",
         "lnd",
+        "nutshell",
         "nutshell-wallet",
         "postgresql",
     ];

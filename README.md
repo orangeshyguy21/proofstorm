@@ -361,6 +361,31 @@ to prove persistence, and verifies teardown:
 bash tests/kubernetes/cdk-bdk-stress-e2e.sh
 ```
 
+Nutshell mint parity is the current control-plane increment. Nutshell 0.20.2 is
+now an exact-version mint catalog entry with a typed configuration contract,
+machine-readable field coverage, a pinned image digest, persistent state, a
+controller-generated private key, and an initial BOLT11/sat binding to LND's
+REST interface. The adapter supports SQLite and the existing secret-backed
+PostgreSQL dependency contract. PostgreSQL credentials and the mint private key
+remain stable across controller restarts, while database state survives both
+database and mint workload restarts. NUT-06 metadata, quote lifetimes, proof/request
+limits, mint/melt and balance ceilings, fee reserve policy, rate limits, MPP,
+and watchdog policy are agent-authorable and rollout-affecting. OIDC
+authentication, Redis caching, non-LND payment backends, and management RPC are
+not advertised until matching dependency and secret contracts exist. The live
+acceptance gates are:
+
+```sh
+bash tests/kubernetes/nutshell-mint-e2e.sh
+bash tests/kubernetes/nutshell-postgres-e2e.sh
+bash tests/kubernetes/cross-implementation-wallet-e2e.sh
+```
+
+The cross-implementation gate materializes CDK 0.17.6 and Nutshell 0.20.2 in
+one lab, drives both through the same pinned Nutshell wallet adapter, and
+requires identical initialize, zero-balance, 1,000 sat funding, self-pay round
+trip, and exact conservation-oracle behavior before verified teardown.
+
 The implementation-neutral wallet surface now includes
 `proofstorm_wallet_initialize`, `proofstorm_wallet_balance`, and
 `proofstorm_wallet_fund`. Balance reads copy the persistent wallet into a
@@ -549,7 +574,7 @@ scripts/run-attack.sh    Phase 6 attack runner
 scenarios/               adversarial scenarios + lib/attack.sh helpers
 ```
 
-## Roadmap
+## Legacy Compose roadmap
 
 | Phase  | Status | Deliverable                                  |
 | ------ | ------ | -------------------------------------------- |
@@ -560,6 +585,16 @@ scenarios/               adversarial scenarios + lib/attack.sh helpers
 | 4 (V3) | done   | value-conservation check after smoke         |
 | 5      | next   | wallet-to-wallet token handoff               |
 | 6      | in progress | adversarial regtest harness — see [`SPEC.md`](SPEC.md) |
+
+The Kubernetes control-plane roadmap supersedes that historical table. CDK and
+Nutshell exact-version configuration coverage is complete. Nutshell's catalog,
+typed configuration, LND/SQLite and secret-backed PostgreSQL materialization,
+generated key handling, golden contract, restart persistence, and live
+acceptance clients are in tree and passing on k3d. The same pinned Nutshell
+wallet workflow also passes against CDK and Nutshell side by side. Remaining
+Nutshell work is intentionally unsupported dependency expansion—OIDC, Redis,
+additional Lightning backends, and management RPC—each gated on a typed secret
+and dependency contract rather than parity of the supported surface.
 
 ## Notes
 

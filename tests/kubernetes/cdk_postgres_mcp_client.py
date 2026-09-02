@@ -226,6 +226,7 @@ secret_data = kubectl("get", "secret/database-credentials", "-n", namespace, "-o
 secret_digest = hashlib.sha256(secret_data.encode()).hexdigest()
 secret = json.loads(secret_data)
 if set(secret.get("data", {})) != {
+    "DATABASE_URL",
     "POSTGRES_DB",
     "POSTGRES_PASSWORD",
     "POSTGRES_USER",

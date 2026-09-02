@@ -16,8 +16,8 @@ use proofstorm_core::{
     ComponentSpec, ComponentStatus, CredentialObservationContract, DatabaseRole, DependencyBinding,
     EffectiveComponentConfig, ExecutionStorageSource, InventoryEntry, LabSpec, LinkKind,
     LinkedStateObservationContract, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES,
-    ProtocolProbePlan, ResolvedLock, TargetDescriptorContract, WorkloadControllerKind,
-    default_backend_registry,
+    NutshellMintConfig, ProtocolProbePlan, ResolvedLock, TargetDescriptorContract,
+    WorkloadControllerKind, default_backend_registry,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -54,6 +54,7 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("cdk-bdk", render_cdk_component),
             ("cln", render_cln_component),
             ("lnd", render_lnd_component),
+            ("nutshell", render_nutshell_mint_component),
             ("nutshell-wallet", render_wallet_component),
             ("postgresql", render_postgres_component),
         ])
@@ -1589,7 +1590,7 @@ fn cdk_runtime_resources(
     config_name: &str,
     data_name: &str,
 ) -> Result<CdkRuntimeResources, AdapterError> {
-    let database_secret = cdk_database_secret(plan)?;
+    let database_secret = primary_database_secret(plan)?;
     let database_config = if database_secret.is_some() {
         ""
     } else {
@@ -1721,7 +1722,7 @@ fn cdk_runtime_resources(
     })
 }
 
-fn cdk_database_secret(plan: &ComponentPlanContract) -> Result<Option<String>, AdapterError> {
+fn primary_database_secret(plan: &ComponentPlanContract) -> Result<Option<String>, AdapterError> {
     let links = plan
         .relevant_links
         .iter()
@@ -1736,8 +1737,8 @@ fn cdk_database_secret(plan: &ComponentPlanContract) -> Result<Option<String>, A
         )
     }) {
         return Err(AdapterError::InvalidPlan(format!(
-            "component {:?} requests an authentication database, which CDK 0.17 support has not enabled yet",
-            plan.component_id
+            "component {:?} requests an authentication database, which backend {:?} has not enabled",
+            plan.component_id, plan.backend_id
         )));
     }
     let primary = links
@@ -1775,6 +1776,279 @@ fn cdk_database_secret(plan: &ComponentPlanContract) -> Result<Option<String>, A
         )));
     }
     Ok(Some(postgres_secret_name(&target.component_id)))
+}
+
+/// Render a persistent Nutshell mint with an exact LND REST payment binding.
+///
+/// # Errors
+///
+/// Returns an error when the plan does not select Nutshell 0.20, does not
+/// resolve exactly one LND payment backend, or selects an unsupported database
+/// binding.
+pub fn render_nutshell_mint_component(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
+    require_plan_backend(plan, "nutshell", ComponentKind::Mint)?;
+    let EffectiveComponentConfig::Nutshell(config) = &plan.effective_config else {
+        return Err(AdapterError::InvalidPlan(
+            "Nutshell plan does not carry its typed mint configuration".into(),
+        ));
+    };
+    let http_port = target_port(&plan.target_descriptor, "http")?;
+    let payment_mounts = plan
+        .execution_context
+        .mounts
+        .iter()
+        .filter(|mount| mount.name == "lnd")
+        .collect::<Vec<_>>();
+    let [payment_mount] = payment_mounts.as_slice() else {
+        return Err(AdapterError::InvalidPlan(format!(
+            "nutshell_simultaneous_payment_backends_not_supported: component {:?} requires exactly one compiled LND payment backend, found {}",
+            plan.component_id,
+            payment_mounts.len()
+        )));
+    };
+    let lightning = plan_execution_target(plan, &payment_mount.name)?;
+    let credential = plan_execution_credential(plan, &payment_mount.name)?;
+    if lightning.backend_id != "lnd" || credential.source_component_id != lightning.component_id {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} compiled Nutshell payment target and credential identities disagree",
+            plan.component_id
+        )));
+    }
+    let lnd_rest_port = target_port(lightning, "rest")?;
+    let database_secret = primary_database_secret(plan)?;
+    let namespace = instance_namespace(&plan.instance_key);
+    let config_name = format!("{}-config", plan.component_id);
+    let secret_name = format!("{}-credentials", plan.component_id);
+    let data_name = format!("{}-data", plan.component_id);
+    let mut environment = nutshell_mint_environment(
+        &plan.component_id,
+        http_port,
+        lightning,
+        lnd_rest_port,
+        payment_mount,
+        config,
+    );
+    if database_secret.is_none() {
+        environment.insert("MINT_DATABASE".into(), "/app/data".into());
+    }
+
+    let mut env = vec![json!({
+        "name": "MINT_PRIVATE_KEY",
+        "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "MINT_PRIVATE_KEY"}}
+    })];
+    if let Some(database_secret) = database_secret {
+        env.push(json!({
+            "name": "MINT_DATABASE",
+            "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "DATABASE_URL"}}
+        }));
+    }
+    let labels = labels(&plan.instance_key, Some(&plan.component_id));
+    let mut rendered = RenderedComponent::default();
+    rendered.config_maps.push(resource(json!({
+        "apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": metadata(&config_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
+        "data": environment
+    }))?);
+    rendered.secrets.push(resource(json!({
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": metadata(&secret_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
+        "type": "Opaque",
+        "stringData": {"PROOFSTORM_SECRET_KIND": "nutshell-mint"}
+    }))?);
+    rendered.persistent_volume_claims.push(resource(json!({
+        "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+        "metadata": metadata(&data_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
+        "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}}
+    }))?);
+    rendered.services.push(resource(service_from_plan(plan))?);
+    rendered.deployments.push(resource(json!({
+        "apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": plan_workload_metadata(plan),
+        "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
+            "metadata": plan_pod_metadata(plan, &labels), "spec": {
+                "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                    "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
+                    "command": ["python3", "-c", "from cashu.mint.main import main; main()"],
+                    "envFrom": [{"configMapRef": {"name": config_name}}],
+                    "env": env,
+                    "ports": [{"name": "http", "containerPort": http_port}],
+                    "securityContext": container_security(),
+                    "readinessProbe": {"httpGet": {"path": "/v1/info", "port": http_port}, "periodSeconds": 3, "failureThreshold": 40},
+                    "volumeMounts": [
+                        {"name": "data", "mountPath": "/app/data"},
+                        {"name": "lnd", "mountPath": payment_mount.mount_path, "readOnly": true}
+                    ]
+                }], "volumes": [
+                    {"name": "data", "persistentVolumeClaim": {"claimName": data_name}},
+                    {"name": "lnd", "persistentVolumeClaim": {"claimName": credential.claim_name}}
+                ]
+            }
+        }}
+    }))?);
+    Ok(rendered)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exact-version environment renderer keeps the complete supported Nutshell setting projection auditable"
+)]
+fn nutshell_mint_environment(
+    component: &str,
+    http_port: u16,
+    lightning: &TargetDescriptorContract,
+    lnd_rest_port: u16,
+    payment_mount: &proofstorm_core::ExecutionMountContract,
+    config: &NutshellMintConfig,
+) -> BTreeMap<String, String> {
+    let bool_string = |value: bool| if value { "TRUE" } else { "FALSE" }.to_owned();
+    let mut contacts = Vec::<Vec<&str>>::new();
+    if !config.contact_email.is_empty() {
+        contacts.push(vec!["email", config.contact_email.as_str()]);
+    }
+    if !config.contact_nostr_public_key.is_empty() {
+        contacts.push(vec!["nostr", config.contact_nostr_public_key.as_str()]);
+    }
+    BTreeMap::from([
+        ("CASHU_DIR".into(), "/app/data".into()),
+        (
+            "LIGHTNING_FEE_PERCENT".into(),
+            config.lightning_fee_percent.to_string(),
+        ),
+        (
+            "LIGHTNING_RESERVE_FEE_MIN".into(),
+            config.lightning_reserve_fee_min_sat.to_string(),
+        ),
+        (
+            "MELT_QUOTE_TTL".into(),
+            config.melt_quote_ttl_seconds.to_string(),
+        ),
+        ("MINT_BACKEND_BOLT11_SAT".into(), "LndRestWallet".into()),
+        (
+            "MINT_BOLT11_DISABLE_MELT".into(),
+            bool_string(config.disable_melt),
+        ),
+        (
+            "MINT_BOLT11_DISABLE_MINT".into(),
+            bool_string(config.disable_mint),
+        ),
+        (
+            "MINT_DATABASE_LOCK_TIMEOUT".into(),
+            config.database_lock_timeout_ms.to_string(),
+        ),
+        ("MINT_DERIVATION_PATH".into(), "m/0'/0'/0'".into()),
+        ("MINT_FORWARDED_ALLOW_IPS".into(), "127.0.0.1".into()),
+        (
+            "MINT_GLOBAL_RATE_LIMIT_PER_MINUTE".into(),
+            config.global_rate_limit_per_minute.to_string(),
+        ),
+        (
+            "MINT_INFO_CONTACT".into(),
+            serde_json::to_string(&contacts).expect("contact JSON"),
+        ),
+        ("MINT_INFO_DESCRIPTION".into(), config.description.clone()),
+        (
+            "MINT_INFO_DESCRIPTION_LONG".into(),
+            config.description_long.clone(),
+        ),
+        ("MINT_INFO_ICON_URL".into(), config.icon_url.clone()),
+        ("MINT_INFO_MOTD".into(), config.motd.clone()),
+        ("MINT_INFO_NAME".into(), config.name.clone()),
+        ("MINT_INFO_TOS_URL".into(), config.tos_url.clone()),
+        (
+            "MINT_INFO_URLS".into(),
+            serde_json::to_string(&[format!("http://{component}:{http_port}")]).expect("URL JSON"),
+        ),
+        (
+            "MINT_INPUT_FEE_PPK".into(),
+            config.input_fee_ppk.to_string(),
+        ),
+        ("MINT_LISTEN_HOST".into(), "0.0.0.0".into()),
+        ("MINT_LISTEN_PORT".into(), http_port.to_string()),
+        (
+            "MINT_LND_ENABLE_MPP".into(),
+            bool_string(config.lnd_enable_mpp),
+        ),
+        (
+            "MINT_LND_REST_CERT".into(),
+            format!("{}/tls.cert", payment_mount.mount_path),
+        ),
+        ("MINT_LND_REST_CERT_VERIFY".into(), "TRUE".into()),
+        (
+            "MINT_LND_REST_ENDPOINT".into(),
+            format!("https://{}:{lnd_rest_port}", lightning.component_id),
+        ),
+        (
+            "MINT_LND_REST_MACAROON".into(),
+            format!(
+                "{}/data/chain/bitcoin/regtest/admin.macaroon",
+                payment_mount.mount_path
+            ),
+        ),
+        (
+            "MINT_MAX_BALANCE".into(),
+            config.max_balance_sat.to_string(),
+        ),
+        (
+            "MINT_MAX_MELT_BOLT11_SAT".into(),
+            config.max_melt_sat.to_string(),
+        ),
+        (
+            "MINT_MAX_MINT_BOLT11_SAT".into(),
+            config.max_mint_sat.to_string(),
+        ),
+        (
+            "MINT_MAX_REQUEST_LENGTH".into(),
+            config.max_request_length.to_string(),
+        ),
+        (
+            "MINT_MAX_SECRET_LENGTH".into(),
+            config.max_secret_length.to_string(),
+        ),
+        (
+            "MINT_MAX_WITNESS_LENGTH".into(),
+            config.max_witness_length.to_string(),
+        ),
+        (
+            "MINT_QUOTE_BACKEND_CHECK_RATE_LIMIT".into(),
+            config.quote_backend_check_rate_limit_seconds.to_string(),
+        ),
+        (
+            "MINT_QUOTE_TTL".into(),
+            config.mint_quote_ttl_seconds.to_string(),
+        ),
+        ("MINT_RATE_LIMIT".into(), bool_string(config.rate_limit)),
+        (
+            "MINT_RATE_LIMIT_PROXY_TRUST".into(),
+            bool_string(config.rate_limit_proxy_trust),
+        ),
+        ("MINT_REDIS_CACHE_ENABLED".into(), "FALSE".into()),
+        (
+            "MINT_REGULAR_TASKS_INTERVAL_SECONDS".into(),
+            config.regular_tasks_interval_seconds.to_string(),
+        ),
+        ("MINT_REQUIRE_AUTH".into(), "FALSE".into()),
+        ("MINT_RPC_SERVER_ENABLE".into(), "FALSE".into()),
+        (
+            "MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE".into(),
+            config.transaction_rate_limit_per_minute.to_string(),
+        ),
+        (
+            "MINT_WATCHDOG_BALANCE_CHECK_INTERVAL_SECONDS".into(),
+            config.watchdog_balance_check_interval_seconds.to_string(),
+        ),
+        (
+            "MINT_WATCHDOG_ENABLED".into(),
+            bool_string(config.watchdog_enabled),
+        ),
+        (
+            "MINT_WEBSOCKET_READ_TIMEOUT".into(),
+            config.websocket_read_timeout_seconds.to_string(),
+        ),
+        ("TOR".into(), "FALSE".into()),
+    ])
 }
 
 /// Render a disposable attacker workspace from a compiled plan without

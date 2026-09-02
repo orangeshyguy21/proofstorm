@@ -3728,14 +3728,14 @@ mod tests {
             .proofstorm_catalog_list()
             .expect("catalog discovery")
             .0;
-        assert_eq!(catalog.entries.len(), 9);
+        assert_eq!(catalog.entries.len(), 10);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.support_lifecycle == proofstorm_core::SupportLifecycle::Preferred
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 9);
+        assert_eq!(catalog.implementations.len(), 10);
         assert!(catalog.implementations.iter().all(|support| {
             support.minimum_supported == support.preferred_version
                 && support.supported_versions.len() == 1
@@ -3795,6 +3795,7 @@ mod tests {
                 .contains(&proofstorm_core::CatalogFeature::Bolt11)
         );
         assert_eq!(cdk.compatible_dependencies[0].implementation, "lnd");
+        assert_nutshell_support(&catalog);
         assert_eq!(
             reader.tool_names(),
             vec![
@@ -3820,6 +3821,24 @@ mod tests {
                 .contains(&proofstorm_core::PaymentMethod::Bolt12)
         );
         assert!(cdk_ldk.support_matrix.payment_bindings.is_empty());
+    }
+
+    fn assert_nutshell_support(catalog: &proofstorm_core::CatalogResponse) {
+        let nutshell = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "nutshell")
+            .expect("Nutshell mint support contract");
+        assert_eq!(nutshell.config_version, "nutshell-mint/0.20/v1");
+        assert_eq!(
+            nutshell.support_matrix.payment_backends,
+            ["lnd".into()].into()
+        );
+        assert!(
+            nutshell.config_schema["x-proofstorm-managed-settings"]
+                .get("mint_private_key")
+                .is_some()
+        );
     }
 
     #[test]

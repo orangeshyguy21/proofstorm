@@ -385,6 +385,47 @@ pub struct CdkMintConfig {
     pub max_melt_sat: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "these booleans are independent upstream Nutshell policy settings, not one state machine"
+)]
+pub struct NutshellMintConfig {
+    pub name: String,
+    pub description: String,
+    pub description_long: String,
+    pub motd: String,
+    pub icon_url: String,
+    pub contact_email: String,
+    pub contact_nostr_public_key: String,
+    pub tos_url: String,
+    pub input_fee_ppk: u64,
+    pub mint_quote_ttl_seconds: u64,
+    pub melt_quote_ttl_seconds: u64,
+    pub max_secret_length: u64,
+    pub max_witness_length: u64,
+    pub max_request_length: u64,
+    pub max_mint_sat: u64,
+    pub max_melt_sat: u64,
+    pub max_balance_sat: u64,
+    pub disable_mint: bool,
+    pub disable_melt: bool,
+    pub rate_limit: bool,
+    pub rate_limit_proxy_trust: bool,
+    pub global_rate_limit_per_minute: u64,
+    pub transaction_rate_limit_per_minute: u64,
+    pub quote_backend_check_rate_limit_seconds: u64,
+    pub lightning_fee_percent: f64,
+    pub lightning_reserve_fee_min_sat: u64,
+    pub lnd_enable_mpp: bool,
+    pub watchdog_enabled: bool,
+    pub watchdog_balance_check_interval_seconds: u64,
+    pub database_lock_timeout_ms: u64,
+    pub regular_tasks_interval_seconds: u64,
+    pub websocket_read_timeout_seconds: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PostgresConfig {
@@ -407,6 +448,8 @@ pub enum EffectiveComponentConfig {
     CdkLdk(CdkMintConfig),
     #[serde(rename = "cdk-bdk")]
     CdkBdk(CdkMintConfig),
+    #[serde(rename = "nutshell")]
+    Nutshell(NutshellMintConfig),
     #[serde(rename = "postgresql")]
     Postgres(PostgresConfig),
     #[serde(rename = "nutshell-wallet")]
@@ -637,6 +680,10 @@ impl BackendContractRegistry {
 }
 
 impl EffectiveComponentConfig {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exact-version typed configuration decoding keeps all installed backends in one exhaustive match"
+    )]
     fn try_from_component(component: &ComponentSpec) -> Result<Self, String> {
         let string = |name| {
             required_config_value(component, name)?
@@ -678,6 +725,61 @@ impl EffectiveComponentConfig {
                 max_melt_sat: integer("max_melt_sat")?,
             })
         };
+        let nutshell = || -> Result<NutshellMintConfig, String> {
+            let integer = |name| {
+                required_config_value(component, name)?
+                    .as_u64()
+                    .ok_or_else(|| typed_config_error(component, name))
+            };
+            let boolean = |name| {
+                required_config_value(component, name)?
+                    .as_bool()
+                    .ok_or_else(|| typed_config_error(component, name))
+            };
+            let number = |name| {
+                required_config_value(component, name)?
+                    .as_f64()
+                    .ok_or_else(|| typed_config_error(component, name))
+            };
+            Ok(NutshellMintConfig {
+                name: string("name")?,
+                description: string("description")?,
+                description_long: string("description_long")?,
+                motd: string("motd")?,
+                icon_url: string("icon_url")?,
+                contact_email: string("contact_email")?,
+                contact_nostr_public_key: string("contact_nostr_public_key")?,
+                tos_url: string("tos_url")?,
+                input_fee_ppk: integer("input_fee_ppk")?,
+                mint_quote_ttl_seconds: integer("mint_quote_ttl_seconds")?,
+                melt_quote_ttl_seconds: integer("melt_quote_ttl_seconds")?,
+                max_secret_length: integer("max_secret_length")?,
+                max_witness_length: integer("max_witness_length")?,
+                max_request_length: integer("max_request_length")?,
+                max_mint_sat: integer("max_mint_sat")?,
+                max_melt_sat: integer("max_melt_sat")?,
+                max_balance_sat: integer("max_balance_sat")?,
+                disable_mint: boolean("disable_mint")?,
+                disable_melt: boolean("disable_melt")?,
+                rate_limit: boolean("rate_limit")?,
+                rate_limit_proxy_trust: boolean("rate_limit_proxy_trust")?,
+                global_rate_limit_per_minute: integer("global_rate_limit_per_minute")?,
+                transaction_rate_limit_per_minute: integer("transaction_rate_limit_per_minute")?,
+                quote_backend_check_rate_limit_seconds: integer(
+                    "quote_backend_check_rate_limit_seconds",
+                )?,
+                lightning_fee_percent: number("lightning_fee_percent")?,
+                lightning_reserve_fee_min_sat: integer("lightning_reserve_fee_min_sat")?,
+                lnd_enable_mpp: boolean("lnd_enable_mpp")?,
+                watchdog_enabled: boolean("watchdog_enabled")?,
+                watchdog_balance_check_interval_seconds: integer(
+                    "watchdog_balance_check_interval_seconds",
+                )?,
+                database_lock_timeout_ms: integer("database_lock_timeout_ms")?,
+                regular_tasks_interval_seconds: integer("regular_tasks_interval_seconds")?,
+                websocket_read_timeout_seconds: integer("websocket_read_timeout_seconds")?,
+            })
+        };
         match component.implementation.as_str() {
             "bitcoin-core" => Ok(Self::BitcoinCore(BitcoinCoreConfig {
                 txindex: required_config_value(component, "txindex")?
@@ -696,6 +798,7 @@ impl EffectiveComponentConfig {
             "cdk" => Ok(Self::Cdk(cdk()?)),
             "cdk-ldk" => Ok(Self::CdkLdk(cdk()?)),
             "cdk-bdk" => Ok(Self::CdkBdk(cdk()?)),
+            "nutshell" => Ok(Self::Nutshell(nutshell()?)),
             "postgresql" => {
                 let database_name = string("database_name")?;
                 if !is_postgres_identifier(&database_name) {
@@ -1434,6 +1537,15 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             service_conditions(true, false),
         ),
         contract(
+            "nutshell",
+            ComponentKind::Mint,
+            "nutshell-mint/0.20/v1",
+            nutshell_config_fields(),
+            BTreeMap::from([("http".into(), 3_338)]),
+            "proofstorm/nutshell-mint-state/v1",
+            service_conditions(true, true),
+        ),
+        contract(
             "postgresql",
             ComponentKind::Database,
             "postgresql/17/v1",
@@ -1669,6 +1781,214 @@ fn cdk_mint_info_config_fields(
                 "",
                 2_048,
             ),
+        ),
+    ])
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the Nutshell support contract deliberately declares every authorable upstream setting inline"
+)]
+fn nutshell_config_fields() -> BTreeMap<String, ConfigFieldContract> {
+    let integer = |description: &str, default: u32, minimum: u32, maximum: u32| {
+        config_field(
+            description,
+            ConfigValueKind::Integer,
+            ConfigDefault::Literal(json!(default)),
+        )
+        .with_numeric_bounds(f64::from(minimum), f64::from(maximum))
+    };
+    let boolean = |description: &str, default: bool| {
+        config_field(
+            description,
+            ConfigValueKind::Boolean,
+            ConfigDefault::Literal(json!(default)),
+        )
+    };
+    let string = |description: &str, default: &str, minimum: usize, maximum: usize| {
+        config_field(
+            description,
+            ConfigValueKind::String,
+            ConfigDefault::Literal(json!(default)),
+        )
+        .with_string_bounds(minimum, maximum)
+    };
+    BTreeMap::from([
+        (
+            "contact_email".into(),
+            string("NUT-06 operator email; empty omits it", "", 0, 254),
+        ),
+        (
+            "contact_nostr_public_key".into(),
+            string(
+                "NUT-06 operator Nostr public key; empty omits it",
+                "",
+                0,
+                128,
+            ),
+        ),
+        (
+            "database_lock_timeout_ms".into(),
+            integer("PostgreSQL migration lock timeout", 30_000, 1_000, 300_000),
+        ),
+        (
+            "description".into(),
+            string(
+                "Native Nutshell mint description",
+                "Proofstorm regtest Nutshell mint",
+                1,
+                1_000,
+            ),
+        ),
+        (
+            "description_long".into(),
+            string(
+                "Long-form NUT-06 mint description; empty omits it",
+                "",
+                0,
+                10_000,
+            ),
+        ),
+        (
+            "disable_melt".into(),
+            boolean("Disable BOLT11 melt operations", false),
+        ),
+        (
+            "disable_mint".into(),
+            boolean("Disable BOLT11 mint operations", false),
+        ),
+        (
+            "global_rate_limit_per_minute".into(),
+            integer("Maximum requests per client IP per minute", 60, 1, 100_000),
+        ),
+        (
+            "icon_url".into(),
+            string("NUT-06 mint icon URL; empty omits it", "", 0, 2_048),
+        ),
+        (
+            "input_fee_ppk".into(),
+            integer("Input fee in parts per thousand", 100, 0, 1_000_000),
+        ),
+        (
+            "lightning_fee_percent".into(),
+            config_field(
+                "Lightning fee reserve as a percentage",
+                ConfigValueKind::Number,
+                ConfigDefault::Literal(json!(1.0)),
+            )
+            .with_numeric_bounds(0.0, 100.0),
+        ),
+        (
+            "lightning_reserve_fee_min_sat".into(),
+            integer("Minimum Lightning fee reserve", 2, 0, 1_000_000),
+        ),
+        (
+            "lnd_enable_mpp".into(),
+            boolean("Allow multi-part LND payments", true),
+        ),
+        (
+            "max_balance_sat".into(),
+            integer(
+                "Maximum outstanding mint balance",
+                10_000_000,
+                1,
+                100_000_000,
+            ),
+        ),
+        (
+            "max_melt_sat".into(),
+            integer("Maximum BOLT11 melt amount", 500_000, 1, 10_000_000),
+        ),
+        (
+            "max_mint_sat".into(),
+            integer("Maximum BOLT11 mint amount", 500_000, 1, 10_000_000),
+        ),
+        (
+            "max_request_length".into(),
+            integer("Maximum REST request array length", 1_000, 1, 100_000),
+        ),
+        (
+            "max_secret_length".into(),
+            integer("Maximum proof secret length", 1_024, 1, 1_000_000),
+        ),
+        (
+            "max_witness_length".into(),
+            integer("Maximum proof witness length", 1_024, 1, 1_000_000),
+        ),
+        (
+            "melt_quote_ttl_seconds".into(),
+            integer("Melt quote lifetime", 120, 0, 86_400),
+        ),
+        (
+            "mint_quote_ttl_seconds".into(),
+            integer("Mint quote lifetime", 600, 0, 86_400),
+        ),
+        (
+            "motd".into(),
+            string("NUT-06 message of the day; empty omits it", "", 0, 1_000),
+        ),
+        (
+            "name".into(),
+            string(
+                "Native Nutshell mint name",
+                "Proofstorm Nutshell mint",
+                1,
+                100,
+            ),
+        ),
+        (
+            "quote_backend_check_rate_limit_seconds".into(),
+            integer(
+                "Minimum interval between unpaid quote backend checks",
+                10,
+                0,
+                3_600,
+            ),
+        ),
+        (
+            "rate_limit".into(),
+            boolean("Enable IP-based HTTP rate limiting", true),
+        ),
+        (
+            "rate_limit_proxy_trust".into(),
+            boolean("Trust proxy-supplied client IP headers", false),
+        ),
+        (
+            "regular_tasks_interval_seconds".into(),
+            integer(
+                "Interval for invoice checks and regular mint tasks",
+                3_600,
+                1,
+                86_400,
+            ),
+        ),
+        (
+            "tos_url".into(),
+            string("NUT-06 terms-of-service URL; empty omits it", "", 0, 2_048),
+        ),
+        (
+            "transaction_rate_limit_per_minute".into(),
+            integer(
+                "Maximum transactional requests per client IP per minute",
+                20,
+                1,
+                100_000,
+            ),
+        ),
+        (
+            "watchdog_balance_check_interval_seconds".into(),
+            integer("Balance watchdog polling interval", 60, 1, 86_400),
+        ),
+        (
+            "watchdog_enabled".into(),
+            boolean(
+                "Stop the mint when backend and mint balances diverge",
+                false,
+            ),
+        ),
+        (
+            "websocket_read_timeout_seconds".into(),
+            integer("WebSocket read timeout", 600, 1, 86_400),
         ),
     ])
 }
@@ -2009,6 +2329,77 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Mint persistent work directory", Policy),
             ),
         ]),
+        "nutshell" => BTreeMap::from([
+            (
+                "authentication".into(),
+                string(
+                    "Disabled until an OIDC dependency contract is installed",
+                    Policy,
+                ),
+            ),
+            (
+                "backend_kind".into(),
+                string("Topology-selected LndRestWallet backend", Topology),
+            ),
+            (
+                "database".into(),
+                string("Topology-selected SQLite path or PostgreSQL URL", Topology),
+            ),
+            (
+                "data_directory".into(),
+                string("Persistent Nutshell mint data directory", Policy),
+            ),
+            (
+                "derivation_path".into(),
+                string(
+                    "Fixed disposable-regtest sat keyset derivation path",
+                    Policy,
+                ),
+            ),
+            (
+                "forwarded_allow_ips".into(),
+                string("Fixed direct-service proxy allowlist", Policy),
+            ),
+            (
+                "lightning_backend_credentials".into(),
+                string("Linked LND TLS certificate and macaroon", Secret),
+            ),
+            (
+                "lightning_backend_endpoint".into(),
+                string("Linked LND REST endpoint", Topology),
+            ),
+            (
+                "listen_address".into(),
+                string("Derived mint listen address", Topology),
+            ),
+            (
+                "management_rpc".into(),
+                string("Disabled management RPC service", Policy),
+            ),
+            (
+                "mint_private_key".into(),
+                string("Controller-generated mint root key", Secret),
+            ),
+            (
+                "public_url".into(),
+                string("Derived mint public URL", Topology),
+            ),
+            (
+                "redis_cache".into(),
+                string(
+                    "Disabled until a Redis dependency contract is installed",
+                    Policy,
+                ),
+            ),
+            (
+                "tor".into(),
+                string("Disabled in the isolated regtest laboratory", Policy),
+            ),
+            (
+                "unit".into(),
+                string("Proofstorm-selected sat unit", Policy),
+            ),
+        ]),
         "nutshell-wallet" => BTreeMap::from([
             (
                 "data_directory".into(),
@@ -2130,6 +2521,17 @@ fn contract(
                 maximum_field: "max_melt_sat".into(),
             },
         ]
+    } else if id == "nutshell" {
+        vec![
+            ConfigRule::LessThanOrEqual {
+                minimum_field: "max_mint_sat".into(),
+                maximum_field: "max_balance_sat".into(),
+            },
+            ConfigRule::LessThanOrEqual {
+                minimum_field: "max_melt_sat".into(),
+                maximum_field: "max_balance_sat".into(),
+            },
+        ]
     } else {
         vec![]
     };
@@ -2164,7 +2566,7 @@ fn protocol_probe_contract(backend: &str) -> Option<ProtocolProbeContract> {
         "postgresql" => Some(ProtocolProbeContract::Tcp {
             port_name: "postgres".into(),
         }),
-        "cdk" | "cdk-ldk" | "cdk-bdk" => Some(ProtocolProbeContract::HttpGet {
+        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" => Some(ProtocolProbeContract::HttpGet {
             port_name: "http".into(),
             path: "/v1/info".into(),
         }),
@@ -2205,7 +2607,7 @@ fn observation_contract(
         "bitcoin-core" | "lnd" | "cln" | "postgresql" => {
             (WorkloadControllerKind::StatefulSet, vec![stateful_data()])
         }
-        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell-wallet" => {
+        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" | "nutshell-wallet" => {
             (WorkloadControllerKind::Deployment, vec![component_data()])
         }
         _ => (WorkloadControllerKind::Deployment, vec![]),
@@ -2326,6 +2728,28 @@ fn execution_contract(
             ],
             BTreeMap::from([
                 ("CDK_MINTD_WORK_DIR".into(), "/app/data".into()),
+                ("HOME".into(), "/app/data".into()),
+            ]),
+        ),
+        "nutshell" => (
+            vec![
+                binding("data", "/app/data", false, Source::ComponentPersistentData),
+                binding(
+                    "lnd",
+                    "/lnd",
+                    true,
+                    Source::LinkedStatefulData {
+                        link_kind: crate::LinkKind::PaymentBackend,
+                        binding: crate::DependencyBinding::Payment {
+                            method: crate::PaymentMethod::Bolt11,
+                            unit: "sat".into(),
+                        },
+                        target_implementation: "lnd".into(),
+                    },
+                ),
+            ],
+            BTreeMap::from([
+                ("CASHU_DIR".into(), "/app/data".into()),
                 ("HOME".into(), "/app/data".into()),
             ]),
         ),
@@ -2505,6 +2929,7 @@ mod tests {
                 "cdk" => "cdk-mintd/0.17/v1",
                 "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
                 "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+                "nutshell" => "nutshell-mint/0.20/v1",
                 "postgresql" => "postgresql/17/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
                 "attacker-workspace" => "attacker-workspace/0.1/v1",

@@ -403,6 +403,22 @@
         {
           "properties": {
             "config": {
+              "$ref": "#/$defs/NutshellMintConfig"
+            },
+            "implementation": {
+              "const": "nutshell",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
               "$ref": "#/$defs/PostgresConfig"
             },
             "implementation": {
@@ -617,6 +633,177 @@
       },
       "required": [
         "alias"
+      ],
+      "type": "object"
+    },
+    "NutshellMintConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "contact_email": {
+          "type": "string"
+        },
+        "contact_nostr_public_key": {
+          "type": "string"
+        },
+        "database_lock_timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "description_long": {
+          "type": "string"
+        },
+        "disable_melt": {
+          "type": "boolean"
+        },
+        "disable_mint": {
+          "type": "boolean"
+        },
+        "global_rate_limit_per_minute": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "icon_url": {
+          "type": "string"
+        },
+        "input_fee_ppk": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lightning_fee_percent": {
+          "format": "double",
+          "type": "number"
+        },
+        "lightning_reserve_fee_min_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lnd_enable_mpp": {
+          "type": "boolean"
+        },
+        "max_balance_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_melt_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_mint_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_request_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_secret_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_witness_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "melt_quote_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mint_quote_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "motd": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "quote_backend_check_rate_limit_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_limit": {
+          "type": "boolean"
+        },
+        "rate_limit_proxy_trust": {
+          "type": "boolean"
+        },
+        "regular_tasks_interval_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tos_url": {
+          "type": "string"
+        },
+        "transaction_rate_limit_per_minute": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "watchdog_balance_check_interval_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "watchdog_enabled": {
+          "type": "boolean"
+        },
+        "websocket_read_timeout_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "description_long",
+        "motd",
+        "icon_url",
+        "contact_email",
+        "contact_nostr_public_key",
+        "tos_url",
+        "input_fee_ppk",
+        "mint_quote_ttl_seconds",
+        "melt_quote_ttl_seconds",
+        "max_secret_length",
+        "max_witness_length",
+        "max_request_length",
+        "max_mint_sat",
+        "max_melt_sat",
+        "max_balance_sat",
+        "disable_mint",
+        "disable_melt",
+        "rate_limit",
+        "rate_limit_proxy_trust",
+        "global_rate_limit_per_minute",
+        "transaction_rate_limit_per_minute",
+        "quote_backend_check_rate_limit_seconds",
+        "lightning_fee_percent",
+        "lightning_reserve_fee_min_sat",
+        "lnd_enable_mpp",
+        "watchdog_enabled",
+        "watchdog_balance_check_interval_seconds",
+        "database_lock_timeout_ms",
+        "regular_tasks_interval_seconds",
+        "websocket_read_timeout_seconds"
       ],
       "type": "object"
     },

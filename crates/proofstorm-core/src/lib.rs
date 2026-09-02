@@ -22,7 +22,7 @@ pub use backend::{
     ConfigFieldContract, ConfigRule, ConfigSettingClass, ConfigValueKind,
     CredentialObservationContract, EffectiveComponentConfig, ExecutionContextContract,
     ExecutionMountContract, ExecutionMountTemplateContract, ExecutionStorageSource,
-    ExecutionStorageTemplateSource, LinkedStateObservationContract, LndConfig,
+    ExecutionStorageTemplateSource, LinkedStateObservationContract, LndConfig, NutshellMintConfig,
     OperationAdmissionContract, OperationClass, PostgresConfig, ProtocolProbeContract,
     ProtocolProbePlan, ReadinessPrerequisite, StorageObservationContract,
     StorageRequirementTemplate, TargetDescriptorContract, WorkloadControllerKind,

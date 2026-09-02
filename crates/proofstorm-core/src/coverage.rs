@@ -116,7 +116,7 @@ mod tests {
         let manifest =
             configuration_coverage_manifest(&default_catalog(), &default_backend_registry())
                 .expect("coverage manifest");
-        assert_eq!(manifest.entries.len(), 9);
+        assert_eq!(manifest.entries.len(), 10);
         let cdk = manifest
             .entries
             .iter()
@@ -172,6 +172,22 @@ mod tests {
         assert_eq!(
             cdk_ldk.fields["ldk_node_mnemonic"].classification,
             ConfigSettingClass::RuntimePolicy
+        );
+        let nutshell = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.implementation == "nutshell")
+            .expect("Nutshell mint coverage");
+        assert_eq!(nutshell.upstream_version, "0.20.2");
+        assert_eq!(nutshell.config_version, "nutshell-mint/0.20/v1");
+        assert_eq!(
+            nutshell.support.storage,
+            [StorageBackend::Sqlite, StorageBackend::Postgres].into()
+        );
+        assert_eq!(nutshell.support.payment_backends, ["lnd".into()].into());
+        assert_eq!(
+            nutshell.fields["mint_private_key"].classification,
+            ConfigSettingClass::GeneratedInstanceSecret
         );
     }
 }

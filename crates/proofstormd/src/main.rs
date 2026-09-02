@@ -1253,6 +1253,7 @@ async fn ensure_generated_postgres_secret(
             "POSTGRES_USER",
             "POSTGRES_PASSWORD",
             "POSTGRES_DB",
+            "DATABASE_URL",
             "database.toml",
         ] {
             if !data.contains_key(key) {
@@ -1303,8 +1304,59 @@ async fn ensure_generated_postgres_secret(
     let mut desired = template.clone();
     desired.string_data.get_or_insert_default().extend([
         ("POSTGRES_PASSWORD".into(), password),
+        ("DATABASE_URL".into(), url),
         ("database.toml".into(), database_config),
     ]);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
+async fn ensure_generated_nutshell_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in ["PROOFSTORM_SECRET_KIND", "MINT_PRIVATE_KEY"] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let kind = template
+        .string_data
+        .as_ref()
+        .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"));
+    if kind.map(String::as_str) != Some("nutshell-mint") {
+        return Err(Error::SecretContract(format!(
+            "Secret template {name:?} is not a Nutshell mint secret"
+        )));
+    }
+    let mut entropy = [0_u8; 32];
+    getrandom::fill(&mut entropy).map_err(|error| {
+        Error::SecretContract(format!(
+            "could not generate credentials for {name:?}: {error}"
+        ))
+    })?;
+    let private_key = entropy
+        .iter()
+        .fold(String::with_capacity(64), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+            encoded
+        });
+    let mut desired = template.clone();
+    desired
+        .string_data
+        .get_or_insert_default()
+        .insert("MINT_PRIVATE_KEY".into(), private_key);
     secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
     Ok(())
 }
@@ -1371,7 +1423,16 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     let client = context.client.clone();
     let secrets = Api::<Secret>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.secrets {
-        ensure_generated_postgres_secret(&secrets, resource, &patch).await?;
+        if resource
+            .string_data
+            .as_ref()
+            .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
+            .is_some_and(|kind| kind == "nutshell-mint")
+        {
+            ensure_generated_nutshell_secret(&secrets, resource, &patch).await?;
+        } else {
+            ensure_generated_postgres_secret(&secrets, resource, &patch).await?;
+        }
     }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.config_maps {
