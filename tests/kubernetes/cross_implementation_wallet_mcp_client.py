@@ -107,9 +107,9 @@ lab = {
         {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cross-payer"}},
         {"id": "cache", "kind": "database", "implementation": "redis", "version": "8.10.1", "config_version": "redis/8.10/v1", "control": "laboratory", "config": {"maxmemory_mb": 64}},
         {"id": "cdk-mint", "kind": "mint", "implementation": "cdk", "version": "0.17.6", "config_version": "cdk-mintd/0.17/v1", "control": "target", "config": {"name": "Proofstorm CDK Cross-Parity", "description": "Cross-implementation wallet acceptance"}},
-        {"id": "nutshell-mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.2", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell Cross-Parity", "description": "Cross-implementation wallet acceptance", "redis_cache_ttl_seconds": 900}},
-        {"id": "cdk-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.2", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
-        {"id": "nutshell-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.2", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
+        {"id": "nutshell-mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell Cross-Parity", "description": "Cross-implementation wallet acceptance", "redis_cache_ttl_seconds": 900}},
+        {"id": "cdk-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
+        {"id": "nutshell-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
     ],
     "links": [
         {"id": "mint-lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -127,7 +127,7 @@ locks = {entry["component_id"]: entry for entry in published["lock"]["entries"]}
 expected_locks = {
     "cache": ("redis", "8.10.1", "redis/8.10/v1"),
     "cdk-mint": ("cdk", "0.17.6", "cdk-mintd/0.17/v1"),
-    "nutshell-mint": ("nutshell", "0.20.2", "nutshell-mint/0.20/v1"),
+    "nutshell-mint": ("nutshell", "0.20.3", "nutshell-mint/0.20/v1"),
 }
 for component_id, expected in expected_locks.items():
     entry = locks.get(component_id)

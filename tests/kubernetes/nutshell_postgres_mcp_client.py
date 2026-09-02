@@ -81,7 +81,7 @@ lab = {
         {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {}},
         {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-nutshell-postgres"}},
         {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "laboratory", "config": {"database_name": "nutshell_mint", "storage_size": "2Gi"}},
-        {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.2", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell PostgreSQL", "description": "Secret-backed persistence acceptance", "mint_quote_ttl_seconds": 701, "melt_quote_ttl_seconds": 131}},
+        {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell PostgreSQL", "description": "Secret-backed persistence acceptance", "mint_quote_ttl_seconds": 701, "melt_quote_ttl_seconds": 131}},
     ],
     "links": [
         {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -124,7 +124,7 @@ url = urlparse(settings.mint_database)
 print(json.dumps({'version': settings.version, 'name': settings.mint_info_name, 'database_host': url.hostname, 'database_name': url.path.lstrip('/'), 'private_key_length': len(settings.mint_private_key or '')}))
 """
 settings = json.loads(kubectl("exec", "deployment/mint", "-n", namespace, "--", "python3", "-c", settings_script).strip())
-if settings != {"version": "0.20.2", "name": "Proofstorm Nutshell PostgreSQL", "database_host": "database", "database_name": "nutshell_mint", "private_key_length": 64}:
+if settings != {"version": "0.20.3", "name": "Proofstorm Nutshell PostgreSQL", "database_host": "database", "database_name": "nutshell_mint", "private_key_length": 64}:
     fail(f"live Nutshell PostgreSQL settings differ: {settings}")
 
 sql = ('PGPASSWORD="$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" '

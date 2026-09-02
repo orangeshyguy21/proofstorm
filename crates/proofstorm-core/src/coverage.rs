@@ -156,7 +156,7 @@ mod tests {
         assert!(
             cdk.support.compatible_wallet_adapters[0]
                 .versions
-                .contains("0.20.2")
+                .contains("0.20.3")
         );
         let cdk_ldk = manifest
             .entries
@@ -178,7 +178,7 @@ mod tests {
             .iter()
             .find(|entry| entry.implementation == "nutshell")
             .expect("Nutshell mint coverage");
-        assert_eq!(nutshell.upstream_version, "0.20.2");
+        assert_eq!(nutshell.upstream_version, "0.20.3");
         assert_eq!(nutshell.config_version, "nutshell-mint/0.20/v1");
         assert_eq!(
             nutshell.support.storage,

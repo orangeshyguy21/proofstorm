@@ -10,4 +10,4 @@ cargo build --locked --manifest-path "${ROOT_DIR}/Cargo.toml" -p proofstorm-mcp
 python3 "${ROOT_DIR}/tests/kubernetes/cross_implementation_wallet_mcp_client.py" \
   "${ROOT_DIR}/target/debug/proofstorm-mcp" "${TMP_DIR}/proofstorm.sqlite3"
 
-echo "CDK 0.17.6 and Redis-backed Nutshell 0.20.2 passed the same wallet workflow; cache use, secret stability, ephemeral restart, recovery, and teardown passed"
+echo "CDK 0.17.6 and Redis-backed Nutshell 0.20.3 passed the same wallet workflow; cache use, secret stability, ephemeral restart, recovery, and teardown passed"

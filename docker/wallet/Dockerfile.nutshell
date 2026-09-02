@@ -1,5 +1,5 @@
 # Nutshell wallet: cashubtc/nutshell image ships the CLI via poetry, not /usr/local/bin/cashu.
-ARG NUTSHELL_VERSION=0.20.2
+ARG NUTSHELL_VERSION=0.20.3
 FROM cashubtc/nutshell:${NUTSHELL_VERSION}
 
 RUN printf '%s\n' \

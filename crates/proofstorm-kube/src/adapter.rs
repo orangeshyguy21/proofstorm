@@ -2061,14 +2061,11 @@ pub fn render_nutshell_mint_component(
             "valueFrom": {"secretKeyRef": {"name": cache_secret, "key": "REDIS_URL"}}
         }));
     }
-    let mut command_script = if lightning.backend_id == "cln" {
+    let command_script = if lightning.backend_id == "cln" {
         NUTSHELL_CLN_BOOTSTRAP.to_owned()
     } else {
         "from cashu.mint.main import main; main()".to_owned()
     };
-    if authentication.is_some() {
-        command_script = format!("{NUTSHELL_AUTH_SCHEMA_COMPATIBILITY}\n{command_script}");
-    }
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut rendered = RenderedComponent::default();
     rendered.config_maps.push(resource(json!({
@@ -2417,7 +2414,7 @@ fn nutshell_mint_environment(
         ("TOR".into(), "FALSE".into()),
     ]);
     if let Some(oidc_discovery_url) = oidc_discovery_url {
-        // Nutshell 0.20.2 spells these upstream environment variables `OICD`.
+        // Nutshell 0.20.3 spells these upstream environment variables `OICD`.
         // Keep Proofstorm's authoring fields correctly named and translate only
         // at this exact-version adapter boundary.
         environment.extend([
@@ -2474,43 +2471,6 @@ fn nutshell_mint_environment(
     }
     environment
 }
-
-// Nutshell 0.20.2's auth migrations create the pre-0.20 `promises` shape,
-// while its AuthLedger is wired to the current LedgerCrudSqlite write path.
-// Register one additional auth migration before importing the ASGI app so the
-// private auth database can persist BAT issuance and replay state correctly.
-const NUTSHELL_AUTH_SCHEMA_COMPATIBILITY: &str = r#"from cashu.mint.auth import migrations as proofstorm_auth_migrations
-
-async def m004_proofstorm_current_promises_schema(db):
-    async with db.connect() as conn:
-        promises = db.table_with_schema("promises")
-        legacy = db.table_with_schema("promises_proofstorm_legacy")
-        await conn.execute(f"ALTER TABLE {promises} RENAME TO promises_proofstorm_legacy")
-        await conn.execute(f"""
-            CREATE TABLE {promises} (
-                id TEXT NOT NULL,
-                amount {db.big_int} NOT NULL,
-                b_ TEXT NOT NULL,
-                c_ TEXT,
-                dleq_e TEXT,
-                dleq_s TEXT,
-                created TIMESTAMP,
-                signed_at TIMESTAMP,
-                mint_quote TEXT,
-                melt_quote TEXT,
-                swap_id TEXT,
-                order_index INTEGER DEFAULT 0,
-                UNIQUE (b_)
-            )
-        """)
-        await conn.execute(f"""
-            INSERT INTO {promises} (id, amount, b_, c_, dleq_e, dleq_s, created)
-            SELECT id, amount, b_, c_, dleq_e, dleq_s, created FROM {legacy}
-        """)
-        await conn.execute(f"DROP TABLE {legacy}")
-
-proofstorm_auth_migrations.m004_proofstorm_current_promises_schema = m004_proofstorm_current_promises_schema
-"#;
 
 const NUTSHELL_CLN_BOOTSTRAP: &str = r#"import json
 import os

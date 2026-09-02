@@ -162,7 +162,7 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "nutshell",
-            "version": "0.20.2",
+            "version": "0.20.3",
             "config_version": "nutshell-mint/0.20/v1",
             "control": "target",
             "config": {
@@ -223,7 +223,7 @@ published = call(
 )
 locks = {entry["catalog_id"]: entry for entry in published["lock"]["entries"]}
 expected_locks = {
-    "nutshell": ("0.20.2", "nutshell-mint/0.20/v1"),
+    "nutshell": ("0.20.3", "nutshell-mint/0.20/v1"),
     "keycloak": ("25.0.6", "keycloak/25/v1"),
     "postgresql": ("17.11", "postgresql/17/v1"),
 }

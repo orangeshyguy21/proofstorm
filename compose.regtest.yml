@@ -150,7 +150,7 @@ services:
       retries: 40
 
   nutshell:
-    image: cashubtc/nutshell:${NUTSHELL_VERSION:-0.20.2}
+    image: cashubtc/nutshell:${NUTSHELL_VERSION:-0.20.3}
     container_name: proofstorm-rt-nutshell
     restart: on-failure
     networks: [net]

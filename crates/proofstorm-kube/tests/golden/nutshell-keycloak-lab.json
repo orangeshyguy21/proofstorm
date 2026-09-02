@@ -834,7 +834,7 @@
           "CASHU_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+        "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
         "mounts": [
           {
             "mount_path": "/app/data",
@@ -962,7 +962,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:97295eb1e34d5c39bdd2da197f1c9b5461ad56076eaaf222990fdfad1fbd2405",
+      "rollout_digest": "sha256:f18384a6db9a47d9856e0bc7b8b188173a6344ed9cc940f9dd633365ca07508c",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -975,7 +975,7 @@
         "ports": {
           "http": 3338
         },
-        "version": "0.20.2"
+        "version": "0.20.3"
       },
       "workload": {
         "desired_replicas": 1,
@@ -1284,7 +1284,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:97295eb1e34d5c39bdd2da197f1c9b5461ad56076eaaf222990fdfad1fbd2405"
+                "proofstorm.dev/rollout-digest": "sha256:f18384a6db9a47d9856e0bc7b8b188173a6344ed9cc940f9dd633365ca07508c"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1314,7 +1314,7 @@
                   "command": [
                     "python3",
                     "-c",
-                    "from cashu.mint.auth import migrations as proofstorm_auth_migrations\n\nasync def m004_proofstorm_current_promises_schema(db):\n    async with db.connect() as conn:\n        promises = db.table_with_schema(\"promises\")\n        legacy = db.table_with_schema(\"promises_proofstorm_legacy\")\n        await conn.execute(f\"ALTER TABLE {promises} RENAME TO promises_proofstorm_legacy\")\n        await conn.execute(f\"\"\"\n            CREATE TABLE {promises} (\n                id TEXT NOT NULL,\n                amount {db.big_int} NOT NULL,\n                b_ TEXT NOT NULL,\n                c_ TEXT,\n                dleq_e TEXT,\n                dleq_s TEXT,\n                created TIMESTAMP,\n                signed_at TIMESTAMP,\n                mint_quote TEXT,\n                melt_quote TEXT,\n                swap_id TEXT,\n                order_index INTEGER DEFAULT 0,\n                UNIQUE (b_)\n            )\n        \"\"\")\n        await conn.execute(f\"\"\"\n            INSERT INTO {promises} (id, amount, b_, c_, dleq_e, dleq_s, created)\n            SELECT id, amount, b_, c_, dleq_e, dleq_s, created FROM {legacy}\n        \"\"\")\n        await conn.execute(f\"DROP TABLE {legacy}\")\n\nproofstorm_auth_migrations.m004_proofstorm_current_promises_schema = m004_proofstorm_current_promises_schema\n\nfrom cashu.mint.main import main; main()"
+                    "from cashu.mint.main import main; main()"
                   ],
                   "env": [
                     {
@@ -1334,7 +1334,7 @@
                       }
                     }
                   ],
-                  "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -1428,7 +1428,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:62bf715085b5c5bb201ca5b997f251537a44f3dc5842955eef8cbe69d5da9baa",
+            "proofstorm.dev/prober-digest": "sha256:f3f9c13554654d4b1ac11f0ccb077ea622fd3b497e526d0839edd23c7665aa61",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -1455,7 +1455,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:62bf715085b5c5bb201ca5b997f251537a44f3dc5842955eef8cbe69d5da9baa",
+                "proofstorm.dev/prober-digest": "sha256:f3f9c13554654d4b1ac11f0ccb077ea622fd3b497e526d0839edd23c7665aa61",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {

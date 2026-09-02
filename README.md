@@ -361,7 +361,7 @@ to prove persistence, and verifies teardown:
 bash tests/kubernetes/cdk-bdk-stress-e2e.sh
 ```
 
-Nutshell mint parity is the current control-plane increment. Nutshell 0.20.2 is
+Nutshell mint parity is the current control-plane increment. Nutshell 0.20.3 is
 now an exact-version mint catalog entry with a typed configuration contract,
 machine-readable field coverage, a pinned image digest, persistent state, a
 controller-generated private key, and exact BOLT11/sat bindings to LND and
@@ -377,16 +377,18 @@ PostgreSQL credentials and the mint private key remain stable across controller 
 while database state survives both database and mint workload restarts. NUT-06
 metadata, quote lifetimes, proof/request limits, mint/melt and balance ceilings,
 fee reserve policy, rate limits, Redis cache TTL, MPP, and watchdog policy are
-agent-authorable and rollout-affecting. OIDC authentication is complete: the
-exact Nutshell 0.20.2 NUT-21 clear-auth and NUT-22 blind-auth settings,
+agent-authorable and rollout-affecting. OIDC environment and topology wiring
+are complete: the
+exact Nutshell 0.20.3 NUT-21 clear-auth and NUT-22 blind-auth settings,
 PVC-backed authentication ledger, and discovery/client policy are typed and
 rendered. A typed `authentication_backend` link selects digest-pinned Keycloak
 25.0.6 with mandatory PostgreSQL storage, a topology-derived discovery URL,
 bounded JVM heap, and controller-generated administrator, realm-import, and
 disposable test-user credentials. The generated public client includes the
-standard subject-bearing scopes and optional offline access. An exact-version
-auth migration bridges Nutshell 0.20.2's older auth schema to its newer CRUD
-write path. Non-LND/non-CLN payment backends and management RPC are not
+standard subject-bearing scopes and optional offline access. Native BAT
+issuance remains blocked by an upstream Nutshell 0.20.3 auth-ledger migration
+defect: its auth `promises` table does not match the shared CRUD write path.
+Proofstorm does not rewrite that schema. Non-LND/non-CLN payment backends and management RPC are not
 advertised until matching dependency and secret contracts exist. The current
 live acceptance gates are:
 
@@ -398,21 +400,22 @@ bash tests/kubernetes/cross-implementation-wallet-e2e.sh
 bash tests/kubernetes/nutshell-oidc-e2e.sh
 ```
 
-The OIDC gate obtains a real Keycloak access token with Nutshell's native
+The OIDC conformance gate obtains a real Keycloak access token with Nutshell's native
 `WalletAuth`, checks signed issuer/client/subject claims, exercises the NUT-21
-and NUT-22 missing/invalid, maximum-output, and per-user rate-limit failures,
-mints DLEQ-backed BATs, uses a BAT on a protected quote, and proves credential,
-auth-ledger, spent-token, and fresh-token behavior across controller,
-PostgreSQL, Keycloak, and mint restarts before verified teardown.
+and NUT-22 missing/invalid and policy failures, then proceeds to native BAT
+issuance. Against upstream 0.20.3 it currently reproduces the auth-ledger
+schema failure and therefore does not satisfy the restart/replay exit gate.
 
-CDK 0.17.6 is not claimed as an authenticated Nutshell client by this gate.
-Its OIDC login and refresh complete against the generated Keycloak client, but
-its NUT-22 key parser rejects Nutshell 0.20.2's nullable `input_fee_ppk`; the
-0.17.6 CLI also loses the fetched auth settings when it constructs the wallet.
-That cross-client compatibility gap is the next bounded increment.
+CDK is not claimed as an authenticated Nutshell client by this gate. The pinned
+0.17.6 client completes OIDC login and refresh against the generated Keycloak
+client, but its CLI does not retain the discovered auth settings in the wallet.
+Both CDK 0.17.6 and current 0.18.0 also model `input_fee_ppk` as a non-null
+`u64`, so they discard Nutshell 0.20.3's auth keyset response when that field is
+`null`. These are upstream conformance findings, not Proofstorm compatibility
+shims.
 
 The cross-implementation gate materializes CDK 0.17.6 and Redis-backed
-Nutshell 0.20.2 in one lab, drives both through the same pinned Nutshell wallet
+Nutshell 0.20.3 in one lab, drives both through the same pinned Nutshell wallet
 adapter, verifies application-populated cache keys, stable Redis credentials,
 ephemeral cache restart and mint recovery, and
 requires identical initialize, zero-balance, 1,000 sat funding, self-pay round
@@ -583,7 +586,7 @@ over HTTP** with independent, racing clients and a real LN backend (SPEC §1).
 | `MINT_IMPL`                   | `cdk`    | Mint implementation (cdk only today)                         |
 | `CDK_MINTD_VERSION`           | `0.17.6` | `cashubtc/mintd` tag                                         |
 | `CDK_CLI_VERSION`             | `0.17.6` | `cdk-cli` in wallet image                                    |
-| `NUTSHELL_VERSION`            | `0.20.2` | `cashubtc/nutshell` in wallet image                          |
+| `NUTSHELL_VERSION`            | `0.20.3` | `cashubtc/nutshell` in wallet image                          |
 | `MINT_HOST_PORT`              | `3338`   | Host port for mint HTTP                                      |
 | `CONSERVATION_EXPECTED`       | _(auto)_ | Override expected total (`N * FUND_AMOUNT`)                  |
 | `CONSERVATION_TOLERANCE`      | `0`      | Allowed delta in fund/population check                       |
@@ -624,20 +627,21 @@ typed configuration, LND/SQLite and secret-backed PostgreSQL materialization,
 generated key handling, golden contract, restart persistence, and live
 acceptance clients are in tree and passing on k3d. The same pinned Nutshell
 wallet workflow also passes against CDK and Redis-backed Nutshell side by side.
-Redis and OIDC support are complete. The exact 0.20.2 authentication projection,
-PVC-backed auth ledger compatibility migration, typed in-lab Keycloak
-dependency, and live NUT-21/NUT-22 acceptance now pass together. Authenticated
-CDK-to-Nutshell client interoperability is next; additional payment backends
+Redis support and OIDC environment wiring are complete. The exact 0.20.3
+authentication projection and typed in-lab Keycloak dependency pass, while the
+native NUT-22 gate is blocked by the reproduced upstream auth-ledger schema
+defect. CDK-to-Nutshell authenticated-client conformance follows that fix;
+additional payment backends
 and management RPC remain intentionally unsupported until their typed
 dependency, authority, and secret contracts are implemented.
 
 | Kubernetes Nutshell increment | Status | Exit gate |
 | ----------------------------- | ------ | --------- |
 | LND/CLN, SQLite/PostgreSQL, Redis | done | Exact-version golden, restart, and cross-implementation gates pass |
-| OIDC settings and auth-ledger wiring | done | Typed schema, exact 0.20.2 environment projection, PVC-backed auth persistence |
+| OIDC settings and auth-ledger wiring | done | Typed schema, exact 0.20.3 environment projection, PVC-backed auth persistence |
 | In-lab Keycloak dependency | done | Digest-pinned provider, generated credentials, topology-derived discovery URL |
-| NUT-21/NUT-22 live acceptance | done | Positive/negative limits, DLEQ BAT, protected quote, replay persistence, restart recovery, verified teardown |
-| CDK authenticated-client interoperability | next | CDK parses Nutshell auth keys, retains auth settings, mints and spends a BAT against the protected API |
+| NUT-21/NUT-22 live acceptance | blocked upstream | Nutshell 0.20.3 must mint and persist a BAT without a schema rewrite, then pass replay and restart recovery |
+| CDK authenticated-client interoperability | blocked upstream | Current CDK parses Nutshell auth keys, retains auth settings, and spends a BAT against the protected API |
 | Additional payment backends | queued | Exact backend and secret contracts selected and verified |
 | Management RPC | queued | Separate mTLS authority and bounded management capabilities |
 

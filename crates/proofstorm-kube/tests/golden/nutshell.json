@@ -129,7 +129,7 @@
         "CASHU_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+      "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
       "mounts": [
         {
           "mount_path": "/app/data",
@@ -238,7 +238,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:2682f9f1e86235f8889bce0eb814a80eccaaef6f732e9b2baaf4c2c5a8dd302d",
+    "rollout_digest": "sha256:bfd1d2250bd6976fc5daaaf232fca8bcfa26a44bbf52fa5cbdbad14cf0d38ff3",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -251,7 +251,7 @@
       "ports": {
         "http": 3338
       },
-      "version": "0.20.2"
+      "version": "0.20.3"
     },
     "workload": {
       "desired_replicas": 1,
@@ -362,7 +362,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:2682f9f1e86235f8889bce0eb814a80eccaaef6f732e9b2baaf4c2c5a8dd302d"
+                "proofstorm.dev/rollout-digest": "sha256:bfd1d2250bd6976fc5daaaf232fca8bcfa26a44bbf52fa5cbdbad14cf0d38ff3"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -412,7 +412,7 @@
                       }
                     }
                   ],
-                  "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [

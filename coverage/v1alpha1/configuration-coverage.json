@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:8a95761bc9c6a3d05157c196b65609883c77af0990463c04878260208d771b86",
+  "catalog_digest": "sha256:5f8eb984591d0bb6177d1e6203bcf5ace4942daa462b98fce3e97e10290a708c",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -301,7 +301,7 @@
           {
             "implementation": "nutshell-wallet",
             "versions": [
-              "0.20.2"
+              "0.20.3"
             ]
           }
         ]
@@ -506,7 +506,7 @@
           {
             "implementation": "nutshell-wallet",
             "versions": [
-              "0.20.2"
+              "0.20.3"
             ]
           }
         ]
@@ -718,7 +718,7 @@
           {
             "implementation": "nutshell-wallet",
             "versions": [
-              "0.20.2"
+              "0.20.3"
             ]
           }
         ]
@@ -977,12 +977,12 @@
     {
       "implementation": "nutshell",
       "kind": "mint",
-      "upstream_version": "0.20.2",
+      "upstream_version": "0.20.3",
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
       "config_schema_digest": "sha256:60e97661e243d5733b37af04de5417b6b1dc3b201343620c9bfe936bbdfc312e",
-      "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+      "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
       "fields": {
         "auth_max_blind_tokens": {
           "classification": "agent_authorable",
@@ -1251,7 +1251,7 @@
           {
             "implementation": "nutshell-wallet",
             "versions": [
-              "0.20.2"
+              "0.20.3"
             ]
           }
         ]
@@ -1297,12 +1297,12 @@
     {
       "implementation": "nutshell-wallet",
       "kind": "wallet",
-      "upstream_version": "0.20.2",
+      "upstream_version": "0.20.3",
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "nutshell-wallet/0.20/v1",
       "config_schema_digest": "sha256:c3c3c1cfd04bf63de992267beabe8d2b1927575da11d8508bbe865957115281f",
-      "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+      "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",

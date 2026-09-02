@@ -100,7 +100,7 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "nutshell",
-            "version": "0.20.2",
+            "version": "0.20.3",
             "config_version": "nutshell-mint/0.20/v1",
             "control": "target",
             "config": {
@@ -148,9 +148,9 @@ published = call(
     {"draft_id": "nutshell-mint", "expected_version": 1, "idempotency_key": "publish-nutshell-mint"},
 )
 nutshell_lock = next(entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "nutshell")
-if nutshell_lock["version"] != "0.20.2" or nutshell_lock["config_version"] != "nutshell-mint/0.20/v1":
+if nutshell_lock["version"] != "0.20.3" or nutshell_lock["config_version"] != "nutshell-mint/0.20/v1":
     fail(f"unexpected Nutshell lock: {nutshell_lock}")
-if nutshell_lock["image"] != "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574":
+if nutshell_lock["image"] != "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed":
     fail(f"unexpected Nutshell image: {nutshell_lock}")
 
 call(
@@ -202,7 +202,7 @@ native = subprocess.run(
 )
 settings = json.loads(native.stdout.strip())
 expected = {
-    "version": "0.20.2",
+    "version": "0.20.3",
     "name": "Proofstorm Nutshell Native",
     "description": "Native Nutshell and LND lab",
     "input_fee_ppk": 123,

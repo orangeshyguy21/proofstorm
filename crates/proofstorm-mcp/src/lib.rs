@@ -3777,7 +3777,7 @@ mod tests {
         assert!(
             cdk.support_matrix.compatible_wallet_adapters[0]
                 .versions
-                .contains("0.20.2")
+                .contains("0.20.3")
         );
         assert!(cdk.config_schema["properties"].get("mnemonic").is_none());
         assert_embedded_ldk_support(&catalog);

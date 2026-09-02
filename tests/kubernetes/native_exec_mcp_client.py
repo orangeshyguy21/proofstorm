@@ -142,7 +142,7 @@ lab = {
             "id": "wallet",
             "kind": "wallet",
             "implementation": "nutshell-wallet",
-            "version": "0.20.2",
+            "version": "0.20.3",
             "config_version": "nutshell-wallet/0.20/v1",
             "control": "laboratory",
             "config": {},

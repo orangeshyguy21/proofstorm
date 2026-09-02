@@ -33,7 +33,7 @@ x-wallet: &wallet
     dockerfile: ${WALLET_DOCKERFILE:-docker/wallet/Dockerfile.cdk}
     args:
       CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.6}
-      NUTSHELL_VERSION: ${NUTSHELL_VERSION:-0.20.2}
+      NUTSHELL_VERSION: ${NUTSHELL_VERSION:-0.20.3}
   restart: on-failure
   networks: [net]
   depends_on:

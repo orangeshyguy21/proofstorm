@@ -870,10 +870,9 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
         mint.pointer("/spec/template/spec/initContainers/0/name"),
         Some(&json!("wait-for-oidc"))
     );
-    assert!(
-        mint.pointer("/spec/template/spec/containers/0/command/2")
-            .and_then(Value::as_str)
-            .is_some_and(|command| command.contains("m004_proofstorm_current_promises_schema"))
+    assert_eq!(
+        mint.pointer("/spec/template/spec/containers/0/command/2"),
+        Some(&json!("from cashu.mint.main import main; main()"))
     );
     assert_golden(
         "nutshell-keycloak-lab",

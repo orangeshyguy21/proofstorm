@@ -15,4 +15,4 @@ python3 "${ROOT_DIR}/tests/kubernetes/nutshell_oidc_mcp_client.py" \
   "${ROOT_DIR}/target/debug/proofstorm-mcp" \
   "${TMP_DIR}/proofstorm.sqlite3"
 
-echo "Nutshell 0.20.2 + Keycloak 25.0.6 passed NUT-21/NUT-22 positive and negative limits, replay persistence, restart recovery, and teardown"
+echo "Nutshell 0.20.3 + Keycloak 25.0.6 passed NUT-21/NUT-22 positive and negative limits, replay persistence, restart recovery, and teardown"

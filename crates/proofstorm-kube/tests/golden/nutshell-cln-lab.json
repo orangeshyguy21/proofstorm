@@ -385,7 +385,7 @@
           "CASHU_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+        "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
         "mounts": [
           {
             "mount_path": "/app/data",
@@ -493,7 +493,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:3a405e408d22ad9756d880aaefb9bf1dacd0ceab42392e2760101882bafa81f0",
+      "rollout_digest": "sha256:76041815f355b97cdb5e5d93315e25cd7af85e055dddbd8e99de8064ec2c15f0",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -506,7 +506,7 @@
         "ports": {
           "http": 3338
         },
-        "version": "0.20.2"
+        "version": "0.20.3"
       },
       "workload": {
         "desired_replicas": 1,
@@ -813,7 +813,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:3a405e408d22ad9756d880aaefb9bf1dacd0ceab42392e2760101882bafa81f0"
+                "proofstorm.dev/rollout-digest": "sha256:76041815f355b97cdb5e5d93315e25cd7af85e055dddbd8e99de8064ec2c15f0"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -863,7 +863,7 @@
                       }
                     }
                   ],
-                  "image": "docker.io/cashubtc/nutshell@sha256:65e9cbe23aaa1aeb27ce7206fa854a80f39ce8db1c9121eaecfc053a22506574",
+                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -935,7 +935,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:7b3d0783ec5078b08beec2efeebf8ba4c14c3179e9a58f2e2fa5f8facd1960e5",
+            "proofstorm.dev/prober-digest": "sha256:54077d95571f6132a86b5293d47cbb4c6fbe234ed56f7a58d5b5d33f00c5dfaf",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -962,7 +962,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:7b3d0783ec5078b08beec2efeebf8ba4c14c3179e9a58f2e2fa5f8facd1960e5",
+                "proofstorm.dev/prober-digest": "sha256:54077d95571f6132a86b5293d47cbb4c6fbe234ed56f7a58d5b5d33f00c5dfaf",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {

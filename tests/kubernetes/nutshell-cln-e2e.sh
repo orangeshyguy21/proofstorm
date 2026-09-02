@@ -10,4 +10,4 @@ cargo build --locked --manifest-path "${ROOT_DIR}/Cargo.toml" -p proofstorm-mcp
 python3 "${ROOT_DIR}/tests/kubernetes/nutshell_cln_mcp_client.py" \
   "${ROOT_DIR}/target/debug/proofstorm-mcp" "${TMP_DIR}/proofstorm.sqlite3"
 
-echo "Nutshell 0.20.2 + Core Lightning 26.06.7 REST, restricted rune, wallet round-trip, conservation, and teardown passed"
+echo "Nutshell 0.20.3 + Core Lightning 26.06.7 REST, restricted rune, wallet round-trip, conservation, and teardown passed"
