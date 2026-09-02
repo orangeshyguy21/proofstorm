@@ -1,14 +1,16 @@
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use proofstorm_core::{
-    API_VERSION, Capability, ComponentKind, ComponentSpec, ControlClass, LabPolicy, LabSpec,
-    LinkKind, LinkSpec, default_backend_registry, default_catalog, resolve_lock,
+    API_VERSION, BitcoinNetwork, Capability, ComponentKind, ComponentSpec, ControlClass,
+    DatabaseRole, DependencyBinding, LabPolicy, LabSpec, LinkKind, LinkSpec, PaymentMethod,
+    default_backend_registry, default_catalog, resolve_lock,
 };
 use proofstorm_kube::{
     LabAction, NativeExecAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
     ProofstormLabSpec, RenderedComponent, compile_component_plans, render_attacker_component,
     render_bitcoin_component, render_cdk_component, render_cln_component, render_lab,
-    render_lab_action_job, render_lnd_component, render_security_spine, render_wallet_component,
+    render_lab_action_job, render_lnd_component, render_postgres_component, render_security_spine,
+    render_wallet_component,
 };
 use serde_json::{Value, json};
 
@@ -26,7 +28,19 @@ fn component(
         kind,
         implementation: implementation.into(),
         version: None,
-        config_version: "v1alpha1".into(),
+        config_version: match implementation {
+            "bitcoin-core" => "bitcoin-core/30/v1",
+            "lnd" => "lnd/0.20/v1",
+            "cln" => "cln/26.06/v1",
+            "cdk" => "cdk-mintd/0.17/v1",
+            "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
+            "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+            "postgresql" => "postgresql/17/v1",
+            "nutshell-wallet" => "nutshell-wallet/0.20/v1",
+            "attacker-workspace" => "attacker-workspace/0.1/v1",
+            _ => panic!("unknown test implementation {implementation:?}"),
+        }
+        .into(),
         control,
         config: BTreeMap::new(),
     }
@@ -44,20 +58,45 @@ fn lab(name: &str, components: Vec<ComponentSpec>, links: Vec<LinkSpec>) -> LabS
 
 fn chain_link(from: &str, to: &str) -> LinkSpec {
     LinkSpec {
+        id: format!("{from}-{to}-chain"),
         kind: LinkKind::ChainBackend,
         from: from.into(),
         to: to.into(),
+        binding: Some(DependencyBinding::Chain {
+            network: BitcoinNetwork::Regtest,
+        }),
     }
 }
 
 fn lightning_link(from: &str, to: &str) -> LinkSpec {
     LinkSpec {
-        kind: LinkKind::LightningBackend,
+        id: format!("{from}-{to}-lightning"),
+        kind: LinkKind::PaymentBackend,
         from: from.into(),
         to: to.into(),
+        binding: Some(DependencyBinding::Payment {
+            method: PaymentMethod::Bolt11,
+            unit: "sat".into(),
+        }),
     }
 }
 
+fn database_link(from: &str, to: &str) -> LinkSpec {
+    LinkSpec {
+        id: format!("{from}-{to}-database"),
+        kind: LinkKind::DatabaseBackend,
+        from: from.into(),
+        to: to.into(),
+        binding: Some(DependencyBinding::Database {
+            role: DatabaseRole::Primary,
+        }),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the golden matrix intentionally keeps every backend fixture in one exhaustive match"
+)]
 fn backend_lab(backend_id: &str) -> (LabSpec, &'static str) {
     match backend_id {
         "bitcoin-core" => (
@@ -119,6 +158,8 @@ fn backend_lab(backend_id: &str) -> (LabSpec, &'static str) {
             ),
             "mint",
         ),
+        "cdk-ldk" => cdk_ldk_backend_lab(),
+        "cdk-bdk" => cdk_bdk_backend_lab(),
         "nutshell-wallet" => (
             lab(
                 "golden-wallet",
@@ -131,6 +172,19 @@ fn backend_lab(backend_id: &str) -> (LabSpec, &'static str) {
                 vec![],
             ),
             "wallet",
+        ),
+        "postgresql" => (
+            lab(
+                "golden-postgresql",
+                vec![component(
+                    "database",
+                    ComponentKind::Database,
+                    "postgresql",
+                    ControlClass::Laboratory,
+                )],
+                vec![],
+            ),
+            "database",
         ),
         "attacker-workspace" => (
             lab(
@@ -149,6 +203,44 @@ fn backend_lab(backend_id: &str) -> (LabSpec, &'static str) {
     }
 }
 
+fn cdk_ldk_backend_lab() -> (LabSpec, &'static str) {
+    (
+        lab(
+            "golden-cdk-ldk",
+            vec![
+                component(
+                    "chain",
+                    ComponentKind::Bitcoin,
+                    "bitcoin-core",
+                    ControlClass::Laboratory,
+                ),
+                component("mint", ComponentKind::Mint, "cdk-ldk", ControlClass::Target),
+            ],
+            vec![chain_link("mint", "chain")],
+        ),
+        "mint",
+    )
+}
+
+fn cdk_bdk_backend_lab() -> (LabSpec, &'static str) {
+    (
+        lab(
+            "golden-cdk-bdk",
+            vec![
+                component(
+                    "chain",
+                    ComponentKind::Bitcoin,
+                    "bitcoin-core",
+                    ControlClass::Laboratory,
+                ),
+                component("mint", ComponentKind::Mint, "cdk-bdk", ControlClass::Target),
+            ],
+            vec![chain_link("mint", "chain")],
+        ),
+        "mint",
+    )
+}
+
 fn render_backend(backend_id: &str) -> Value {
     let (lab, component_id) = backend_lab(backend_id);
     let lock = resolve_lock(&lab, &default_catalog()).expect("backend lock");
@@ -162,8 +254,9 @@ fn render_backend(backend_id: &str) -> Value {
         "bitcoin-core" => render_bitcoin_component(plan),
         "lnd" => render_lnd_component(plan),
         "cln" => render_cln_component(plan),
-        "cdk" => render_cdk_component(plan),
+        "cdk" | "cdk-ldk" | "cdk-bdk" => render_cdk_component(plan),
         "nutshell-wallet" => render_wallet_component(plan),
+        "postgresql" => render_postgres_component(plan),
         "attacker-workspace" => render_attacker_component(plan),
         _ => panic!("uncharacterized backend {backend_id}"),
     }
@@ -180,6 +273,7 @@ fn component_snapshot(
         "plan": plan,
         "resources": {
             "configMaps": &rendered.config_maps,
+            "secrets": &rendered.secrets,
             "services": &rendered.services,
             "statefulSets": &rendered.stateful_sets,
             "deployments": &rendered.deployments,
@@ -286,6 +380,106 @@ fn full_baseline_lab() -> LabSpec {
     )
 }
 
+fn cdk_cln_lab() -> LabSpec {
+    lab(
+        "golden-cdk-cln",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "mint-cln",
+                ComponentKind::Lightning,
+                "cln",
+                ControlClass::Laboratory,
+            ),
+            component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
+        ],
+        vec![
+            chain_link("mint-cln", "chain"),
+            lightning_link("mint", "mint-cln"),
+        ],
+    )
+}
+
+#[test]
+fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
+    let spec = lab(
+        "golden-cdk-postgres",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "lightning",
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Laboratory,
+            ),
+            component(
+                "database",
+                ComponentKind::Database,
+                "postgresql",
+                ControlClass::Laboratory,
+            ),
+            component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
+        ],
+        vec![
+            chain_link("lightning", "chain"),
+            lightning_link("mint", "lightning"),
+            database_link("mint", "database"),
+        ],
+    );
+    let lock = resolve_lock(&spec, &default_catalog()).expect("PostgreSQL lab lock");
+    let rendered =
+        render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("PostgreSQL lab render");
+    let secret = rendered
+        .secrets
+        .iter()
+        .find(|secret| secret.metadata.name.as_deref() == Some("database-credentials"))
+        .expect("database credential template");
+    assert_eq!(
+        secret.string_data.as_ref().unwrap()["POSTGRES_DB"],
+        "cdk_mint"
+    );
+    assert!(
+        !secret
+            .string_data
+            .as_ref()
+            .unwrap()
+            .contains_key("POSTGRES_PASSWORD")
+    );
+    let mint_config = rendered
+        .config_maps
+        .iter()
+        .find(|config| config.metadata.name.as_deref() == Some("mint-config"))
+        .and_then(|config| config.data.as_ref())
+        .and_then(|data| data.get("config.toml"))
+        .expect("mint public config");
+    assert!(!mint_config.contains("postgresql://"));
+    assert!(!mint_config.contains("[database]"));
+    let mint = rendered
+        .deployments
+        .iter()
+        .find(|deployment| deployment.metadata.name.as_deref() == Some("mint"))
+        .expect("mint deployment");
+    let mint = serde_json::to_value(mint).expect("mint JSON");
+    assert_eq!(
+        mint.pointer("/spec/template/spec/initContainers/0/name"),
+        Some(&json!("materialize-config"))
+    );
+    assert_eq!(
+        mint.pointer("/spec/template/spec/volumes/2/secret/secretName"),
+        Some(&json!("database-credentials"))
+    );
+}
+
 fn golden_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -318,9 +512,12 @@ fn every_registered_backend_matches_its_golden_contract() {
         "attacker-workspace",
         "bitcoin-core",
         "cdk",
+        "cdk-bdk",
+        "cdk-ldk",
         "cln",
         "lnd",
         "nutshell-wallet",
+        "postgresql",
     ];
     assert_eq!(
         default_backend_registry().ids().collect::<Vec<_>>(),
@@ -433,6 +630,29 @@ fn full_baseline_lab_matches_its_golden_contract() {
                 "roleBinding": spine.role_binding,
             },
             "crossTargetNativeExec": native_exec,
+        }),
+    );
+}
+
+#[test]
+fn cdk_cln_lab_matches_its_golden_contract() {
+    let spec = cdk_cln_lab();
+    let lock = resolve_lock(&spec, &default_catalog()).expect("CDK+CLN lock");
+    let rendered =
+        render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("CDK+CLN full render");
+    assert_golden(
+        "cdk-cln-lab",
+        &json!({
+            "plans": &rendered.plans,
+            "inventory": rendered.inventory(),
+            "resources": {
+                "configMaps": &rendered.config_maps,
+                "services": &rendered.services,
+                "statefulSets": &rendered.stateful_sets,
+                "deployments": &rendered.deployments,
+                "persistentVolumeClaims": &rendered.persistent_volume_claims,
+                "networkPolicies": &rendered.network_policies,
+            },
         }),
     );
 }

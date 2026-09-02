@@ -1,0 +1,332 @@
+{
+  "$defs": {
+    "AuthenticationMode": {
+      "enum": [
+        "unauthenticated",
+        "nut21_clear",
+        "nut22_blind"
+      ],
+      "type": "string"
+    },
+    "CatalogDependencySupport": {
+      "additionalProperties": false,
+      "properties": {
+        "implementation": {
+          "type": "string"
+        },
+        "link_kind": {
+          "$ref": "#/$defs/LinkKind"
+        },
+        "versions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "link_kind",
+        "implementation",
+        "versions"
+      ],
+      "type": "object"
+    },
+    "CatalogEmbeddedPaymentBindingSupport": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "method": {
+          "$ref": "#/$defs/PaymentMethod"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "unit",
+        "backend"
+      ],
+      "type": "object"
+    },
+    "CatalogPaymentBindingSupport": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/CatalogVersionSupport"
+        },
+        "method": {
+          "$ref": "#/$defs/PaymentMethod"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "unit",
+        "backend"
+      ],
+      "type": "object"
+    },
+    "CatalogSupportMatrix": {
+      "additionalProperties": false,
+      "properties": {
+        "authentication": {
+          "items": {
+            "$ref": "#/$defs/AuthenticationMode"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "compatible_wallet_adapters": {
+          "items": {
+            "$ref": "#/$defs/CatalogVersionSupport"
+          },
+          "type": "array"
+        },
+        "embedded_payment_bindings": {
+          "description": "Exact payment tuples implemented inside the component image rather\nthan reached through a topology dependency.",
+          "items": {
+            "$ref": "#/$defs/CatalogEmbeddedPaymentBindingSupport"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "payment_backends": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "payment_bindings": {
+          "description": "Exact mint payment tuples; the summary sets above are projections, not\npermission to assume their Cartesian product is supported.",
+          "items": {
+            "$ref": "#/$defs/CatalogPaymentBindingSupport"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "payment_methods": {
+          "items": {
+            "$ref": "#/$defs/PaymentMethod"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "storage": {
+          "items": {
+            "$ref": "#/$defs/StorageBackend"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "units": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "storage",
+        "payment_methods",
+        "payment_backends",
+        "units",
+        "payment_bindings",
+        "authentication",
+        "compatible_wallet_adapters"
+      ],
+      "type": "object"
+    },
+    "CatalogVersionSupport": {
+      "additionalProperties": false,
+      "properties": {
+        "implementation": {
+          "type": "string"
+        },
+        "versions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "implementation",
+        "versions"
+      ],
+      "type": "object"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "database",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ConfigSettingClass": {
+      "enum": [
+        "agent_authorable",
+        "topology_derived",
+        "generated_instance_secret",
+        "imported_secret_reference",
+        "runtime_policy"
+      ],
+      "type": "string"
+    },
+    "ConfigurationCoverageEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "compatible_dependencies": {
+          "items": {
+            "$ref": "#/$defs/CatalogDependencySupport"
+          },
+          "type": "array"
+        },
+        "config_schema_digest": {
+          "type": "string"
+        },
+        "config_version": {
+          "type": "string"
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ConfigurationFieldCoverage"
+          },
+          "type": "object"
+        },
+        "image": {
+          "type": "string"
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "release_channel": {
+          "$ref": "#/$defs/ReleaseChannel"
+        },
+        "support": {
+          "$ref": "#/$defs/CatalogSupportMatrix"
+        },
+        "support_lifecycle": {
+          "$ref": "#/$defs/SupportLifecycle"
+        },
+        "upstream_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "implementation",
+        "kind",
+        "upstream_version",
+        "release_channel",
+        "support_lifecycle",
+        "config_version",
+        "config_schema_digest",
+        "image",
+        "fields",
+        "support",
+        "compatible_dependencies"
+      ],
+      "type": "object"
+    },
+    "ConfigurationFieldCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ConfigSettingClass"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "classification",
+        "required"
+      ],
+      "type": "object"
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "payment_backend",
+        "database_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
+    "PaymentMethod": {
+      "enum": [
+        "bolt11",
+        "bolt12",
+        "onchain"
+      ],
+      "type": "string"
+    },
+    "ReleaseChannel": {
+      "enum": [
+        "stable",
+        "prerelease"
+      ],
+      "type": "string"
+    },
+    "StorageBackend": {
+      "enum": [
+        "ephemeral",
+        "persistent_volume",
+        "sqlite",
+        "postgres"
+      ],
+      "type": "string"
+    },
+    "SupportLifecycle": {
+      "enum": [
+        "preferred",
+        "supported",
+        "deprecated",
+        "experimental"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "type": "string"
+    },
+    "catalog_digest": {
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/ConfigurationCoverageEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "api_version",
+    "catalog_digest",
+    "entries"
+  ],
+  "title": "ConfigurationCoverageManifest",
+  "type": "object"
+}

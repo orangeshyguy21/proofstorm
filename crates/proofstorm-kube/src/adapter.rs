@@ -1,20 +1,23 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
     sync::LazyLock,
 };
 
 use k8s_openapi::api::{
     apps::v1::{Deployment, StatefulSet},
-    core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Service},
+    core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Secret, Service},
     discovery::v1::EndpointSlice,
     networking::v1::NetworkPolicy,
 };
 use proofstorm_core::{
-    ComponentCondition, ComponentConditionReason, ComponentConditionState, ComponentConditionType,
-    ComponentKind, ComponentPlanContract, ComponentPlanInput, ComponentSpec, ComponentStatus,
-    InventoryEntry, LabSpec, LinkKind, LinkedStateObservationContract, MAX_COMPONENT_CONDITIONS,
-    MAX_CONDITION_MESSAGE_BYTES, ProtocolProbePlan, ResolvedLock, TargetDescriptorContract,
-    WorkloadControllerKind, default_backend_registry,
+    CdkMintConfig, ComponentCondition, ComponentConditionReason, ComponentConditionState,
+    ComponentConditionType, ComponentKind, ComponentPlanContract, ComponentPlanInput,
+    ComponentSpec, ComponentStatus, CredentialObservationContract, DatabaseRole, DependencyBinding,
+    EffectiveComponentConfig, ExecutionStorageSource, InventoryEntry, LabSpec, LinkKind,
+    LinkedStateObservationContract, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES,
+    ProtocolProbePlan, ResolvedLock, TargetDescriptorContract, WorkloadControllerKind,
+    default_backend_registry,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -47,9 +50,12 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ),
             ("bitcoin-core", render_bitcoin_component),
             ("cdk", render_cdk_component),
+            ("cdk-ldk", render_cdk_component),
+            ("cdk-bdk", render_cdk_component),
             ("cln", render_cln_component),
             ("lnd", render_lnd_component),
             ("nutshell-wallet", render_wallet_component),
+            ("postgresql", render_postgres_component),
         ])
     });
 
@@ -73,6 +79,7 @@ pub enum AdapterError {
 pub struct RenderedLab {
     pub plans: Vec<ComponentPlanContract>,
     pub config_maps: Vec<ConfigMap>,
+    pub secrets: Vec<Secret>,
     pub services: Vec<Service>,
     pub stateful_sets: Vec<StatefulSet>,
     pub deployments: Vec<Deployment>,
@@ -84,6 +91,7 @@ pub struct RenderedLab {
 #[derive(Debug, Default)]
 pub struct RenderedComponent {
     pub config_maps: Vec<ConfigMap>,
+    pub secrets: Vec<Secret>,
     pub services: Vec<Service>,
     pub stateful_sets: Vec<StatefulSet>,
     pub deployments: Vec<Deployment>,
@@ -105,6 +113,7 @@ impl RenderedLab {
     pub fn inventory(&self) -> Vec<InventoryEntry> {
         let mut inventory = Vec::new();
         append_inventory(&mut inventory, "v1", "ConfigMap", &self.config_maps);
+        append_inventory(&mut inventory, "v1", "Secret", &self.secrets);
         append_inventory(&mut inventory, "v1", "Service", &self.services);
         append_inventory(
             &mut inventory,
@@ -138,6 +147,7 @@ impl RenderedLab {
 
     fn append_component(&mut self, mut component: RenderedComponent) {
         self.config_maps.append(&mut component.config_maps);
+        self.secrets.append(&mut component.secrets);
         self.services.append(&mut component.services);
         self.stateful_sets.append(&mut component.stateful_sets);
         self.deployments.append(&mut component.deployments);
@@ -147,6 +157,7 @@ impl RenderedLab {
 
     fn sort_resources(&mut self) {
         sort_by_name(&mut self.config_maps);
+        sort_by_name(&mut self.secrets);
         sort_by_name(&mut self.services);
         sort_by_name(&mut self.stateful_sets);
         sort_by_name(&mut self.deployments);
@@ -207,15 +218,17 @@ pub fn compile_component_plans(
                     .require(&target_lock.catalog_id)
                     .map_err(AdapterError::InvalidPlan)?;
                 linked_targets.insert(
-                    target.id.clone(),
+                    link.id.clone(),
                     TargetDescriptorContract {
                         component_id: target.id.clone(),
                         kind: target.kind,
+                        backend_id: target_lock.catalog_id.clone(),
+                        version: target_lock.version.clone(),
                         ports: target_backend.service_ports.clone(),
                     },
                 );
                 linked_state.insert(
-                    target.id.clone(),
+                    link.id.clone(),
                     LinkedStateObservationContract {
                         component_id: target.id.clone(),
                         state_contract: target_backend.execution_state_contract.clone(),
@@ -1227,6 +1240,92 @@ fn preserve_condition_transitions(
     }
 }
 
+/// Render an isolated `PostgreSQL` service with persistent storage and a
+/// controller-populated credential Secret.
+///
+/// # Errors
+///
+/// Returns an error when the plan does not select the `PostgreSQL` backend or
+/// the fixed Kubernetes resource contract is invalid.
+pub fn render_postgres_component(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
+    require_plan_backend(plan, "postgresql", ComponentKind::Database)?;
+    let EffectiveComponentConfig::Postgres(config) = &plan.effective_config else {
+        return Err(AdapterError::InvalidPlan(
+            "PostgreSQL plan does not carry PostgreSQL configuration".into(),
+        ));
+    };
+    let namespace = instance_namespace(&plan.instance_key);
+    let secret_name = postgres_secret_name(&plan.component_id);
+    let labels = labels(&plan.instance_key, Some(&plan.component_id));
+    let postgres_port = target_port(&plan.target_descriptor, "postgres")?;
+    let mut rendered = RenderedComponent::default();
+    rendered.secrets.push(resource(json!({
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": metadata(&secret_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
+        "type": "Opaque",
+        "stringData": {
+            "POSTGRES_USER": "proofstorm",
+            "POSTGRES_DB": config.database_name
+        }
+    }))?);
+    rendered.services.push(resource(service_from_plan(plan))?);
+    rendered.stateful_sets.push(resource(json!({
+        "apiVersion": "apps/v1", "kind": "StatefulSet",
+        "metadata": plan_workload_metadata(plan),
+        "spec": {
+            "serviceName": plan.component_id,
+            "replicas": 1,
+            "selector": {"matchLabels": labels},
+            "template": {
+                "metadata": plan_pod_metadata(plan, &labels),
+                "spec": {
+                    "serviceAccountName": "proofstorm-workload",
+                    "automountServiceAccountToken": false,
+                    "enableServiceLinks": false,
+                    "securityContext": {
+                        "runAsNonRoot": true, "runAsUser": 70, "runAsGroup": 70, "fsGroup": 70,
+                        "seccompProfile": {"type": "RuntimeDefault"}
+                    },
+                    "affinity": instance_affinity(&plan.instance_key),
+                    "containers": [{
+                        "name": "component",
+                        "image": plan.execution_context.image,
+                        "imagePullPolicy": "IfNotPresent",
+                        "env": [
+                            {"name": "PGDATA", "value": "/var/lib/postgresql/data/pgdata"},
+                            {"name": "POSTGRES_USER", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "POSTGRES_USER"}}},
+                            {"name": "POSTGRES_PASSWORD", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "POSTGRES_PASSWORD"}}},
+                            {"name": "POSTGRES_DB", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "POSTGRES_DB"}}}
+                        ],
+                        "ports": [{"name": "postgres", "containerPort": postgres_port}],
+                        "securityContext": container_security(),
+                        "readinessProbe": {
+                            "exec": {"command": ["pg_isready", "-U", "proofstorm", "-d", config.database_name]},
+                            "periodSeconds": 3,
+                            "failureThreshold": 40
+                        },
+                        "volumeMounts": [{"name": "data", "mountPath": "/var/lib/postgresql/data"}]
+                    }]
+                }
+            },
+            "volumeClaimTemplates": [{
+                "metadata": {"name": "data", "labels": labels},
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "resources": {"requests": {"storage": config.storage_size}}
+                }
+            }]
+        }
+    }))?);
+    Ok(rendered)
+}
+
+fn postgres_secret_name(component: &str) -> String {
+    format!("{component}-credentials")
+}
+
 /// Render Bitcoin Core resources from a compiled plan without cluster I/O.
 ///
 /// # Errors
@@ -1243,16 +1342,11 @@ pub fn render_bitcoin_component(
         )));
     }
     let namespace = instance_namespace(&plan.instance_key);
-    let txindex = plan
-        .effective_config
-        .get("txindex")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| AdapterError::InvalidPlan("bitcoin txindex is not boolean".into()))?;
-    let fallback_fee = plan
-        .effective_config
-        .get("fallback_fee")
-        .and_then(Value::as_f64)
-        .ok_or_else(|| AdapterError::InvalidPlan("bitcoin fallback_fee is not numeric".into()))?;
+    let EffectiveComponentConfig::BitcoinCore(config) = &plan.effective_config else {
+        return Err(AdapterError::InvalidPlan(
+            "bitcoin plan does not carry Bitcoin Core configuration".into(),
+        ));
+    };
     let args = vec![
         "-regtest".to_owned(),
         "-datadir=/home/bitcoin/.bitcoin".to_owned(),
@@ -1262,10 +1356,10 @@ pub fn render_bitcoin_component(
         format!("-rpcuser={RPC_USER}"),
         format!("-rpcpassword={RPC_PASSWORD}"),
         "-rpcport=18443".to_owned(),
-        format!("-txindex={}", u8::from(txindex)),
+        format!("-txindex={}", u8::from(config.txindex)),
         "-zmqpubrawblock=tcp://0.0.0.0:28334".to_owned(),
         "-zmqpubrawtx=tcp://0.0.0.0:28335".to_owned(),
-        format!("-fallbackfee={fallback_fee}"),
+        format!("-fallbackfee={}", config.fallback_fee),
         "-debug=0".to_owned(),
     ];
     let mut rendered = RenderedComponent::default();
@@ -1300,15 +1394,15 @@ pub fn render_lnd_component(
     let chain_rpc = target_port(chain, "rpc")?;
     let chain_zmq_block = target_port(chain, "zmq_block")?;
     let chain_zmq_tx = target_port(chain, "zmq_tx")?;
-    let alias = plan
-        .effective_config
-        .get("alias")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AdapterError::InvalidPlan("lnd alias is not a string".into()))?;
+    let EffectiveComponentConfig::Lnd(config) = &plan.effective_config else {
+        return Err(AdapterError::InvalidPlan(
+            "LND plan does not carry LND configuration".into(),
+        ));
+    };
     let args = vec![
         "--lnddir=/home/lnd/.lnd".to_owned(),
         "--noseedbackup".to_owned(),
-        format!("--alias={alias}"),
+        format!("--alias={}", config.alias),
         format!("--externalip={}", plan.component_id),
         "--listen=0.0.0.0:9735".to_owned(),
         "--rpclisten=0.0.0.0:10009".to_owned(),
@@ -1362,15 +1456,15 @@ pub fn render_cln_component(
     require_plan_backend(plan, "cln", ComponentKind::Lightning)?;
     let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
     let chain_rpc = target_port(chain, "rpc")?;
-    let alias = plan
-        .effective_config
-        .get("alias")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AdapterError::InvalidPlan("cln alias is not a string".into()))?;
+    let EffectiveComponentConfig::Cln(config) = &plan.effective_config else {
+        return Err(AdapterError::InvalidPlan(
+            "Core Lightning plan does not carry Core Lightning configuration".into(),
+        ));
+    };
     let args = vec![
         "--lightning-dir=/home/cln/.lightning".to_owned(),
         "--network=regtest".to_owned(),
-        format!("--alias={alias}"),
+        format!("--alias={}", config.alias),
         "--developer".to_owned(),
         "--dev-no-reconnect".to_owned(),
         "--autoconnect-seeker-peers=0".to_owned(),
@@ -1411,41 +1505,38 @@ pub fn render_cln_component(
 pub fn render_cdk_component(
     plan: &ComponentPlanContract,
 ) -> Result<RenderedComponent, AdapterError> {
-    require_plan_backend(plan, "cdk", ComponentKind::Mint)?;
-    let lightning = plan_linked_target(plan, LinkKind::LightningBackend)?;
-    let lightning_rpc = target_port(lightning, "rpc")?;
+    if plan.kind != ComponentKind::Mint
+        || !matches!(plan.backend_id.as_str(), "cdk" | "cdk-ldk" | "cdk-bdk")
+    {
+        return Err(AdapterError::InvalidPlan(format!(
+            "backend {:?} with kind {:?} is not a CDK mint runtime",
+            plan.backend_id, plan.kind
+        )));
+    }
     let http_port = plan
         .target_descriptor
         .ports
         .get("http")
         .copied()
         .ok_or_else(|| AdapterError::InvalidPlan("cdk has no HTTP service port".into()))?;
-    let name = plan
-        .effective_config
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AdapterError::InvalidPlan("cdk name is not a string".into()))?;
-    let description = plan
-        .effective_config
-        .get("description")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AdapterError::InvalidPlan("cdk description is not a string".into()))?;
+    let (("cdk", EffectiveComponentConfig::Cdk(config))
+    | ("cdk-ldk", EffectiveComponentConfig::CdkLdk(config))
+    | ("cdk-bdk", EffectiveComponentConfig::CdkBdk(config))) =
+        (&plan.backend_id[..], &plan.effective_config)
+    else {
+        return Err(AdapterError::InvalidPlan(
+            "CDK plan does not carry its matching typed mint configuration".into(),
+        ));
+    };
     let namespace = instance_namespace(&plan.instance_key);
     let config_name = format!("{}-config", plan.component_id);
     let data_name = format!("{}-data", plan.component_id);
-    let config = mint_config(
-        &plan.component_id,
-        http_port,
-        &lightning.component_id,
-        lightning_rpc,
-        name,
-        description,
-    );
+    let runtime = cdk_runtime_resources(plan, config, http_port, &config_name, &data_name)?;
     let mut rendered = RenderedComponent::default();
     rendered.config_maps.push(resource(json!({
         "apiVersion": "v1", "kind": "ConfigMap",
         "metadata": metadata(&config_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
-        "data": {"config.toml": config}
+        "data": {"config.toml": runtime.native_config}
     }))?);
     rendered.persistent_volume_claims.push(resource(json!({
         "apiVersion": "v1", "kind": "PersistentVolumeClaim",
@@ -1454,33 +1545,236 @@ pub fn render_cdk_component(
     }))?);
     rendered.services.push(resource(service_from_plan(plan))?);
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
+    let mut pod_spec = json!({
+        "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+            "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
+            "command": ["cdk-mintd"], "args": ["--config", "/config/config.toml"],
+            "env": [{"name": "CDK_MINTD_WORK_DIR", "value": "/app/data"}],
+            "ports": runtime.ports,
+            "securityContext": container_security(),
+            "readinessProbe": {"httpGet": {"path": "/v1/info", "port": http_port}, "periodSeconds": 3, "failureThreshold": 40},
+            "volumeMounts": runtime.volume_mounts
+        }], "volumes": runtime.volumes
+    });
+    if !runtime.init_containers.is_empty() {
+        pod_spec["initContainers"] = Value::Array(runtime.init_containers);
+    }
     rendered.deployments.push(resource(json!({
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": plan_workload_metadata(plan),
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
-            "metadata": plan_pod_metadata(plan, &labels), "spec": {
-                "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
-                    "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
-                    "command": ["cdk-mintd"], "args": ["--config", "/config/config.toml"],
-                    "env": [{"name": "CDK_MINTD_WORK_DIR", "value": "/app/data"}],
-                    "ports": [{"name": "http", "containerPort": http_port}],
-                    "securityContext": container_security(),
-                    "readinessProbe": {"httpGet": {"path": "/v1/info", "port": http_port}, "periodSeconds": 3, "failureThreshold": 40},
-                    "volumeMounts": [
-                        {"name": "config", "mountPath": "/config", "readOnly": true},
-                        {"name": "data", "mountPath": "/app/data"},
-                        {"name": "lnd", "mountPath": "/lnd", "readOnly": true}
-                    ]
-                }], "volumes": [
-                    {"name": "config", "configMap": {"name": config_name}},
-                    {"name": "data", "persistentVolumeClaim": {"claimName": data_name}},
-                    {"name": "lnd", "persistentVolumeClaim": {"claimName": format!("data-{}-0", lightning.component_id)}}
-                ]
-            }
+            "metadata": plan_pod_metadata(plan, &labels), "spec": pod_spec
         }}
     }))?);
     Ok(rendered)
+}
+
+struct CdkRuntimeResources {
+    native_config: String,
+    volume_mounts: Vec<Value>,
+    volumes: Vec<Value>,
+    ports: Vec<Value>,
+    init_containers: Vec<Value>,
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the CDK runtime composes native payment, chain, storage, and secret-backed database resources in one fail-closed path"
+)]
+fn cdk_runtime_resources(
+    plan: &ComponentPlanContract,
+    config: &CdkMintConfig,
+    http_port: u16,
+    config_name: &str,
+    data_name: &str,
+) -> Result<CdkRuntimeResources, AdapterError> {
+    let database_secret = cdk_database_secret(plan)?;
+    let database_config = if database_secret.is_some() {
+        ""
+    } else {
+        "[database]\nengine = \"sqlite\"\n"
+    };
+    let (mut volume_mounts, mut volumes, init_containers) = if let Some(secret_name) =
+        database_secret
+    {
+        (
+            vec![
+                json!({"name": "config-runtime", "mountPath": "/config", "readOnly": true}),
+                json!({"name": "data", "mountPath": "/app/data"}),
+            ],
+            vec![
+                json!({"name": "config-public", "configMap": {"name": config_name}}),
+                json!({"name": "config-runtime", "emptyDir": {}}),
+                json!({"name": "database-secret", "secret": {"secretName": secret_name}}),
+                json!({"name": "data", "persistentVolumeClaim": {"claimName": data_name}}),
+            ],
+            vec![json!({
+                "name": "materialize-config",
+                "image": PROBER_IMAGE,
+                "imagePullPolicy": "IfNotPresent",
+                "command": ["sh", "-c", "cp /config-public/config.toml /config-runtime/config.toml && cat /database-secret/database.toml >> /config-runtime/config.toml"],
+                "securityContext": container_security(),
+                "volumeMounts": [
+                    {"name": "config-public", "mountPath": "/config-public", "readOnly": true},
+                    {"name": "database-secret", "mountPath": "/database-secret", "readOnly": true},
+                    {"name": "config-runtime", "mountPath": "/config-runtime"}
+                ]
+            })],
+        )
+    } else {
+        (
+            vec![
+                json!({"name": "config", "mountPath": "/config", "readOnly": true}),
+                json!({"name": "data", "mountPath": "/app/data"}),
+            ],
+            vec![
+                json!({"name": "config", "configMap": {"name": config_name}}),
+                json!({"name": "data", "persistentVolumeClaim": {"claimName": data_name}}),
+            ],
+            vec![],
+        )
+    };
+    let mut ports = vec![json!({"name": "http", "containerPort": http_port})];
+    let native_config = if plan.backend_id == "cdk-ldk" {
+        let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
+        let chain_rpc = target_port(chain, "rpc")?;
+        let p2p_port = plan
+            .target_descriptor
+            .ports
+            .get("p2p")
+            .copied()
+            .ok_or_else(|| AdapterError::InvalidPlan("cdk-ldk has no P2P service port".into()))?;
+        ports.push(json!({"name": "p2p", "containerPort": p2p_port}));
+        mint_ldk_config(
+            &plan.component_id,
+            http_port,
+            chain,
+            chain_rpc,
+            p2p_port,
+            config,
+            database_config,
+        )
+    } else if plan.backend_id == "cdk-bdk" {
+        let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
+        let chain_rpc = target_port(chain, "rpc")?;
+        mint_bdk_config(
+            &plan.component_id,
+            http_port,
+            chain,
+            chain_rpc,
+            config,
+            database_config,
+        )
+    } else {
+        let payment_mounts = plan
+            .execution_context
+            .mounts
+            .iter()
+            .filter(|mount| matches!(mount.name.as_str(), "lnd" | "cln"))
+            .collect::<Vec<_>>();
+        let [payment_mount] = payment_mounts.as_slice() else {
+            return Err(AdapterError::InvalidPlan(format!(
+                "cdk_simultaneous_payment_backends_not_supported: component {:?} requires exactly one compiled native payment backend, found {:?}",
+                plan.component_id,
+                payment_mounts
+                    .iter()
+                    .map(|mount| mount.name.as_str())
+                    .collect::<Vec<_>>()
+            )));
+        };
+        let lightning = plan_execution_target(plan, &payment_mount.name)?;
+        let credential = plan_execution_credential(plan, &payment_mount.name)?;
+        if lightning.backend_id != payment_mount.name
+            || credential.source_component_id != lightning.component_id
+        {
+            return Err(AdapterError::InvalidPlan(format!(
+                "component {:?} compiled payment target and credential identities disagree",
+                plan.component_id
+            )));
+        }
+        volume_mounts.push(json!({
+            "name": payment_mount.name,
+            "mountPath": payment_mount.mount_path,
+            "readOnly": payment_mount.read_only
+        }));
+        volumes.push(json!({
+            "name": payment_mount.name,
+            "persistentVolumeClaim": {"claimName": credential.claim_name}
+        }));
+        mint_config(
+            &plan.component_id,
+            http_port,
+            lightning,
+            &payment_mount.name,
+            &payment_mount.mount_path,
+            config,
+            database_config,
+        )?
+    };
+    Ok(CdkRuntimeResources {
+        native_config,
+        volume_mounts,
+        volumes,
+        ports,
+        init_containers,
+    })
+}
+
+fn cdk_database_secret(plan: &ComponentPlanContract) -> Result<Option<String>, AdapterError> {
+    let links = plan
+        .relevant_links
+        .iter()
+        .filter(|link| link.kind == LinkKind::DatabaseBackend && link.from == plan.component_id)
+        .collect::<Vec<_>>();
+    if links.iter().any(|link| {
+        matches!(
+            link.binding,
+            Some(DependencyBinding::Database {
+                role: DatabaseRole::Authentication
+            })
+        )
+    }) {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} requests an authentication database, which CDK 0.17 support has not enabled yet",
+            plan.component_id
+        )));
+    }
+    let primary = links
+        .iter()
+        .filter(|link| {
+            matches!(
+                link.binding,
+                Some(DependencyBinding::Database {
+                    role: DatabaseRole::Primary
+                })
+            )
+        })
+        .collect::<Vec<_>>();
+    let Some(link) = primary.first() else {
+        return Ok(None);
+    };
+    if primary.len() != 1 {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} has {} primary database bindings",
+            plan.component_id,
+            primary.len()
+        )));
+    }
+    let target = plan
+        .linked_targets
+        .get(&link.id)
+        .ok_or_else(|| AdapterError::MissingTarget {
+            component: plan.component_id.clone(),
+            target: link.to.clone(),
+        })?;
+    if target.backend_id != "postgresql" || target.kind != ComponentKind::Database {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} database binding {:?} does not resolve to PostgreSQL",
+            plan.component_id, link.id
+        )));
+    }
+    Ok(Some(postgres_secret_name(&target.component_id)))
 }
 
 /// Render a disposable attacker workspace from a compiled plan without
@@ -1697,20 +1991,91 @@ fn plan_linked_target(
     plan: &ComponentPlanContract,
     kind: LinkKind,
 ) -> Result<&TargetDescriptorContract, AdapterError> {
-    let link = plan
+    let links = plan
         .relevant_links
         .iter()
-        .find(|link| link.kind == kind && link.from == plan.component_id)
-        .ok_or_else(|| AdapterError::MissingLink {
+        .filter(|link| link.kind == kind && link.from == plan.component_id)
+        .collect::<Vec<_>>();
+    let Some(link) = links.first() else {
+        return Err(AdapterError::MissingLink {
             component: plan.component_id.clone(),
             link: kind,
-        })?;
+        });
+    };
+    if links.len() > 1 {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} has ambiguous {kind:?} bindings {:?}; the backend must select a named binding",
+            plan.component_id,
+            links
+                .iter()
+                .map(|link| link.id.as_str())
+                .collect::<Vec<_>>()
+        )));
+    }
     plan.linked_targets
-        .get(&link.to)
+        .get(&link.id)
         .ok_or_else(|| AdapterError::MissingTarget {
             component: plan.component_id.clone(),
             target: link.to.clone(),
         })
+}
+
+fn plan_execution_target<'a>(
+    plan: &'a ComponentPlanContract,
+    mount_name: &str,
+) -> Result<&'a TargetDescriptorContract, AdapterError> {
+    let mount = plan
+        .execution_context
+        .mounts
+        .iter()
+        .find(|mount| mount.name == mount_name)
+        .ok_or_else(|| {
+            AdapterError::InvalidPlan(format!(
+                "component {:?} lacks execution mount {mount_name:?}",
+                plan.component_id
+            ))
+        })?;
+    let ExecutionStorageSource::LinkedStatefulData { link_id } = &mount.source else {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} execution mount {mount_name:?} is not linked to a resolved binding",
+            plan.component_id,
+        )));
+    };
+    let link = plan
+        .relevant_links
+        .iter()
+        .find(|link| link.id == *link_id && link.from == plan.component_id)
+        .ok_or_else(|| {
+            AdapterError::InvalidPlan(format!(
+                "component {:?} lacks resolved execution binding {link_id:?}",
+                plan.component_id
+            ))
+        })?;
+    plan.linked_targets
+        .get(link_id)
+        .ok_or_else(|| AdapterError::MissingTarget {
+            component: plan.component_id.clone(),
+            target: link.to.clone(),
+        })
+}
+
+fn plan_execution_credential<'a>(
+    plan: &'a ComponentPlanContract,
+    mount_name: &str,
+) -> Result<&'a CredentialObservationContract, AdapterError> {
+    let credentials = plan
+        .credentials
+        .iter()
+        .filter(|credential| credential.mount_name == mount_name)
+        .collect::<Vec<_>>();
+    let [credential] = credentials.as_slice() else {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} execution mount {mount_name:?} requires exactly one compiled credential, found {}",
+            plan.component_id,
+            credentials.len()
+        )));
+    };
+    Ok(credential)
 }
 
 fn target_port(target: &TargetDescriptorContract, name: &str) -> Result<u16, AdapterError> {
@@ -1725,14 +2090,121 @@ fn target_port(target: &TargetDescriptorContract, name: &str) -> Result<u16, Ada
 fn mint_config(
     component: &str,
     http_port: u16,
-    lightning: &str,
-    lightning_rpc: u16,
-    name: &str,
-    description: &str,
+    lightning: &TargetDescriptorContract,
+    mount_name: &str,
+    mount_path: &str,
+    config: &CdkMintConfig,
+    database_config: &str,
+) -> Result<String, AdapterError> {
+    let backend = match mount_name {
+        "lnd" => {
+            let lightning_rpc = target_port(lightning, "rpc")?;
+            format!(
+                "[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[lnd]\naddress = \"https://{}:{lightning_rpc}\"\ncert_file = \"{mount_path}/tls.cert\"\nmacaroon_file = \"{mount_path}/data/chain/bitcoin/regtest/admin.macaroon\"\n",
+                config.min_mint_sat,
+                config.max_mint_sat,
+                config.min_melt_sat,
+                config.max_melt_sat,
+                lightning.component_id
+            )
+        }
+        "cln" => format!(
+            "[ln]\nln_backend = \"cln\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[cln]\nrpc_path = \"{mount_path}/regtest/lightning-rpc\"\nbolt12 = false\nexpose_private_channels = false\nfee_percent = 0.02\nreserve_fee_min = 2\n",
+            config.min_mint_sat, config.max_mint_sat, config.min_melt_sat, config.max_melt_sat
+        ),
+        backend => {
+            return Err(AdapterError::InvalidPlan(format!(
+                "CDK payment backend {backend:?} has no configuration renderer"
+            )));
+        }
+    };
+    Ok(format!(
+        "{}{}\n{database_config}",
+        mint_common_config(component, http_port, config),
+        backend
+    ))
+}
+
+fn mint_ldk_config(
+    component: &str,
+    http_port: u16,
+    chain: &TargetDescriptorContract,
+    chain_rpc: u16,
+    p2p_port: u16,
+    config: &CdkMintConfig,
+    database_config: &str,
 ) -> String {
+    let common = mint_common_config(component, http_port, config);
     format!(
-        "[info]\nurl = \"http://{component}:{http_port}\"\nlisten_host = \"0.0.0.0\"\nlisten_port = {http_port}\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\ninput_fee_ppk = 100\n\n[mint_info]\nname = {name:?}\ndescription = {description:?}\nurls = [\"http://{component}:{http_port}\"]\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://{lightning}:{lightning_rpc}\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
+        "{common}[ln]\nln_backend = \"ldknode\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"{RPC_PASSWORD}\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = {p2p_port}\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"legal winner thank year wave sausage worth useful legal winner thank yellow\"\n\n{database_config}",
+        config.min_mint_sat,
+        config.max_mint_sat,
+        config.min_melt_sat,
+        config.max_melt_sat,
+        chain.component_id
     )
+}
+
+fn mint_bdk_config(
+    component: &str,
+    http_port: u16,
+    chain: &TargetDescriptorContract,
+    chain_rpc: u16,
+    config: &CdkMintConfig,
+    database_config: &str,
+) -> String {
+    let common = mint_common_config(component, http_port, config);
+    format!(
+        "{common}[ln]\nln_backend = \"none\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[bdk]\nmnemonic = \"legal winner thank year wave sausage worth useful legal winner thank yellow\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = {}\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"{RPC_PASSWORD}\"\n\n{database_config}",
+        config.min_mint_sat,
+        config.max_mint_sat,
+        config.min_melt_sat,
+        config.max_melt_sat,
+        config.min_mint_sat,
+        config.max_mint_sat,
+        config.min_melt_sat,
+        config.max_melt_sat,
+        config.min_mint_sat,
+        chain.component_id
+    )
+}
+
+fn mint_common_config(component: &str, http_port: u16, config: &CdkMintConfig) -> String {
+    let mut rendered = format!(
+        "[info]\nurl = \"http://{component}:{http_port}\"\nlisten_host = \"0.0.0.0\"\nlisten_port = {http_port}\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\nenable_info_page = {}\ninput_fee_ppk = {}\nuse_keyset_v2 = {}\n\n[info.quote_ttl]\nmint_ttl = {}\nmelt_ttl = {}\n\n[info.http_cache]\nbackend = \"memory\"\nttl = {}\ntti = {}\n\n[mint_info]\nname = {:?}\ndescription = {:?}\n",
+        config.enable_info_page,
+        config.input_fee_ppk,
+        config.use_keyset_v2,
+        config.mint_quote_ttl_seconds,
+        config.melt_quote_ttl_seconds,
+        config.http_cache_ttl_seconds,
+        config.http_cache_tti_seconds,
+        config.name,
+        config.description,
+    );
+    for (name, value) in [
+        ("description_long", config.description_long.as_str()),
+        ("motd", config.motd.as_str()),
+        ("icon_url", config.icon_url.as_str()),
+        ("contact_email", config.contact_email.as_str()),
+        (
+            "contact_nostr_public_key",
+            config.contact_nostr_public_key.as_str(),
+        ),
+        ("tos_url", config.tos_url.as_str()),
+    ] {
+        if !value.is_empty() {
+            writeln!(&mut rendered, "{name} = {value:?}")
+                .expect("writing native configuration to a String cannot fail");
+        }
+    }
+    write!(
+        &mut rendered,
+        "urls = [\"http://{component}:{http_port}\"]\n\n[limits]\nmax_inputs = {}\nmax_outputs = {}\n\n",
+        config.max_inputs, config.max_outputs
+    )
+    .expect("writing native configuration to a String cannot fail");
+    rendered
 }
 
 fn metadata(name: &str, instance_key: &str, namespace: &str, component: Option<&str>) -> Value {
@@ -1859,8 +2331,8 @@ pub fn component_ports(component: &ComponentSpec) -> BTreeMap<String, u16> {
 #[cfg(test)]
 mod tests {
     use proofstorm_core::{
-        API_VERSION, ComponentSpec, ControlClass, LabPolicy, LinkSpec, default_catalog,
-        resolve_lock,
+        API_VERSION, BitcoinNetwork, ComponentSpec, ControlClass, DependencyBinding, LabPolicy,
+        LinkSpec, PaymentMethod, default_catalog, resolve_lock,
     };
 
     use super::*;
@@ -1876,7 +2348,18 @@ mod tests {
             kind,
             implementation: implementation.into(),
             version: None,
-            config_version: "v1alpha1".into(),
+            config_version: match implementation {
+                "bitcoin-core" => "bitcoin-core/30/v1",
+                "lnd" => "lnd/0.20/v1",
+                "cln" => "cln/26.06/v1",
+                "cdk" => "cdk-mintd/0.17/v1",
+                "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
+                "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+                "nutshell-wallet" => "nutshell-wallet/0.20/v1",
+                "attacker-workspace" => "attacker-workspace/0.1/v1",
+                _ => panic!("unknown test implementation {implementation:?}"),
+            }
+            .into(),
             control,
             config: BTreeMap::new(),
         }
@@ -1916,14 +2399,22 @@ mod tests {
             ],
             links: vec![
                 LinkSpec {
+                    id: "alice-chain".into(),
                     kind: LinkKind::ChainBackend,
                     from: "alice".into(),
                     to: "chain-a".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: BitcoinNetwork::Regtest,
+                    }),
                 },
                 LinkSpec {
+                    id: "bob-chain".into(),
                     kind: LinkKind::ChainBackend,
                     from: "bob".into(),
                     to: "chain-a".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: BitcoinNetwork::Regtest,
+                    }),
                 },
             ],
             policy: LabPolicy::default(),
@@ -1950,9 +2441,84 @@ mod tests {
                 component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
             ],
             links: vec![LinkSpec {
-                kind: LinkKind::LightningBackend,
+                id: "mint-bolt11-primary".into(),
+                kind: LinkKind::PaymentBackend,
                 from: "mint".into(),
                 to: "mint-lnd-a".into(),
+                binding: Some(DependencyBinding::Payment {
+                    method: PaymentMethod::Bolt11,
+                    unit: "sat".into(),
+                }),
+            }],
+            policy: LabPolicy::default(),
+        }
+    }
+
+    fn cdk_cln_lab() -> LabSpec {
+        LabSpec {
+            api_version: API_VERSION.into(),
+            name: "cdk-cln-plan".into(),
+            components: vec![
+                component(
+                    "chain",
+                    ComponentKind::Bitcoin,
+                    "bitcoin-core",
+                    ControlClass::Laboratory,
+                ),
+                component(
+                    "mint-cln",
+                    ComponentKind::Lightning,
+                    "cln",
+                    ControlClass::Laboratory,
+                ),
+                component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
+            ],
+            links: vec![
+                LinkSpec {
+                    id: "mint-cln-chain".into(),
+                    kind: LinkKind::ChainBackend,
+                    from: "mint-cln".into(),
+                    to: "chain".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: BitcoinNetwork::Regtest,
+                    }),
+                },
+                LinkSpec {
+                    id: "mint-cln-bolt11".into(),
+                    kind: LinkKind::PaymentBackend,
+                    from: "mint".into(),
+                    to: "mint-cln".into(),
+                    binding: Some(DependencyBinding::Payment {
+                        method: PaymentMethod::Bolt11,
+                        unit: "sat".into(),
+                    }),
+                },
+            ],
+            policy: LabPolicy::default(),
+        }
+    }
+
+    fn cdk_ldk_lab() -> LabSpec {
+        LabSpec {
+            api_version: API_VERSION.into(),
+            name: "cdk-ldk-plan".into(),
+            components: vec![
+                component(
+                    "chain",
+                    ComponentKind::Bitcoin,
+                    "bitcoin-core",
+                    ControlClass::Laboratory,
+                ),
+                component("mint", ComponentKind::Mint, "cdk-ldk", ControlClass::Target),
+            ],
+            links: vec![LinkSpec {
+                id: "mint-chain".into(),
+                kind: LinkKind::ChainBackend,
+                from: "mint".into(),
+                to: "chain".into(),
+                binding: Some(DependencyBinding::Chain {
+                    network: BitcoinNetwork::Regtest,
+                }),
             }],
             policy: LabPolicy::default(),
         }
@@ -2197,14 +2763,23 @@ mod tests {
             ],
             links: vec![
                 LinkSpec {
+                    id: "lightning-chain".into(),
                     kind: LinkKind::ChainBackend,
                     from: "lightning".into(),
                     to: "chain".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: BitcoinNetwork::Regtest,
+                    }),
                 },
                 LinkSpec {
-                    kind: LinkKind::LightningBackend,
+                    id: "mint-bolt11".into(),
+                    kind: LinkKind::PaymentBackend,
                     from: "mint".into(),
                     to: "lightning".into(),
+                    binding: Some(DependencyBinding::Payment {
+                        method: PaymentMethod::Bolt11,
+                        unit: "sat".into(),
+                    }),
                 },
             ],
             policy: LabPolicy::default(),
@@ -2252,8 +2827,19 @@ mod tests {
             compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
                 .expect("compile first plan")
                 .remove(0);
-        assert_eq!(first_plan.effective_config["txindex"], json!(true));
+        assert!(matches!(
+            first_plan.effective_config,
+            EffectiveComponentConfig::BitcoinCore(ref config) if config.txindex
+        ));
         assert_eq!(first_plan.target_descriptor.ports["rpc"], 18_443);
+
+        let mut mistyped_plan = first_plan.clone();
+        mistyped_plan.effective_config = EffectiveComponentConfig::AttackerWorkspace;
+        assert!(matches!(
+            render_bitcoin_component(&mistyped_plan),
+            Err(AdapterError::InvalidPlan(message))
+                if message.contains("does not carry Bitcoin Core configuration")
+        ));
 
         let first = render_bitcoin_component(&first_plan).expect("first render");
         let repeated = render_bitcoin_component(&first_plan).expect("repeat render");
@@ -2341,7 +2927,11 @@ mod tests {
         let mut initial_templates = BTreeMap::new();
         for (id, renderer) in renderers {
             let component_plan = plan(id);
-            assert_eq!(component_plan.effective_config["alias"], json!(id));
+            match &component_plan.effective_config {
+                EffectiveComponentConfig::Lnd(config) => assert_eq!(config.alias, id),
+                EffectiveComponentConfig::Cln(config) => assert_eq!(config.alias, id),
+                config => panic!("unexpected Lightning configuration {config:?}"),
+            }
             let rendered = renderer(component_plan).expect("render lightning plan");
             let repeated = renderer(component_plan).expect("repeat lightning render");
             assert_eq!(
@@ -2491,8 +3081,18 @@ mod tests {
             .iter()
             .find(|plan| plan.component_id == "mint")
             .expect("mint plan");
-        assert_eq!(plan.effective_config["name"], json!("Proofstorm CDK mint"));
-        assert_eq!(plan.linked_targets["mint-lnd-a"].ports["rpc"], 10_009);
+        assert!(matches!(
+            &plan.effective_config,
+            EffectiveComponentConfig::Cdk(config) if config.name == "Proofstorm CDK mint"
+        ));
+        assert_eq!(
+            plan.linked_targets["mint-bolt11-primary"].component_id,
+            "mint-lnd-a"
+        );
+        assert_eq!(
+            plan.linked_targets["mint-bolt11-primary"].ports["rpc"],
+            10_009
+        );
 
         let rendered = render_cdk_component(plan).expect("render CDK");
         let repeated = render_cdk_component(plan).expect("repeat CDK render");
@@ -2553,6 +3153,231 @@ mod tests {
     }
 
     #[test]
+    fn cdk_cln_plan_uses_the_compiled_socket_and_disables_bolt12() {
+        let lab = cdk_cln_lab();
+        let lock = resolve_lock(&lab, &default_catalog()).expect("CDK+CLN lock");
+        let plans = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:cdk-cln-revision",
+            &lab,
+            &lock,
+        )
+        .expect("CDK+CLN plans");
+        let mint = plans
+            .iter()
+            .find(|plan| plan.component_id == "mint")
+            .expect("mint plan");
+        assert_eq!(mint.execution_context.mounts[2].name, "cln");
+        assert_eq!(mint.credentials[0].claim_name, "data-mint-cln-0");
+
+        let rendered = render_cdk_component(mint).expect("render CDK+CLN");
+        let config = rendered.config_maps[0]
+            .data
+            .as_ref()
+            .and_then(|data| data.get("config.toml"))
+            .expect("mint config");
+        assert!(config.contains("ln_backend = \"cln\""));
+        assert!(config.contains("rpc_path = \"/cln/regtest/lightning-rpc\""));
+        assert!(config.contains("bolt12 = false"));
+        assert!(!config.contains("[lnd]"));
+
+        let deployment = serde_json::to_value(&rendered.deployments[0]).expect("deployment");
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][2]["name"],
+            "cln"
+        );
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["volumes"][2]["persistentVolumeClaim"]["claimName"],
+            "data-mint-cln-0"
+        );
+    }
+
+    #[test]
+    fn cdk_ldk_plan_uses_embedded_state_and_direct_chain_binding() {
+        let mut lab = cdk_ldk_lab();
+        let authored = lab
+            .components
+            .iter_mut()
+            .find(|component| component.id == "mint")
+            .expect("mint component");
+        authored.config.insert("input_fee_ppk".into(), json!(321));
+        authored.config.insert("use_keyset_v2".into(), json!(false));
+        authored
+            .config
+            .insert("description_long".into(), json!("Long-form lab metadata"));
+        authored
+            .config
+            .insert("motd".into(), json!("Agents welcome"));
+        authored.config.insert(
+            "icon_url".into(),
+            json!("https://proofstorm.invalid/mint.png"),
+        );
+        authored.config.insert("max_inputs".into(), json!(64));
+        authored.config.insert("max_outputs".into(), json!(96));
+        authored
+            .config
+            .insert("http_cache_ttl_seconds".into(), json!(90));
+        authored
+            .config
+            .insert("mint_quote_ttl_seconds".into(), json!(777));
+        authored.config.insert("max_mint_sat".into(), json!(42_000));
+        let lock = resolve_lock(&lab, &default_catalog()).expect("CDK+LDK lock");
+        let plans = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:cdk-ldk-revision",
+            &lab,
+            &lock,
+        )
+        .expect("CDK+LDK plans");
+        let mint = plans
+            .iter()
+            .find(|plan| plan.component_id == "mint")
+            .expect("mint plan");
+        assert_eq!(mint.backend_id, "cdk-ldk");
+        assert_eq!(mint.execution_context.mounts.len(), 2);
+        assert!(mint.credentials.is_empty());
+        assert_eq!(mint.linked_targets["mint-chain"].backend_id, "bitcoin-core");
+
+        let rendered = render_cdk_component(mint).expect("render CDK+LDK");
+        let config = rendered.config_maps[0]
+            .data
+            .as_ref()
+            .and_then(|data| data.get("config.toml"))
+            .expect("mint config");
+        for expected in [
+            "input_fee_ppk = 321",
+            "use_keyset_v2 = false",
+            "mint_ttl = 777",
+            "ttl = 90",
+            "description_long = \"Long-form lab metadata\"",
+            "motd = \"Agents welcome\"",
+            "icon_url = \"https://proofstorm.invalid/mint.png\"",
+            "max_inputs = 64",
+            "max_outputs = 96",
+            "max_mint = 42000",
+            "ln_backend = \"ldknode\"",
+            "bitcoin_network = \"regtest\"",
+            "chain_source_type = \"bitcoinrpc\"",
+            "bitcoind_rpc_host = \"chain\"",
+            "storage_dir_path = \"/app/data/ldk-node\"",
+            "ldk_node_port = 9735",
+        ] {
+            assert!(config.contains(expected), "missing {expected:?}");
+        }
+        let deployment = serde_json::to_value(&rendered.deployments[0]).expect("deployment");
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["containers"][0]["ports"][1]["name"],
+            "p2p"
+        );
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+                .as_array()
+                .expect("mounts")
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn named_bindings_do_not_collide_and_unselected_multiplicity_refuses() {
+        let mut lab = cdk_lab();
+        lab.links.push(LinkSpec {
+            id: "mint-bolt11-secondary".into(),
+            kind: LinkKind::PaymentBackend,
+            from: "mint".into(),
+            to: "mint-lnd-b".into(),
+            binding: Some(DependencyBinding::Payment {
+                method: PaymentMethod::Bolt11,
+                unit: "sat".into(),
+            }),
+        });
+        let lock = resolve_lock(&lab, &default_catalog()).expect("both bindings lock exactly");
+        let error = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:ambiguous-revision",
+            &lab,
+            &lock,
+        )
+        .expect_err("current CDK adapter must select one named binding");
+        assert!(
+            error
+                .to_string()
+                .contains("backend_execution_binding_ambiguous")
+        );
+
+        lab.links.pop();
+        let lock = resolve_lock(&lab, &default_catalog()).expect("single binding lock");
+        let plans = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:single-revision",
+            &lab,
+            &lock,
+        )
+        .expect("single binding compiles");
+        let mint = plans
+            .iter()
+            .find(|plan| plan.component_id == "mint")
+            .expect("mint plan");
+        assert_eq!(
+            mint.linked_targets["mint-bolt11-primary"].component_id,
+            "mint-lnd-a"
+        );
+        assert!(
+            mint.credentials
+                .iter()
+                .all(|credential| credential.identity.contains("mint-bolt11-primary"))
+        );
+        assert!(matches!(
+            mint.execution_context.mounts[2].source,
+            ExecutionStorageSource::LinkedStatefulData { ref link_id }
+                if link_id == "mint-bolt11-primary"
+        ));
+    }
+
+    #[test]
+    fn cdk_renderer_consumes_the_compiled_payment_binding_identity() {
+        let lab = cdk_lab();
+        let lock = resolve_lock(&lab, &default_catalog()).expect("supported payment lock");
+        let mut plans = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:payment-selection",
+            &lab,
+            &lock,
+        )
+        .expect("payment plans");
+        let mint = plans
+            .iter_mut()
+            .find(|plan| plan.component_id == "mint")
+            .expect("mint plan");
+
+        mint.credentials[0].claim_name = "opaque-linked-state".into();
+        let rendered = serde_json::to_value(
+            &render_cdk_component(mint)
+                .expect("compiled binding renders")
+                .deployments[0],
+        )
+        .expect("deployment value");
+        assert_eq!(
+            rendered["spec"]["template"]["spec"]["volumes"][2]["persistentVolumeClaim"]["claimName"],
+            "opaque-linked-state"
+        );
+
+        mint.execution_context.mounts[2].source = ExecutionStorageSource::LinkedStatefulData {
+            link_id: "missing-binding".into(),
+        };
+        let error = render_cdk_component(mint).expect_err("unknown compiled binding must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("lacks resolved execution binding")
+        );
+
+        mint.execution_context.mounts[2].source = ExecutionStorageSource::ComponentConfig;
+        let error = render_cdk_component(mint).expect_err("unresolved mount must refuse");
+        assert!(error.to_string().contains("is not linked"));
+    }
+
+    #[test]
     fn cdk_relinking_updates_only_the_mint_and_incomplete_plans_refuse() {
         let mut lab = cdk_lab();
         let catalog = default_catalog();
@@ -2598,10 +3423,8 @@ mod tests {
         missing_link.relevant_links.clear();
         assert!(matches!(
             render_cdk_component(&missing_link),
-            Err(AdapterError::MissingLink {
-                link: LinkKind::LightningBackend,
-                ..
-            })
+            Err(AdapterError::InvalidPlan(message))
+                if message.contains("lacks resolved execution binding")
         ));
         let mut missing_target = plan("mint").clone();
         missing_target.linked_targets.clear();
@@ -3180,7 +4003,13 @@ mod tests {
                 })
                 .collect(),
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: LabPolicy {
+                limits: proofstorm_core::LabLimits {
+                    max_components: 128,
+                    ..proofstorm_core::LabLimits::default()
+                },
+                ..LabPolicy::default()
+            },
         };
         let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
@@ -3543,9 +4372,13 @@ mod tests {
                 ),
             ],
             links: vec![LinkSpec {
+                id: "attacker-cln-chain".into(),
                 kind: LinkKind::ChainBackend,
                 from: "attacker-cln".into(),
                 to: "chain".into(),
+                binding: Some(DependencyBinding::Chain {
+                    network: BitcoinNetwork::Regtest,
+                }),
             }],
             policy: LabPolicy::default(),
         };

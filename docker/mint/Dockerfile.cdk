@@ -1,3 +1,3 @@
 # Optional local build path. Default compose uses cashubtc/mintd.
 # Build: docker build -f docker/mint/Dockerfile.cdk -t proofstorm-mint:local .
-FROM cashubtc/mintd:0.17.1
+FROM cashubtc/mintd:0.17.6

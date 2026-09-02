@@ -133,7 +133,7 @@ lab = {
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
             "version": "30.0",
-            "config_version": "v1alpha1",
+            "config_version": "bitcoin-core/30/v1",
             "control": "laboratory",
             "config": {"txindex": True, "fallback_fee": 0.0002},
         }

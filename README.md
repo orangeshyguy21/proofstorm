@@ -327,6 +327,40 @@ the close negotiation, bounded regtest mining, and terminal-state verification
 as coordinated containers so chain progress cannot deadlock behind a blocking
 adapter call.
 
+CDK 0.17.6 mints may select either an exact LND or CLN BOLT11/sat backend. The
+CLN path mounts the selected node's compiled state claim read-only, configures
+its regtest Unix socket, and explicitly disables BOLT12 until that capability
+has its own LDK-backed contract. Exercise the complete MCP materialization and
+live binary/configuration check with:
+
+```sh
+bash tests/kubernetes/cdk-cln-e2e.sh
+```
+
+CDK 0.17.6 also has a distinct embedded-LDK runtime. It links the mint directly
+to a selected Bitcoin Core node, persists the LDK node in the mint's own state,
+and exposes its P2P port without exposing the loopback administrative UI. A
+usable BOLT12 offer requires an introduction path, so the live acceptance adds
+a real CLN peer, connects it to embedded LDK, requests an actual 100-sat `lno`
+offer through the mint API, and verifies teardown:
+
+```sh
+bash tests/kubernetes/cdk-ldk-e2e.sh
+```
+
+The distinct CDK-BDK runtime uses CDK 0.17.6's standard image, where BDK is a
+default feature, and links an on-chain-only mint directly to a selected Bitcoin
+Core node. Its bounded stress acceptance creates 24 concurrent NUT-30 address
+quotes, exercises agent-authored input fees, keyset-v2 policy, quote lifetimes,
+mint/melt bounds, NUT-06 metadata, in-memory cache policy, and transaction input
+and output limits in the live native configuration and API, funds and confirms
+selected quotes, checks the authored minimum-deposit boundary, restarts the mint
+to prove persistence, and verifies teardown:
+
+```sh
+bash tests/kubernetes/cdk-bdk-stress-e2e.sh
+```
+
 The implementation-neutral wallet surface now includes
 `proofstorm_wallet_initialize`, `proofstorm_wallet_balance`, and
 `proofstorm_wallet_fund`. Balance reads copy the persistent wallet into a
@@ -490,8 +524,8 @@ over HTTP** with independent, racing clients and a real LN backend (SPEC §1).
 | `SWAP_AMOUNT`                 | `1`      | Sats used in self-swap during smoke                          |
 | `WALLET_IMPL`                 | `cdk`    | `cdk` or `nutshell`                                          |
 | `MINT_IMPL`                   | `cdk`    | Mint implementation (cdk only today)                         |
-| `CDK_MINTD_VERSION`           | `0.17.1` | `cashubtc/mintd` tag                                         |
-| `CDK_CLI_VERSION`             | `0.17.1` | `cdk-cli` in wallet image                                    |
+| `CDK_MINTD_VERSION`           | `0.17.6` | `cashubtc/mintd` tag                                         |
+| `CDK_CLI_VERSION`             | `0.17.6` | `cdk-cli` in wallet image                                    |
 | `NUTSHELL_VERSION`            | `0.20.2` | `cashubtc/nutshell` in wallet image                          |
 | `MINT_HOST_PORT`              | `3338`   | Host port for mint HTTP                                      |
 | `CONSERVATION_EXPECTED`       | _(auto)_ | Override expected total (`N * FUND_AMOUNT`)                  |

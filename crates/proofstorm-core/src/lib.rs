@@ -2,6 +2,7 @@
 
 mod backend;
 mod catalog;
+mod coverage;
 mod evidence;
 mod experiment;
 mod instance;
@@ -15,18 +16,27 @@ mod schema;
 mod validation;
 
 pub use backend::{
-    BackendContractRegistry, ComponentBackendContract, ComponentConditionReason,
-    ComponentConditionState, ComponentConditionType, ComponentPlanContract, ComponentPlanInput,
-    ConditionAggregationContract, ConfigDefault, CredentialObservationContract,
-    ExecutionContextContract, ExecutionMountContract, ExecutionStorageSource,
-    LinkedStateObservationContract, OperationAdmissionContract, OperationClass,
-    ProtocolProbeContract, ProtocolProbePlan, ReadinessPrerequisite, StorageObservationContract,
+    BackendContractRegistry, BitcoinCoreConfig, CdkMintConfig, ClnConfig, ComponentBackendContract,
+    ComponentConditionReason, ComponentConditionState, ComponentConditionType,
+    ComponentPlanContract, ComponentPlanInput, ConditionAggregationContract, ConfigDefault,
+    ConfigFieldContract, ConfigRule, ConfigSettingClass, ConfigValueKind,
+    CredentialObservationContract, EffectiveComponentConfig, ExecutionContextContract,
+    ExecutionMountContract, ExecutionMountTemplateContract, ExecutionStorageSource,
+    ExecutionStorageTemplateSource, LinkedStateObservationContract, LndConfig,
+    OperationAdmissionContract, OperationClass, PostgresConfig, ProtocolProbeContract,
+    ProtocolProbePlan, ReadinessPrerequisite, StorageObservationContract,
     StorageRequirementTemplate, TargetDescriptorContract, WorkloadControllerKind,
     WorkloadObservationContract, default_backend_registry,
 };
 pub use catalog::{
-    CatalogEntry, CatalogResponse, default_catalog, validate_catalog_component,
-    validate_component_config,
+    AuthenticationMode, CatalogDependencySupport, CatalogEntry, CatalogFeature,
+    CatalogImplementationSupport, CatalogPaymentBindingSupport, CatalogResponse,
+    CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel, StorageBackend, SupportLifecycle,
+    default_catalog, validate_catalog_component, validate_component_config,
+};
+pub use coverage::{
+    CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,
+    ConfigurationFieldCoverage, configuration_coverage_manifest,
 };
 pub use evidence::{
     EVIDENCE_API_VERSION, EVIDENCE_MEDIA_TYPE, EvidenceAction, EvidenceArtifact, EvidenceBundle,
@@ -38,8 +48,9 @@ pub use instance::{
     LabInstanceStatus, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, TeardownReceipt,
 };
 pub use model::{
-    API_VERSION, Capability, ComponentKind, ComponentSpec, ControlClass, LabLimits, LabPolicy,
-    LabSpec, LinkKind, LinkSpec, ValidateLabRequest,
+    API_VERSION, BitcoinNetwork, Capability, ComponentKind, ComponentSpec, ControlClass,
+    DatabaseRole, DependencyBinding, LabLimits, LabPolicy, LabSpec, LinkKind, LinkSpec,
+    PaymentMethod, ValidateLabRequest,
 };
 pub use mutation::{DraftMutation, apply_draft_mutation};
 pub use network::{

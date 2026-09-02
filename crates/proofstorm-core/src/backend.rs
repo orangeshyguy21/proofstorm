@@ -174,15 +174,75 @@ pub enum ConfigDefault {
     ComponentId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigValueKind {
+    Boolean,
+    Number,
+    Integer,
+    String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigSettingClass {
+    AgentAuthorable,
+    TopologyDerived,
+    GeneratedInstanceSecret,
+    ImportedSecretReference,
+    RuntimePolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFieldContract {
+    pub description: String,
+    pub value_kind: ConfigValueKind,
+    pub classification: ConfigSettingClass,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<ConfigDefault>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConfigRule {
+    MutuallyExclusive {
+        fields: BTreeSet<String>,
+    },
+    RequiredWhen {
+        field: String,
+        equals: Value,
+        required_field: String,
+    },
+    LessThanOrEqual {
+        minimum_field: String,
+        maximum_field: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentBackendContract {
     pub id: String,
     pub kind: ComponentKind,
-    pub config_defaults: BTreeMap<String, ConfigDefault>,
+    pub config_version: String,
+    pub config_fields: BTreeMap<String, ConfigFieldContract>,
+    pub config_rules: Vec<ConfigRule>,
     pub service_ports: BTreeMap<String, u16>,
     pub execution_state_contract: String,
-    pub execution_mounts: Vec<ExecutionMountContract>,
+    pub execution_mounts: Vec<ExecutionMountTemplateContract>,
     pub execution_environment: BTreeMap<String, String>,
     pub workload_kind: WorkloadControllerKind,
     pub storage_requirements: Vec<StorageRequirementTemplate>,
@@ -206,11 +266,45 @@ pub struct ExecutionContextContract {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "source", rename_all = "snake_case")]
+pub enum ExecutionStorageTemplateSource {
+    StatefulData,
+    ComponentPersistentData,
+    ComponentConfig,
+    LinkedStatefulData {
+        link_kind: crate::LinkKind,
+        binding: crate::DependencyBinding,
+        target_implementation: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "source", rename_all = "snake_case")]
 pub enum ExecutionStorageSource {
     StatefulData,
     ComponentPersistentData,
     ComponentConfig,
-    LinkedStatefulData { link_kind: crate::LinkKind },
+    LinkedStatefulData { link_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionMountTemplateContract {
+    pub name: String,
+    pub mount_path: String,
+    pub read_only: bool,
+    #[serde(default)]
+    pub requirement: ExecutionMountRequirement,
+    pub source: ExecutionStorageTemplateSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExecutionMountRequirement {
+    #[default]
+    Required,
+    AtLeastOne {
+        group: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -227,6 +321,8 @@ pub struct ExecutionMountContract {
 pub struct TargetDescriptorContract {
     pub component_id: String,
     pub kind: ComponentKind,
+    pub backend_id: String,
+    pub version: String,
     pub ports: BTreeMap<String, u16>,
 }
 
@@ -238,8 +334,85 @@ pub struct ComponentPlanInput {
     pub component: ComponentSpec,
     pub lock: LockEntry,
     pub relevant_links: Vec<LinkSpec>,
+    /// Target descriptors keyed by stable `LinkSpec::id`, not component ID.
     pub linked_targets: BTreeMap<String, TargetDescriptorContract>,
+    /// Linked state contracts keyed by stable `LinkSpec::id`.
     pub linked_state: BTreeMap<String, LinkedStateObservationContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BitcoinCoreConfig {
+    pub txindex: bool,
+    pub fallback_fee: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LndConfig {
+    pub alias: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClnConfig {
+    pub alias: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CdkMintConfig {
+    pub name: String,
+    pub description: String,
+    pub description_long: String,
+    pub motd: String,
+    pub icon_url: String,
+    pub contact_email: String,
+    pub contact_nostr_public_key: String,
+    pub tos_url: String,
+    pub enable_info_page: bool,
+    pub input_fee_ppk: u64,
+    pub use_keyset_v2: bool,
+    pub mint_quote_ttl_seconds: u64,
+    pub melt_quote_ttl_seconds: u64,
+    pub http_cache_ttl_seconds: u64,
+    pub http_cache_tti_seconds: u64,
+    pub max_inputs: u64,
+    pub max_outputs: u64,
+    pub min_mint_sat: u64,
+    pub max_mint_sat: u64,
+    pub min_melt_sat: u64,
+    pub max_melt_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PostgresConfig {
+    pub database_name: String,
+    pub storage_size: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "implementation", content = "config")]
+pub enum EffectiveComponentConfig {
+    #[serde(rename = "bitcoin-core")]
+    BitcoinCore(BitcoinCoreConfig),
+    #[serde(rename = "lnd")]
+    Lnd(LndConfig),
+    #[serde(rename = "cln")]
+    Cln(ClnConfig),
+    #[serde(rename = "cdk")]
+    Cdk(CdkMintConfig),
+    #[serde(rename = "cdk-ldk")]
+    CdkLdk(CdkMintConfig),
+    #[serde(rename = "cdk-bdk")]
+    CdkBdk(CdkMintConfig),
+    #[serde(rename = "postgresql")]
+    Postgres(PostgresConfig),
+    #[serde(rename = "nutshell-wallet")]
+    NutshellWallet,
+    #[serde(rename = "attacker-workspace")]
+    AttackerWorkspace,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -251,8 +424,9 @@ pub struct ComponentPlanContract {
     pub component_id: String,
     pub kind: ComponentKind,
     pub rollout_digest: String,
-    pub effective_config: BTreeMap<String, Value>,
+    pub effective_config: EffectiveComponentConfig,
     pub relevant_links: Vec<LinkSpec>,
+    /// Target descriptors keyed by stable `LinkSpec::id`, not component ID.
     pub linked_targets: BTreeMap<String, TargetDescriptorContract>,
     pub execution_context: ExecutionContextContract,
     pub target_descriptor: TargetDescriptorContract,
@@ -284,6 +458,7 @@ impl BackendContractRegistry {
     ) -> Result<Self, String> {
         let mut entries = BTreeMap::new();
         for contract in contracts {
+            validate_backend_config_contract(&contract)?;
             let id = contract.id.clone();
             if entries.insert(id.clone(), contract).is_some() {
                 return Err(format!(
@@ -310,6 +485,26 @@ impl BackendContractRegistry {
         self.entries.keys().map(String::as_str)
     }
 
+    /// Return the machine-readable authoring schema owned by one backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable diagnostic when the backend is not registered.
+    pub fn config_schema(&self, id: &str) -> Result<Value, String> {
+        Ok(self.require(id)?.config_schema())
+    }
+
+    /// Validate only the agent-authored configuration fields of a component.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, field-addressed diagnostic for unknown fields, wrong
+    /// types, violated bounds, invalid enumerations, or cross-field rules.
+    pub fn validate_component_config(&self, component: &ComponentSpec) -> Result<(), String> {
+        self.require(&component.implementation)?
+            .validate_config(component, false)
+    }
+
     /// Resolve omitted component configuration through the installed backend
     /// contract without mutating explicitly requested values.
     ///
@@ -327,16 +522,19 @@ impl BackendContractRegistry {
                 component.id, component.kind, contract.id, contract.kind
             ));
         }
+        contract.validate_config(component, false)?;
         let mut effective = component.clone();
-        for (name, default) in &contract.config_defaults {
-            effective
-                .config
-                .entry(name.clone())
-                .or_insert_with(|| match default {
-                    ConfigDefault::Literal(value) => value.clone(),
-                    ConfigDefault::ComponentId => Value::String(component.id.clone()),
-                });
+        for (name, field) in &contract.config_fields {
+            if field.classification.is_agent_authorable() {
+                if let Some(default) = &field.default {
+                    effective
+                        .config
+                        .entry(name.clone())
+                        .or_insert_with(|| resolve_config_default(default, &component.id));
+                }
+            }
         }
+        contract.validate_config(&effective, true)?;
         Ok(effective)
     }
 
@@ -364,13 +562,14 @@ impl BackendContractRegistry {
             ));
         }
         let effective = self.resolve_effective_component(&input.component)?;
+        let effective_config = EffectiveComponentConfig::try_from_component(&effective)?;
         let mut relevant_links = input.relevant_links.clone();
         relevant_links.sort();
         for link in &relevant_links {
-            let Some(target) = input.linked_targets.get(&link.to) else {
+            let Some(target) = input.linked_targets.get(&link.id) else {
                 return Err(format!(
-                    "backend_link_target_missing: component {:?} link target {:?} has no descriptor",
-                    input.component.id, link.to
+                    "backend_link_target_missing: component {:?} binding {:?} target {:?} has no descriptor",
+                    input.component.id, link.id, link.to
                 ));
             };
             if target.component_id != link.to {
@@ -385,7 +584,13 @@ impl BackendContractRegistry {
             .iter()
             .map(|requirement| requirement.resolve(&input.component.id))
             .collect();
-        let credentials = compile_credential_observations(backend, input, &relevant_links)?;
+        let execution_mounts = resolve_execution_mounts(
+            backend,
+            &input.component.id,
+            &relevant_links,
+            &input.linked_targets,
+        )?;
+        let credentials = compile_credential_observations(&execution_mounts, input)?;
         let protocol_probe = backend
             .protocol_probe
             .as_ref()
@@ -398,19 +603,21 @@ impl BackendContractRegistry {
             component_id: input.component.id.clone(),
             kind: input.component.kind,
             rollout_digest: input.lock.rollout_digest.clone(),
-            effective_config: effective.config,
+            effective_config,
             relevant_links,
             linked_targets: input.linked_targets.clone(),
             execution_context: ExecutionContextContract {
                 component_id: input.component.id.clone(),
                 image: input.lock.image.clone(),
                 state_contract: backend.execution_state_contract.clone(),
-                mounts: backend.execution_mounts.clone(),
+                mounts: execution_mounts,
                 environment: backend.execution_environment.clone(),
             },
             target_descriptor: TargetDescriptorContract {
                 component_id: input.component.id.clone(),
                 kind: input.component.kind,
+                backend_id: input.lock.catalog_id.clone(),
+                version: input.lock.version.clone(),
                 ports: backend.service_ports.clone(),
             },
             workload: WorkloadObservationContract {
@@ -429,38 +636,555 @@ impl BackendContractRegistry {
     }
 }
 
-fn compile_credential_observations(
-    backend: &ComponentBackendContract,
-    input: &ComponentPlanInput,
-    relevant_links: &[LinkSpec],
-) -> Result<Vec<CredentialObservationContract>, String> {
-    let mut credentials = Vec::new();
-    for mount in &backend.execution_mounts {
-        let ExecutionStorageSource::LinkedStatefulData { link_kind } = mount.source else {
-            continue;
+impl EffectiveComponentConfig {
+    fn try_from_component(component: &ComponentSpec) -> Result<Self, String> {
+        let string = |name| {
+            required_config_value(component, name)?
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| typed_config_error(component, name))
         };
-        for link in relevant_links.iter().filter(|link| link.kind == link_kind) {
-            let linked = input.linked_state.get(&link.to).ok_or_else(|| {
-                format!(
-                    "backend_link_state_missing: component {:?} link target {:?} has no state observation contract",
-                    input.component.id, link.to
-                )
-            })?;
-            for linked_storage in &linked.storage {
-                credentials.push(CredentialObservationContract {
-                    identity: format!(
-                        "{}:{}:{}",
-                        mount.name, linked.component_id, linked_storage.claim_name
-                    ),
-                    source_component_id: linked.component_id.clone(),
-                    source_state_contract: linked.state_contract.clone(),
-                    claim_name: linked_storage.claim_name.clone(),
-                    mount_name: mount.name.clone(),
-                    mount_path: mount.mount_path.clone(),
-                    read_only: mount.read_only,
-                });
+        let cdk = || -> Result<CdkMintConfig, String> {
+            let integer = |name| {
+                required_config_value(component, name)?
+                    .as_u64()
+                    .ok_or_else(|| typed_config_error(component, name))
+            };
+            Ok(CdkMintConfig {
+                name: string("name")?,
+                description: string("description")?,
+                description_long: string("description_long")?,
+                motd: string("motd")?,
+                icon_url: string("icon_url")?,
+                contact_email: string("contact_email")?,
+                contact_nostr_public_key: string("contact_nostr_public_key")?,
+                tos_url: string("tos_url")?,
+                enable_info_page: required_config_value(component, "enable_info_page")?
+                    .as_bool()
+                    .ok_or_else(|| typed_config_error(component, "enable_info_page"))?,
+                input_fee_ppk: integer("input_fee_ppk")?,
+                use_keyset_v2: required_config_value(component, "use_keyset_v2")?
+                    .as_bool()
+                    .ok_or_else(|| typed_config_error(component, "use_keyset_v2"))?,
+                mint_quote_ttl_seconds: integer("mint_quote_ttl_seconds")?,
+                melt_quote_ttl_seconds: integer("melt_quote_ttl_seconds")?,
+                http_cache_ttl_seconds: integer("http_cache_ttl_seconds")?,
+                http_cache_tti_seconds: integer("http_cache_tti_seconds")?,
+                max_inputs: integer("max_inputs")?,
+                max_outputs: integer("max_outputs")?,
+                min_mint_sat: integer("min_mint_sat")?,
+                max_mint_sat: integer("max_mint_sat")?,
+                min_melt_sat: integer("min_melt_sat")?,
+                max_melt_sat: integer("max_melt_sat")?,
+            })
+        };
+        match component.implementation.as_str() {
+            "bitcoin-core" => Ok(Self::BitcoinCore(BitcoinCoreConfig {
+                txindex: required_config_value(component, "txindex")?
+                    .as_bool()
+                    .ok_or_else(|| typed_config_error(component, "txindex"))?,
+                fallback_fee: required_config_value(component, "fallback_fee")?
+                    .as_f64()
+                    .ok_or_else(|| typed_config_error(component, "fallback_fee"))?,
+            })),
+            "lnd" => Ok(Self::Lnd(LndConfig {
+                alias: string("alias")?,
+            })),
+            "cln" => Ok(Self::Cln(ClnConfig {
+                alias: string("alias")?,
+            })),
+            "cdk" => Ok(Self::Cdk(cdk()?)),
+            "cdk-ldk" => Ok(Self::CdkLdk(cdk()?)),
+            "cdk-bdk" => Ok(Self::CdkBdk(cdk()?)),
+            "postgresql" => {
+                let database_name = string("database_name")?;
+                if !is_postgres_identifier(&database_name) {
+                    return Err(config_diagnostic(
+                        "identifier_violation",
+                        component,
+                        "database_name",
+                        "must begin with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, or '_'",
+                    ));
+                }
+                Ok(Self::Postgres(PostgresConfig {
+                    database_name,
+                    storage_size: string("storage_size")?,
+                }))
+            }
+            "nutshell-wallet" => Ok(Self::NutshellWallet),
+            "attacker-workspace" => Ok(Self::AttackerWorkspace),
+            implementation => Err(format!(
+                "backend_typed_config_missing: implementation {implementation:?} has no typed effective configuration"
+            )),
+        }
+    }
+}
+
+fn required_config_value<'a>(
+    component: &'a ComponentSpec,
+    name: &str,
+) -> Result<&'a Value, String> {
+    component
+        .config
+        .get(name)
+        .ok_or_else(|| typed_config_error(component, name))
+}
+
+fn typed_config_error(component: &ComponentSpec, name: &str) -> String {
+    format!(
+        "backend_typed_config_invalid: component {:?} field /config/{name} was not normalized to its declared native type",
+        component.id
+    )
+}
+
+fn is_postgres_identifier(value: &str) -> bool {
+    value
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+impl ComponentBackendContract {
+    fn config_schema(&self) -> Value {
+        let properties = self
+            .config_fields
+            .iter()
+            .filter(|(_, field)| field.classification.is_agent_authorable())
+            .map(|(name, field)| (name.clone(), config_field_schema(field, true)))
+            .collect::<serde_json::Map<_, _>>();
+        let managed_settings = self
+            .config_fields
+            .iter()
+            .filter(|(_, field)| !field.classification.is_agent_authorable())
+            .map(|(name, field)| (name.clone(), config_field_schema(field, false)))
+            .collect::<serde_json::Map<_, _>>();
+        let required = self
+            .config_fields
+            .iter()
+            .filter(|(_, field)| {
+                field.classification.is_agent_authorable()
+                    && field.required
+                    && field.default.is_none()
+            })
+            .map(|(name, _)| Value::String(name.clone()))
+            .collect::<Vec<_>>();
+        let all_of = self
+            .config_rules
+            .iter()
+            .flat_map(config_rule_schema)
+            .collect::<Vec<_>>();
+        let mut schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": format!("https://proofstorm.dev/schemas/config/{}", self.config_version),
+            "title": format!("{} configuration", self.id),
+            "type": "object",
+            "additionalProperties": false,
+            "properties": properties,
+            "required": required,
+            "x-proofstorm-config-version": self.config_version,
+            "x-proofstorm-rules": self.config_rules,
+            "x-proofstorm-managed-settings": managed_settings,
+        });
+        if !all_of.is_empty() {
+            schema["allOf"] = Value::Array(all_of);
+        }
+        schema
+    }
+
+    fn validate_config(&self, component: &ComponentSpec, effective: bool) -> Result<(), String> {
+        for (name, value) in &component.config {
+            let Some(field) = self.config_fields.get(name) else {
+                return Err(config_diagnostic(
+                    "unknown_field",
+                    component,
+                    name,
+                    "field is not declared by the backend configuration contract",
+                ));
+            };
+            if !field.classification.is_agent_authorable() {
+                return Err(config_diagnostic(
+                    "managed_field",
+                    component,
+                    name,
+                    "field is derived or owned by Proofstorm and cannot be supplied by an agent",
+                ));
+            }
+            validate_config_value(component, name, value, field)?;
+        }
+        if self.id == "postgresql"
+            && let Some(database_name) = component
+                .config
+                .get("database_name")
+                .and_then(Value::as_str)
+            && !is_postgres_identifier(database_name)
+        {
+            return Err(config_diagnostic(
+                "identifier_violation",
+                component,
+                "database_name",
+                "must begin with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, or '_'",
+            ));
+        }
+        if effective {
+            for (name, field) in &self.config_fields {
+                if field.classification.is_agent_authorable()
+                    && field.required
+                    && !component.config.contains_key(name)
+                {
+                    return Err(config_diagnostic(
+                        "required_field_missing",
+                        component,
+                        name,
+                        "required field is absent after default resolution",
+                    ));
+                }
             }
         }
+        validate_config_rules(component, &self.config_rules)
+    }
+}
+
+impl ConfigSettingClass {
+    const fn is_agent_authorable(self) -> bool {
+        matches!(self, Self::AgentAuthorable | Self::ImportedSecretReference)
+    }
+}
+
+fn config_field_schema(field: &ConfigFieldContract, include_default: bool) -> Value {
+    let mut schema = serde_json::Map::from_iter([
+        (
+            "description".into(),
+            Value::String(field.description.clone()),
+        ),
+        (
+            "type".into(),
+            Value::String(config_json_type(field.value_kind).into()),
+        ),
+        (
+            "x-proofstorm-classification".into(),
+            serde_json::to_value(field.classification)
+                .expect("configuration classification serializes"),
+        ),
+    ]);
+    if include_default {
+        if let Some(ConfigDefault::Literal(value)) = &field.default {
+            schema.insert("default".into(), value.clone());
+        } else if matches!(field.default, Some(ConfigDefault::ComponentId)) {
+            schema.insert(
+                "x-proofstorm-default".into(),
+                json!({"source": "component_id"}),
+            );
+        }
+    } else {
+        schema.insert("readOnly".into(), Value::Bool(true));
+    }
+    if !field.enum_values.is_empty() {
+        schema.insert("enum".into(), Value::Array(field.enum_values.clone()));
+    }
+    insert_optional_number(&mut schema, "minimum", field.minimum);
+    insert_optional_number(&mut schema, "maximum", field.maximum);
+    insert_optional_usize(&mut schema, "minLength", field.min_length);
+    insert_optional_usize(&mut schema, "maxLength", field.max_length);
+    Value::Object(schema)
+}
+
+fn config_json_type(kind: ConfigValueKind) -> &'static str {
+    match kind {
+        ConfigValueKind::Boolean => "boolean",
+        ConfigValueKind::Number => "number",
+        ConfigValueKind::Integer => "integer",
+        ConfigValueKind::String => "string",
+    }
+}
+
+fn resolve_config_default(default: &ConfigDefault, component_id: &str) -> Value {
+    match default {
+        ConfigDefault::Literal(value) => value.clone(),
+        ConfigDefault::ComponentId => Value::String(component_id.into()),
+    }
+}
+
+fn config_rule_schema(rule: &ConfigRule) -> Vec<Value> {
+    match rule {
+        ConfigRule::MutuallyExclusive { fields } => {
+            let fields = fields.iter().collect::<Vec<_>>();
+            let mut pairs = Vec::new();
+            for (index, left) in fields.iter().enumerate() {
+                for right in fields.iter().skip(index + 1) {
+                    pairs.push(json!({"not": {"required": [left, right]}}));
+                }
+            }
+            pairs
+        }
+        ConfigRule::RequiredWhen {
+            field,
+            equals,
+            required_field,
+        } => vec![json!({
+            "if": {"properties": {field: {"const": equals}}, "required": [field]},
+            "then": {"required": [required_field]}
+        })],
+        ConfigRule::LessThanOrEqual { .. } => vec![],
+    }
+}
+
+fn insert_optional_number(
+    object: &mut serde_json::Map<String, Value>,
+    name: &str,
+    value: Option<f64>,
+) {
+    if let Some(value) = value {
+        object.insert(name.into(), json!(value));
+    }
+}
+
+fn insert_optional_usize(
+    object: &mut serde_json::Map<String, Value>,
+    name: &str,
+    value: Option<usize>,
+) {
+    if let Some(value) = value {
+        object.insert(name.into(), json!(value));
+    }
+}
+
+fn validate_config_value(
+    component: &ComponentSpec,
+    name: &str,
+    value: &Value,
+    field: &ConfigFieldContract,
+) -> Result<(), String> {
+    let type_matches = match field.value_kind {
+        ConfigValueKind::Boolean => value.is_boolean(),
+        ConfigValueKind::Number => value.is_number(),
+        ConfigValueKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
+        ConfigValueKind::String => value.is_string(),
+    };
+    if !type_matches {
+        return Err(config_diagnostic(
+            "wrong_type",
+            component,
+            name,
+            &format!("expected {}", config_json_type(field.value_kind)),
+        ));
+    }
+    if !field.enum_values.is_empty() && !field.enum_values.contains(value) {
+        return Err(config_diagnostic(
+            "enum_violation",
+            component,
+            name,
+            "value is not one of the declared enumeration values",
+        ));
+    }
+    if let Some(number) = value.as_f64() {
+        if field.minimum.is_some_and(|minimum| number < minimum)
+            || field.maximum.is_some_and(|maximum| number > maximum)
+        {
+            return Err(config_diagnostic(
+                "numeric_bound_violation",
+                component,
+                name,
+                "numeric value is outside the declared inclusive bounds",
+            ));
+        }
+    }
+    if let Some(text) = value.as_str() {
+        let length = text.chars().count();
+        if field.min_length.is_some_and(|minimum| length < minimum)
+            || field.max_length.is_some_and(|maximum| length > maximum)
+        {
+            return Err(config_diagnostic(
+                "string_length_violation",
+                component,
+                name,
+                "string length is outside the declared inclusive bounds",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_config_rules(component: &ComponentSpec, rules: &[ConfigRule]) -> Result<(), String> {
+    for rule in rules {
+        match rule {
+            ConfigRule::MutuallyExclusive { fields } => {
+                let present = fields
+                    .iter()
+                    .filter(|field| component.config.contains_key(*field))
+                    .collect::<Vec<_>>();
+                if present.len() > 1 {
+                    return Err(format!(
+                        "config_mutually_exclusive: component {:?} fields {:?} cannot be set together",
+                        component.id, present
+                    ));
+                }
+            }
+            ConfigRule::RequiredWhen {
+                field,
+                equals,
+                required_field,
+            } if component.config.get(field) == Some(equals)
+                && !component.config.contains_key(required_field) =>
+            {
+                return Err(config_diagnostic(
+                    "conditional_required_field_missing",
+                    component,
+                    required_field,
+                    &format!("field is required when /config/{field} equals {equals}"),
+                ));
+            }
+            ConfigRule::RequiredWhen { .. } => {}
+            ConfigRule::LessThanOrEqual {
+                minimum_field,
+                maximum_field,
+            } => {
+                let (Some(minimum), Some(maximum)) = (
+                    component.config.get(minimum_field).and_then(Value::as_u64),
+                    component.config.get(maximum_field).and_then(Value::as_u64),
+                ) else {
+                    continue;
+                };
+                if minimum > maximum {
+                    return Err(format!(
+                        "config_order_violation: component {:?} field /config/{minimum_field} must be less than or equal to /config/{maximum_field}",
+                        component.id
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn config_diagnostic(code: &str, component: &ComponentSpec, field: &str, message: &str) -> String {
+    format!(
+        "config_{code}: component {:?} field /config/{field}: {message}",
+        component.id
+    )
+}
+
+fn resolve_execution_mounts(
+    backend: &ComponentBackendContract,
+    component_id: &str,
+    relevant_links: &[LinkSpec],
+    linked_targets: &BTreeMap<String, TargetDescriptorContract>,
+) -> Result<Vec<ExecutionMountContract>, String> {
+    let mut resolved = Vec::new();
+    let mut alternative_groups = BTreeMap::<&str, usize>::new();
+    for mount in &backend.execution_mounts {
+        if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
+            alternative_groups.entry(group).or_default();
+        }
+        let source = match &mount.source {
+            ExecutionStorageTemplateSource::StatefulData => ExecutionStorageSource::StatefulData,
+            ExecutionStorageTemplateSource::ComponentPersistentData => {
+                ExecutionStorageSource::ComponentPersistentData
+            }
+            ExecutionStorageTemplateSource::ComponentConfig => {
+                ExecutionStorageSource::ComponentConfig
+            }
+            ExecutionStorageTemplateSource::LinkedStatefulData {
+                link_kind,
+                binding,
+                target_implementation,
+            } => {
+                let links = relevant_links
+                    .iter()
+                    .filter(|link| {
+                        link.kind == *link_kind
+                            && link.binding.as_ref() == Some(binding)
+                            && linked_targets
+                                .get(&link.id)
+                                .is_some_and(|target| target.backend_id == *target_implementation)
+                    })
+                    .collect::<Vec<_>>();
+                let link = match links.as_slice() {
+                    [] if matches!(
+                        mount.requirement,
+                        ExecutionMountRequirement::AtLeastOne { .. }
+                    ) =>
+                    {
+                        continue;
+                    }
+                    [link] => *link,
+                    [] => {
+                        return Err(format!(
+                            "backend_execution_binding_missing: component {component_id:?} mount {:?} requires one {link_kind:?} binding matching {binding:?} through implementation {target_implementation:?}",
+                            mount.name,
+                        ));
+                    }
+                    _ => {
+                        return Err(format!(
+                            "backend_execution_binding_ambiguous: component {component_id:?} mount {:?} requires one {link_kind:?} binding matching {binding:?} through implementation {target_implementation:?}, found {:?}",
+                            mount.name,
+                            links
+                                .iter()
+                                .map(|link| link.id.as_str())
+                                .collect::<Vec<_>>()
+                        ));
+                    }
+                };
+                ExecutionStorageSource::LinkedStatefulData {
+                    link_id: link.id.clone(),
+                }
+            }
+        };
+        if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
+            *alternative_groups.entry(group).or_default() += 1;
+        }
+        resolved.push(ExecutionMountContract {
+            name: mount.name.clone(),
+            mount_path: mount.mount_path.clone(),
+            read_only: mount.read_only,
+            source,
+        });
+    }
+    if let Some((group, _)) = alternative_groups.iter().find(|(_, count)| **count == 0) {
+        return Err(format!(
+            "backend_execution_binding_group_missing: component {component_id:?} requires at least one resolved execution mount in group {group:?}"
+        ));
+    }
+    Ok(resolved)
+}
+
+fn compile_credential_observations(
+    execution_mounts: &[ExecutionMountContract],
+    input: &ComponentPlanInput,
+) -> Result<Vec<CredentialObservationContract>, String> {
+    let mut credentials = Vec::new();
+    for mount in execution_mounts {
+        let ExecutionStorageSource::LinkedStatefulData { ref link_id } = mount.source else {
+            continue;
+        };
+        let linked = input.linked_state.get(link_id).ok_or_else(|| {
+            format!(
+                "backend_link_state_missing: component {:?} binding {link_id:?} has no state observation contract",
+                input.component.id
+            )
+        })?;
+        let [linked_storage] = linked.storage.as_slice() else {
+            return Err(format!(
+                "backend_link_storage_cardinality: component {:?} binding {link_id:?} mount {:?} requires exactly one linked storage claim, found {}",
+                input.component.id,
+                mount.name,
+                linked.storage.len()
+            ));
+        };
+        credentials.push(CredentialObservationContract {
+            identity: format!(
+                "{}:{link_id}:{}:{}",
+                mount.name, linked.component_id, linked_storage.claim_name
+            ),
+            source_component_id: linked.component_id.clone(),
+            source_state_contract: linked.state_contract.clone(),
+            claim_name: linked_storage.claim_name.clone(),
+            mount_name: mount.name.clone(),
+            mount_path: mount.mount_path.clone(),
+            read_only: mount.read_only,
+        });
     }
     credentials.sort_by(|left, right| left.identity.cmp(&right.identity));
     Ok(credentials)
@@ -481,23 +1205,144 @@ impl StorageRequirementTemplate {
 }
 
 #[must_use]
+/// Return the built-in, internally validated backend registry.
+///
+/// # Panics
+///
+/// Panics when a built-in backend violates a configuration-contract invariant.
+/// This is a programmer error covered by the backend contract tests.
 pub fn default_backend_registry() -> BackendContractRegistry {
-    BackendContractRegistry {
-        entries: default_backend_contracts()
-            .into_iter()
-            .map(|contract| (contract.id.clone(), contract))
-            .collect(),
-    }
+    BackendContractRegistry::try_new(default_backend_contracts())
+        .expect("built-in backend configuration contracts are valid")
 }
 
+fn validate_backend_config_contract(contract: &ComponentBackendContract) -> Result<(), String> {
+    for (name, field) in &contract.config_fields {
+        if !field.classification.is_agent_authorable() && field.default.is_some() {
+            return Err(format!(
+                "backend_managed_config_default_forbidden: backend {:?} field {name:?} cannot publish or resolve a managed value as an authoring default",
+                contract.id
+            ));
+        }
+    }
+    for rule in &contract.config_rules {
+        let referenced = match rule {
+            ConfigRule::MutuallyExclusive { fields } => fields.iter().collect::<Vec<_>>(),
+            ConfigRule::RequiredWhen {
+                field,
+                required_field,
+                ..
+            } => vec![field, required_field],
+            ConfigRule::LessThanOrEqual {
+                minimum_field,
+                maximum_field,
+            } => vec![minimum_field, maximum_field],
+        };
+        for name in referenced {
+            let Some(field) = contract.config_fields.get(name) else {
+                return Err(format!(
+                    "backend_config_rule_field_missing: backend {:?} rule references undeclared field {name:?}",
+                    contract.id
+                ));
+            };
+            if !field.classification.is_agent_authorable() {
+                return Err(format!(
+                    "backend_config_rule_managed_field: backend {:?} authoring rule references managed field {name:?}",
+                    contract.id
+                ));
+            }
+        }
+    }
+    let mut mount_names = BTreeSet::new();
+    let mut mount_paths = BTreeSet::new();
+    for mount in &contract.execution_mounts {
+        if !mount_names.insert(mount.name.as_str())
+            || !mount_paths.insert(mount.mount_path.as_str())
+        {
+            return Err(format!(
+                "backend_execution_mount_collision: backend {:?} repeats mount name {:?} or path {:?}",
+                contract.id, mount.name, mount.mount_path
+            ));
+        }
+        if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
+            if group.is_empty() {
+                return Err(format!(
+                    "backend_execution_mount_group_missing: backend {:?} mount {:?} has an empty alternative group",
+                    contract.id, mount.name
+                ));
+            }
+            if !matches!(
+                &mount.source,
+                ExecutionStorageTemplateSource::LinkedStatefulData { .. }
+            ) {
+                return Err(format!(
+                    "backend_execution_mount_group_source_invalid: backend {:?} mount {:?} uses an alternative requirement without linked state",
+                    contract.id, mount.name
+                ));
+            }
+        }
+        let ExecutionStorageTemplateSource::LinkedStatefulData {
+            link_kind,
+            binding,
+            target_implementation,
+        } = &mount.source
+        else {
+            continue;
+        };
+        if target_implementation.is_empty() {
+            return Err(format!(
+                "backend_execution_selector_target_missing: backend {:?} mount {:?} has no target implementation",
+                contract.id, mount.name
+            ));
+        }
+        let compatible = matches!(
+            (link_kind, binding),
+            (
+                crate::LinkKind::ChainBackend,
+                crate::DependencyBinding::Chain { .. }
+            ) | (
+                crate::LinkKind::PaymentBackend,
+                crate::DependencyBinding::Payment { .. }
+            )
+        );
+        if !compatible {
+            return Err(format!(
+                "backend_execution_selector_incompatible: backend {:?} mount {:?} link kind {link_kind:?} does not match binding {binding:?}",
+                contract.id, mount.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "backend support contracts deliberately declare native configuration fields inline"
+)]
 fn default_backend_contracts() -> Vec<ComponentBackendContract> {
     vec![
         contract(
             "bitcoin-core",
             ComponentKind::Bitcoin,
+            "bitcoin-core/30/v1",
             BTreeMap::from([
-                ("fallback_fee".into(), ConfigDefault::Literal(json!(0.0002))),
-                ("txindex".into(), ConfigDefault::Literal(json!(true))),
+                (
+                    "fallback_fee".into(),
+                    config_field(
+                        "Fallback transaction fee in BTC per kvB",
+                        ConfigValueKind::Number,
+                        ConfigDefault::Literal(json!(0.0002)),
+                    )
+                    .with_numeric_bounds(0.0, 1.0),
+                ),
+                (
+                    "txindex".into(),
+                    config_field(
+                        "Enable the complete transaction index",
+                        ConfigValueKind::Boolean,
+                        ConfigDefault::Literal(json!(true)),
+                    ),
+                ),
             ]),
             BTreeMap::from([
                 ("p2p".into(), 18_444),
@@ -511,7 +1356,16 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "lnd",
             ComponentKind::Lightning,
-            BTreeMap::from([("alias".into(), ConfigDefault::ComponentId)]),
+            "lnd/0.20/v1",
+            BTreeMap::from([(
+                "alias".into(),
+                config_field(
+                    "Native LND node alias",
+                    ConfigValueKind::String,
+                    ConfigDefault::ComponentId,
+                )
+                .with_string_bounds(1, 32),
+            )]),
             BTreeMap::from([
                 ("p2p".into(), 9_735),
                 ("rest".into(), 8_080),
@@ -523,7 +1377,16 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "cln",
             ComponentKind::Lightning,
-            BTreeMap::from([("alias".into(), ConfigDefault::ComponentId)]),
+            "cln/26.06/v1",
+            BTreeMap::from([(
+                "alias".into(),
+                config_field(
+                    "Native Core Lightning node alias",
+                    ConfigValueKind::String,
+                    ConfigDefault::ComponentId,
+                )
+                .with_string_bounds(1, 32),
+            )]),
             BTreeMap::from([("p2p".into(), 9_735)]),
             "proofstorm/cln-state/v1",
             service_conditions(true, false),
@@ -531,23 +1394,77 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "cdk",
             ComponentKind::Mint,
-            BTreeMap::from([
-                (
-                    "description".into(),
-                    ConfigDefault::Literal(json!("Proofstorm regtest CDK mint")),
-                ),
-                (
-                    "name".into(),
-                    ConfigDefault::Literal(json!("Proofstorm CDK mint")),
-                ),
-            ]),
+            "cdk-mintd/0.17/v1",
+            cdk_config_fields(
+                "Proofstorm CDK mint",
+                "Proofstorm regtest CDK mint",
+                1,
+                500_000,
+            ),
             BTreeMap::from([("http".into(), 3_338)]),
             "proofstorm/cdk-mint-state/v1",
             service_conditions(true, true),
         ),
         contract(
+            "cdk-ldk",
+            ComponentKind::Mint,
+            "cdk-mintd-ldk/0.17/v1",
+            cdk_config_fields(
+                "Proofstorm CDK LDK mint",
+                "Proofstorm regtest CDK LDK mint",
+                1,
+                500_000,
+            ),
+            BTreeMap::from([("http".into(), 3_338), ("p2p".into(), 9_735)]),
+            "proofstorm/cdk-mint-ldk-state/v1",
+            service_conditions(true, false),
+        ),
+        contract(
+            "cdk-bdk",
+            ComponentKind::Mint,
+            "cdk-mintd-bdk/0.17/v1",
+            cdk_config_fields(
+                "Proofstorm CDK BDK mint",
+                "Proofstorm regtest CDK BDK mint",
+                1_000,
+                1_000_000,
+            ),
+            BTreeMap::from([("http".into(), 3_338)]),
+            "proofstorm/cdk-mint-bdk-state/v1",
+            service_conditions(true, false),
+        ),
+        contract(
+            "postgresql",
+            ComponentKind::Database,
+            "postgresql/17/v1",
+            BTreeMap::from([
+                (
+                    "database_name".into(),
+                    config_field(
+                        "Database created for the linked primary client",
+                        ConfigValueKind::String,
+                        ConfigDefault::Literal(json!("cdk_mint")),
+                    )
+                    .with_string_bounds(1, 63),
+                ),
+                (
+                    "storage_size".into(),
+                    config_field(
+                        "Persistent database volume size",
+                        ConfigValueKind::String,
+                        ConfigDefault::Literal(json!("1Gi")),
+                    )
+                    .with_enum_values(&["1Gi", "2Gi", "5Gi", "10Gi"]),
+                ),
+            ]),
+            BTreeMap::from([("postgres".into(), 5_432)]),
+            "proofstorm/postgresql-state/v1",
+            service_conditions(false, false),
+        ),
+        contract(
             "nutshell-wallet",
             ComponentKind::Wallet,
+            "nutshell-wallet/0.20/v1",
             BTreeMap::new(),
             BTreeMap::new(),
             "proofstorm/nutshell-wallet-state/v1",
@@ -561,6 +1478,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "attacker-workspace",
             ComponentKind::Attacker,
+            "attacker-workspace/0.1/v1",
             BTreeMap::new(),
             BTreeMap::new(),
             "proofstorm/attacker-workspace-state/v1",
@@ -571,6 +1489,601 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             ]),
         ),
     ]
+}
+
+fn config_field(
+    description: &str,
+    value_kind: ConfigValueKind,
+    default: ConfigDefault,
+) -> ConfigFieldContract {
+    ConfigFieldContract {
+        description: description.into(),
+        value_kind,
+        classification: ConfigSettingClass::AgentAuthorable,
+        default: Some(default),
+        enum_values: vec![],
+        minimum: None,
+        maximum: None,
+        min_length: None,
+        max_length: None,
+        required: true,
+    }
+}
+
+fn cdk_config_fields(
+    default_name: &str,
+    default_description: &str,
+    default_minimum: u32,
+    default_maximum: u32,
+) -> BTreeMap<String, ConfigFieldContract> {
+    let mut fields = cdk_mint_info_config_fields(default_name, default_description);
+    let integer = |description: &str, default: u32, minimum: u32, maximum: u32| {
+        config_field(
+            description,
+            ConfigValueKind::Integer,
+            ConfigDefault::Literal(json!(default)),
+        )
+        .with_numeric_bounds(f64::from(minimum), f64::from(maximum))
+    };
+    fields.extend(BTreeMap::from([
+        (
+            "http_cache_tti_seconds".into(),
+            integer("In-memory HTTP response-cache idle lifetime", 60, 1, 86_400),
+        ),
+        (
+            "http_cache_ttl_seconds".into(),
+            integer(
+                "In-memory HTTP response-cache absolute lifetime",
+                60,
+                1,
+                86_400,
+            ),
+        ),
+        (
+            "input_fee_ppk".into(),
+            integer("Input fee in parts per thousand", 100, 0, 1_000_000),
+        ),
+        (
+            "max_melt_sat".into(),
+            integer("Maximum melt quote amount", default_maximum, 1, 10_000_000),
+        ),
+        (
+            "max_mint_sat".into(),
+            integer("Maximum mint quote amount", default_maximum, 1, 10_000_000),
+        ),
+        (
+            "max_inputs".into(),
+            integer(
+                "Maximum inputs accepted by a swap or melt request",
+                1_000,
+                1,
+                10_000,
+            ),
+        ),
+        (
+            "max_outputs".into(),
+            integer(
+                "Maximum outputs accepted by a mint, swap, or melt request",
+                1_000,
+                1,
+                10_000,
+            ),
+        ),
+        (
+            "melt_quote_ttl_seconds".into(),
+            integer("Melt quote lifetime", 120, 1, 86_400),
+        ),
+        (
+            "min_melt_sat".into(),
+            integer("Minimum melt quote amount", default_minimum, 1, 10_000_000),
+        ),
+        (
+            "min_mint_sat".into(),
+            integer("Minimum mint quote amount", default_minimum, 1, 10_000_000),
+        ),
+        (
+            "mint_quote_ttl_seconds".into(),
+            integer("Mint quote lifetime", 600, 1, 86_400),
+        ),
+        (
+            "use_keyset_v2".into(),
+            config_field(
+                "Create new keysets using CDK keyset version 2",
+                ConfigValueKind::Boolean,
+                ConfigDefault::Literal(json!(true)),
+            ),
+        ),
+    ]));
+    fields
+}
+
+fn cdk_mint_info_config_fields(
+    default_name: &str,
+    default_description: &str,
+) -> BTreeMap<String, ConfigFieldContract> {
+    let string = |description, default, maximum| {
+        config_field(
+            description,
+            ConfigValueKind::String,
+            ConfigDefault::Literal(json!(default)),
+        )
+        .with_string_bounds(0, maximum)
+    };
+    BTreeMap::from([
+        (
+            "contact_email".into(),
+            string(
+                "NUT-06 operator email contact; an empty value omits it",
+                "",
+                254,
+            ),
+        ),
+        (
+            "contact_nostr_public_key".into(),
+            string(
+                "NUT-06 operator Nostr public key in hexadecimal; an empty value omits it",
+                "",
+                64,
+            ),
+        ),
+        (
+            "description".into(),
+            string("Native CDK mint description", default_description, 1_000),
+        ),
+        (
+            "description_long".into(),
+            string(
+                "Long-form NUT-06 mint description; an empty value omits it",
+                "",
+                10_000,
+            ),
+        ),
+        (
+            "enable_info_page".into(),
+            config_field(
+                "Enable CDK's human-facing mint information page",
+                ConfigValueKind::Boolean,
+                ConfigDefault::Literal(json!(false)),
+            ),
+        ),
+        (
+            "icon_url".into(),
+            string("NUT-06 mint icon URL; an empty value omits it", "", 2_048),
+        ),
+        (
+            "motd".into(),
+            string(
+                "NUT-06 message of the day; an empty value omits it",
+                "",
+                1_000,
+            ),
+        ),
+        (
+            "name".into(),
+            string("Native CDK mint name", default_name, 100).with_string_bounds(1, 100),
+        ),
+        (
+            "tos_url".into(),
+            string(
+                "NUT-06 terms-of-service URL; an empty value omits it",
+                "",
+                2_048,
+            ),
+        ),
+    ])
+}
+
+fn managed_field(
+    description: &str,
+    value_kind: ConfigValueKind,
+    classification: ConfigSettingClass,
+) -> ConfigFieldContract {
+    ConfigFieldContract {
+        description: description.into(),
+        value_kind,
+        classification,
+        default: None,
+        enum_values: vec![],
+        minimum: None,
+        maximum: None,
+        min_length: None,
+        max_length: None,
+        required: true,
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the managed-setting inventory deliberately keeps every backend declaration together"
+)]
+fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract> {
+    use ConfigSettingClass::{
+        GeneratedInstanceSecret as Secret, RuntimePolicy as Policy, TopologyDerived as Topology,
+    };
+    let string = |description, classification| {
+        managed_field(description, ConfigValueKind::String, classification)
+    };
+    let integer = |description, classification| {
+        managed_field(description, ConfigValueKind::Integer, classification)
+    };
+    match backend {
+        "bitcoin-core" => BTreeMap::from([
+            (
+                "data_directory".into(),
+                string("Bitcoin data directory", Policy),
+            ),
+            (
+                "debug_level".into(),
+                string("Fixed Bitcoin debug level", Policy),
+            ),
+            (
+                "network".into(),
+                string("Fixed Bitcoin regtest network", Policy),
+            ),
+            (
+                "p2p_bind".into(),
+                string("Derived P2P listen endpoint", Topology),
+            ),
+            (
+                "rpc_allow_policy".into(),
+                string("Disposable-lab RPC allow policy", Policy),
+            ),
+            (
+                "rpc_bind".into(),
+                string("Derived RPC listen endpoint", Topology),
+            ),
+            (
+                "rpc_credentials".into(),
+                string("Fixed disposable-regtest RPC credentials", Policy),
+            ),
+            (
+                "server_mode".into(),
+                string("Bitcoin RPC server mode", Policy),
+            ),
+            (
+                "zmq_endpoints".into(),
+                string("Derived raw block and transaction endpoints", Topology),
+            ),
+        ]),
+        "lnd" => BTreeMap::from([
+            (
+                "accept_keysend".into(),
+                string("Keysend acceptance policy", Policy),
+            ),
+            (
+                "admin_macaroon".into(),
+                string("Instance admin macaroon", Secret),
+            ),
+            (
+                "chain_backend_endpoint".into(),
+                string("Linked Bitcoin RPC and ZMQ endpoints", Topology),
+            ),
+            (
+                "chain_backend_credentials".into(),
+                string("Linked Bitcoin RPC credentials", Secret),
+            ),
+            (
+                "data_directory".into(),
+                string("LND data directory", Policy),
+            ),
+            (
+                "debug_level".into(),
+                string("Fixed LND debug level", Policy),
+            ),
+            (
+                "external_address".into(),
+                string("Derived externally advertised address", Topology),
+            ),
+            (
+                "listen_endpoints".into(),
+                string("Derived P2P, RPC, and REST endpoints", Topology),
+            ),
+            (
+                "network".into(),
+                string("Fixed Bitcoin regtest network", Policy),
+            ),
+            (
+                "seed_backup_policy".into(),
+                string("No-seed-backup startup policy", Policy),
+            ),
+            (
+                "tls_extra_domain".into(),
+                string("Derived TLS service domain", Topology),
+            ),
+            (
+                "tls_identity".into(),
+                string("Instance TLS certificate and key", Secret),
+            ),
+        ]),
+        "cln" => BTreeMap::from([
+            (
+                "announce_endpoint".into(),
+                string("Derived advertised P2P endpoint", Topology),
+            ),
+            (
+                "autoconnect_policy".into(),
+                string("Disabled seeker autoconnect", Policy),
+            ),
+            (
+                "bitcoin_retry_timeout".into(),
+                integer("Bitcoin RPC retry timeout", Policy),
+            ),
+            (
+                "chain_backend_endpoint".into(),
+                string("Linked Bitcoin RPC endpoint", Topology),
+            ),
+            (
+                "chain_backend_credentials".into(),
+                string("Linked Bitcoin RPC credentials", Secret),
+            ),
+            (
+                "data_directory".into(),
+                string("Core Lightning data directory", Policy),
+            ),
+            (
+                "developer_mode".into(),
+                string("Core Lightning developer mode", Policy),
+            ),
+            (
+                "listen_endpoint".into(),
+                string("Derived P2P listen endpoint", Topology),
+            ),
+            (
+                "network".into(),
+                string("Fixed Bitcoin regtest network", Policy),
+            ),
+            (
+                "log_level".into(),
+                string("Fixed Core Lightning log level", Policy),
+            ),
+            (
+                "reconnect_policy".into(),
+                string("Disabled automatic reconnect", Policy),
+            ),
+        ]),
+        "cdk" => BTreeMap::from([
+            (
+                "database_engine".into(),
+                string("Topology-selected SQLite or PostgreSQL engine", Topology),
+            ),
+            ("database_path".into(), string("Mint database path", Policy)),
+            (
+                "lightning_backend_credentials".into(),
+                string("Linked Lightning credentials", Secret),
+            ),
+            (
+                "lightning_backend_endpoint".into(),
+                string("Linked Lightning endpoint", Topology),
+            ),
+            (
+                "lightning_backend_kind".into(),
+                string("Linked Lightning implementation kind", Topology),
+            ),
+            (
+                "listen_address".into(),
+                string("Derived mint listen address", Topology),
+            ),
+            (
+                "max_melt".into(),
+                integer("Proofstorm maximum melt amount", Policy),
+            ),
+            (
+                "max_mint".into(),
+                integer("Proofstorm maximum mint amount", Policy),
+            ),
+            (
+                "min_melt".into(),
+                integer("Proofstorm minimum melt amount", Policy),
+            ),
+            (
+                "min_mint".into(),
+                integer("Proofstorm minimum mint amount", Policy),
+            ),
+            (
+                "mnemonic".into(),
+                string("Fixed disposable-regtest mint mnemonic", Policy),
+            ),
+            (
+                "public_url".into(),
+                string("Derived mint public URL", Topology),
+            ),
+            (
+                "unit".into(),
+                string("Proofstorm-selected Cashu unit", Policy),
+            ),
+            (
+                "work_directory".into(),
+                string("Mint persistent work directory", Policy),
+            ),
+        ]),
+        "cdk-ldk" => BTreeMap::from([
+            (
+                "chain_backend_endpoint".into(),
+                string("Linked Bitcoin RPC endpoint", Topology),
+            ),
+            (
+                "chain_backend_credentials".into(),
+                string("Disposable-regtest Bitcoin RPC credentials", Policy),
+            ),
+            (
+                "database_engine".into(),
+                string("Topology-selected SQLite or PostgreSQL engine", Topology),
+            ),
+            ("database_path".into(), string("Mint database path", Policy)),
+            (
+                "embedded_lightning_backend".into(),
+                string("Pinned embedded LDK Node backend", Policy),
+            ),
+            (
+                "ldk_listen_endpoint".into(),
+                string("Derived embedded LDK P2P endpoint", Topology),
+            ),
+            (
+                "ldk_node_mnemonic".into(),
+                string("Fixed disposable-regtest LDK seed", Policy),
+            ),
+            (
+                "ldk_storage_directory".into(),
+                string("Embedded LDK persistent storage directory", Policy),
+            ),
+            (
+                "listen_address".into(),
+                string("Derived mint listen address", Topology),
+            ),
+            (
+                "mint_mnemonic".into(),
+                string("Fixed disposable-regtest mint mnemonic", Policy),
+            ),
+            (
+                "network".into(),
+                string("Fixed Bitcoin regtest network", Policy),
+            ),
+            (
+                "payment_methods".into(),
+                string("Embedded BOLT11 and BOLT12 method set", Policy),
+            ),
+            (
+                "public_url".into(),
+                string("Derived mint public URL", Topology),
+            ),
+            (
+                "unit".into(),
+                string("Proofstorm-selected Cashu unit", Policy),
+            ),
+            (
+                "work_directory".into(),
+                string("Mint and LDK persistent work directory", Policy),
+            ),
+        ]),
+        "cdk-bdk" => BTreeMap::from([
+            (
+                "bdk_mnemonic".into(),
+                string("Fixed disposable-regtest BDK seed", Policy),
+            ),
+            (
+                "bdk_storage_directory".into(),
+                string("Embedded BDK persistent storage directory", Policy),
+            ),
+            (
+                "chain_backend_endpoint".into(),
+                string("Linked Bitcoin RPC endpoint", Topology),
+            ),
+            (
+                "chain_backend_credentials".into(),
+                string("Disposable-regtest Bitcoin RPC credentials", Policy),
+            ),
+            (
+                "confirmation_target".into(),
+                integer("Required on-chain confirmations", Policy),
+            ),
+            (
+                "database_engine".into(),
+                string("Topology-selected SQLite or PostgreSQL engine", Topology),
+            ),
+            (
+                "listen_address".into(),
+                string("Derived mint listen address", Topology),
+            ),
+            (
+                "mint_mnemonic".into(),
+                string("Fixed disposable-regtest mint mnemonic", Policy),
+            ),
+            (
+                "network".into(),
+                string("Fixed Bitcoin regtest network", Policy),
+            ),
+            (
+                "payment_methods".into(),
+                string("Embedded on-chain method set", Policy),
+            ),
+            (
+                "public_url".into(),
+                string("Derived mint public URL", Topology),
+            ),
+            (
+                "unit".into(),
+                string("Proofstorm-selected Cashu unit", Policy),
+            ),
+            (
+                "work_directory".into(),
+                string("Mint persistent work directory", Policy),
+            ),
+        ]),
+        "nutshell-wallet" => BTreeMap::from([
+            (
+                "data_directory".into(),
+                string("Persistent wallet data directory", Policy),
+            ),
+            (
+                "idle_process".into(),
+                string("Persistent wallet workspace process", Policy),
+            ),
+            (
+                "storage_size".into(),
+                string("Wallet persistent volume size", Policy),
+            ),
+            (
+                "wallet_identity".into(),
+                string("Derived wallet component identity", Topology),
+            ),
+            (
+                "wallet_seed".into(),
+                string("Instance wallet seed material", Secret),
+            ),
+        ]),
+        "attacker-workspace" => BTreeMap::from([
+            (
+                "idle_process".into(),
+                string("Persistent attacker workspace process", Policy),
+            ),
+            (
+                "service_account_access".into(),
+                string("Disabled Kubernetes API access", Policy),
+            ),
+            (
+                "workspace_profile".into(),
+                string("Pinned adversarial tool workspace", Policy),
+            ),
+        ]),
+        "postgresql" => BTreeMap::from([
+            (
+                "credentials".into(),
+                string("Controller-generated instance credentials", Secret),
+            ),
+            (
+                "data_directory".into(),
+                string("PostgreSQL persistent data directory", Policy),
+            ),
+            (
+                "listen_endpoint".into(),
+                string("Derived PostgreSQL service endpoint", Topology),
+            ),
+            (
+                "tls_mode".into(),
+                string("Isolated-lab transport policy", Policy),
+            ),
+        ]),
+        _ => BTreeMap::new(),
+    }
+}
+
+impl ConfigFieldContract {
+    fn with_numeric_bounds(mut self, minimum: f64, maximum: f64) -> Self {
+        self.minimum = Some(minimum);
+        self.maximum = Some(maximum);
+        self
+    }
+
+    fn with_string_bounds(mut self, minimum: usize, maximum: usize) -> Self {
+        self.min_length = Some(minimum);
+        self.max_length = Some(maximum);
+        self
+    }
+
+    fn with_enum_values(mut self, values: &[&str]) -> Self {
+        self.enum_values = values.iter().map(|value| json!(value)).collect();
+        self
+    }
 }
 
 fn service_conditions(
@@ -597,17 +2110,35 @@ fn service_conditions(
 fn contract(
     id: &str,
     kind: ComponentKind,
-    config_defaults: BTreeMap<String, ConfigDefault>,
+    config_version: &str,
+    mut config_fields: BTreeMap<String, ConfigFieldContract>,
     service_ports: BTreeMap<String, u16>,
     execution_state_contract: &str,
     applicable_conditions: BTreeSet<ComponentConditionType>,
 ) -> ComponentBackendContract {
+    config_fields.extend(managed_config_fields(id));
     let (execution_mounts, execution_environment) = execution_contract(id);
     let (workload_kind, storage_requirements) = observation_contract(id);
+    let config_rules = if matches!(id, "cdk" | "cdk-ldk" | "cdk-bdk") {
+        vec![
+            ConfigRule::LessThanOrEqual {
+                minimum_field: "min_mint_sat".into(),
+                maximum_field: "max_mint_sat".into(),
+            },
+            ConfigRule::LessThanOrEqual {
+                minimum_field: "min_melt_sat".into(),
+                maximum_field: "max_melt_sat".into(),
+            },
+        ]
+    } else {
+        vec![]
+    };
     ComponentBackendContract {
         id: id.into(),
         kind,
-        config_defaults,
+        config_version: config_version.into(),
+        config_fields,
+        config_rules,
         service_ports,
         execution_state_contract: execution_state_contract.into(),
         execution_mounts,
@@ -630,7 +2161,10 @@ fn protocol_probe_contract(backend: &str) -> Option<ProtocolProbeContract> {
         "cln" => Some(ProtocolProbeContract::Tcp {
             port_name: "p2p".into(),
         }),
-        "cdk" => Some(ProtocolProbeContract::HttpGet {
+        "postgresql" => Some(ProtocolProbeContract::Tcp {
+            port_name: "postgres".into(),
+        }),
+        "cdk" | "cdk-ldk" | "cdk-bdk" => Some(ProtocolProbeContract::HttpGet {
             port_name: "http".into(),
             path: "/v1/info".into(),
         }),
@@ -668,23 +2202,48 @@ fn observation_contract(
         suffix: "-data".into(),
     };
     match backend {
-        "bitcoin-core" | "lnd" | "cln" => {
+        "bitcoin-core" | "lnd" | "cln" | "postgresql" => {
             (WorkloadControllerKind::StatefulSet, vec![stateful_data()])
         }
-        "cdk" | "nutshell-wallet" => (WorkloadControllerKind::Deployment, vec![component_data()]),
+        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell-wallet" => {
+            (WorkloadControllerKind::Deployment, vec![component_data()])
+        }
         _ => (WorkloadControllerKind::Deployment, vec![]),
     }
 }
 
-fn execution_contract(backend: &str) -> (Vec<ExecutionMountContract>, BTreeMap<String, String>) {
-    use ExecutionStorageSource as Source;
+#[allow(
+    clippy::too_many_lines,
+    reason = "the built-in execution contracts are clearer when each backend mount is declared together"
+)]
+fn execution_contract(
+    backend: &str,
+) -> (
+    Vec<ExecutionMountTemplateContract>,
+    BTreeMap<String, String>,
+) {
+    use ExecutionStorageTemplateSource as Source;
 
-    let binding = |name: &str, mount_path: &str, read_only: bool, source| ExecutionMountContract {
-        name: name.into(),
-        mount_path: mount_path.into(),
-        read_only,
-        source,
-    };
+    let binding =
+        |name: &str, mount_path: &str, read_only: bool, source| ExecutionMountTemplateContract {
+            name: name.into(),
+            mount_path: mount_path.into(),
+            read_only,
+            requirement: ExecutionMountRequirement::Required,
+            source,
+        };
+    let alternative_binding =
+        |name: &str, mount_path: &str, read_only: bool, group: &str, source| {
+            ExecutionMountTemplateContract {
+                name: name.into(),
+                mount_path: mount_path.into(),
+                read_only,
+                requirement: ExecutionMountRequirement::AtLeastOne {
+                    group: group.into(),
+                },
+                source,
+            }
+        };
     match backend {
         "bitcoin-core" => (
             vec![binding(
@@ -713,18 +2272,57 @@ fn execution_contract(backend: &str) -> (Vec<ExecutionMountContract>, BTreeMap<S
             )],
             BTreeMap::from([("HOME".into(), "/home/cln".into())]),
         ),
+        "postgresql" => (
+            vec![binding(
+                "data",
+                "/var/lib/postgresql/data",
+                false,
+                Source::StatefulData,
+            )],
+            BTreeMap::from([("PGDATA".into(), "/var/lib/postgresql/data/pgdata".into())]),
+        ),
         "cdk" => (
             vec![
                 binding("config", "/config", true, Source::ComponentConfig),
                 binding("data", "/app/data", false, Source::ComponentPersistentData),
-                binding(
+                alternative_binding(
                     "lnd",
                     "/lnd",
                     true,
+                    "payment-backend",
                     Source::LinkedStatefulData {
-                        link_kind: crate::LinkKind::LightningBackend,
+                        link_kind: crate::LinkKind::PaymentBackend,
+                        binding: crate::DependencyBinding::Payment {
+                            method: crate::PaymentMethod::Bolt11,
+                            unit: "sat".into(),
+                        },
+                        target_implementation: "lnd".into(),
                     },
                 ),
+                alternative_binding(
+                    "cln",
+                    "/cln",
+                    true,
+                    "payment-backend",
+                    Source::LinkedStatefulData {
+                        link_kind: crate::LinkKind::PaymentBackend,
+                        binding: crate::DependencyBinding::Payment {
+                            method: crate::PaymentMethod::Bolt11,
+                            unit: "sat".into(),
+                        },
+                        target_implementation: "cln".into(),
+                    },
+                ),
+            ],
+            BTreeMap::from([
+                ("CDK_MINTD_WORK_DIR".into(), "/app/data".into()),
+                ("HOME".into(), "/app/data".into()),
+            ]),
+        ),
+        "cdk-ldk" | "cdk-bdk" => (
+            vec![
+                binding("config", "/config", true, Source::ComponentConfig),
+                binding("data", "/app/data", false, Source::ComponentPersistentData),
             ],
             BTreeMap::from([
                 ("CDK_MINTD_WORK_DIR".into(), "/app/data".into()),
@@ -892,7 +2490,7 @@ fn default_operation_admission() -> Vec<OperationAdmissionContract> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ControlClass, LOCK_API_VERSION, resolve_lock};
+    use crate::{ControlClass, LOCK_API_VERSION, default_catalog, resolve_lock};
 
     fn component(id: &str, implementation: &str, kind: ComponentKind) -> ComponentSpec {
         ComponentSpec {
@@ -900,7 +2498,19 @@ mod tests {
             kind,
             implementation: implementation.into(),
             version: None,
-            config_version: "v1alpha1".into(),
+            config_version: match implementation {
+                "bitcoin-core" => "bitcoin-core/30/v1",
+                "lnd" => "lnd/0.20/v1",
+                "cln" => "cln/26.06/v1",
+                "cdk" => "cdk-mintd/0.17/v1",
+                "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
+                "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+                "postgresql" => "postgresql/17/v1",
+                "nutshell-wallet" => "nutshell-wallet/0.20/v1",
+                "attacker-workspace" => "attacker-workspace/0.1/v1",
+                _ => panic!("unknown test implementation {implementation:?}"),
+            }
+            .into(),
             control: ControlClass::Laboratory,
             config: BTreeMap::new(),
         }
@@ -926,6 +2536,192 @@ mod tests {
             .resolve_effective_component(&component("alice", "lnd", ComponentKind::Lightning))
             .expect("default alias");
         assert_eq!(lnd.config["alias"], json!("alice"));
+
+        let cdk = registry
+            .resolve_effective_component(&component("mint", "cdk", ComponentKind::Mint))
+            .expect("default CDK policy");
+        assert_eq!(cdk.config["input_fee_ppk"], json!(100));
+        assert_eq!(cdk.config["use_keyset_v2"], json!(true));
+        assert_eq!(cdk.config["mint_quote_ttl_seconds"], json!(600));
+        assert_eq!(cdk.config["melt_quote_ttl_seconds"], json!(120));
+        assert_eq!(cdk.config["description_long"], json!(""));
+        assert_eq!(cdk.config["enable_info_page"], json!(false));
+        assert_eq!(cdk.config["http_cache_ttl_seconds"], json!(60));
+        assert_eq!(cdk.config["http_cache_tti_seconds"], json!(60));
+        assert_eq!(cdk.config["max_inputs"], json!(1_000));
+        assert_eq!(cdk.config["max_outputs"], json!(1_000));
+
+        let bdk = registry
+            .resolve_effective_component(&component("mint", "cdk-bdk", ComponentKind::Mint))
+            .expect("default BDK limits");
+        assert_eq!(bdk.config["min_mint_sat"], json!(1_000));
+        assert_eq!(bdk.config["max_mint_sat"], json!(1_000_000));
+
+        let mut invalid = component("mint", "cdk", ComponentKind::Mint);
+        invalid.config.insert("min_mint_sat".into(), json!(10));
+        invalid.config.insert("max_mint_sat".into(), json!(9));
+        assert!(
+            registry
+                .validate_component_config(&invalid)
+                .expect_err("ordered mint bounds")
+                .starts_with("config_order_violation:")
+        );
+    }
+
+    #[test]
+    fn backend_contract_is_the_catalog_schema_and_validation_source() {
+        let registry = default_backend_registry();
+        let catalog = default_catalog();
+        for entry in &catalog.entries {
+            let backend = registry.require(&entry.id).expect("catalog backend");
+            assert_eq!(entry.config_version, backend.config_version);
+            assert_eq!(entry.config_schema, backend.config_schema());
+            let effective = registry
+                .resolve_effective_component(&component("sample", &entry.id, entry.kind))
+                .expect("default configuration resolves");
+            let typed = EffectiveComponentConfig::try_from_component(&effective)
+                .expect("default configuration is representable by its native type");
+            assert_eq!(
+                serde_json::to_value(typed).expect("typed config serializes")["implementation"],
+                entry.id
+            );
+        }
+
+        let bitcoin_schema = registry.config_schema("bitcoin-core").expect("schema");
+        assert_eq!(
+            bitcoin_schema["properties"]["txindex"]["x-proofstorm-classification"],
+            json!("agent_authorable")
+        );
+        assert_eq!(
+            bitcoin_schema["properties"]["fallback_fee"]["minimum"],
+            json!(0.0)
+        );
+        assert_eq!(
+            bitcoin_schema["properties"]["fallback_fee"]["default"],
+            json!(0.0002)
+        );
+        assert!(
+            bitcoin_schema["properties"]
+                .get("rpc_credentials")
+                .is_none()
+        );
+        assert_eq!(
+            bitcoin_schema["x-proofstorm-managed-settings"]["rpc_credentials"]["x-proofstorm-classification"],
+            json!("runtime_policy")
+        );
+        assert_eq!(
+            bitcoin_schema["x-proofstorm-managed-settings"]["rpc_credentials"]["readOnly"],
+            json!(true)
+        );
+        assert!(
+            bitcoin_schema["x-proofstorm-managed-settings"]["rpc_credentials"]
+                .get("default")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn backend_config_validation_is_field_addressed_and_data_driven() {
+        let registry = default_backend_registry();
+        let mut bitcoin = component("chain", "bitcoin-core", ComponentKind::Bitcoin);
+        bitcoin.config.insert("mystery".into(), json!(true));
+        assert_eq!(
+            registry
+                .validate_component_config(&bitcoin)
+                .expect_err("unknown field"),
+            "config_unknown_field: component \"chain\" field /config/mystery: field is not declared by the backend configuration contract"
+        );
+
+        bitcoin.config.clear();
+        bitcoin.config.insert("txindex".into(), json!("yes"));
+        assert!(
+            registry
+                .validate_component_config(&bitcoin)
+                .expect_err("wrong type")
+                .starts_with("config_wrong_type: component \"chain\" field /config/txindex:")
+        );
+
+        bitcoin.config.clear();
+        bitcoin.config.insert("fallback_fee".into(), json!(-0.1));
+        assert!(
+            registry
+                .validate_component_config(&bitcoin)
+                .expect_err("bound")
+                .starts_with(
+                    "config_numeric_bound_violation: component \"chain\" field /config/fallback_fee:"
+                )
+        );
+
+        bitcoin.config.clear();
+        bitcoin
+            .config
+            .insert("rpc_credentials".into(), json!("agent-secret"));
+        assert!(
+            registry
+                .validate_component_config(&bitcoin)
+                .expect_err("managed setting")
+                .starts_with(
+                    "config_managed_field: component \"chain\" field /config/rpc_credentials:"
+                )
+        );
+    }
+
+    #[test]
+    fn generic_contract_rules_drive_schema_and_refusal() {
+        let mut backend = default_backend_registry()
+            .require("cdk")
+            .expect("CDK backend")
+            .clone();
+        backend.config_fields.insert(
+            "auth_mode".into(),
+            ConfigFieldContract {
+                description: "Authentication mode".into(),
+                value_kind: ConfigValueKind::String,
+                classification: ConfigSettingClass::AgentAuthorable,
+                default: None,
+                enum_values: vec![json!("clear"), json!("blind")],
+                minimum: None,
+                maximum: None,
+                min_length: None,
+                max_length: None,
+                required: false,
+            },
+        );
+        backend.config_fields.insert(
+            "identity_provider".into(),
+            ConfigFieldContract {
+                description: "Identity provider component".into(),
+                value_kind: ConfigValueKind::String,
+                classification: ConfigSettingClass::ImportedSecretReference,
+                default: None,
+                enum_values: vec![],
+                minimum: None,
+                maximum: None,
+                min_length: Some(1),
+                max_length: Some(63),
+                required: false,
+            },
+        );
+        backend.config_rules.push(ConfigRule::RequiredWhen {
+            field: "auth_mode".into(),
+            equals: json!("clear"),
+            required_field: "identity_provider".into(),
+        });
+        let schema = backend.config_schema();
+        assert_eq!(
+            schema["allOf"][0]["then"]["required"][0],
+            "identity_provider"
+        );
+
+        let registry = BackendContractRegistry::try_new([backend]).expect("test registry");
+        let mut cdk = component("mint", "cdk", ComponentKind::Mint);
+        cdk.config.insert("auth_mode".into(), json!("clear"));
+        assert!(
+            registry
+                .validate_component_config(&cdk)
+                .expect_err("conditional requirement")
+                .starts_with("config_conditional_required_field_missing:")
+        );
     }
 
     #[test]
@@ -933,6 +2729,7 @@ mod tests {
         let first = contract(
             "duplicate",
             ComponentKind::Bitcoin,
+            "duplicate/v1",
             BTreeMap::new(),
             BTreeMap::new(),
             "proofstorm/test-state/v1",
@@ -953,6 +2750,46 @@ mod tests {
             .resolve_effective_component(&component("wrong", "bitcoin-core", ComponentKind::Wallet))
             .expect_err("kind mismatch must refuse");
         assert!(error.starts_with("backend_kind_mismatch:"));
+
+        let mut managed_default = registry
+            .require("bitcoin-core")
+            .expect("bitcoin backend")
+            .clone();
+        managed_default
+            .config_fields
+            .get_mut("rpc_credentials")
+            .expect("managed credential field")
+            .default = Some(ConfigDefault::Literal(json!("must-not-leak")));
+        assert!(
+            BackendContractRegistry::try_new([managed_default])
+                .expect_err("managed defaults must refuse")
+                .starts_with("backend_managed_config_default_forbidden:")
+        );
+
+        let mut invalid_selector = registry.require("cdk").expect("CDK backend").clone();
+        let ExecutionStorageTemplateSource::LinkedStatefulData { binding, .. } =
+            &mut invalid_selector.execution_mounts[2].source
+        else {
+            panic!("CDK linked mount");
+        };
+        *binding = crate::DependencyBinding::Chain {
+            network: crate::BitcoinNetwork::Regtest,
+        };
+        assert!(
+            BackendContractRegistry::try_new([invalid_selector])
+                .expect_err("mismatched execution selector must refuse")
+                .starts_with("backend_execution_selector_incompatible:")
+        );
+
+        let mut duplicate_mount = registry.require("cdk").expect("CDK backend").clone();
+        duplicate_mount
+            .execution_mounts
+            .push(duplicate_mount.execution_mounts[2].clone());
+        assert!(
+            BackendContractRegistry::try_new([duplicate_mount])
+                .expect_err("duplicate mount identity must refuse")
+                .starts_with("backend_execution_mount_collision:")
+        );
     }
 
     #[test]
@@ -1065,9 +2902,141 @@ mod tests {
             .expect("compile contract");
         assert_eq!(compiled.rollout_digest, expected);
         assert_eq!(compiled.revision_digest, "sha256:revision");
-        assert_eq!(compiled.effective_config["txindex"], json!(true));
+        assert!(matches!(
+            compiled.effective_config,
+            EffectiveComponentConfig::BitcoinCore(BitcoinCoreConfig { txindex: true, .. })
+        ));
         assert_eq!(compiled.execution_context.image, lock.entries[0].image);
         assert_eq!(compiled.target_descriptor.ports["rpc"], 18_443);
+    }
+
+    #[test]
+    fn execution_mount_templates_resolve_one_exact_typed_binding() {
+        let backend = default_backend_registry()
+            .require("cdk")
+            .expect("CDK backend")
+            .clone();
+        let payment = |id: &str, method| LinkSpec {
+            id: id.into(),
+            kind: crate::LinkKind::PaymentBackend,
+            from: "mint".into(),
+            to: format!("{id}-node"),
+            binding: Some(crate::DependencyBinding::Payment {
+                method,
+                unit: "sat".into(),
+            }),
+        };
+        let mut links = vec![
+            payment("bolt11", crate::PaymentMethod::Bolt11),
+            payment("bolt12", crate::PaymentMethod::Bolt12),
+        ];
+        let target =
+            |component_id: &str, backend_id: &str, version: &str| TargetDescriptorContract {
+                component_id: component_id.into(),
+                kind: ComponentKind::Lightning,
+                backend_id: backend_id.into(),
+                version: version.into(),
+                ports: BTreeMap::new(),
+            };
+        let mut targets = BTreeMap::from([
+            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.0-beta")),
+            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.0-beta")),
+        ]);
+        let mounts = resolve_execution_mounts(&backend, "mint", &links, &targets)
+            .expect("unselected methods and implementations do not collide");
+        assert!(matches!(
+            mounts[2].source,
+            ExecutionStorageSource::LinkedStatefulData { ref link_id }
+                if link_id == "bolt11"
+        ));
+
+        let cln_link = payment("cln-bolt11", crate::PaymentMethod::Bolt11);
+        let cln_targets = BTreeMap::from([(
+            "cln-bolt11".into(),
+            target("cln-bolt11-node", "cln", "26.06.7"),
+        )]);
+        let cln_mounts = resolve_execution_mounts(&backend, "mint", &[cln_link], &cln_targets)
+            .expect("CLN is an alternative exact payment-state mount");
+        assert_eq!(cln_mounts[2].name, "cln");
+
+        let error = resolve_execution_mounts(&backend, "mint", &[], &BTreeMap::new())
+            .expect_err("at least one payment backend is required");
+        assert!(error.starts_with("backend_execution_binding_group_missing:"));
+
+        links.push(payment("bolt11-secondary", crate::PaymentMethod::Bolt11));
+        targets.insert(
+            "bolt11-secondary".into(),
+            target("bolt11-secondary-node", "lnd", "0.20.0-beta"),
+        );
+        let error = resolve_execution_mounts(&backend, "mint", &links, &targets)
+            .expect_err("duplicate exact selectors must refuse");
+        assert!(error.starts_with("backend_execution_binding_ambiguous:"));
+        assert!(error.contains("bolt11-secondary"));
+    }
+
+    #[test]
+    fn linked_execution_mount_refuses_non_singular_storage_projection() {
+        let mut mint = component("mint", "cdk", ComponentKind::Mint);
+        mint.control = ControlClass::Target;
+        let lightning = component("lightning", "lnd", ComponentKind::Lightning);
+        let link = LinkSpec {
+            id: "mint-bolt11".into(),
+            kind: crate::LinkKind::PaymentBackend,
+            from: "mint".into(),
+            to: "lightning".into(),
+            binding: Some(crate::DependencyBinding::Payment {
+                method: crate::PaymentMethod::Bolt11,
+                unit: "sat".into(),
+            }),
+        };
+        let lab = crate::LabSpec {
+            api_version: crate::API_VERSION.into(),
+            name: "storage-cardinality".into(),
+            components: vec![mint.clone(), lightning],
+            links: vec![link.clone()],
+            policy: crate::LabPolicy::default(),
+        };
+        let lock = resolve_lock(&lab, &crate::default_catalog()).expect("lock");
+        let error = default_backend_registry()
+            .compile_contract(&ComponentPlanInput {
+                instance_key: "instance-key".into(),
+                revision_digest: "sha256:revision".into(),
+                component: mint,
+                lock: lock
+                    .entries
+                    .iter()
+                    .find(|entry| entry.component_id == "mint")
+                    .expect("mint lock")
+                    .clone(),
+                relevant_links: vec![link],
+                linked_targets: BTreeMap::from([(
+                    "mint-bolt11".into(),
+                    TargetDescriptorContract {
+                        component_id: "lightning".into(),
+                        kind: ComponentKind::Lightning,
+                        backend_id: "lnd".into(),
+                        version: "0.20.0-beta".into(),
+                        ports: BTreeMap::from([("rpc".into(), 10_009)]),
+                    },
+                )]),
+                linked_state: BTreeMap::from([(
+                    "mint-bolt11".into(),
+                    LinkedStateObservationContract {
+                        component_id: "lightning".into(),
+                        state_contract: "proofstorm/lnd-state/v1".into(),
+                        storage: vec![
+                            StorageObservationContract {
+                                claim_name: "credentials".into(),
+                            },
+                            StorageObservationContract {
+                                claim_name: "logs".into(),
+                            },
+                        ],
+                    },
+                )]),
+            })
+            .expect_err("one mount cannot project two PVCs");
+        assert!(error.starts_with("backend_link_storage_cardinality:"));
     }
 
     #[test]

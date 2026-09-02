@@ -19,7 +19,8 @@ pub use adapter::{
     RenderedComponent, RenderedLab, compile_component_plans, component_ports,
     observe_component_statuses, render_attacker_component, render_bitcoin_component,
     render_cdk_component, render_cln_component, render_component_network_policy, render_lab,
-    render_lnd_component, render_protocol_prober, render_wallet_component,
+    render_lnd_component, render_postgres_component, render_protocol_prober,
+    render_wallet_component,
 };
 pub use api::{
     ActionPhase, BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction,

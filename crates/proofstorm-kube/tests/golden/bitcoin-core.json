@@ -58,8 +58,11 @@
     },
     "credentials": [],
     "effective_config": {
-      "fallback_fee": 0.0002,
-      "txindex": true
+      "config": {
+        "fallback_fee": 0.0002,
+        "txindex": true
+      },
+      "implementation": "bitcoin-core"
     },
     "execution_context": {
       "component_id": "chain",
@@ -141,13 +144,14 @@
     },
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:7044ccbdf4bdba13f4574806e2004cd1d1314d02b6b3b88f74db04cd179dce4f",
+    "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
     "storage": [
       {
         "claim_name": "data-chain-0"
       }
     ],
     "target_descriptor": {
+      "backend_id": "bitcoin-core",
       "component_id": "chain",
       "kind": "bitcoin",
       "ports": {
@@ -155,7 +159,8 @@
         "rpc": 18443,
         "zmq_block": 28334,
         "zmq_tx": 28335
-      }
+      },
+      "version": "30.0"
     },
     "workload": {
       "desired_replicas": 1,
@@ -167,6 +172,7 @@
     "configMaps": [],
     "deployments": [],
     "persistentVolumeClaims": [],
+    "secrets": [],
     "services": [
       {
         "apiVersion": "v1",
@@ -246,7 +252,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:7044ccbdf4bdba13f4574806e2004cd1d1314d02b6b3b88f74db04cd179dce4f"
+                "proofstorm.dev/rollout-digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

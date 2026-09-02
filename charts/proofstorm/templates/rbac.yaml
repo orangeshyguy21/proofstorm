@@ -19,7 +19,7 @@ rules:
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["resourcequotas", "limitranges", "serviceaccounts", "configmaps", "services", "persistentvolumeclaims"]
+    resources: ["resourcequotas", "limitranges", "serviceaccounts", "configmaps", "secrets", "services", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "patch"]
   - apiGroups: [""]
     resources: ["pods"]

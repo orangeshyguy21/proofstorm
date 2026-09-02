@@ -72,7 +72,7 @@
     "credentials": [
       {
         "claim_name": "data-lightning-0",
-        "identity": "lnd:lightning:data-lightning-0",
+        "identity": "lnd:mint-lightning-lightning:lightning:data-lightning-0",
         "mount_name": "lnd",
         "mount_path": "/lnd",
         "read_only": true,
@@ -81,8 +81,30 @@
       }
     ],
     "effective_config": {
-      "description": "Proofstorm regtest CDK mint",
-      "name": "Proofstorm CDK mint"
+      "config": {
+        "contact_email": "",
+        "contact_nostr_public_key": "",
+        "description": "Proofstorm regtest CDK mint",
+        "description_long": "",
+        "enable_info_page": false,
+        "http_cache_tti_seconds": 60,
+        "http_cache_ttl_seconds": 60,
+        "icon_url": "",
+        "input_fee_ppk": 100,
+        "max_inputs": 1000,
+        "max_melt_sat": 500000,
+        "max_mint_sat": 500000,
+        "max_outputs": 1000,
+        "melt_quote_ttl_seconds": 120,
+        "min_melt_sat": 1,
+        "min_mint_sat": 1,
+        "mint_quote_ttl_seconds": 600,
+        "motd": "",
+        "name": "Proofstorm CDK mint",
+        "tos_url": "",
+        "use_keyset_v2": true
+      },
+      "implementation": "cdk"
     },
     "execution_context": {
       "component_id": "mint",
@@ -90,7 +112,7 @@
         "CDK_MINTD_WORK_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "docker.io/cashubtc/mintd@sha256:b17af7ed8bce85086c011afeae1d578ccde1c0b098b16fd961140931dec06f8a",
+      "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
       "mounts": [
         {
           "mount_path": "/config",
@@ -113,7 +135,7 @@
           "name": "lnd",
           "read_only": true,
           "source": {
-            "link_kind": "lightning_backend",
+            "link_id": "mint-lightning-lightning",
             "source": "linked_stateful_data"
           }
         }
@@ -123,14 +145,16 @@
     "instance_key": "i-golden-b2",
     "kind": "mint",
     "linked_targets": {
-      "lightning": {
+      "mint-lightning-lightning": {
+        "backend_id": "lnd",
         "component_id": "lightning",
         "kind": "lightning",
         "ports": {
           "p2p": 9735,
           "rest": 8080,
           "rpc": 10009
-        }
+        },
+        "version": "0.20.0-beta"
       }
     },
     "operation_admission": [
@@ -193,24 +217,32 @@
     },
     "relevant_links": [
       {
+        "binding": {
+          "method": "bolt11",
+          "type": "payment",
+          "unit": "sat"
+        },
         "from": "mint",
-        "kind": "lightning_backend",
+        "id": "mint-lightning-lightning",
+        "kind": "payment_backend",
         "to": "lightning"
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:88d46397152ee55d33c0cd2e62c0ef9a660a450a60b693225bfb980289726ae5",
+    "rollout_digest": "sha256:733c74b77922326531abaddc7c072ec93e9ec80c3da8535579645753f7ace7f6",
     "storage": [
       {
         "claim_name": "mint-data"
       }
     ],
     "target_descriptor": {
+      "backend_id": "cdk",
       "component_id": "mint",
       "kind": "mint",
       "ports": {
         "http": 3338
-      }
+      },
+      "version": "0.17.6"
     },
     "workload": {
       "desired_replicas": 1,
@@ -223,7 +255,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\ninput_fee_ppk = 100\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\nurls = [\"http://mint:3338\"]\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\nurls = [\"http://mint:3338\"]\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -270,7 +302,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:88d46397152ee55d33c0cd2e62c0ef9a660a450a60b693225bfb980289726ae5"
+                "proofstorm.dev/rollout-digest": "sha256:733c74b77922326531abaddc7c072ec93e9ec80c3da8535579645753f7ace7f6"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -310,7 +342,7 @@
                       "value": "/app/data"
                     }
                   ],
-                  "image": "docker.io/cashubtc/mintd@sha256:b17af7ed8bce85086c011afeae1d578ccde1c0b098b16fd961140931dec06f8a",
+                  "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -415,6 +447,7 @@
         }
       }
     ],
+    "secrets": [],
     "services": [
       {
         "apiVersion": "v1",

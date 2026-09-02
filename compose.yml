@@ -32,7 +32,7 @@ x-wallet: &wallet
     context: .
     dockerfile: ${WALLET_DOCKERFILE:-docker/wallet/Dockerfile.cdk}
     args:
-      CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.1}
+      CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.6}
       NUTSHELL_VERSION: ${NUTSHELL_VERSION:-0.20.2}
   restart: on-failure
   networks: [net]
@@ -45,7 +45,7 @@ x-wallet: &wallet
 
 services:
   mint:
-    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.17.1}
+    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.17.6}
     container_name: proofstorm-mint
     restart: on-failure
     networks: [net]

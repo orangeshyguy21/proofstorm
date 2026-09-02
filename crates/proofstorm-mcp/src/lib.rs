@@ -713,7 +713,9 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "List the installed Proofstorm component catalog")]
+    #[tool(
+        description = "List exact installed component versions, configuration contracts and schema digests, support lifecycle, immutable images, features, and compatible dependencies"
+    )]
     fn proofstorm_catalog_list(&self) -> Result<Json<CatalogResponse>, ErrorData> {
         self.authorize(Capability::CatalogRead)?;
         Ok(Json(default_catalog()))
@@ -839,7 +841,9 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Add a typed relationship between two draft components")]
+    #[tool(
+        description = "Add a uniquely named typed binding between two draft components; the link id is the stable binding identity"
+    )]
     fn proofstorm_link_add(
         &self,
         Parameters(request): Parameters<MutateLinkRequest>,
@@ -858,7 +862,7 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Remove one exact typed relationship from a lab draft")]
+    #[tool(description = "Remove one exact named typed binding from a lab draft")]
     fn proofstorm_link_remove(
         &self,
         Parameters(request): Parameters<MutateLinkRequest>,
@@ -2093,7 +2097,7 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
-        component_image(&revision, &request.mint, ComponentKind::Mint, "cdk")?;
+        component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         component_image(
             &revision,
             &request.payer_lightning,
@@ -2149,7 +2153,7 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
-        component_image(&revision, &request.mint, ComponentKind::Mint, "cdk")?;
+        component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -3720,6 +3724,77 @@ mod tests {
         assert_eq!(backend.id, "kubernetes-network-policy");
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
+        let catalog = designer
+            .proofstorm_catalog_list()
+            .expect("catalog discovery")
+            .0;
+        assert_eq!(catalog.entries.len(), 9);
+        assert!(catalog.entries.iter().all(|entry| {
+            entry.config_version.contains('/')
+                && entry.config_schema_digest.starts_with("sha256:")
+                && entry.support_lifecycle == proofstorm_core::SupportLifecycle::Preferred
+                && entry.image.contains("@sha256:")
+        }));
+        assert_eq!(catalog.implementations.len(), 9);
+        assert!(catalog.implementations.iter().all(|support| {
+            support.minimum_supported == support.preferred_version
+                && support.supported_versions.len() == 1
+                && support
+                    .supported_versions
+                    .contains(&support.preferred_version)
+        }));
+        let cdk = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cdk")
+            .expect("CDK support contract");
+        assert_eq!(cdk.config_version, "cdk-mintd/0.17/v1");
+        assert_eq!(
+            cdk.support_matrix.storage,
+            [
+                proofstorm_core::StorageBackend::Sqlite,
+                proofstorm_core::StorageBackend::Postgres,
+            ]
+            .into()
+        );
+        assert_eq!(
+            cdk.support_matrix.payment_methods,
+            [proofstorm_core::PaymentMethod::Bolt11].into()
+        );
+        assert_eq!(
+            cdk.support_matrix.payment_backends,
+            ["cln".into(), "lnd".into()].into()
+        );
+        assert!(cdk.support_matrix.units.contains("sat"));
+        assert_eq!(cdk.support_matrix.payment_bindings.len(), 2);
+        assert!(cdk.support_matrix.payment_bindings.iter().all(|binding| {
+            binding.method == proofstorm_core::PaymentMethod::Bolt11 && binding.unit == "sat"
+        }));
+        assert_eq!(
+            cdk.support_matrix.compatible_wallet_adapters[0].implementation,
+            "nutshell-wallet"
+        );
+        assert!(
+            cdk.support_matrix.compatible_wallet_adapters[0]
+                .versions
+                .contains("0.20.2")
+        );
+        assert!(cdk.config_schema["properties"].get("mnemonic").is_none());
+        assert_embedded_ldk_support(&catalog);
+        assert_eq!(
+            cdk.config_schema["x-proofstorm-managed-settings"]["mnemonic"]["x-proofstorm-classification"],
+            "runtime_policy"
+        );
+        assert!(
+            !serde_json::to_string(&catalog)
+                .expect("catalog serializes")
+                .contains("abandon abandon")
+        );
+        assert!(
+            cdk.features
+                .contains(&proofstorm_core::CatalogFeature::Bolt11)
+        );
+        assert_eq!(cdk.compatible_dependencies[0].implementation, "lnd");
         assert_eq!(
             reader.tool_names(),
             vec![
@@ -3728,6 +3803,23 @@ mod tests {
                 "proofstorm_workspace_read",
             ]
         );
+    }
+
+    fn assert_embedded_ldk_support(catalog: &proofstorm_core::CatalogResponse) {
+        let cdk_ldk = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cdk-ldk")
+            .expect("embedded LDK support contract");
+        assert_eq!(cdk_ldk.config_version, "cdk-mintd-ldk/0.17/v1");
+        assert_eq!(cdk_ldk.support_matrix.embedded_payment_bindings.len(), 2);
+        assert!(
+            cdk_ldk
+                .support_matrix
+                .payment_methods
+                .contains(&proofstorm_core::PaymentMethod::Bolt12)
+        );
+        assert!(cdk_ldk.support_matrix.payment_bindings.is_empty());
     }
 
     #[test]

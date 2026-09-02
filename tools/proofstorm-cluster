@@ -157,13 +157,52 @@ setup() {
   existing_labs="$("${KUBECTL_BIN}" --context k3d-proofstorm get \
     proofstormlabs.proofstorm.dev --all-namespaces -o json)"
   if ! python3 -c '
-import json, sys
+import json, re, sys
 labs = json.load(sys.stdin).get("items", [])
-valid = all(
-    "rollout_digest" in entry and "effective_config_digest" in entry
+valid_locks = all(
+    "rollout_digest" in entry
+    and "effective_config_digest" in entry
+    and "config_schema_digest" in entry
+    and "features" in entry
+    and "compatible_dependencies" in entry
     for lab in labs
     for entry in lab.get("spec", {}).get("lock", {}).get("entries", [])
 )
+valid_bindings = all(
+    "id" in link
+    and link.get("kind") != "lightning_backend"
+    and (
+        link.get("kind") not in {"chain_backend", "payment_backend", "database_backend"}
+        or (
+            isinstance(link.get("binding"), dict)
+            and (
+                (
+                    link["kind"] == "chain_backend"
+                    and set(link["binding"]) == {"type", "network"}
+                    and link["binding"].get("type") == "chain"
+                    and link["binding"].get("network") == "regtest"
+                )
+                or (
+                    link["kind"] == "payment_backend"
+                    and set(link["binding"]) == {"type", "method", "unit"}
+                    and link["binding"].get("type") == "payment"
+                    and link["binding"].get("method") in {"bolt11", "bolt12", "onchain"}
+                    and isinstance(link["binding"].get("unit"), str)
+                    and re.fullmatch(r"[a-z0-9-]{1,16}", link["binding"]["unit"])
+                )
+                or (
+                    link["kind"] == "database_backend"
+                    and set(link["binding"]) == {"type", "role"}
+                    and link["binding"].get("type") == "database"
+                    and link["binding"].get("role") == "primary"
+                )
+            )
+        )
+    )
+    for lab in labs
+    for link in lab.get("spec", {}).get("lab", {}).get("links", [])
+)
+valid = valid_locks and valid_bindings
 raise SystemExit(0 if valid else 1)
 ' <<<"${existing_labs}"; then
     echo "existing Proofstorm labs use an incompatible alpha schema" >&2

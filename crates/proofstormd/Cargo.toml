@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 futures.workspace = true
+getrandom.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
 proofstorm-kube = { path = "../proofstorm-kube" }

@@ -349,7 +349,9 @@
         ]
       },
       "credentials": [],
-      "effective_config": {},
+      "effective_config": {
+        "implementation": "attacker-workspace"
+      },
       "execution_context": {
         "component_id": "attacker",
         "environment": {
@@ -417,12 +419,14 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:aec62e745b94e504157db175676fa31d0ebd5cbe2152ea6584755e78c451b2ef",
+      "rollout_digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3",
       "storage": [],
       "target_descriptor": {
+        "backend_id": "attacker-workspace",
         "component_id": "attacker",
         "kind": "attacker",
-        "ports": {}
+        "ports": {},
+        "version": "0.1.0-alpha.1"
       },
       "workload": {
         "desired_replicas": 1,
@@ -489,8 +493,11 @@
       },
       "credentials": [],
       "effective_config": {
-        "fallback_fee": 0.0002,
-        "txindex": true
+        "config": {
+          "fallback_fee": 0.0002,
+          "txindex": true
+        },
+        "implementation": "bitcoin-core"
       },
       "execution_context": {
         "component_id": "chain-a",
@@ -572,13 +579,14 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:7044ccbdf4bdba13f4574806e2004cd1d1314d02b6b3b88f74db04cd179dce4f",
+      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
       "storage": [
         {
           "claim_name": "data-chain-a-0"
         }
       ],
       "target_descriptor": {
+        "backend_id": "bitcoin-core",
         "component_id": "chain-a",
         "kind": "bitcoin",
         "ports": {
@@ -586,7 +594,8 @@
           "rpc": 18443,
           "zmq_block": 28334,
           "zmq_tx": 28335
-        }
+        },
+        "version": "30.0"
       },
       "workload": {
         "desired_replicas": 1,
@@ -653,8 +662,11 @@
       },
       "credentials": [],
       "effective_config": {
-        "fallback_fee": 0.0002,
-        "txindex": true
+        "config": {
+          "fallback_fee": 0.0002,
+          "txindex": true
+        },
+        "implementation": "bitcoin-core"
       },
       "execution_context": {
         "component_id": "chain-b",
@@ -736,13 +748,14 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:7044ccbdf4bdba13f4574806e2004cd1d1314d02b6b3b88f74db04cd179dce4f",
+      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
       "storage": [
         {
           "claim_name": "data-chain-b-0"
         }
       ],
       "target_descriptor": {
+        "backend_id": "bitcoin-core",
         "component_id": "chain-b",
         "kind": "bitcoin",
         "ports": {
@@ -750,7 +763,8 @@
           "rpc": 18443,
           "zmq_block": 28334,
           "zmq_tx": 28335
-        }
+        },
+        "version": "30.0"
       },
       "workload": {
         "desired_replicas": 1,
@@ -824,7 +838,10 @@
       },
       "credentials": [],
       "effective_config": {
-        "alias": "cln"
+        "config": {
+          "alias": "cln"
+        },
+        "implementation": "cln"
       },
       "execution_context": {
         "component_id": "cln",
@@ -847,7 +864,8 @@
       "instance_key": "i-golden-b2",
       "kind": "lightning",
       "linked_targets": {
-        "chain-a": {
+        "cln-chain-a-chain": {
+          "backend_id": "bitcoin-core",
           "component_id": "chain-a",
           "kind": "bitcoin",
           "ports": {
@@ -855,7 +873,8 @@
             "rpc": 18443,
             "zmq_block": 28334,
             "zmq_tx": 28335
-          }
+          },
+          "version": "30.0"
         }
       },
       "operation_admission": [
@@ -917,24 +936,31 @@
       },
       "relevant_links": [
         {
+          "binding": {
+            "network": "regtest",
+            "type": "chain"
+          },
           "from": "cln",
+          "id": "cln-chain-a-chain",
           "kind": "chain_backend",
           "to": "chain-a"
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:118924622f7d95deb91d5f8e15a89a9f9fc113994a9690ffee5f5b20df5f7142",
+      "rollout_digest": "sha256:bc08b8a0ec74b362ee8ddf3f7003b3d9763f57d488fcb890f45f4c0bdd883c1b",
       "storage": [
         {
           "claim_name": "data-cln-0"
         }
       ],
       "target_descriptor": {
+        "backend_id": "cln",
         "component_id": "cln",
         "kind": "lightning",
         "ports": {
           "p2p": 9735
-        }
+        },
+        "version": "26.06.7"
       },
       "workload": {
         "desired_replicas": 1,
@@ -1008,7 +1034,10 @@
       },
       "credentials": [],
       "effective_config": {
-        "alias": "lnd"
+        "config": {
+          "alias": "lnd"
+        },
+        "implementation": "lnd"
       },
       "execution_context": {
         "component_id": "lnd",
@@ -1031,7 +1060,8 @@
       "instance_key": "i-golden-b2",
       "kind": "lightning",
       "linked_targets": {
-        "chain-a": {
+        "lnd-chain-a-chain": {
+          "backend_id": "bitcoin-core",
           "component_id": "chain-a",
           "kind": "bitcoin",
           "ports": {
@@ -1039,7 +1069,8 @@
             "rpc": 18443,
             "zmq_block": 28334,
             "zmq_tx": 28335
-          }
+          },
+          "version": "30.0"
         }
       },
       "operation_admission": [
@@ -1101,26 +1132,33 @@
       },
       "relevant_links": [
         {
+          "binding": {
+            "network": "regtest",
+            "type": "chain"
+          },
           "from": "lnd",
+          "id": "lnd-chain-a-chain",
           "kind": "chain_backend",
           "to": "chain-a"
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:fd4cee1534072355f9ce44699213b2f4aba3a88380672ba05bc83739896ac0f8",
+      "rollout_digest": "sha256:c70d6a9694097b28f41d45225936bf29d8ef2025682e10899d42a4bc872081a4",
       "storage": [
         {
           "claim_name": "data-lnd-0"
         }
       ],
       "target_descriptor": {
+        "backend_id": "lnd",
         "component_id": "lnd",
         "kind": "lightning",
         "ports": {
           "p2p": 9735,
           "rest": 8080,
           "rpc": 10009
-        }
+        },
+        "version": "0.20.0-beta"
       },
       "workload": {
         "desired_replicas": 1,
@@ -1201,7 +1239,7 @@
       "credentials": [
         {
           "claim_name": "data-lnd-0",
-          "identity": "lnd:lnd:data-lnd-0",
+          "identity": "lnd:mint-lnd-lightning:lnd:data-lnd-0",
           "mount_name": "lnd",
           "mount_path": "/lnd",
           "read_only": true,
@@ -1210,8 +1248,30 @@
         }
       ],
       "effective_config": {
-        "description": "Proofstorm regtest CDK mint",
-        "name": "Proofstorm CDK mint"
+        "config": {
+          "contact_email": "",
+          "contact_nostr_public_key": "",
+          "description": "Proofstorm regtest CDK mint",
+          "description_long": "",
+          "enable_info_page": false,
+          "http_cache_tti_seconds": 60,
+          "http_cache_ttl_seconds": 60,
+          "icon_url": "",
+          "input_fee_ppk": 100,
+          "max_inputs": 1000,
+          "max_melt_sat": 500000,
+          "max_mint_sat": 500000,
+          "max_outputs": 1000,
+          "melt_quote_ttl_seconds": 120,
+          "min_melt_sat": 1,
+          "min_mint_sat": 1,
+          "mint_quote_ttl_seconds": 600,
+          "motd": "",
+          "name": "Proofstorm CDK mint",
+          "tos_url": "",
+          "use_keyset_v2": true
+        },
+        "implementation": "cdk"
       },
       "execution_context": {
         "component_id": "mint",
@@ -1219,7 +1279,7 @@
           "CDK_MINTD_WORK_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "docker.io/cashubtc/mintd@sha256:b17af7ed8bce85086c011afeae1d578ccde1c0b098b16fd961140931dec06f8a",
+        "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
         "mounts": [
           {
             "mount_path": "/config",
@@ -1242,7 +1302,7 @@
             "name": "lnd",
             "read_only": true,
             "source": {
-              "link_kind": "lightning_backend",
+              "link_id": "mint-lnd-lightning",
               "source": "linked_stateful_data"
             }
           }
@@ -1252,14 +1312,16 @@
       "instance_key": "i-golden-b2",
       "kind": "mint",
       "linked_targets": {
-        "lnd": {
+        "mint-lnd-lightning": {
+          "backend_id": "lnd",
           "component_id": "lnd",
           "kind": "lightning",
           "ports": {
             "p2p": 9735,
             "rest": 8080,
             "rpc": 10009
-          }
+          },
+          "version": "0.20.0-beta"
         }
       },
       "operation_admission": [
@@ -1322,24 +1384,32 @@
       },
       "relevant_links": [
         {
+          "binding": {
+            "method": "bolt11",
+            "type": "payment",
+            "unit": "sat"
+          },
           "from": "mint",
-          "kind": "lightning_backend",
+          "id": "mint-lnd-lightning",
+          "kind": "payment_backend",
           "to": "lnd"
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:4fc20a368a3b0e7bc90860254036686bd306c07db2ade181dace89defb6fbba3",
+      "rollout_digest": "sha256:23e077429f81a378cf5de236755b850c5616181a204649b6ffc5287d2866a6f8",
       "storage": [
         {
           "claim_name": "mint-data"
         }
       ],
       "target_descriptor": {
+        "backend_id": "cdk",
         "component_id": "mint",
         "kind": "mint",
         "ports": {
           "http": 3338
-        }
+        },
+        "version": "0.17.6"
       },
       "workload": {
         "desired_replicas": 1,
@@ -1390,7 +1460,9 @@
         ]
       },
       "credentials": [],
-      "effective_config": {},
+      "effective_config": {
+        "implementation": "nutshell-wallet"
+      },
       "execution_context": {
         "component_id": "wallet",
         "environment": {
@@ -1468,16 +1540,18 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:bdaa48837ec1a83e2d4e6b70d8841f6ce2050e48521a32f07796f3e765b06dba",
+      "rollout_digest": "sha256:0b01dea715440f691d9211b5a747f1eba43bce1b1d1324affbe07fa1f3ba6a83",
       "storage": [
         {
           "claim_name": "wallet-data"
         }
       ],
       "target_descriptor": {
+        "backend_id": "nutshell-wallet",
         "component_id": "wallet",
         "kind": "wallet",
-        "ports": {}
+        "ports": {},
+        "version": "0.20.2"
       },
       "workload": {
         "desired_replicas": 1,
@@ -1491,7 +1565,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\ninput_fee_ppk = 100\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\nurls = [\"http://mint:3338\"]\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lnd:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\nurls = [\"http://mint:3338\"]\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lnd:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -1538,7 +1612,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:aec62e745b94e504157db175676fa31d0ebd5cbe2152ea6584755e78c451b2ef"
+                "proofstorm.dev/rollout-digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1629,7 +1703,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:4fc20a368a3b0e7bc90860254036686bd306c07db2ade181dace89defb6fbba3"
+                "proofstorm.dev/rollout-digest": "sha256:23e077429f81a378cf5de236755b850c5616181a204649b6ffc5287d2866a6f8"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1669,7 +1743,7 @@
                       "value": "/app/data"
                     }
                   ],
-                  "image": "docker.io/cashubtc/mintd@sha256:b17af7ed8bce85086c011afeae1d578ccde1c0b098b16fd961140931dec06f8a",
+                  "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -1752,7 +1826,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:92a5f2663ff229136073dcdf0c6db1e3ab03f5a6a7e8df7b84130f31fc862ac0",
+            "proofstorm.dev/prober-digest": "sha256:82f0fcd310f1b1fb1989a1c44b2f3f545879115d9502bc3a1b8f4cdb4b242563",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -1779,7 +1853,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:92a5f2663ff229136073dcdf0c6db1e3ab03f5a6a7e8df7b84130f31fc862ac0",
+                "proofstorm.dev/prober-digest": "sha256:82f0fcd310f1b1fb1989a1c44b2f3f545879115d9502bc3a1b8f4cdb4b242563",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {
@@ -2081,7 +2155,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:bdaa48837ec1a83e2d4e6b70d8841f6ce2050e48521a32f07796f3e765b06dba"
+                "proofstorm.dev/rollout-digest": "sha256:0b01dea715440f691d9211b5a747f1eba43bce1b1d1324affbe07fa1f3ba6a83"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3015,7 +3089,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:7044ccbdf4bdba13f4574806e2004cd1d1314d02b6b3b88f74db04cd179dce4f"
+                "proofstorm.dev/rollout-digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3164,7 +3238,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:7044ccbdf4bdba13f4574806e2004cd1d1314d02b6b3b88f74db04cd179dce4f"
+                "proofstorm.dev/rollout-digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3313,7 +3387,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:118924622f7d95deb91d5f8e15a89a9f9fc113994a9690ffee5f5b20df5f7142"
+                "proofstorm.dev/rollout-digest": "sha256:bc08b8a0ec74b362ee8ddf3f7003b3d9763f57d488fcb890f45f4c0bdd883c1b"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3462,7 +3536,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:fd4cee1534072355f9ce44699213b2f4aba3a88380672ba05bc83739896ac0f8"
+                "proofstorm.dev/rollout-digest": "sha256:c70d6a9694097b28f41d45225936bf29d8ef2025682e10899d42a4bc872081a4"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

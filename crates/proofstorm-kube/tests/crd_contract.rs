@@ -17,6 +17,11 @@ fn checked_in_crds_match_typed_contracts() {
         ),
     ];
     for (name, generated) in cases {
+        if name == "proofstorm.dev_proofstormlabs.yaml" {
+            assert!(generated.contains("x-kubernetes-validations:"));
+            assert!(generated.contains("chain bindings require only network"));
+            assert!(generated.contains("backend links require a binding"));
+        }
         let checked_in = fs::read_to_string(root.join("charts/proofstorm/crds").join(name))
             .unwrap_or_else(|error| panic!("read checked-in {name}: {error}"));
         assert_eq!(generated, checked_in, "regenerate CRD {name}");

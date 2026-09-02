@@ -9,8 +9,8 @@ use k8s_openapi::api::{
     apps::v1::{Deployment, StatefulSet},
     batch::v1::{Job, JobStatus},
     core::v1::{
-        ConfigMap, LimitRange, Namespace, PersistentVolumeClaim, Pod, ResourceQuota, Service,
-        ServiceAccount,
+        ConfigMap, LimitRange, Namespace, PersistentVolumeClaim, Pod, ResourceQuota, Secret,
+        Service, ServiceAccount,
     },
     discovery::v1::EndpointSlice,
     networking::v1::NetworkPolicy,
@@ -63,6 +63,8 @@ enum Error {
     InvalidInstanceKey(String),
     #[error("controller invariant failed: {0}")]
     ControllerInvariant(&'static str),
+    #[error("generated Secret contract failed: {0}")]
+    SecretContract(String),
     #[error("cleanup pending while instance namespace {0} still exists")]
     CleanupPending(String),
     #[error("cleanup pending while runtime actions for instance {0} are being removed")]
@@ -1237,6 +1239,76 @@ async fn patch_lab_protocol_probe_lease(
     Ok(())
 }
 
+async fn ensure_generated_postgres_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in [
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_DB",
+            "database.toml",
+        ] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+
+    let template_data = template.string_data.as_ref().ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no stringData"))
+    })?;
+    let username = template_data.get("POSTGRES_USER").ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_USER"))
+    })?;
+    let database = template_data.get("POSTGRES_DB").ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_DB"))
+    })?;
+    let component = template
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get("proofstorm.dev/component"))
+        .ok_or_else(|| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has no component identity"
+            ))
+        })?;
+    let mut entropy = [0_u8; 32];
+    getrandom::fill(&mut entropy).map_err(|error| {
+        Error::SecretContract(format!(
+            "could not generate credentials for {name:?}: {error}"
+        ))
+    })?;
+    let password = entropy
+        .iter()
+        .fold(String::with_capacity(64), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+            encoded
+        });
+    let url = format!("postgresql://{username}:{password}@{component}:5432/{database}");
+    let database_config = format!(
+        "\n[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = {url:?}\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
+    );
+    let mut desired = template.clone();
+    desired.string_data.get_or_insert_default().extend([
+        ("POSTGRES_PASSWORD".into(), password),
+        ("database.toml".into(), database_config),
+    ]);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "one reconciliation pass visibly applies the complete bounded instance inventory"
@@ -1297,6 +1369,10 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         .await?;
 
     let client = context.client.clone();
+    let secrets = Api::<Secret>::namespaced(client.clone(), &namespace_name);
+    for resource in &workloads.secrets {
+        ensure_generated_postgres_secret(&secrets, resource, &patch).await?;
+    }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.config_maps {
         configs

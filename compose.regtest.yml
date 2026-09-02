@@ -127,7 +127,7 @@ services:
       --accept-keysend --debuglevel=info
 
   cdk-mintd:
-    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.17.1}
+    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.17.6}
     container_name: proofstorm-rt-cdk-mintd
     restart: on-failure
     networks: [net]
@@ -187,7 +187,7 @@ services:
       context: .
       dockerfile: docker/adversary/Dockerfile
       args:
-        CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.1}
+        CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.6}
     container_name: proofstorm-rt-adversary
     restart: on-failure
     networks: [net]

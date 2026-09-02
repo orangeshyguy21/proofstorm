@@ -1,0 +1,458 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "cdk-ldk",
+    "component_id": "mint",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "config": {
+        "contact_email": "",
+        "contact_nostr_public_key": "",
+        "description": "Proofstorm regtest CDK LDK mint",
+        "description_long": "",
+        "enable_info_page": false,
+        "http_cache_tti_seconds": 60,
+        "http_cache_ttl_seconds": 60,
+        "icon_url": "",
+        "input_fee_ppk": 100,
+        "max_inputs": 1000,
+        "max_melt_sat": 500000,
+        "max_mint_sat": 500000,
+        "max_outputs": 1000,
+        "melt_quote_ttl_seconds": 120,
+        "min_melt_sat": 1,
+        "min_mint_sat": 1,
+        "mint_quote_ttl_seconds": 600,
+        "motd": "",
+        "name": "Proofstorm CDK LDK mint",
+        "tos_url": "",
+        "use_keyset_v2": true
+      },
+      "implementation": "cdk-ldk"
+    },
+    "execution_context": {
+      "component_id": "mint",
+      "environment": {
+        "CDK_MINTD_WORK_DIR": "/app/data",
+        "HOME": "/app/data"
+      },
+      "image": "docker.io/cashubtc/mintd@sha256:418527bb3642a2cfd9091caca9d706b5f7582c5c5923cb852f3fe6c29f587392",
+      "mounts": [
+        {
+          "mount_path": "/config",
+          "name": "config",
+          "read_only": true,
+          "source": {
+            "source": "component_config"
+          }
+        },
+        {
+          "mount_path": "/app/data",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "component_persistent_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/cdk-mint-ldk-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "mint",
+    "linked_targets": {
+      "mint-chain-chain": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
+        "ports": {
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
+        },
+        "version": "30.0"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "peer_channel_mutation",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "wallet_payment",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "http_get",
+      "path": "/v1/info",
+      "port": 3338
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "chain"
+        },
+        "from": "mint",
+        "id": "mint-chain-chain",
+        "kind": "chain_backend",
+        "to": "chain"
+      }
+    ],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:65f208103cdaebcc0dbbd85631a7ce891ce74e35e54dba2a7e9275e64ccdf173",
+    "storage": [
+      {
+        "claim_name": "mint-data"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "cdk-ldk",
+      "component_id": "mint",
+      "kind": "mint",
+      "ports": {
+        "http": 3338,
+        "p2p": 9735
+      },
+      "version": "0.17.6"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "deployment",
+      "name": "mint"
+    }
+  },
+  "resources": {
+    "configMaps": [
+      {
+        "apiVersion": "v1",
+        "data": {
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK LDK mint\"\ndescription = \"Proofstorm regtest CDK LDK mint\"\nurls = [\"http://mint:3338\"]\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[ln]\nln_backend = \"ldknode\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"proofstorm-regtest-only\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = 9735\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"legal winner thank year wave sausage worth useful legal winner thank yellow\"\n\n[database]\nengine = \"sqlite\"\n"
+        },
+        "kind": "ConfigMap",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-config",
+          "namespace": "proofstorm-i-golden-b2"
+        }
+      }
+    ],
+    "deployments": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "cdk-ldk",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-mint-ldk-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "mint",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "mint"
+            }
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:65f208103cdaebcc0dbbd85631a7ce891ce74e35e54dba2a7e9275e64ccdf173"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "mint",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "mint"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [
+                    "--config",
+                    "/config/config.toml"
+                  ],
+                  "command": [
+                    "cdk-mintd"
+                  ],
+                  "env": [
+                    {
+                      "name": "CDK_MINTD_WORK_DIR",
+                      "value": "/app/data"
+                    }
+                  ],
+                  "image": "docker.io/cashubtc/mintd@sha256:418527bb3642a2cfd9091caca9d706b5f7582c5c5923cb852f3fe6c29f587392",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 3338,
+                      "name": "http"
+                    },
+                    {
+                      "containerPort": 9735,
+                      "name": "p2p"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "failureThreshold": 40,
+                    "httpGet": {
+                      "path": "/v1/info",
+                      "port": 3338
+                    },
+                    "periodSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/config",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/app/data",
+                      "name": "data"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "configMap": {
+                    "name": "mint-config"
+                  },
+                  "name": "config"
+                },
+                {
+                  "name": "data",
+                  "persistentVolumeClaim": {
+                    "claimName": "mint-data"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "persistentVolumeClaims": [
+      {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-data",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "1Gi"
+            }
+          }
+        }
+      }
+    ],
+    "secrets": [],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "http",
+              "port": 3338,
+              "targetPort": 3338
+            },
+            {
+              "name": "p2p",
+              "port": 9735,
+              "targetPort": 9735
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          }
+        }
+      }
+    ],
+    "statefulSets": []
+  }
+}

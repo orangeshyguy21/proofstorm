@@ -57,6 +57,7 @@
         "bitcoin",
         "lightning",
         "mint",
+        "database",
         "wallet",
         "attacker",
         "proxy",
@@ -114,6 +115,57 @@
       ],
       "type": "string"
     },
+    "DependencyBinding": {
+      "additionalProperties": false,
+      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role. Proofstorm validates the discriminator-specific fields before publication.",
+      "properties": {
+        "method": {
+          "enum": [
+            "bolt11",
+            "bolt12",
+            "onchain"
+          ],
+          "type": "string"
+        },
+        "network": {
+          "enum": [
+            "regtest"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chain",
+            "payment",
+            "database"
+          ],
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "pattern": "^[a-z0-9-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role",
+          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) : has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit))"
+        }
+      ]
+    },
     "LabLimits": {
       "additionalProperties": false,
       "properties": {
@@ -167,7 +219,8 @@
         "bitcoin_peer",
         "lightning_peer",
         "chain_backend",
-        "lightning_backend",
+        "payment_backend",
+        "database_backend",
         "network_path"
       ],
       "type": "string"
@@ -175,7 +228,21 @@
     "LinkSpec": {
       "additionalProperties": false,
       "properties": {
+        "binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "from": {
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable binding identity within one lab revision.",
           "type": "string"
         },
         "kind": {
@@ -186,11 +253,18 @@
         }
       },
       "required": [
+        "id",
         "kind",
         "from",
         "to"
       ],
-      "type": "object"
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "backend links require a binding; peer and network-path links forbid one",
+          "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend') ? has(self.binding) : !has(self.binding)"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

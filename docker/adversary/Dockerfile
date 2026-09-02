@@ -2,7 +2,7 @@
 # Ships cdk-cli (for wallet-driven attacks: mint/send/receive/melt) plus
 # curl + jq (for raw NUT HTTP attacks and DoS floods). Host scripts drive it
 # via `docker exec`. Regtest only.
-ARG CDK_CLI_VERSION=0.17.1
+ARG CDK_CLI_VERSION=0.17.6
 
 FROM rust:1-slim-trixie AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \

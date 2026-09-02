@@ -42,7 +42,9 @@
       ]
     },
     "credentials": [],
-    "effective_config": {},
+    "effective_config": {
+      "implementation": "nutshell-wallet"
+    },
     "execution_context": {
       "component_id": "wallet",
       "environment": {
@@ -120,16 +122,18 @@
     ],
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:bdaa48837ec1a83e2d4e6b70d8841f6ce2050e48521a32f07796f3e765b06dba",
+    "rollout_digest": "sha256:0b01dea715440f691d9211b5a747f1eba43bce1b1d1324affbe07fa1f3ba6a83",
     "storage": [
       {
         "claim_name": "wallet-data"
       }
     ],
     "target_descriptor": {
+      "backend_id": "nutshell-wallet",
       "component_id": "wallet",
       "kind": "wallet",
-      "ports": {}
+      "ports": {},
+      "version": "0.20.2"
     },
     "workload": {
       "desired_replicas": 1,
@@ -171,7 +175,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:bdaa48837ec1a83e2d4e6b70d8841f6ce2050e48521a32f07796f3e765b06dba"
+                "proofstorm.dev/rollout-digest": "sha256:0b01dea715440f691d9211b5a747f1eba43bce1b1d1324affbe07fa1f3ba6a83"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -282,6 +286,7 @@
         }
       }
     ],
+    "secrets": [],
     "services": [],
     "statefulSets": []
   }

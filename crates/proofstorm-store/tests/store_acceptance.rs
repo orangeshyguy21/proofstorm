@@ -158,7 +158,7 @@ fn composer_mutations_are_idempotent_and_optimistic() {
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
             version: Some("30.0".into()),
-            config_version: "v1alpha1".into(),
+            config_version: "bitcoin-core/30/v1".into(),
             control: ControlClass::Laboratory,
             config: BTreeMap::new(),
         },
@@ -198,7 +198,7 @@ fn publication_keeps_requested_draft_and_persists_effective_configuration() {
         kind: ComponentKind::Bitcoin,
         implementation: "bitcoin-core".into(),
         version: Some("30.0".into()),
-        config_version: "v1alpha1".into(),
+        config_version: "bitcoin-core/30/v1".into(),
         control: ControlClass::Laboratory,
         config: BTreeMap::new(),
     });

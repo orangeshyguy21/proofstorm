@@ -1,0 +1,397 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "service_ready",
+      "protocol_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "postgresql",
+    "component_id": "database",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "config": {
+        "database_name": "cdk_mint",
+        "storage_size": "1Gi"
+      },
+      "implementation": "postgresql"
+    },
+    "execution_context": {
+      "component_id": "database",
+      "environment": {
+        "PGDATA": "/var/lib/postgresql/data/pgdata"
+      },
+      "image": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+      "mounts": [
+        {
+          "mount_path": "/var/lib/postgresql/data",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "stateful_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/postgresql-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "database",
+    "linked_targets": {},
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "peer_channel_mutation",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "wallet_payment",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 5432
+    },
+    "relevant_links": [],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:1c9ae523d44e66407f252d1a0394956ce94d7d94e4a39dffe759d85aad61dcdb",
+    "storage": [
+      {
+        "claim_name": "data-database-0"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "postgresql",
+      "component_id": "database",
+      "kind": "database",
+      "ports": {
+        "postgres": 5432
+      },
+      "version": "17.11"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "stateful_set",
+      "name": "database"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [],
+    "persistentVolumeClaims": [],
+    "secrets": [
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "database",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "database"
+          },
+          "name": "database-credentials",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "POSTGRES_DB": "cdk_mint",
+          "POSTGRES_USER": "proofstorm"
+        },
+        "type": "Opaque"
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "database",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "database"
+          },
+          "name": "database",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "postgres",
+              "port": 5432,
+              "targetPort": 5432
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "database",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "database"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "postgresql",
+            "proofstorm.dev/execution-state-contract": "proofstorm/postgresql-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "database",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "database"
+          },
+          "name": "database",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "database",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "database"
+            }
+          },
+          "serviceName": "database",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:1c9ae523d44e66407f252d1a0394956ce94d7d94e4a39dffe759d85aad61dcdb"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "database",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "database"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "env": [
+                    {
+                      "name": "PGDATA",
+                      "value": "/var/lib/postgresql/data/pgdata"
+                    },
+                    {
+                      "name": "POSTGRES_USER",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_USER",
+                          "name": "database-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "POSTGRES_PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "database-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "POSTGRES_DB",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_DB",
+                          "name": "database-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 5432,
+                      "name": "postgres"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "pg_isready",
+                        "-U",
+                        "proofstorm",
+                        "-d",
+                        "cdk_mint"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/var/lib/postgresql/data",
+                      "name": "data"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 70,
+                "runAsGroup": 70,
+                "runAsNonRoot": true,
+                "runAsUser": 70,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload"
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "database",
+                  "proofstorm.dev/instance": "i-golden-b2",
+                  "proofstorm.dev/network-identity": "database"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -65,7 +65,10 @@
     },
     "credentials": [],
     "effective_config": {
-      "alias": "lightning"
+      "config": {
+        "alias": "lightning"
+      },
+      "implementation": "cln"
     },
     "execution_context": {
       "component_id": "lightning",
@@ -88,7 +91,8 @@
     "instance_key": "i-golden-b2",
     "kind": "lightning",
     "linked_targets": {
-      "chain": {
+      "lightning-chain-chain": {
+        "backend_id": "bitcoin-core",
         "component_id": "chain",
         "kind": "bitcoin",
         "ports": {
@@ -96,7 +100,8 @@
           "rpc": 18443,
           "zmq_block": 28334,
           "zmq_tx": 28335
-        }
+        },
+        "version": "30.0"
       }
     },
     "operation_admission": [
@@ -158,24 +163,31 @@
     },
     "relevant_links": [
       {
+        "binding": {
+          "network": "regtest",
+          "type": "chain"
+        },
         "from": "lightning",
+        "id": "lightning-chain-chain",
         "kind": "chain_backend",
         "to": "chain"
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:cab0f53ea52abb452f12df537eeccb4a42b8a93075b6c63600bdf5c425f9c64e",
+    "rollout_digest": "sha256:4ec6b476e0007ca6ece1703016107089c77d9e9a91d944671746a36999b13654",
     "storage": [
       {
         "claim_name": "data-lightning-0"
       }
     ],
     "target_descriptor": {
+      "backend_id": "cln",
       "component_id": "lightning",
       "kind": "lightning",
       "ports": {
         "p2p": 9735
-      }
+      },
+      "version": "26.06.7"
     },
     "workload": {
       "desired_replicas": 1,
@@ -187,6 +199,7 @@
     "configMaps": [],
     "deployments": [],
     "persistentVolumeClaims": [],
+    "secrets": [],
     "services": [
       {
         "apiVersion": "v1",
@@ -251,7 +264,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:cab0f53ea52abb452f12df537eeccb4a42b8a93075b6c63600bdf5c425f9c64e"
+                "proofstorm.dev/rollout-digest": "sha256:4ec6b476e0007ca6ece1703016107089c77d9e9a91d944671746a36999b13654"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

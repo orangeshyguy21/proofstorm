@@ -44,6 +44,7 @@
         "bitcoin",
         "lightning",
         "mint",
+        "database",
         "wallet",
         "attacker",
         "proxy",
@@ -101,7 +102,243 @@
         }
       ]
     },
-    "ExecutionMountContract": {
+    "ConfigFieldContract": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ConfigSettingClass"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigDefault"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "enum_values": {
+          "items": true,
+          "type": "array"
+        },
+        "max_length": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maximum": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min_length": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minimum": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "value_kind": {
+          "$ref": "#/$defs/ConfigValueKind"
+        }
+      },
+      "required": [
+        "description",
+        "value_kind",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "ConfigRule": {
+      "oneOf": [
+        {
+          "properties": {
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "kind": {
+              "const": "mutually_exclusive",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "equals": true,
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "required_when",
+              "type": "string"
+            },
+            "required_field": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field",
+            "equals",
+            "required_field"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "less_than_or_equal",
+              "type": "string"
+            },
+            "maximum_field": {
+              "type": "string"
+            },
+            "minimum_field": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "minimum_field",
+            "maximum_field"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConfigSettingClass": {
+      "enum": [
+        "agent_authorable",
+        "topology_derived",
+        "generated_instance_secret",
+        "imported_secret_reference",
+        "runtime_policy"
+      ],
+      "type": "string"
+    },
+    "ConfigValueKind": {
+      "enum": [
+        "boolean",
+        "number",
+        "integer",
+        "string"
+      ],
+      "type": "string"
+    },
+    "DependencyBinding": {
+      "additionalProperties": false,
+      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role. Proofstorm validates the discriminator-specific fields before publication.",
+      "properties": {
+        "method": {
+          "enum": [
+            "bolt11",
+            "bolt12",
+            "onchain"
+          ],
+          "type": "string"
+        },
+        "network": {
+          "enum": [
+            "regtest"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chain",
+            "payment",
+            "database"
+          ],
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "pattern": "^[a-z0-9-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role",
+          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) : has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit))"
+        }
+      ]
+    },
+    "ExecutionMountRequirement": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "group": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "at_least_one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "group"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExecutionMountTemplateContract": {
       "additionalProperties": false,
       "properties": {
         "mount_path": {
@@ -113,8 +350,14 @@
         "read_only": {
           "type": "boolean"
         },
+        "requirement": {
+          "$ref": "#/$defs/ExecutionMountRequirement",
+          "default": {
+            "kind": "required"
+          }
+        },
         "source": {
-          "$ref": "#/$defs/ExecutionStorageSource"
+          "$ref": "#/$defs/ExecutionStorageTemplateSource"
         }
       },
       "required": [
@@ -125,7 +368,7 @@
       ],
       "type": "object"
     },
-    "ExecutionStorageSource": {
+    "ExecutionStorageTemplateSource": {
       "oneOf": [
         {
           "properties": {
@@ -165,17 +408,25 @@
         },
         {
           "properties": {
+            "binding": {
+              "$ref": "#/$defs/DependencyBinding"
+            },
             "link_kind": {
               "$ref": "#/$defs/LinkKind"
             },
             "source": {
               "const": "linked_stateful_data",
               "type": "string"
+            },
+            "target_implementation": {
+              "type": "string"
             }
           },
           "required": [
             "source",
-            "link_kind"
+            "link_kind",
+            "binding",
+            "target_implementation"
           ],
           "type": "object"
         }
@@ -186,7 +437,8 @@
         "bitcoin_peer",
         "lightning_peer",
         "chain_backend",
-        "lightning_backend",
+        "payment_backend",
+        "database_backend",
         "network_path"
       ],
       "type": "string"
@@ -399,11 +651,20 @@
       },
       "type": "object"
     },
-    "config_defaults": {
+    "config_fields": {
       "additionalProperties": {
-        "$ref": "#/$defs/ConfigDefault"
+        "$ref": "#/$defs/ConfigFieldContract"
       },
       "type": "object"
+    },
+    "config_rules": {
+      "items": {
+        "$ref": "#/$defs/ConfigRule"
+      },
+      "type": "array"
+    },
+    "config_version": {
+      "type": "string"
     },
     "execution_environment": {
       "additionalProperties": {
@@ -413,7 +674,7 @@
     },
     "execution_mounts": {
       "items": {
-        "$ref": "#/$defs/ExecutionMountContract"
+        "$ref": "#/$defs/ExecutionMountTemplateContract"
       },
       "type": "array"
     },
@@ -464,7 +725,9 @@
   "required": [
     "id",
     "kind",
-    "config_defaults",
+    "config_version",
+    "config_fields",
+    "config_rules",
     "service_ports",
     "execution_state_contract",
     "execution_mounts",

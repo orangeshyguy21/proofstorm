@@ -35,7 +35,9 @@
       ]
     },
     "credentials": [],
-    "effective_config": {},
+    "effective_config": {
+      "implementation": "attacker-workspace"
+    },
     "execution_context": {
       "component_id": "attacker",
       "environment": {
@@ -103,12 +105,14 @@
     ],
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:aec62e745b94e504157db175676fa31d0ebd5cbe2152ea6584755e78c451b2ef",
+    "rollout_digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3",
     "storage": [],
     "target_descriptor": {
+      "backend_id": "attacker-workspace",
       "component_id": "attacker",
       "kind": "attacker",
-      "ports": {}
+      "ports": {},
+      "version": "0.1.0-alpha.1"
     },
     "workload": {
       "desired_replicas": 1,
@@ -150,7 +154,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:aec62e745b94e504157db175676fa31d0ebd5cbe2152ea6584755e78c451b2ef"
+                "proofstorm.dev/rollout-digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -212,6 +216,7 @@
       }
     ],
     "persistentVolumeClaims": [],
+    "secrets": [],
     "services": [],
     "statefulSets": []
   }

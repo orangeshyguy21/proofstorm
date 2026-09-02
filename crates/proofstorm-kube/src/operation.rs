@@ -2,8 +2,8 @@ use k8s_openapi::api::batch::v1::Job;
 use kube::ResourceExt;
 use proofstorm_core::{
     Capability, ComponentConditionReason, ComponentConditionState, ComponentConditionType,
-    ComponentKind, ComponentPlanContract, ComponentStatus, ExecutionStorageSource, OperationClass,
-    ReadinessPrerequisite,
+    ComponentKind, ComponentPlanContract, ComponentStatus, EffectiveComponentConfig,
+    ExecutionStorageSource, OperationClass, ReadinessPrerequisite,
 };
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -645,6 +645,17 @@ fn render_native_exec_action(
     // A non-zero native exit is experiment data, not an infrastructure failure.
     // The controller reads the bounded pod log and this small exit metadata.
     let wrapper = "set +e; /bin/sh -c \"$PROOFSTORM_SCRIPT\"; code=$?; printf '{\"exit_code\":%s}' \"$code\" >/dev/termination-log; exit 0";
+    let mut exec_container = container_with_env(
+        "exec",
+        &component.execution_context.image,
+        wrapper,
+        &context.mounts,
+        environment,
+    );
+    exec_container["env"]
+        .as_array_mut()
+        .expect("native exec environment is an array")
+        .extend(context.secret_environment);
     let pod = json!({
         "restartPolicy": "Never",
         "serviceAccountName": "proofstorm-workload",
@@ -652,7 +663,7 @@ fn render_native_exec_action(
         "enableServiceLinks": false,
         "securityContext": pod_security(),
         "affinity": instance_affinity(&action.spec.instance_key),
-        "containers": [container_with_env("exec", &component.execution_context.image, wrapper, &context.mounts, environment)],
+        "containers": [exec_container],
         "volumes": context.volumes,
     });
     let mut rendered = job(
@@ -686,6 +697,7 @@ struct NativeExecComponentContext {
     mounts: Vec<Value>,
     volumes: Vec<Value>,
     environment: Vec<(String, String)>,
+    secret_environment: Vec<Value>,
 }
 
 fn native_exec_component_context(
@@ -705,7 +717,21 @@ fn native_exec_component_context(
                 )
             })
             .collect(),
+        secret_environment: vec![],
     };
+    if let EffectiveComponentConfig::Postgres(config) = &plan.effective_config {
+        let secret_name = format!("{}-credentials", plan.component_id);
+        context.environment.extend([
+            ("PGHOST".into(), plan.component_id.clone()),
+            ("PGPORT".into(), "5432".into()),
+            ("PGUSER".into(), "proofstorm".into()),
+            ("PGDATABASE".into(), config.database_name.clone()),
+        ]);
+        context.secret_environment.push(json!({
+            "name": "PGPASSWORD",
+            "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "POSTGRES_PASSWORD"}}
+        }));
+    }
     for binding in &plan.execution_context.mounts {
         context
             .mounts
@@ -720,18 +746,37 @@ fn native_exec_component_context(
             ExecutionStorageSource::ComponentConfig => {
                 json!({"configMap": {"name": format!("{}-config", plan.component_id)}})
             }
-            ExecutionStorageSource::LinkedStatefulData { link_kind } => {
+            ExecutionStorageSource::LinkedStatefulData { ref link_id } => {
                 let target = plan
                     .relevant_links
                     .iter()
-                    .find(|link| link.kind == link_kind && link.from == plan.component_id)
+                    .find(|link| link.id == *link_id && link.from == plan.component_id)
                     .ok_or_else(|| {
                         ActionRenderError::InvalidPlan(format!(
-                            "component {:?} lacks required {link_kind:?} execution binding",
-                            plan.component_id
+                            "component {:?} lacks resolved execution binding {link_id:?}",
+                            plan.component_id,
                         ))
                     })?;
-                json!({"persistentVolumeClaim": {"claimName": format!("data-{}-0", target.to)}})
+                let credentials = plan
+                    .credentials
+                    .iter()
+                    .filter(|credential| credential.mount_name == binding.name)
+                    .collect::<Vec<_>>();
+                let [credential] = credentials.as_slice() else {
+                    return Err(ActionRenderError::InvalidPlan(format!(
+                        "component {:?} execution mount {:?} requires exactly one compiled credential, found {}",
+                        plan.component_id,
+                        binding.name,
+                        credentials.len()
+                    )));
+                };
+                if credential.source_component_id != target.to {
+                    return Err(ActionRenderError::InvalidPlan(format!(
+                        "component {:?} execution binding {link_id:?} target {:?} does not match credential source {:?}",
+                        plan.component_id, target.to, credential.source_component_id
+                    )));
+                }
+                json!({"persistentVolumeClaim": {"claimName": credential.claim_name}})
             }
         };
         let mut volume = json!({"name": binding.name});
@@ -822,6 +867,20 @@ fn native_exec_target_environment(
                 ports.get("http").copied().unwrap_or_default()
             ),
         )),
+        ComponentKind::Database => environment.extend([
+            (
+                "PROOFSTORM_DATABASE_HOST".to_owned(),
+                target.component_id.clone(),
+            ),
+            (
+                "PROOFSTORM_DATABASE_PORT".to_owned(),
+                ports
+                    .get("postgres")
+                    .copied()
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        ]),
         _ => {}
     }
     environment
@@ -1071,7 +1130,7 @@ fn render_wallet_initialize_action(
         return Err(ActionRenderError::Capability);
     }
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
     render_wallet_initialize_job(&WalletJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1091,7 +1150,7 @@ fn render_wallet_balance_action(
         return Err(ActionRenderError::Capability);
     }
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
     render_wallet_balance_job(&WalletJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1112,7 +1171,7 @@ fn render_wallet_fund_action(
     }
     validate_wallet_amount(request.amount_sat)?;
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
     let lightning_image = locked_component_image(
         lab,
         &request.payer_lightning,
@@ -1148,7 +1207,7 @@ fn render_wallet_invoice_action(
         ));
     }
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
     render_wallet_invoice_job(&WalletInvoiceJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1179,7 +1238,7 @@ fn render_wallet_pay_action(
     }
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
     nutshell_wallet_image(lab, &request.recipient_wallet)?;
-    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
     render_wallet_pay_job(&WalletPayJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1203,7 +1262,7 @@ fn render_wallet_action(
     }
     validate_wallet_round_trip_action(request)?;
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
     let lnd_image = locked_component_image(
         lab,
         &request.payer_lightning,
@@ -1234,7 +1293,7 @@ fn render_oracle_action(
     }
     validate_conservation_oracle_action(request)?;
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component_image(lab, &request.mint, ComponentKind::Mint, "cdk")?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
     render_conservation_oracle_job(
         &action.name_any(),
         &action.spec.instance_key,
@@ -2605,7 +2664,15 @@ mod tests {
             kind,
             implementation: implementation.into(),
             version: None,
-            config_version: "v1alpha1".into(),
+            config_version: match implementation {
+                "bitcoin-core" => "bitcoin-core/30/v1",
+                "lnd" => "lnd/0.20/v1",
+                "cln" => "cln/26.06/v1",
+                "cdk" => "cdk-mintd/0.17/v1",
+                "nutshell-wallet" => "nutshell-wallet/0.20/v1",
+                _ => panic!("unknown test implementation {implementation:?}"),
+            }
+            .into(),
             control: if kind == ComponentKind::Mint {
                 ControlClass::Target
             } else {
@@ -2625,7 +2692,16 @@ mod tests {
                 component("mint", ComponentKind::Mint, "cdk"),
                 component("wallet", ComponentKind::Wallet, "nutshell-wallet"),
             ],
-            links: vec![],
+            links: vec![proofstorm_core::LinkSpec {
+                id: "mint-bolt11".into(),
+                kind: proofstorm_core::LinkKind::PaymentBackend,
+                from: "mint".into(),
+                to: "mint-lnd".into(),
+                binding: Some(proofstorm_core::DependencyBinding::Payment {
+                    method: proofstorm_core::PaymentMethod::Bolt11,
+                    unit: "sat".into(),
+                }),
+            }],
             policy: LabPolicy::default(),
         };
         let lock = resolve_lock(&lab_spec, &default_catalog()).expect("lock");
@@ -3139,13 +3215,7 @@ mod tests {
 
     #[test]
     fn native_exec_mounts_are_compiled_from_the_executor_plan() {
-        let (mut lab, mut action) = typed_bootstrap();
-        lab.spec.lab.links.push(proofstorm_core::LinkSpec {
-            kind: proofstorm_core::LinkKind::LightningBackend,
-            from: "mint".into(),
-            to: "mint-lnd".into(),
-        });
-        lab.spec.lock = resolve_lock(&lab.spec.lab, &default_catalog()).expect("linked lock");
+        let (lab, mut action) = typed_bootstrap();
         action.spec.capability = Capability::ComponentExec;
         action.spec.action = LabAction::NativeExec(NativeExecAction {
             component: "mint".into(),
@@ -3190,6 +3260,24 @@ mod tests {
             .expect("plan mounts");
         assert_eq!(mounts[2].mount_path, "/lnd");
         assert_eq!(mounts[2].read_only, Some(true));
+
+        let mut plans = crate::compile_component_plans(
+            &lab.spec.instance_key,
+            &lab.spec.revision_digest,
+            &lab.spec.lab,
+            &lab.spec.lock,
+        )
+        .expect("compiled plans");
+        let mint = plans
+            .iter_mut()
+            .find(|plan| plan.component_id == "mint")
+            .expect("mint plan");
+        mint.credentials[0].claim_name = "opaque-linked-state".into();
+        let context = native_exec_component_context(mint).expect("compiled native context");
+        assert_eq!(
+            context.volumes[2]["persistentVolumeClaim"]["claimName"],
+            "opaque-linked-state"
+        );
     }
 
     #[test]
