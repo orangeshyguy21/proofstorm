@@ -13,8 +13,9 @@ use std::{
 use proofstorm_core::{
     Capability, DraftMutation, Experiment, ExperimentLease, ExperimentPhase, LabInstance,
     LabOperation, LabSpec, LeasePhase, OperationArtifact, OperationKind, OperationPhase,
-    PublishedRevision, WalletQuote, WalletQuoteDirection, WalletQuotePhase, apply_draft_mutation,
-    default_catalog, resolve_effective_lab, resolve_lock, validate_lab,
+    PublishedRevision, WalletQuote, WalletQuoteDirection, WalletQuoteObservation,
+    WalletQuoteObservationInput, WalletQuoteObservationRole, WalletQuotePhase,
+    apply_draft_mutation, default_catalog, resolve_effective_lab, resolve_lock, validate_lab,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use schemars::JsonSchema;
@@ -108,6 +109,8 @@ pub enum StoreError {
         from: WalletQuotePhase,
         to: WalletQuotePhase,
     },
+    #[error("wallet mint quote {quote:?} already has payment operation {operation:?}")]
+    QuotePaymentAlreadyClaimed { quote: String, operation: String },
 }
 
 impl StoreError {
@@ -138,6 +141,7 @@ impl StoreError {
             Self::ActionBudgetExceeded { .. } => "action_budget_exceeded",
             Self::StaleQuote { .. } => "stale_quote",
             Self::InvalidQuoteTransition { .. } => "invalid_quote_transition",
+            Self::QuotePaymentAlreadyClaimed { .. } => "quote_payment_already_claimed",
         }
     }
 }
@@ -167,6 +171,79 @@ pub struct DraftDiff {
     pub removed_components: Vec<String>,
     pub links_changed: bool,
     pub policy_changed: bool,
+}
+
+/// A durable single-flight claim for one receive quote payment. This controls
+/// execution admission and deliberately carries no wallet quote state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WalletPaymentClaim {
+    pub workspace_id: String,
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub principal_id: String,
+    pub operation_id: String,
+    pub recipient_wallet_id: String,
+    pub recipient_mint_id: String,
+    pub mint_quote_id: String,
+    pub payer_wallet_id: String,
+    pub payer_mint_id: String,
+    pub admitted_at_unix: i64,
+}
+
+struct WalletQuoteObservationRow {
+    observation_sequence: i64,
+    workspace_id: String,
+    instance_id: String,
+    experiment_id: String,
+    lease_id: String,
+    principal_id: String,
+    operation_id: String,
+    observation_role_json: String,
+    wallet_id: String,
+    mint_id: String,
+    direction_json: String,
+    quote_id: String,
+    amount_sat: i64,
+    state: String,
+    wallet_created_at_unix: Option<i64>,
+    wallet_paid_at_unix: Option<i64>,
+    wallet_expires_at_unix: Option<i64>,
+    fee_reserve_sat: Option<i64>,
+    fee_paid_sat: Option<i64>,
+    observed_at_unix: i64,
+}
+
+impl TryFrom<WalletQuoteObservationRow> for WalletQuoteObservation {
+    type Error = StoreError;
+
+    fn try_from(row: WalletQuoteObservationRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            observation_sequence: u64::try_from(row.observation_sequence)
+                .map_err(|_| StoreError::InvalidStoredVersion(row.observation_sequence))?,
+            workspace_id: row.workspace_id,
+            instance_id: row.instance_id,
+            experiment_id: row.experiment_id,
+            lease_id: row.lease_id,
+            principal_id: row.principal_id,
+            observed_by_operation: row.operation_id,
+            role: serde_json::from_str(&row.observation_role_json)?,
+            wallet_id: row.wallet_id,
+            mint_id: row.mint_id,
+            direction: serde_json::from_str(&row.direction_json)?,
+            quote_id: row.quote_id,
+            amount_sat: u64::try_from(row.amount_sat)
+                .map_err(|_| StoreError::InvalidStoredVersion(row.amount_sat))?,
+            state: row.state,
+            wallet_created_at_unix: row.wallet_created_at_unix,
+            wallet_paid_at_unix: row.wallet_paid_at_unix,
+            wallet_expires_at_unix: row.wallet_expires_at_unix,
+            fee_reserve_sat: optional_sql_u64(row.fee_reserve_sat)?,
+            fee_paid_sat: optional_sql_u64(row.fee_paid_sat)?,
+            observed_at_unix: row.observed_at_unix,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -327,6 +404,65 @@ impl Store {
                ON wallet_quotes(workspace_id, experiment_id, created_at, id);
              CREATE INDEX IF NOT EXISTS wallet_quotes_experiment_page
                ON wallet_quotes(workspace_id, experiment_id, principal_id, id);
+             CREATE TABLE IF NOT EXISTS wallet_quote_observations (
+               observation_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+               workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+               instance_id TEXT NOT NULL,
+               experiment_id TEXT NOT NULL,
+               lease_id TEXT NOT NULL,
+               principal_id TEXT NOT NULL REFERENCES principals(id),
+               operation_id TEXT NOT NULL,
+               observation_role_json TEXT NOT NULL,
+               wallet_id TEXT NOT NULL,
+               mint_id TEXT NOT NULL,
+               direction_json TEXT NOT NULL,
+               quote_id TEXT NOT NULL,
+               amount_sat INTEGER NOT NULL,
+               state TEXT NOT NULL,
+               wallet_created_at INTEGER,
+               wallet_paid_at INTEGER,
+               wallet_expires_at INTEGER,
+               fee_reserve_sat INTEGER,
+               fee_paid_sat INTEGER,
+               observed_at INTEGER NOT NULL,
+               UNIQUE (workspace_id, operation_id, observation_role_json),
+               FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id),
+               FOREIGN KEY (workspace_id, experiment_id) REFERENCES experiments(workspace_id, id),
+               FOREIGN KEY (workspace_id, lease_id) REFERENCES experiment_leases(workspace_id, id),
+               FOREIGN KEY (workspace_id, operation_id) REFERENCES actions(workspace_id, id)
+             );
+             CREATE INDEX IF NOT EXISTS wallet_quote_observations_latest
+               ON wallet_quote_observations(
+                 workspace_id, instance_id, wallet_id, mint_id, direction_json,
+                 quote_id, observation_sequence DESC
+               );
+             CREATE INDEX IF NOT EXISTS wallet_quote_observations_by_experiment
+               ON wallet_quote_observations(
+                 workspace_id, experiment_id, principal_id, observation_sequence
+               );
+             CREATE TABLE IF NOT EXISTS wallet_payment_claims (
+               workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+               instance_id TEXT NOT NULL,
+               experiment_id TEXT NOT NULL,
+               lease_id TEXT NOT NULL,
+               principal_id TEXT NOT NULL REFERENCES principals(id),
+               operation_id TEXT NOT NULL,
+               recipient_wallet_id TEXT NOT NULL,
+               recipient_mint_id TEXT NOT NULL,
+               mint_quote_id TEXT NOT NULL,
+               payer_wallet_id TEXT NOT NULL,
+               payer_mint_id TEXT NOT NULL,
+               admitted_at INTEGER NOT NULL,
+               PRIMARY KEY (
+                 workspace_id, instance_id, recipient_wallet_id,
+                 recipient_mint_id, mint_quote_id
+               ),
+               UNIQUE (workspace_id, operation_id),
+               FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id),
+               FOREIGN KEY (workspace_id, experiment_id) REFERENCES experiments(workspace_id, id),
+               FOREIGN KEY (workspace_id, lease_id) REFERENCES experiment_leases(workspace_id, id),
+               FOREIGN KEY (workspace_id, operation_id) REFERENCES actions(workspace_id, id)
+             );
              CREATE TABLE IF NOT EXISTS idempotency (
                workspace_id TEXT NOT NULL,
                principal_id TEXT NOT NULL,
@@ -1831,10 +1967,32 @@ impl Store {
         phase: OperationPhase,
         content: serde_json::Value,
     ) -> Result<LabOperation, StoreError> {
+        self.record_operation_result_with_quote_observations(
+            workspace,
+            operation_id,
+            phase,
+            content,
+            &[],
+        )
+    }
+
+    /// Atomically terminalize an action-journal entry and append every
+    /// wallet-native quote observation decoded from its sanitized artifact.
+    pub fn record_operation_result_with_quote_observations(
+        &self,
+        workspace: &str,
+        operation_id: &str,
+        phase: OperationPhase,
+        content: serde_json::Value,
+        observations: &[WalletQuoteObservationInput],
+    ) -> Result<LabOperation, StoreError> {
         if matches!(phase, OperationPhase::Pending | OperationPhase::Running) {
             return Err(StoreError::Validation(
                 "operation result phase must be terminal".into(),
             ));
+        }
+        for observation in observations {
+            validate_quote_observation(observation)?;
         }
         let existing = self.operation_unchecked(workspace, operation_id)?;
         if matches!(
@@ -1861,19 +2019,199 @@ impl Store {
             })?,
             content,
         };
-        self.lock()?.execute(
+        let completed_at = now_unix();
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
             "UPDATE actions SET phase_json = ?1, artifact_json = ?2, completed_at = ?3
              WHERE workspace_id = ?4 AND id = ?5
                AND phase_json IN ('\"pending\"', '\"running\"')",
             params![
                 serde_json::to_string(&phase)?,
                 serde_json::to_string(&artifact)?,
-                now_unix(),
+                completed_at,
                 workspace,
                 operation_id
             ],
         )?;
+        if changed == 0 {
+            transaction.commit()?;
+            drop(connection);
+            return self.operation_unchecked(workspace, operation_id);
+        }
+        for observation in observations {
+            transaction.execute(
+                "INSERT INTO wallet_quote_observations(
+                   workspace_id, instance_id, experiment_id, lease_id, principal_id,
+                   operation_id, observation_role_json, wallet_id, mint_id,
+                   direction_json, quote_id, amount_sat, state, wallet_created_at,
+                   wallet_paid_at, wallet_expires_at, fee_reserve_sat, fee_paid_sat,
+                   observed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                         ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                params![
+                    workspace,
+                    existing.instance_id,
+                    existing.experiment_id,
+                    existing.lease_id,
+                    existing.principal_id,
+                    operation_id,
+                    serde_json::to_string(&observation.role)?,
+                    observation.wallet_id,
+                    observation.mint_id,
+                    serde_json::to_string(&observation.direction)?,
+                    observation.quote_id,
+                    sql_version(observation.amount_sat)?,
+                    observation.state,
+                    observation.wallet_created_at_unix,
+                    observation.wallet_paid_at_unix,
+                    observation.wallet_expires_at_unix,
+                    observation.fee_reserve_sat.map(sql_version).transpose()?,
+                    observation.fee_paid_sat.map(sql_version).transpose()?,
+                    completed_at,
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        drop(connection);
         self.operation_unchecked(workspace, operation_id)
+    }
+
+    /// Read the most recently recorded observation for one fully scoped
+    /// adapter-native quote. This is historical data, not a live wallet read.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wallet_quote_observation(
+        &self,
+        workspace: &str,
+        principal: &str,
+        instance_id: &str,
+        wallet_id: &str,
+        mint_id: &str,
+        direction: WalletQuoteDirection,
+        quote_id: &str,
+    ) -> Result<WalletQuoteObservation, StoreError> {
+        self.authorize(workspace, principal, Capability::ArtifactRead)?;
+        validate_quote_observation_identity(wallet_id, mint_id, quote_id)?;
+        let direction_json = serde_json::to_string(&direction)?;
+        let row = self
+            .lock()?
+            .query_row(
+                "SELECT observation_sequence, workspace_id, instance_id,
+                        experiment_id, lease_id, principal_id, operation_id,
+                        observation_role_json, wallet_id, mint_id, direction_json,
+                        quote_id, amount_sat, state, wallet_created_at,
+                        wallet_paid_at, wallet_expires_at, fee_reserve_sat,
+                        fee_paid_sat, observed_at
+                 FROM wallet_quote_observations
+                 WHERE workspace_id = ?1 AND instance_id = ?2 AND wallet_id = ?3
+                   AND mint_id = ?4 AND direction_json = ?5 AND quote_id = ?6
+                 ORDER BY observation_sequence DESC LIMIT 1",
+                params![
+                    workspace,
+                    instance_id,
+                    wallet_id,
+                    mint_id,
+                    direction_json,
+                    quote_id
+                ],
+                wallet_quote_observation_row,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "wallet quote observation",
+                id: quote_id.to_owned(),
+            })?;
+        let observation = WalletQuoteObservation::try_from(row)?;
+        if observation.principal_id != principal {
+            return Err(StoreError::QuoteOwnerMismatch {
+                quote: quote_id.to_owned(),
+                owner: observation.principal_id,
+                principal: principal.to_owned(),
+            });
+        }
+        Ok(observation)
+    }
+
+    /// Record the durable single-flight payment claim for an already-admitted
+    /// wallet-pay operation. Phase B folds this insert into action admission.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_wallet_payment_claim(
+        &self,
+        workspace: &str,
+        principal: &str,
+        operation_id: &str,
+        recipient_wallet_id: &str,
+        recipient_mint_id: &str,
+        mint_quote_id: &str,
+        payer_wallet_id: &str,
+        payer_mint_id: &str,
+    ) -> Result<WalletPaymentClaim, StoreError> {
+        validate_quote_observation_identity(recipient_wallet_id, recipient_mint_id, mint_quote_id)?;
+        if !is_slug(payer_wallet_id) || !is_slug(payer_mint_id) {
+            return Err(StoreError::Validation(
+                "payer wallet and mint ids must be lowercase kebab-case identifiers of 1..=63 bytes"
+                    .into(),
+            ));
+        }
+        let operation = self.operation(workspace, principal, operation_id)?;
+        if operation.kind != OperationKind::WalletPay {
+            return Err(StoreError::Validation(
+                "wallet payment claims require a wallet_pay operation".into(),
+            ));
+        }
+        let claim = WalletPaymentClaim {
+            workspace_id: workspace.to_owned(),
+            instance_id: operation.instance_id,
+            experiment_id: operation.experiment_id,
+            lease_id: operation.lease_id,
+            principal_id: principal.to_owned(),
+            operation_id: operation_id.to_owned(),
+            recipient_wallet_id: recipient_wallet_id.to_owned(),
+            recipient_mint_id: recipient_mint_id.to_owned(),
+            mint_quote_id: mint_quote_id.to_owned(),
+            payer_wallet_id: payer_wallet_id.to_owned(),
+            payer_mint_id: payer_mint_id.to_owned(),
+            admitted_at_unix: operation.accepted_at_unix,
+        };
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO wallet_payment_claims(
+               workspace_id, instance_id, experiment_id, lease_id, principal_id,
+               operation_id, recipient_wallet_id, recipient_mint_id, mint_quote_id,
+               payer_wallet_id, payer_mint_id, admitted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                claim.workspace_id,
+                claim.instance_id,
+                claim.experiment_id,
+                claim.lease_id,
+                claim.principal_id,
+                claim.operation_id,
+                claim.recipient_wallet_id,
+                claim.recipient_mint_id,
+                claim.mint_quote_id,
+                claim.payer_wallet_id,
+                claim.payer_mint_id,
+                claim.admitted_at_unix,
+            ],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        let existing = self.wallet_payment_claim_unchecked(
+            workspace,
+            &claim.instance_id,
+            &claim.recipient_wallet_id,
+            &claim.recipient_mint_id,
+            &claim.mint_quote_id,
+        )?;
+        if inserted == 0 && existing != claim {
+            return Err(StoreError::QuotePaymentAlreadyClaimed {
+                quote: mint_quote_id.to_owned(),
+                operation: existing.operation_id,
+            });
+        }
+        Ok(existing)
     }
 
     pub fn update_operation_phase(
@@ -2138,6 +2476,53 @@ impl Store {
             })
     }
 
+    fn wallet_payment_claim_unchecked(
+        &self,
+        workspace: &str,
+        instance_id: &str,
+        recipient_wallet_id: &str,
+        recipient_mint_id: &str,
+        mint_quote_id: &str,
+    ) -> Result<WalletPaymentClaim, StoreError> {
+        self.lock()?
+            .query_row(
+                "SELECT experiment_id, lease_id, principal_id, operation_id,
+                        payer_wallet_id, payer_mint_id, admitted_at
+                 FROM wallet_payment_claims
+                 WHERE workspace_id = ?1 AND instance_id = ?2
+                   AND recipient_wallet_id = ?3 AND recipient_mint_id = ?4
+                   AND mint_quote_id = ?5",
+                params![
+                    workspace,
+                    instance_id,
+                    recipient_wallet_id,
+                    recipient_mint_id,
+                    mint_quote_id
+                ],
+                |row| {
+                    Ok(WalletPaymentClaim {
+                        workspace_id: workspace.to_owned(),
+                        instance_id: instance_id.to_owned(),
+                        experiment_id: row.get(0)?,
+                        lease_id: row.get(1)?,
+                        principal_id: row.get(2)?,
+                        operation_id: row.get(3)?,
+                        recipient_wallet_id: recipient_wallet_id.to_owned(),
+                        recipient_mint_id: recipient_mint_id.to_owned(),
+                        mint_quote_id: mint_quote_id.to_owned(),
+                        payer_wallet_id: row.get(4)?,
+                        payer_mint_id: row.get(5)?,
+                        admitted_at_unix: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "wallet payment claim",
+                id: mint_quote_id.to_owned(),
+            })
+    }
+
     fn wallet_quote_unchecked(&self, workspace: &str, id: &str) -> Result<WalletQuote, StoreError> {
         self.lock()?
             .query_row(
@@ -2359,6 +2744,97 @@ fn validate_wallet_quote_request(
         ));
     }
     Ok(())
+}
+
+fn validate_quote_observation_identity(
+    wallet_id: &str,
+    mint_id: &str,
+    quote_id: &str,
+) -> Result<(), StoreError> {
+    if !is_slug(wallet_id) || !is_slug(mint_id) || !is_slug(quote_id) {
+        return Err(StoreError::Validation(
+            "wallet, mint, and adapter quote ids must be lowercase kebab-case identifiers of 1..=63 bytes"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_quote_observation(observation: &WalletQuoteObservationInput) -> Result<(), StoreError> {
+    validate_quote_observation_identity(
+        &observation.wallet_id,
+        &observation.mint_id,
+        &observation.quote_id,
+    )?;
+    if !(1..=500_000).contains(&observation.amount_sat) {
+        return Err(StoreError::Validation(
+            "wallet quote observation amount_sat must be 1..=500000".into(),
+        ));
+    }
+    if observation.state.is_empty()
+        || observation.state.len() > 63
+        || !observation
+            .state
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(StoreError::Validation(
+            "wallet quote observation state must contain 1..=63 ASCII letters, digits, hyphens, or underscores"
+                .into(),
+        ));
+    }
+    let expected_direction = match observation.role {
+        WalletQuoteObservationRole::InvoiceReceive
+        | WalletQuoteObservationRole::PaymentReceive
+        | WalletQuoteObservationRole::ClaimReceive => WalletQuoteDirection::Receive,
+        WalletQuoteObservationRole::PaymentMelt => WalletQuoteDirection::Pay,
+    };
+    if observation.direction != expected_direction {
+        return Err(StoreError::Validation(
+            "wallet quote observation role and direction disagree".into(),
+        ));
+    }
+    if observation.direction == WalletQuoteDirection::Receive
+        && (observation.fee_reserve_sat.is_some() || observation.fee_paid_sat.is_some())
+    {
+        return Err(StoreError::Validation(
+            "receive quote observations cannot carry melt fee fields".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn wallet_quote_observation_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<WalletQuoteObservationRow> {
+    Ok(WalletQuoteObservationRow {
+        observation_sequence: row.get(0)?,
+        workspace_id: row.get(1)?,
+        instance_id: row.get(2)?,
+        experiment_id: row.get(3)?,
+        lease_id: row.get(4)?,
+        principal_id: row.get(5)?,
+        operation_id: row.get(6)?,
+        observation_role_json: row.get(7)?,
+        wallet_id: row.get(8)?,
+        mint_id: row.get(9)?,
+        direction_json: row.get(10)?,
+        quote_id: row.get(11)?,
+        amount_sat: row.get(12)?,
+        state: row.get(13)?,
+        wallet_created_at_unix: row.get(14)?,
+        wallet_paid_at_unix: row.get(15)?,
+        wallet_expires_at_unix: row.get(16)?,
+        fee_reserve_sat: row.get(17)?,
+        fee_paid_sat: row.get(18)?,
+        observed_at_unix: row.get(19)?,
+    })
+}
+
+fn optional_sql_u64(value: Option<i64>) -> Result<Option<u64>, StoreError> {
+    value
+        .map(|value| u64::try_from(value).map_err(|_| StoreError::InvalidStoredVersion(value)))
+        .transpose()
 }
 
 fn validate_quote_transition_metadata(

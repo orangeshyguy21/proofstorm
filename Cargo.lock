@@ -1433,10 +1433,12 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "proofstorm-core",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror",
 ]
 
