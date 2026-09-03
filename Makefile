@@ -1,183 +1,208 @@
-# proofstorm — wallet-population runner
-# Usage: make up && make smoke && make down
+# Proofstorm — the single entrypoint for build, test, cluster, and gates.
+#
+# Everything here is sequencing and paths. Anything needing a conditional or a
+# parser lives in Rust, so this file stays readable and cannot drift from the
+# real types. The legacy Docker Compose harness lives in Makefile.compose and
+# is reachable as `make compose-<target>`.
 
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+TOOLS_DIR := $(ROOT).tools
+BIN_DIR := $(TOOLS_DIR)/bin
+DOWNLOAD_DIR := $(TOOLS_DIR)/downloads
+ACCEPTANCE := $(ROOT)target/debug/proofstorm-acceptance
 
-# Command-line / shell env overrides must survive `include .env` (plain `=` in
-# included files otherwise wins over `WALLET_IMPL=nutshell make …`).
-_CMD_WALLET_IMPL := $(WALLET_IMPL)
+# The one source of pinned versions.
+include $(ROOT)tools/versions.env
 
-include $(ROOT).env.example
--include $(ROOT).env
+CONTEXT := k3d-proofstorm
+CONTROL_NAMESPACE := proofstorm-system
+REGISTRY := localhost:5111
+IMAGE := $(REGISTRY)/proofstormd:$(PROOFSTORM_VERSION)
+CHART := $(ROOT)charts/proofstorm
 
-ifneq ($(_CMD_WALLET_IMPL),)
-WALLET_IMPL := $(_CMD_WALLET_IMPL)
-endif
+# Pinned tools win over anything already on PATH.
+export PATH := $(BIN_DIR):$(PATH)
+KUBECTL := $(BIN_DIR)/kubectl --context $(CONTEXT)
+HELM := $(BIN_DIR)/helm
+K3D := $(BIN_DIR)/k3d
 
-export N_WALLETS FUND_AMOUNT MINT_IMPL WALLET_IMPL SWAP_AMOUNT
-export CDK_MINTD_VERSION CDK_CLI_VERSION NUTSHELL_VERSION MINT_HOST_PORT UNIT
-export CONSERVATION_EXPECTED CONSERVATION_TOLERANCE CONSERVATION_SWAP_TOLERANCE
+PLATFORM_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+PLATFORM_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 
-N_WALLETS ?= 3
-MAX_WALLETS := 10
+# Every gate the acceptance runner knows, in the plan's port order.
+GATES := slice2 slice4 slice5 native-exec cross-lab-scheduler \
+	cross-implementation-wallet nutshell-mint nutshell-cln nutshell-postgres \
+	cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres
+# Excluded from `make e2e`: fails on a known upstream Nutshell defect.
+EXPECTED_FAIL_GATES := nutshell-oidc
 
-ifeq ($(shell test $(N_WALLETS) -ge 1 -a $(N_WALLETS) -le $(MAX_WALLETS) && echo ok),)
-$(error N_WALLETS must be 1..$(MAX_WALLETS))
-endif
-
-# Wallet implementation selects image + data directory inside containers.
-ifeq ($(WALLET_IMPL),nutshell)
-WALLET_DOCKERFILE := docker/wallet/Dockerfile.nutshell
-WALLET_DATA_DIR := /root/.cashu
-else ifeq ($(WALLET_IMPL),cdk)
-WALLET_DOCKERFILE := docker/wallet/Dockerfile.cdk
-WALLET_DATA_DIR := /root/.cdk
-else
-$(error WALLET_IMPL must be cdk or nutshell (got $(WALLET_IMPL)))
-endif
-
-export WALLET_DOCKERFILE WALLET_DATA_DIR
-
-WALLET_SERVICES := $(shell seq -f 'wallet-%g' 1 $(N_WALLETS))
-
-# Prefer Compose V2 plugin; fall back to standalone docker-compose 1.29+.
-ifeq ($(shell docker compose version >/dev/null 2>&1 && echo yes),yes)
-COMPOSE := docker compose
-else
-COMPOSE := docker-compose
-endif
-
-# Run from project root so relative volume paths resolve.
-# Pass wallet build vars explicitly — compose also auto-loads `.env`, which only
-# has WALLET_IMPL=cdk and would not set WALLET_DOCKERFILE on its own.
-define compose
-	cd $(ROOT) && \
-		WALLET_DOCKERFILE="$(WALLET_DOCKERFILE)" \
-		WALLET_DATA_DIR="$(WALLET_DATA_DIR)" \
-		$(COMPOSE) -p proofstorm -f compose.yml $(1)
-endef
-
-# Regtest adversarial stack (SPEC.md Phase 6). Separate compose project so it
-# never collides with the FakeWallet stack. Sources regtest/*.env for image
-# pins + overrides; compose.regtest.yml also carries defaults for every var, so
-# it runs even without those files.
-MINT ?= cdk
-SCENARIO ?= all
-define compose_rt
-	cd $(ROOT) && set -a && \
-		{ [ -f regtest/versions.env ] && . ./regtest/versions.env || true; } && \
-		{ [ -f regtest/env ] && . ./regtest/env || true; } && set +a && \
-		$(COMPOSE) -p proofstorm-rt -f compose.regtest.yml $(1)
-endef
-
-.PHONY: help up down build fund balances smoke check watch snapshot wait-mint ps logs smoke-cdk smoke-nutshell \
-	regtest-build regtest-up regtest-fund regtest-down regtest-ps regtest-logs attack
+.PHONY: help build test lint tools cluster-up docker-build docker-push install \
+	deploy setup doctor cluster-schema e2e build-installer down clean-tools \
+	$(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES))
 
 help:
-	@echo "proofstorm targets:"
-	@echo "  make up              start mint + wallet-1..N (N_WALLETS=$(N_WALLETS), WALLET_IMPL=$(WALLET_IMPL))"
-	@echo "  make down            stop stack and remove volumes"
-	@echo "  make build           build wallet image(s)"
-	@echo "  make wait-mint       wait until mint /v1/info responds"
-	@echo "  make fund            mint FUND_AMOUNT into each wallet"
-	@echo "  make balances        print each wallet balance"
-	@echo "  make smoke           fund + self-swap + balances + conservation check"
-	@echo "  make check           conservation check only (stack must be up)"
-	@echo "  make watch           live refreshing population dashboard (ctrl-c to exit)"
-	@echo "  make snapshot        render the dashboard once and exit"
-	@echo "  make smoke-cdk       smoke with WALLET_IMPL=cdk"
-	@echo "  make smoke-nutshell  smoke with WALLET_IMPL=nutshell"
-	@echo "  make ps              compose ps"
-	@echo "  make logs            follow mint logs"
-	@echo "  --- regtest adversarial harness (SPEC.md, Phase 6) ---"
-	@echo "  make regtest-build   build the adversary image (first run or after Dockerfile changes)"
-	@echo "  make regtest-up      start bitcoind + 2 LND + cdk-mintd + nutshell + adversary"
-	@echo "  make regtest-fund    mine chain, fund LND, open channel, start block-miner"
-	@echo "  make attack          run built attack scenarios (MINT=cdk|nutshell, SCENARIO=all)"
-	@echo "  make regtest-down    tear down the regtest stack and wipe volumes"
-	@echo "  make regtest-ps      compose ps for the regtest stack"
-	@echo "  make regtest-logs    follow cdk-mintd + nutshell mint logs"
+	@echo "Proofstorm targets:"
+	@echo "  make setup            tools, cluster, image, CRDs, controller, binaries, doctor"
+	@echo "  make doctor           verify pinned tools, cluster, controller, and MCP discovery"
+	@echo "  make down             delete the local cluster and its registry"
+	@echo ""
+	@echo "  make build            build the MCP server, controller, and gate runner"
+	@echo "  make test             hermetic workspace tests; needs no cluster"
+	@echo "  make lint             formatting, strict Clippy, and Helm lint"
+	@echo ""
+	@echo "  make e2e              every live gate in order (needs an idle cluster)"
+	@echo "  make e2e-<gate>       one live gate; gates are:"
+	@echo "                        $(GATES)"
+	@echo "                        $(EXPECTED_FAIL_GATES) (expected to fail, upstream defect)"
+	@echo ""
+	@echo "  make docker-build     build the controller image"
+	@echo "  make install          apply the CRDs"
+	@echo "  make deploy           schema check, then Helm upgrade and rollout"
+	@echo "  make build-installer  render dist/install.yaml for a release"
+	@echo ""
+	@echo "  make compose-<target> the legacy Compose harness in Makefile.compose"
+
+# ---- build and check -------------------------------------------------------
 
 build:
-	$(call compose,build $(WALLET_SERVICES))
+	cargo build --locked -p proofstorm-mcp -p proofstorm-acceptance
+	cargo build --locked --release -p proofstorm-mcp
 
-up: build
-	$(call compose,up -d mint $(WALLET_SERVICES))
-	@$(ROOT)scripts/wait-mint.sh
-	@printf 'WALLET_IMPL=%s\nN_WALLETS=%s\nWALLET_DATA_DIR=%s\n' \
-		'$(WALLET_IMPL)' '$(N_WALLETS)' '$(WALLET_DATA_DIR)' > $(ROOT).proofstorm-active
-	@echo "[proofstorm] active stack recorded: WALLET_IMPL=$(WALLET_IMPL) N_WALLETS=$(N_WALLETS)"
+test:
+	cargo test --workspace --all-targets
 
-down:
-	$(call compose,down -v --remove-orphans)
-	@rm -f $(ROOT).proofstorm-active
+lint:
+	cargo fmt --check
+	cargo clippy --workspace --all-targets -- -D warnings
+	$(HELM) lint $(CHART)
 
-wait-mint:
-	@$(ROOT)scripts/wait-mint.sh
+# ---- pinned tools ----------------------------------------------------------
 
-fund:
-	@$(ROOT)scripts/fund.sh
+tools: $(BIN_DIR)/k3d $(BIN_DIR)/kubectl $(BIN_DIR)/helm
 
-balances:
-	@$(ROOT)scripts/balances.sh
+$(BIN_DIR)/k3d:
+	@mkdir -p $(BIN_DIR) $(DOWNLOAD_DIR)
+	@echo "[proofstorm] downloading k3d $(K3D_VERSION)"
+	@curl --fail --location --retry 3 --silent --show-error \
+		"https://github.com/k3d-io/k3d/releases/download/$(K3D_VERSION)/k3d-$(PLATFORM_OS)-$(PLATFORM_ARCH)" \
+		--output "$(DOWNLOAD_DIR)/k3d"
+	@curl --fail --location --retry 3 --silent --show-error \
+		"https://github.com/k3d-io/k3d/releases/download/$(K3D_VERSION)/checksums.txt" \
+		--output "$(DOWNLOAD_DIR)/k3d-checksums.txt"
+	@expected=$$(awk -v name="_dist/k3d-$(PLATFORM_OS)-$(PLATFORM_ARCH)" '$$2 == name {print $$1}' \
+		"$(DOWNLOAD_DIR)/k3d-checksums.txt"); \
+	  test -n "$$expected" || { echo "k3d checksum entry was not published" >&2; exit 1; }; \
+	  actual=$$(shasum -a 256 "$(DOWNLOAD_DIR)/k3d" | awk '{print $$1}'); \
+	  test "$$expected" = "$$actual" || { echo "k3d checksum mismatch" >&2; exit 1; }
+	@install -m 0755 "$(DOWNLOAD_DIR)/k3d" "$@"
 
-check:
-	@$(ROOT)scripts/check-conservation.sh
+$(BIN_DIR)/kubectl:
+	@mkdir -p $(BIN_DIR) $(DOWNLOAD_DIR)
+	@echo "[proofstorm] downloading kubectl $(KUBECTL_VERSION)"
+	@curl --fail --location --retry 3 --silent --show-error \
+		"https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/$(PLATFORM_OS)/$(PLATFORM_ARCH)/kubectl" \
+		--output "$(DOWNLOAD_DIR)/kubectl"
+	@curl --fail --location --retry 3 --silent --show-error \
+		"https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/$(PLATFORM_OS)/$(PLATFORM_ARCH)/kubectl.sha256" \
+		--output "$(DOWNLOAD_DIR)/kubectl.sha256"
+	@expected=$$(tr -d '[:space:]' < "$(DOWNLOAD_DIR)/kubectl.sha256"); \
+	  actual=$$(shasum -a 256 "$(DOWNLOAD_DIR)/kubectl" | awk '{print $$1}'); \
+	  test "$$expected" = "$$actual" || { echo "kubectl checksum mismatch" >&2; exit 1; }
+	@install -m 0755 "$(DOWNLOAD_DIR)/kubectl" "$@"
 
-watch:
-	@$(ROOT)scripts/watch.sh
+$(BIN_DIR)/helm:
+	@mkdir -p $(BIN_DIR) $(DOWNLOAD_DIR)
+	@echo "[proofstorm] downloading helm $(HELM_VERSION)"
+	@curl --fail --location --retry 3 --silent --show-error \
+		"https://get.helm.sh/helm-$(HELM_VERSION)-$(PLATFORM_OS)-$(PLATFORM_ARCH).tar.gz" \
+		--output "$(DOWNLOAD_DIR)/helm.tar.gz"
+	@curl --fail --location --retry 3 --silent --show-error \
+		"https://get.helm.sh/helm-$(HELM_VERSION)-$(PLATFORM_OS)-$(PLATFORM_ARCH).tar.gz.sha256sum" \
+		--output "$(DOWNLOAD_DIR)/helm.tar.gz.sha256sum"
+	@expected=$$(awk '{print $$1}' "$(DOWNLOAD_DIR)/helm.tar.gz.sha256sum"); \
+	  actual=$$(shasum -a 256 "$(DOWNLOAD_DIR)/helm.tar.gz" | awk '{print $$1}'); \
+	  test "$$expected" = "$$actual" || { echo "helm checksum mismatch" >&2; exit 1; }
+	@unpack=$$(mktemp -d); \
+	  tar -xzf "$(DOWNLOAD_DIR)/helm.tar.gz" -C "$$unpack"; \
+	  install -m 0755 "$$unpack/$(PLATFORM_OS)-$(PLATFORM_ARCH)/helm" "$@"; \
+	  rm -rf -- "$$unpack"
 
-snapshot:
-	@WATCH_ONCE=1 $(ROOT)scripts/watch.sh
+clean-tools:
+	rm -rf $(TOOLS_DIR)
 
-smoke:
-	@$(ROOT)scripts/run-smoke.sh
+# ---- cluster lifecycle -----------------------------------------------------
 
-smoke-cdk:
-	@$(MAKE) smoke WALLET_IMPL=cdk
+cluster-up: tools
+	@$(K3D) cluster get proofstorm >/dev/null 2>&1 || \
+		$(K3D) cluster create --config $(ROOT)infra/k3d/proofstorm.yaml
 
-# Rebuild wallet image if switching impl; pass WALLET_IMPL on the same make line.
-smoke-nutshell:
-	@$(MAKE) up smoke WALLET_IMPL=nutshell
+docker-build:
+	docker build --file $(ROOT)Dockerfile.proofstormd --tag $(IMAGE) $(ROOT)
 
-ps:
-	$(call compose,ps)
+docker-push: docker-build
+	docker push $(IMAGE)
 
-logs:
-	$(call compose,logs -f mint)
+# Helm installs chart CRDs once but never upgrades them, so reconcile the
+# checked-in API before the controller that depends on it.
+install: tools
+	$(KUBECTL) apply --server-side --force-conflicts \
+		--field-manager=proofstorm-make -f $(CHART)/crds
 
-# ---- regtest adversarial harness -------------------------------------------
+cluster-schema: build
+	$(ACCEPTANCE) cluster-schema
 
-# Build the cdk-cli adversary explicitly. This is intentionally separate from
-# regtest-up: the first build can take a long time, while ordinary stack
-# restarts should use the cached image without rebuilding it.
-regtest-build:
-	$(call compose_rt,build adversary)
+deploy: install cluster-schema
+	$(HELM) upgrade --install proofstorm $(CHART) \
+		--kube-context $(CONTEXT) \
+		--namespace $(CONTROL_NAMESPACE) --create-namespace --rollback-on-failure --wait
+	$(KUBECTL) rollout restart deployment/proofstormd -n $(CONTROL_NAMESPACE)
+	$(KUBECTL) rollout status deployment/proofstormd -n $(CONTROL_NAMESPACE) --timeout=90s
 
-# Bring up chain + LN + both mints + adversary. block-miner is started later by
-# regtest-fund (after the default wallet exists) to avoid restart churn. Run
-# `make regtest-build` first when the adversary image is not available.
-regtest-up:
-	$(call compose_rt,up -d bitcoind lnd-a lnd-b cdk-mintd nutshell adversary)
-	@echo "[proofstorm] regtest stack up. Next: make regtest-fund"
+setup: cluster-up docker-push deploy build doctor
 
-# Mine the initial chain, fund both LND nodes, open the lnd-a<->lnd-b channel,
-# then start the perpetual block-miner.
-regtest-fund:
-	@cd $(ROOT) && set -a && \
-		{ [ -f regtest/env ] && . ./regtest/env || true; } && set +a && \
-		$(ROOT)regtest/scripts/fund-topology.sh
-	$(call compose_rt,up -d block-miner)
-	@echo "[proofstorm] regtest funded. Run: make attack MINT=cdk|nutshell"
+doctor: tools build
+	@docker info >/dev/null
+	@$(K3D) version | grep -F "$(patsubst v%,%,$(K3D_VERSION))" >/dev/null
+	@$(BIN_DIR)/kubectl version --client | grep -F "$(patsubst v%,%,$(KUBECTL_VERSION))" >/dev/null
+	@$(HELM) version --short | grep -F "$(HELM_VERSION)" >/dev/null
+	@$(KUBECTL) get namespace $(CONTROL_NAMESPACE) >/dev/null
+	@$(KUBECTL) wait --for=condition=Available deployment/proofstormd \
+		-n $(CONTROL_NAMESPACE) --timeout=90s
+	@$(ACCEPTANCE) doctor
+	@echo "proofstorm doctor passed: pinned tools, cluster, controller, and MCP discovery are healthy"
 
-attack:
-	@MINT=$(MINT) $(ROOT)scripts/run-attack.sh $(SCENARIO)
+down: tools
+	@$(K3D) cluster get proofstorm >/dev/null 2>&1 && $(K3D) cluster delete proofstorm || true
+	@$(K3D) registry list 2>/dev/null | grep -F 'proofstorm-registry.localhost' >/dev/null && \
+		$(K3D) registry delete proofstorm-registry.localhost || true
 
-regtest-down:
-	$(call compose_rt,down -v --remove-orphans)
+# ---- live acceptance gates -------------------------------------------------
+#
+# Gates assert that zero instance namespaces exist anywhere, so they need the
+# cluster to themselves for their duration. Check before starting:
+#   kubectl --context k3d-proofstorm get ns -l proofstorm.dev/instance
 
-regtest-ps:
-	$(call compose_rt,ps)
+$(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES)): e2e-%: build
+	$(ACCEPTANCE) $*
 
-regtest-logs:
-	$(call compose_rt,logs -f cdk-mintd nutshell)
+e2e: build
+	@for gate in $(GATES); do \
+		echo "[proofstorm] gate $$gate"; \
+		$(ACCEPTANCE) $$gate || exit 1; \
+	done
+	@echo "[proofstorm] all $(words $(GATES)) gates passed"
+
+# ---- release ---------------------------------------------------------------
+
+build-installer: tools
+	@mkdir -p $(ROOT)dist
+	@cat $(CHART)/crds/*.yaml > $(ROOT)dist/install.yaml
+	@echo "---" >> $(ROOT)dist/install.yaml
+	@$(HELM) template proofstorm $(CHART) --namespace $(CONTROL_NAMESPACE) \
+		>> $(ROOT)dist/install.yaml
+	@echo "[proofstorm] wrote dist/install.yaml"
+
+# ---- legacy Compose harness ------------------------------------------------
+
+compose-%:
+	@$(MAKE) -f $(ROOT)Makefile.compose $*

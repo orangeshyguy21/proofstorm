@@ -12,9 +12,8 @@ fn checked_in_coverage_matches_catalog_and_backend_contracts() {
     let bytes = fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     let checked_in: ConfigurationCoverageManifest = serde_json::from_slice(&bytes)
         .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
-    let generated =
-        configuration_coverage_manifest(&default_catalog(), &default_backend_registry())
-            .expect("generate coverage manifest");
+    let generated = configuration_coverage_manifest(default_catalog(), default_backend_registry())
+        .expect("generate coverage manifest");
     assert_eq!(
         checked_in,
         generated,

@@ -1053,7 +1053,7 @@ async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Erro
     let backend_registry = default_backend_registry();
     let mut candidate_counts = BTreeMap::<String, usize>::new();
     for lab in &labs.items {
-        if protocol_probe_candidate(lab, &backend_registry) {
+        if protocol_probe_candidate(lab, backend_registry) {
             *candidate_counts
                 .entry(lab.spec.instance_key.clone())
                 .or_default() += 1;
@@ -1068,7 +1068,7 @@ async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Erro
             .active_instance_keys
             .contains(&lab.spec.instance_key);
         if !active
-            && (protocol_probe_candidate(lab, &backend_registry)
+            && (protocol_probe_candidate(lab, backend_registry)
                 || lab
                     .annotations()
                     .contains_key(PROTOCOL_PROBER_LEASE_ANNOTATION))

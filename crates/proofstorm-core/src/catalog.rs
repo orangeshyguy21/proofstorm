@@ -184,23 +184,32 @@ impl CatalogResponse {
 }
 
 #[must_use]
-#[allow(
-    clippy::too_many_lines,
-    reason = "the default catalog deliberately declares every support-contract field inline"
-)]
 /// Return the built-in, internally validated catalog.
+///
+/// Built once per process: generating a JSON Schema for every entry and
+/// digesting each one is far too expensive to repeat per request.
 ///
 /// # Panics
 ///
 /// Panics when a built-in entry violates a catalog invariant. This indicates a
 /// programmer error caught by the catalog contract tests.
-pub fn default_catalog() -> CatalogResponse {
+pub fn default_catalog() -> &'static CatalogResponse {
+    static CATALOG: std::sync::LazyLock<CatalogResponse> =
+        std::sync::LazyLock::new(build_default_catalog);
+    &CATALOG
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the default catalog deliberately declares every support-contract field inline"
+)]
+fn build_default_catalog() -> CatalogResponse {
     let adapter_version = "0.1.0-alpha.1";
     let backends = default_backend_registry();
     let entries = vec![
         catalog_entry(
             "bitcoin-core",
-            &backends,
+            backends,
             ComponentKind::Bitcoin,
             "Bitcoin Core regtest node",
             adapter_version,
@@ -226,7 +235,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "lnd",
-            &backends,
+            backends,
             ComponentKind::Lightning,
             "LND regtest Lightning node",
             adapter_version,
@@ -257,7 +266,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "cln",
-            &backends,
+            backends,
             ComponentKind::Lightning,
             "Core Lightning regtest node",
             adapter_version,
@@ -288,7 +297,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "cdk",
-            &backends,
+            backends,
             ComponentKind::Mint,
             "CDK Cashu mint",
             adapter_version,
@@ -323,7 +332,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "cdk-ldk",
-            &backends,
+            backends,
             ComponentKind::Mint,
             "CDK Cashu mint with embedded LDK Node",
             adapter_version,
@@ -362,7 +371,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "cdk-bdk",
-            &backends,
+            backends,
             ComponentKind::Mint,
             "CDK Cashu mint with embedded BDK on-chain backend",
             adapter_version,
@@ -401,7 +410,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "nutshell",
-            &backends,
+            backends,
             ComponentKind::Mint,
             "Nutshell Cashu mint",
             adapter_version,
@@ -446,7 +455,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "keycloak",
-            &backends,
+            backends,
             ComponentKind::IdentityProvider,
             "Disposable OpenID Connect provider for NUT-21 authentication",
             adapter_version,
@@ -464,7 +473,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "redis",
-            &backends,
+            backends,
             ComponentKind::Database,
             "Redis cache service",
             adapter_version,
@@ -486,7 +495,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "postgresql",
-            &backends,
+            backends,
             ComponentKind::Database,
             "PostgreSQL database service",
             adapter_version,
@@ -512,7 +521,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "nutshell-wallet",
-            &backends,
+            backends,
             ComponentKind::Wallet,
             "Persistent Cashu Nutshell wallet workspace",
             adapter_version,
@@ -539,7 +548,7 @@ pub fn default_catalog() -> CatalogResponse {
         ),
         catalog_entry(
             "attacker-workspace",
-            &backends,
+            backends,
             ComponentKind::Attacker,
             "Disposable adversarial client workspace",
             adapter_version,

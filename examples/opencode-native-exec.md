@@ -3,7 +3,7 @@
 Run `tools/proofstorm-cluster setup`, then start OpenCode from this repository:
 
 ```bash
-OPENCODE_CONFIG=examples/opencode.json opencode .
+OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 ```
 
 Give the agent this request:

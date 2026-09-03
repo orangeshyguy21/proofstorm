@@ -595,7 +595,7 @@ impl Store {
             });
         }
         let mut lab = current.lab.clone();
-        apply_draft_mutation(&mut lab, mutation, &default_catalog())
+        apply_draft_mutation(&mut lab, mutation, default_catalog())
             .map_err(StoreError::Validation)?;
         if lab == current.lab {
             self.record_idempotency(
@@ -741,8 +741,8 @@ impl Store {
         }
         let catalog = default_catalog();
         let effective_lab =
-            resolve_effective_lab(&draft.lab, &catalog).map_err(StoreError::Catalog)?;
-        let lock = resolve_lock(&effective_lab, &catalog).map_err(StoreError::Catalog)?;
+            resolve_effective_lab(&draft.lab, catalog).map_err(StoreError::Catalog)?;
+        let lock = resolve_lock(&effective_lab, catalog).map_err(StoreError::Catalog)?;
         let digest = proofstorm_core::publication_digest(workspace, &effective_lab, &lock);
         let revision = PublishedRevision {
             workspace_id: workspace.to_owned(),

@@ -1182,7 +1182,7 @@ impl ProofstormMcp {
     ) -> Result<EvidenceBundle, ErrorData> {
         self.authorize_all(&[Capability::ExperimentRead, Capability::ArtifactRead])?;
         if request.artifact_operation_ids.len() > MAX_EXPLICIT_EVIDENCE_ARTIFACTS {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_artifact_limit",
                 "at most 16 explicit artifact operation IDs may be requested",
             ));
@@ -1193,7 +1193,7 @@ impl ProofstormMcp {
             .cloned()
             .collect::<BTreeSet<_>>();
         if explicit.len() != request.artifact_operation_ids.len() {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_artifact_duplicate",
                 "artifact operation IDs must be unique",
             ));
@@ -1203,7 +1203,7 @@ impl ProofstormMcp {
             .experiment(&self.workspace, &self.principal, &request.experiment_id)
             .map_err(store_error)?;
         if experiment.phase != ExperimentPhase::Closed {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_experiment_active",
                 "evidence export requires a closed experiment",
             ));
@@ -1241,7 +1241,7 @@ impl ProofstormMcp {
                 .map_err(store_error)?
                 .is_empty()
             {
-                return Err(evidence_error(
+                return Err(coded_invalid_request(
                     "evidence_action_limit",
                     "experiment has more than 100 actions and cannot be exported as one bundle",
                 ));
@@ -1253,7 +1253,7 @@ impl ProofstormMcp {
                 OperationPhase::Pending | OperationPhase::Running
             )
         }) {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_journal_incomplete",
                 "all experiment actions must be terminal before evidence export",
             ));
@@ -1263,9 +1263,9 @@ impl ProofstormMcp {
             .map(|action| action.id.as_str())
             .collect::<BTreeSet<_>>();
         if let Some(unknown) = explicit.iter().find(|id| !known_ids.contains(id.as_str())) {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_artifact_unknown",
-                &format!("operation {unknown:?} is not in the experiment journal"),
+                format!("operation {unknown:?} is not in the experiment journal"),
             ));
         }
         let selected = actions
@@ -1280,7 +1280,7 @@ impl ProofstormMcp {
             })
             .collect::<Vec<_>>();
         if selected.len() > MAX_EVIDENCE_ARTIFACTS {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_artifact_limit",
                 "at most 32 artifact bodies may be included in one evidence bundle",
             ));
@@ -1288,9 +1288,9 @@ impl ProofstormMcp {
         let mut artifacts = Vec::with_capacity(selected.len());
         for action in selected {
             let artifact = action.artifact.clone().ok_or_else(|| {
-                evidence_error(
+                coded_invalid_request(
                     "evidence_artifact_missing",
-                    &format!("operation {:?} has no terminal artifact", action.id),
+                    format!("operation {:?} has no terminal artifact", action.id),
                 )
             })?;
             artifacts.push(EvidenceArtifact {
@@ -1315,7 +1315,7 @@ impl ProofstormMcp {
         };
         let bundle = EvidenceBundle::from_content(content);
         if bundle.byte_length as usize > MAX_EVIDENCE_BUNDLE_BYTES {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_bundle_too_large",
                 "evidence bundle content exceeds 512 KiB",
             ));
@@ -1699,9 +1699,9 @@ impl ProofstormMcp {
                 return Ok(Json(response));
             }
             if end <= start + 1 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "status_response_too_large",
                     "one component status exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "status_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -1748,9 +1748,9 @@ impl ProofstormMcp {
                 return Ok(Json(response));
             }
             if end <= start + 1 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "status_response_too_large",
                     "one inventory entry exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "status_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -1876,12 +1876,12 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         let status = self.runtime()?.status(instance).await?;
         if status.phase != InstancePhase::Ready {
-            return Err(ErrorData::invalid_request(
+            return Err(coded_invalid_request(
+                "instance_not_ready",
                 format!(
                     "lab instance {:?} is not ready for a lease",
                     experiment.instance_id
                 ),
-                Some(serde_json::json!({"code": "instance_not_ready"})),
             ));
         }
         self.store
@@ -3172,9 +3172,9 @@ impl ProofstormMcp {
                 return Ok(Json(response));
             }
             if end == 0 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "action_response_too_large",
                     "action page envelope exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "action_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -3213,7 +3213,7 @@ impl ProofstormMcp {
         let bundle = self.build_evidence_bundle(&export_request)?;
         if matches!(request.section, EvidenceSection::Journal) {
             if !(1..=50).contains(&request.limit) {
-                return Err(evidence_error(
+                return Err(coded_invalid_request(
                     "evidence_section_limit_invalid",
                     "journal limit must be between 1 and 50",
                 ));
@@ -3243,7 +3243,7 @@ impl ProofstormMcp {
                     return Ok(Json(response));
                 }
                 if end <= 1 {
-                    return Err(evidence_error(
+                    return Err(coded_invalid_request(
                         "evidence_action_too_large",
                         "one evidence journal action exceeds the agent response budget",
                     ));
@@ -3264,7 +3264,7 @@ impl ProofstormMcp {
             )?,
             EvidenceSection::Artifact => {
                 let operation_id = request.operation_id.as_deref().ok_or_else(|| {
-                    evidence_error(
+                    coded_invalid_request(
                         "evidence_operation_id_required",
                         "operation_id is required for an artifact section read",
                     )
@@ -3275,7 +3275,7 @@ impl ProofstormMcp {
                     .iter()
                     .find(|artifact| artifact.operation_id == operation_id)
                     .ok_or_else(|| {
-                        evidence_error(
+                        coded_invalid_request(
                             "evidence_artifact_not_selected",
                             "operation_id is not present in the selected evidence artifacts",
                         )
@@ -3371,9 +3371,9 @@ impl ProofstormMcp {
                 return Ok(Json(response));
             }
             if end == 0 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "wallet_quote_response_too_large",
                     "wallet quote page envelope exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "wallet_quote_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -3538,15 +3538,15 @@ fn evidence_pointer(
         return Ok(value);
     }
     if !pointer.starts_with('/') {
-        return Err(evidence_error(
+        return Err(coded_invalid_request(
             "evidence_pointer_invalid",
             "JSON Pointer must be empty or start with '/'",
         ));
     }
     value.pointer(pointer).cloned().ok_or_else(|| {
-        evidence_error(
+        coded_invalid_request(
             "evidence_pointer_not_found",
-            &format!("JSON Pointer {pointer:?} does not exist in the {section} section"),
+            format!("JSON Pointer {pointer:?} does not exist in the {section} section"),
         )
     })
 }
@@ -3570,7 +3570,7 @@ fn publish_draft_response(
 
 fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, ErrorData> {
     if !(1..=MAX_CATALOG_LIST_LIMIT).contains(&request.limit) {
-        return Err(catalog_error(
+        return Err(coded_invalid_request(
             "catalog_limit_invalid",
             "catalog list limit must be in 1..=50",
         ));
@@ -3595,7 +3595,7 @@ fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, Err
             .position(|entry| catalog_cursor(&catalog_digest, &filter_digest, entry) == cursor)
             .map(|position| position + 1)
             .ok_or_else(|| {
-                catalog_error(
+                coded_invalid_request(
                     "catalog_cursor_invalid",
                     "catalog cursor is invalid, stale, or belongs to different filters",
                 )
@@ -3638,7 +3638,7 @@ fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, Err
             return Ok(response);
         }
         if end == 0 {
-            return Err(catalog_error(
+            return Err(coded_invalid_request(
                 "catalog_response_too_large",
                 "catalog page envelope exceeds the agent response budget",
             ));
@@ -3711,7 +3711,7 @@ fn catalog_config_schema(
     request: CatalogConfigSchemaRequest,
 ) -> Result<CatalogConfigSchemaResponse, ErrorData> {
     if !request.pointer.is_empty() && !request.pointer.starts_with('/') {
-        return Err(catalog_error(
+        return Err(coded_invalid_request(
             "catalog_schema_pointer_invalid",
             "configuration schema pointer must be empty or begin with '/'",
         ));
@@ -3769,9 +3769,9 @@ fn collect_local_schema_references(
                     root
                 } else {
                     root.pointer(pointer).ok_or_else(|| {
-                        catalog_error(
+                        coded_invalid_request(
                             "catalog_schema_reference_invalid",
-                            &format!(
+                            format!(
                                 "configuration schema contains unresolved reference {reference:?}"
                             ),
                         )
@@ -3813,10 +3813,6 @@ fn serialized_size(value: &impl Serialize) -> Result<usize, ErrorData> {
                 Some(serde_json::json!({"code": "response_serialization_failed"})),
             )
         })
-}
-
-fn catalog_error(code: &str, message: &str) -> ErrorData {
-    ErrorData::invalid_request(message.to_owned(), Some(serde_json::json!({"code": code})))
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -4089,9 +4085,9 @@ fn wallet_quote_recovery_outcome(
 impl ProofstormMcp {
     fn runtime(&self) -> Result<&KubernetesRuntime, ErrorData> {
         self.kubernetes.as_ref().ok_or_else(|| {
-            ErrorData::invalid_request(
+            coded_invalid_request(
+                "runtime_unavailable",
                 "Kubernetes runtime is not configured",
-                Some(serde_json::json!({"code": "runtime_unavailable"})),
             )
         })
     }
@@ -4281,9 +4277,9 @@ impl ProofstormMcp {
                 Err(error) => return Err(store_error(error)),
             }
         }
-        Err(ErrorData::invalid_request(
+        Err(coded_invalid_request(
+            "stale_quote",
             "wallet quote changed repeatedly while synchronizing action status",
-            Some(serde_json::json!({"code": "stale_quote"})),
         ))
     }
 
@@ -4736,15 +4732,16 @@ fn compact_operation_wait(operation: LabOperation, timed_out: bool) -> Operation
     }
 }
 
-fn invalid_operation(message: &str) -> ErrorData {
-    ErrorData::invalid_request(
-        message.to_owned(),
-        Some(serde_json::json!({"code": "invalid_operation"})),
-    )
+/// One coded invalid-request error.
+///
+/// The `code` travels in the error payload so agents can branch on a stable
+/// identifier rather than parsing prose.
+fn coded_invalid_request(code: &str, message: impl Into<String>) -> ErrorData {
+    ErrorData::invalid_request(message.into(), Some(serde_json::json!({"code": code})))
 }
 
-fn evidence_error(code: &str, message: &str) -> ErrorData {
-    ErrorData::invalid_request(message.to_owned(), Some(serde_json::json!({"code": code})))
+fn invalid_operation(message: &str) -> ErrorData {
+    coded_invalid_request("invalid_operation", message)
 }
 
 impl KubernetesRuntime {
@@ -4759,9 +4756,9 @@ impl KubernetesRuntime {
             .await
             .map_err(kube_error)?;
         if lab.status.as_ref().map(|status| status.phase) != Some(LabPhase::Ready) {
-            return Err(ErrorData::invalid_request(
+            return Err(coded_invalid_request(
+                "instance_not_ready",
                 format!("lab instance {:?} is not ready for actions", instance.id),
-                Some(serde_json::json!({"code": "instance_not_ready"})),
             ));
         }
         let actions =
@@ -4774,9 +4771,9 @@ impl KubernetesRuntime {
         })?;
         if let Some(existing) = actions.get_opt(name).await.map_err(kube_error)? {
             if existing.spec != action.spec {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "action_identity_conflict",
                     format!("action resource {name:?} already exists with a different request"),
-                    Some(serde_json::json!({"code": "action_identity_conflict"})),
                 ));
             }
             return Ok(());
@@ -4858,9 +4855,9 @@ impl KubernetesRuntime {
             || action.spec.principal_id != operation.principal_id
             || action.spec.request_digest != operation.request_digest
         {
-            return Err(ErrorData::invalid_request(
+            return Err(coded_invalid_request(
+                "action_identity_conflict",
                 "action cancellation identity does not match the journal",
-                Some(serde_json::json!({"code": "action_identity_conflict"})),
             ));
         }
         if action.status.as_ref().is_some_and(|status| {
@@ -5141,7 +5138,7 @@ mod tests {
                 .contains("0.20.3")
         );
         assert!(cdk.config_schema["properties"].get("mnemonic").is_none());
-        assert_embedded_ldk_support(&catalog);
+        assert_embedded_ldk_support(catalog);
         assert_eq!(
             cdk.config_schema["x-proofstorm-managed-settings"]["mnemonic"]["x-proofstorm-classification"],
             "runtime_policy"
@@ -5156,7 +5153,7 @@ mod tests {
                 .contains(&proofstorm_core::CatalogFeature::Bolt11)
         );
         assert_eq!(cdk.compatible_dependencies[0].implementation, "lnd");
-        assert_nutshell_support(&catalog);
+        assert_nutshell_support(catalog);
         assert_eq!(
             reader.tool_names(),
             vec![

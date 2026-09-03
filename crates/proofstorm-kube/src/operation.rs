@@ -2749,7 +2749,7 @@ mod tests {
             }],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab_spec, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab_spec, default_catalog()).expect("lock");
         let lab = ProofstormLab::new(
             "lab-resource",
             crate::ProofstormLabSpec {

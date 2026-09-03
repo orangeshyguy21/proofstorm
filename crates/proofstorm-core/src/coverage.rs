@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn manifest_maps_exact_support_and_field_ownership() {
         let manifest =
-            configuration_coverage_manifest(&default_catalog(), &default_backend_registry())
+            configuration_coverage_manifest(default_catalog(), default_backend_registry())
                 .expect("coverage manifest");
         assert_eq!(manifest.entries.len(), 12);
         let cdk = manifest
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn manifest_maps_nutshell_redis_cache_ownership_and_compatibility() {
         let manifest =
-            configuration_coverage_manifest(&default_catalog(), &default_backend_registry())
+            configuration_coverage_manifest(default_catalog(), default_backend_registry())
                 .expect("coverage manifest");
         let nutshell = manifest
             .entries

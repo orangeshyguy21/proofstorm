@@ -19,8 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .parent()
             .expect("coverage output has a parent"),
     )?;
-    let manifest =
-        configuration_coverage_manifest(&default_catalog(), &default_backend_registry())?;
+    let manifest = configuration_coverage_manifest(default_catalog(), default_backend_registry())?;
     let mut bytes = serde_json::to_vec_pretty(&manifest)?;
     bytes.push(b'\n');
     fs::write(coverage_output, bytes)?;

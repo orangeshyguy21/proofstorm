@@ -3413,7 +3413,7 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("plans");
         let rendered = render_bitcoin_component(&plans[0]).expect("render chain");
@@ -3584,7 +3584,7 @@ mod tests {
             ],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let rendered =
             render_lab("i0123456789012345678", "sha256:revision", &lab, &lock).expect("render");
         assert_eq!(rendered.services.len(), 3);
@@ -3622,7 +3622,7 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let first_plan =
             compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
                 .expect("compile first plan")
@@ -3710,7 +3710,7 @@ mod tests {
     fn lightning_plans_are_dependency_complete_and_rollout_scoped() {
         let lab = lightning_lab();
         let catalog = default_catalog();
-        let lock = resolve_lock(&lab, &catalog).expect("initial lock");
+        let lock = resolve_lock(&lab, catalog).expect("initial lock");
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
                 .expect("initial plans");
@@ -3809,7 +3809,7 @@ mod tests {
     fn lightning_relinking_is_component_scoped_and_missing_links_refuse() {
         let mut lab = lightning_lab();
         let catalog = default_catalog();
-        let lock = resolve_lock(&lab, &catalog).expect("initial lock");
+        let lock = resolve_lock(&lab, catalog).expect("initial lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("initial plans");
         let plan = |id: &str| {
@@ -3823,7 +3823,7 @@ mod tests {
             .find(|link| link.from == "alice")
             .expect("alice chain link")
             .to = "chain-b".into();
-        let relinked_lock = resolve_lock(&lab, &catalog).expect("relinked lock");
+        let relinked_lock = resolve_lock(&lab, catalog).expect("relinked lock");
         let relinked_plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:relinked-revision",
@@ -3884,7 +3884,7 @@ mod tests {
     #[test]
     fn cdk_plan_rendering_is_deterministic_private_and_rollout_scoped() {
         let lab = cdk_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("CDK lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("CDK lock");
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
                 .expect("CDK plans");
@@ -3990,7 +3990,7 @@ mod tests {
     #[test]
     fn cdk_cln_plan_uses_the_compiled_socket_and_disables_bolt12() {
         let lab = cdk_cln_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("CDK+CLN lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("CDK+CLN lock");
         let plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:cdk-cln-revision",
@@ -4058,7 +4058,7 @@ mod tests {
             .config
             .insert("mint_quote_ttl_seconds".into(), json!(777));
         authored.config.insert("max_mint_sat".into(), json!(42_000));
-        let lock = resolve_lock(&lab, &default_catalog()).expect("CDK+LDK lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("CDK+LDK lock");
         let plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:cdk-ldk-revision",
@@ -4144,7 +4144,7 @@ mod tests {
                 unit: "sat".into(),
             }),
         });
-        let lock = resolve_lock(&lab, &default_catalog()).expect("both bindings lock exactly");
+        let lock = resolve_lock(&lab, default_catalog()).expect("both bindings lock exactly");
         let error = compile_component_plans(
             "i0123456789012345678",
             "sha256:ambiguous-revision",
@@ -4159,7 +4159,7 @@ mod tests {
         );
 
         lab.links.pop();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("single binding lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("single binding lock");
         let plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:single-revision",
@@ -4190,7 +4190,7 @@ mod tests {
     #[test]
     fn cdk_renderer_consumes_the_compiled_payment_binding_identity() {
         let lab = cdk_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("supported payment lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("supported payment lock");
         let mut plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:payment-selection",
@@ -4240,7 +4240,7 @@ mod tests {
     fn cdk_relinking_updates_only_the_mint_and_incomplete_plans_refuse() {
         let mut lab = cdk_lab();
         let catalog = default_catalog();
-        let lock = resolve_lock(&lab, &catalog).expect("initial CDK lock");
+        let lock = resolve_lock(&lab, catalog).expect("initial CDK lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("initial CDK plans");
         let plan = |id: &str| {
@@ -4251,7 +4251,7 @@ mod tests {
         };
 
         lab.links[0].to = "mint-lnd-b".into();
-        let relinked_lock = resolve_lock(&lab, &catalog).expect("relinked CDK lock");
+        let relinked_lock = resolve_lock(&lab, catalog).expect("relinked CDK lock");
         let relinked_plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:relinked-revision",
@@ -4309,7 +4309,7 @@ mod tests {
     #[test]
     fn wallet_plans_are_deterministic_persistent_and_multi_wallet_isolated() {
         let lab = workspace_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("workspace lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
                 .expect("workspace plans");
@@ -4361,7 +4361,7 @@ mod tests {
     #[test]
     fn wallet_and_attacker_metadata_revisions_do_not_churn_pods() {
         let lab = workspace_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("workspace lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
         let compile = |revision| {
             compile_component_plans("i0123456789012345678", revision, &lab, &lock)
                 .expect("workspace plans")
@@ -4406,7 +4406,7 @@ mod tests {
     #[test]
     fn attacker_plan_is_disposable_locked_and_restricted() {
         let lab = workspace_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("workspace lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("workspace plans");
         let plan = plans
@@ -4457,7 +4457,7 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let first = render_lab("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("first render");
         lab.components.reverse();
@@ -4483,7 +4483,7 @@ mod tests {
     #[test]
     fn observation_requires_the_compiled_rollout_identity() {
         let lab = workspace_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("workspace lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("workspace plans");
         let wallet = plans
@@ -4588,7 +4588,7 @@ mod tests {
     #[test]
     fn compatibility_ready_is_derived_only_from_component_ready() {
         let lab = workspace_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("workspace lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("workspace plans");
         let attacker = plans
@@ -4746,7 +4746,7 @@ mod tests {
     #[test]
     fn protocol_prober_is_single_bounded_and_credential_free() {
         let lab = lightning_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("plans");
         let prober = render_protocol_prober(&plans)
@@ -4802,7 +4802,7 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("max lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("max lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("max plans");
         let prober = render_protocol_prober(&plans)
@@ -4870,7 +4870,7 @@ mod tests {
                 ..LabPolicy::default()
             },
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("plans");
         assert!(matches!(
@@ -4898,7 +4898,7 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("max lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("max lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("max plans");
         let resources = ComponentObservationResources {
@@ -5041,7 +5041,7 @@ mod tests {
     #[test]
     fn credential_observation_validates_the_linked_state_projection() {
         let lab = cdk_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("CDK lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("CDK lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("CDK plans");
         let mint = plans
@@ -5124,7 +5124,7 @@ mod tests {
     #[test]
     fn dependency_readiness_is_transitive_and_component_order_independent() {
         let lab = cdk_lab();
-        let lock = resolve_lock(&lab, &default_catalog()).expect("CDK lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("CDK lock");
         let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
             .expect("CDK plans");
         let empty = ComponentObservationResources {
@@ -5241,7 +5241,7 @@ mod tests {
             }],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("CLN lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("CLN lock");
         let rendered =
             render_lab("i0123456789012345678", "sha256:revision", &lab, &lock).expect("CLN render");
         let cln = rendered
