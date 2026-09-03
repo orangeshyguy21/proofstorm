@@ -10,6 +10,7 @@ pub mod cdk_ldk;
 pub mod cdk_postgres;
 pub mod cross_implementation_wallet;
 pub mod cross_lab_scheduler;
+pub mod failed_melt;
 pub mod native_exec;
 pub mod nutshell_cln;
 pub mod nutshell_mint;
@@ -36,6 +37,7 @@ pub const NAMES: &[&str] = &[
     "native-exec",
     "slice2",
     "slice5",
+    "failed-melt",
     "nutshell-oidc",
 ];
 
@@ -57,6 +59,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "native-exec" => native_exec::run(context),
         "slice2" => slice2::run(context),
         "slice5" => slice5::run(context),
+        "failed-melt" => failed_melt::run(context),
         "nutshell-oidc" => nutshell_oidc::run(context),
         other => bail!(
             "unknown gate {other}; available gates: {}",

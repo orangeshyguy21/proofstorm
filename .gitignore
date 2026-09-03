@@ -6,3 +6,5 @@
 /target/
 /.tools/
 /.proofstorm/
+__pycache__/
+*.pyc

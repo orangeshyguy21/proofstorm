@@ -32,7 +32,8 @@ PLATFORM_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64
 # Every gate the acceptance runner knows, in the plan's port order.
 GATES := slice2 slice4 slice5 native-exec cross-lab-scheduler \
 	cross-implementation-wallet nutshell-mint nutshell-cln nutshell-postgres \
-	cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres
+	cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres \
+	failed-melt
 # Excluded from `make e2e`: fails on a known upstream Nutshell defect.
 EXPECTED_FAIL_GATES := nutshell-oidc
 
