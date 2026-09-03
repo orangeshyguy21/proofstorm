@@ -1,6 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+};
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -114,6 +117,8 @@ pub enum ComponentKind {
     Bitcoin,
     Lightning,
     Mint,
+    Database,
+    IdentityProvider,
     Wallet,
     Attacker,
     Proxy,
@@ -153,16 +158,118 @@ pub enum LinkKind {
     BitcoinPeer,
     LightningPeer,
     ChainBackend,
-    LightningBackend,
+    PaymentBackend,
+    DatabaseBackend,
+    AuthenticationBackend,
     NetworkPath,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseRole {
+    Primary,
+    Cache,
+    Authentication,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentMethod {
+    Bolt11,
+    Bolt12,
+    Onchain,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationProtocol {
+    Oidc,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BitcoinNetwork {
+    Regtest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DependencyBinding {
+    Chain { network: BitcoinNetwork },
+    Payment { method: PaymentMethod, unit: String },
+    Database { role: DatabaseRole },
+    Authentication { protocol: AuthenticationProtocol },
+}
+
+// Kubernetes structural schemas cannot merge internally tagged enum branches
+// that assign different constants to the same discriminator. Keep the strict
+// serde representation above and expose its union as one structural object;
+// validate_lab enforces the legal field combinations before publication.
+impl JsonSchema for DependencyBinding {
+    fn schema_name() -> Cow<'static, str> {
+        "DependencyBinding".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::DependencyBinding").into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "object",
+            "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+            "required": ["type"],
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["chain", "payment", "database", "authentication"]
+                },
+                "protocol": AuthenticationProtocol::json_schema(generator),
+                "network": BitcoinNetwork::json_schema(generator),
+                "method": PaymentMethod::json_schema(generator),
+                "role": DatabaseRole::json_schema(generator),
+                "unit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16,
+                    "pattern": "^[a-z0-9-]+$"
+                }
+            },
+            "additionalProperties": false,
+            "x-kubernetes-validations": [
+                {
+                    "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))",
+                    "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol"
+                }
+            ]
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend(
+    "x-kubernetes-validations" = [{
+        "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend' || self.kind == 'authentication_backend') ? has(self.binding) : !has(self.binding)",
+        "message": "backend links require a binding; peer and network-path links forbid one"
+    }]
+))]
 pub struct LinkSpec {
+    /// Stable binding identity within one lab revision.
+    pub id: String,
     pub kind: LinkKind,
     pub from: String,
     pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<DependencyBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

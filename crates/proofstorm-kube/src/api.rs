@@ -56,6 +56,10 @@ pub struct ProofstormLabStatus {
     pub instance_namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
+    /// Immutable lab revision against which this status was observed.
+    pub observed_revision_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_protocol_probe_lease: Option<String>,
     #[serde(default)]
     pub components: Vec<ComponentStatus>,
     #[serde(default)]

@@ -9,9 +9,10 @@ use k8s_openapi::api::{
     apps::v1::{Deployment, StatefulSet},
     batch::v1::{Job, JobStatus},
     core::v1::{
-        ConfigMap, LimitRange, Namespace, PersistentVolumeClaim, Pod, ResourceQuota, Service,
-        ServiceAccount,
+        ConfigMap, LimitRange, Namespace, PersistentVolumeClaim, Pod, ResourceQuota, Secret,
+        Service, ServiceAccount,
     },
+    discovery::v1::EndpointSlice,
     networking::v1::NetworkPolicy,
     rbac::v1::{Role, RoleBinding},
 };
@@ -25,18 +26,27 @@ use kube::{
         watcher,
     },
 };
+use proofstorm_core::{BackendContractRegistry, default_backend_registry};
 use proofstorm_kube::{
-    ACTION_CANCEL_ANNOTATION, ActionPhase, ActionRenderError, AdapterError,
-    LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION,
-    LabAction, LabPhase, ProofstormLab, ProofstormLabAction, ProofstormLabActionStatus,
-    ProofstormLabStatus, action_result_container, component_ports, instance_namespace,
-    render_component_network_policy, render_lab, render_lab_action_cleanup_job,
-    render_lab_action_job, render_security_spine,
+    ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
+    BACKEND_ID_ANNOTATION, ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
+    INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION,
+    LIFECYCLE_STATE_ANNOTATION, LabAction, LabPhase, MAX_PROTOCOL_PROBES_PER_LAB,
+    PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION, PROTOCOL_PROBER_NAME, ProofstormLab,
+    ProofstormLabAction, ProofstormLabActionStatus, ProofstormLabStatus, action_result_container,
+    compile_component_plans, evaluate_action_admission, instance_namespace,
+    observe_component_statuses, render_component_network_policy, render_lab,
+    render_lab_action_cleanup_job, render_lab_action_job, render_security_spine,
+    schedule_protocol_probers,
 };
 use thiserror::Error;
 
 const FINALIZER: &str = "proofstorm.dev/lab-cleanup";
 const FIELD_MANAGER: &str = "proofstormd";
+const LAB_CONTROLLER_CONCURRENCY: u16 = 8;
+const ACTION_CONTROLLER_CONCURRENCY: u16 = 16;
+const MAX_LAB_STATUS_BYTES: usize = 256 * 1024;
+const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
 struct Context {
@@ -53,6 +63,8 @@ enum Error {
     InvalidInstanceKey(String),
     #[error("controller invariant failed: {0}")]
     ControllerInvariant(&'static str),
+    #[error("generated Secret contract failed: {0}")]
+    SecretContract(String),
     #[error("cleanup pending while instance namespace {0} still exists")]
     CleanupPending(String),
     #[error("cleanup pending while runtime actions for instance {0} are being removed")]
@@ -61,6 +73,12 @@ enum Error {
     Adapter(#[from] AdapterError),
     #[error("action adapter failed: {0}")]
     Action(#[from] ActionRenderError),
+    #[error("{kind} status is {actual} bytes; controller maximum is {maximum} bytes")]
+    StatusBudgetExceeded {
+        kind: &'static str,
+        actual: usize,
+        maximum: usize,
+    },
 }
 
 #[tokio::main]
@@ -70,6 +88,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let actions = Api::<ProofstormLabAction>::all(client.clone());
     let context = Arc::new(Context { client });
     let lab_controller = Controller::new(labs, watcher::Config::default())
+        .with_config(
+            kube::runtime::controller::Config::default().concurrency(LAB_CONTROLLER_CONCURRENCY),
+        )
         .shutdown_on_signal()
         .run(reconcile, error_policy, context.clone())
         .for_each(|result| async move {
@@ -79,15 +100,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     let action_controller = Controller::new(actions, watcher::Config::default())
+        .with_config(
+            kube::runtime::controller::Config::default().concurrency(ACTION_CONTROLLER_CONCURRENCY),
+        )
         .shutdown_on_signal()
-        .run(reconcile_action, action_error_policy, context)
+        .run(reconcile_action, action_error_policy, context.clone())
         .for_each(|result| async move {
             match result {
                 Ok((object, _)) => eprintln!("reconciled ProofstormLabAction {object:?}"),
                 Err(error) => eprintln!("action reconciliation failed: {error}"),
             }
         });
-    tokio::join!(lab_controller, action_controller);
+    let probe_scheduler = run_protocol_probe_scheduler(context);
+    tokio::join!(lab_controller, action_controller, probe_scheduler);
     Ok(())
 }
 
@@ -114,6 +139,21 @@ async fn reconcile_action(
     }
     let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
     let lab = labs.get(&action.spec.lab_name).await?;
+    if let Err(error) = evaluate_action_admission(action.as_ref(), &lab) {
+        patch_action_status(
+            action.as_ref(),
+            &context,
+            ProofstormLabActionStatus {
+                phase: ActionPhase::Failed,
+                observed_generation: action.metadata.generation,
+                completed_at_unix: Some(now_unix()),
+                error: Some(action_admission_failure(&error)),
+                ..ProofstormLabActionStatus::default()
+            },
+        )
+        .await?;
+        return Ok(Action::await_change());
+    }
     if matches!(
         action.spec.action,
         LabAction::NodeStart(_) | LabAction::NodeStop(_) | LabAction::NodeRestart(_)
@@ -126,10 +166,6 @@ async fn reconcile_action(
     ) {
         return reconcile_network_fault(action.as_ref(), &lab, &context).await;
     }
-    if lab.status.as_ref().map(|status| status.phase) != Some(LabPhase::Ready) {
-        return Ok(Action::requeue(Duration::from_secs(2)));
-    }
-
     let job = match render_lab_action_job(action.as_ref(), &lab) {
         Ok(job) => job,
         Err(error) => {
@@ -288,12 +324,15 @@ async fn reconcile_node_lifecycle(
     else {
         return Err(Error::ControllerInvariant("expected node lifecycle action"));
     };
-    let component = lab
-        .spec
-        .lab
-        .components
+    let plans = compile_component_plans(
+        &lab.spec.instance_key,
+        &lab.spec.revision_digest,
+        &lab.spec.lab,
+        &lab.spec.lock,
+    )?;
+    let component = plans
         .iter()
-        .find(|component| component.id == request.component);
+        .find(|plan| plan.component_id == request.component);
     let Some(component) = component else {
         return patch_invalid_action(
             action,
@@ -333,6 +372,15 @@ async fn reconcile_node_lifecycle(
     let Some(workload) = workloads.get_opt(&request.component).await? else {
         return Ok(Action::requeue(Duration::from_secs(1)));
     };
+    if !stateful_set_matches_plan(&workload, component) {
+        return patch_action_failure(
+            action,
+            context,
+            "stale_component_plan",
+            "node workload does not match the accepted component plan",
+        )
+        .await;
+    }
     let annotations = workload.metadata.annotations.as_ref();
     let observed_sequence = annotations
         .and_then(|values| values.get(LIFECYCLE_SEQUENCE_ANNOTATION))
@@ -878,6 +926,13 @@ async fn reconcile_action_cancellation(
 }
 
 fn action_failure(status: &JobStatus, pods: &[Pod]) -> serde_json::Value {
+    if let Some(failure) = pods
+        .iter()
+        .filter_map(container_failure)
+        .find(|failure| failure.get("stage").is_some())
+    {
+        return failure;
+    }
     if status.conditions.as_ref().is_some_and(|conditions| {
         conditions.iter().any(|condition| {
             condition.status == "True" && condition.reason.as_deref() == Some("DeadlineExceeded")
@@ -890,6 +945,36 @@ fn action_failure(status: &JobStatus, pods: &[Pod]) -> serde_json::Value {
         .unwrap_or_else(|| serde_json::json!({"code": "action_failed"}))
 }
 
+fn action_admission_failure(error: &ActionAdmissionError) -> BTreeMap<String, serde_json::Value> {
+    let mut value = serde_json::json!({
+        "code": error.code(),
+        "message": error.to_string(),
+    });
+    if let ActionAdmissionError::PrerequisiteUnsatisfied {
+        component,
+        operation,
+        prerequisite,
+        condition,
+        state,
+        reason,
+    } = error
+    {
+        value["component"] = serde_json::json!(component);
+        value["operation"] = serde_json::json!(operation);
+        value["prerequisite"] = serde_json::json!(prerequisite);
+        if let Some(condition) = condition {
+            value["condition"] = serde_json::json!(condition);
+        }
+        if let Some(state) = state {
+            value["state"] = serde_json::json!(state);
+        }
+        if let Some(reason) = reason {
+            value["reason"] = serde_json::json!(reason);
+        }
+    }
+    status_object(value)
+}
+
 async fn patch_action_status(
     action: &ProofstormLabAction,
     context: &Context,
@@ -898,6 +983,7 @@ async fn patch_action_status(
     if action.status.as_ref() == Some(&status) {
         return Ok(());
     }
+    enforce_status_budget("ProofstormLabAction", &status, MAX_ACTION_STATUS_BYTES)?;
     let namespace = action
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
@@ -943,12 +1029,537 @@ async fn reconcile(lab: Arc<ProofstormLab>, context: Arc<Context>) -> Result<Act
     })
 }
 
+async fn run_protocol_probe_scheduler(context: Arc<Context>) {
+    loop {
+        if let Err(error) = reconcile_protocol_probe_schedule(&context).await {
+            eprintln!("protocol probe scheduler retryable error: {error}");
+        }
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result {
+                    eprintln!("protocol probe scheduler shutdown signal failed: {error}");
+                }
+                break;
+            }
+            () = tokio::time::sleep(Duration::from_secs(2)) => {}
+        }
+    }
+}
+
+async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Error> {
+    let labs = Api::<ProofstormLab>::all(context.client.clone())
+        .list(&ListParams::default())
+        .await?;
+    let backend_registry = default_backend_registry();
+    let mut candidate_counts = BTreeMap::<String, usize>::new();
+    for lab in &labs.items {
+        if protocol_probe_candidate(lab, &backend_registry) {
+            *candidate_counts
+                .entry(lab.spec.instance_key.clone())
+                .or_default() += 1;
+        }
+    }
+    let candidates = candidate_counts
+        .into_iter()
+        .filter_map(|(instance_key, count)| (count == 1).then_some(instance_key));
+    let schedule = schedule_protocol_probers(candidates, now_unix());
+    for lab in &labs.items {
+        let active = schedule
+            .active_instance_keys
+            .contains(&lab.spec.instance_key);
+        if !active
+            && (protocol_probe_candidate(lab, &backend_registry)
+                || lab
+                    .annotations()
+                    .contains_key(PROTOCOL_PROBER_LEASE_ANNOTATION))
+        {
+            patch_lab_protocol_probe_lease(lab, "inactive", context).await?;
+        }
+    }
+    let deployments = Api::<Deployment>::all(context.client.clone())
+        .list(&ListParams::default().labels(&format!("{PROTOCOL_PROBER_LABEL}=true")))
+        .await?;
+
+    for deployment in &deployments.items {
+        let instance_key = deployment
+            .metadata
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(INSTANCE_LABEL));
+        if !instance_key
+            .is_some_and(|instance_key| schedule.active_instance_keys.contains(instance_key))
+        {
+            patch_protocol_prober_lease(deployment, 0, "inactive", context).await?;
+        }
+    }
+
+    let observed_prober_pods = Api::<Pod>::all(context.client.clone())
+        .list(&ListParams::default().labels(&format!("{PROTOCOL_PROBER_LABEL}=true")))
+        .await?
+        .items;
+    if unscheduled_protocol_prober_exists(&observed_prober_pods, &schedule.active_instance_keys) {
+        return Ok(());
+    }
+
+    for deployment in &deployments.items {
+        let active = deployment
+            .metadata
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(INSTANCE_LABEL))
+            .is_some_and(|instance_key| schedule.active_instance_keys.contains(instance_key));
+        if active {
+            patch_protocol_prober_lease(deployment, 1, &schedule.lease_id, context).await?;
+        }
+    }
+    for lab in &labs.items {
+        if schedule
+            .active_instance_keys
+            .contains(&lab.spec.instance_key)
+        {
+            patch_lab_protocol_probe_lease(lab, &schedule.lease_id, context).await?;
+        }
+    }
+    Ok(())
+}
+
+fn unscheduled_protocol_prober_exists(
+    pods: &[Pod],
+    active_instance_keys: &BTreeSet<String>,
+) -> bool {
+    pods.iter().any(|pod| {
+        !pod.metadata
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(INSTANCE_LABEL))
+            .is_some_and(|instance_key| active_instance_keys.contains(instance_key))
+    })
+}
+
+fn protocol_probe_candidate(
+    lab: &ProofstormLab,
+    backend_registry: &BackendContractRegistry,
+) -> bool {
+    if lab.metadata.deletion_timestamp.is_some()
+        || lab
+            .status
+            .as_ref()
+            .is_some_and(|status| status.phase == LabPhase::Closing)
+    {
+        return false;
+    }
+    let count = lab
+        .spec
+        .lab
+        .components
+        .iter()
+        .try_fold(0_usize, |count, component| {
+            let lock = lab
+                .spec
+                .lock
+                .entries
+                .iter()
+                .find(|entry| entry.component_id == component.id)?;
+            let backend = backend_registry.require(&lock.catalog_id).ok()?;
+            (backend.kind == component.kind)
+                .then_some(count + usize::from(backend.protocol_probe.is_some()))
+        });
+    count.is_some_and(|count| (1..=MAX_PROTOCOL_PROBES_PER_LAB).contains(&count))
+}
+
+async fn patch_protocol_prober_lease(
+    deployment: &Deployment,
+    replicas: i32,
+    lease_id: &str,
+    context: &Context,
+) -> Result<(), Error> {
+    let current_replicas = deployment.spec.as_ref().and_then(|spec| spec.replicas);
+    let metadata_lease = deployment
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(PROTOCOL_PROBER_LEASE_ANNOTATION));
+    let template_lease = deployment
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.template.metadata.as_ref())
+        .and_then(|metadata| metadata.annotations.as_ref())
+        .and_then(|annotations| annotations.get(PROTOCOL_PROBER_LEASE_ANNOTATION));
+    if current_replicas == Some(replicas)
+        && metadata_lease.is_some_and(|current| current == lease_id)
+        && template_lease.is_some_and(|current| current == lease_id)
+    {
+        return Ok(());
+    }
+    let namespace = deployment
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(deployment.name_any()))?;
+    let deployments = Api::<Deployment>::namespaced(context.client.clone(), &namespace);
+    deployments
+        .patch(
+            &deployment.name_any(),
+            &PatchParams::default(),
+            &Patch::Merge(serde_json::json!({
+                "metadata": {
+                    "annotations": {PROTOCOL_PROBER_LEASE_ANNOTATION: lease_id}
+                },
+                "spec": {
+                    "replicas": replicas,
+                    "template": {
+                        "metadata": {
+                            "annotations": {PROTOCOL_PROBER_LEASE_ANNOTATION: lease_id}
+                        }
+                    }
+                }
+            })),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn patch_lab_protocol_probe_lease(
+    lab: &ProofstormLab,
+    lease_id: &str,
+    context: &Context,
+) -> Result<(), Error> {
+    if lab
+        .annotations()
+        .get(PROTOCOL_PROBER_LEASE_ANNOTATION)
+        .is_some_and(|current| current == lease_id)
+    {
+        return Ok(());
+    }
+    let namespace = lab
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
+    Api::<ProofstormLab>::namespaced(context.client.clone(), &namespace)
+        .patch(
+            &lab.name_any(),
+            &PatchParams::default(),
+            &Patch::Merge(serde_json::json!({
+                "metadata": {
+                    "annotations": {PROTOCOL_PROBER_LEASE_ANNOTATION: lease_id}
+                }
+            })),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn ensure_generated_postgres_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in [
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_DB",
+            "DATABASE_URL",
+            "database.toml",
+        ] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+
+    let template_data = template.string_data.as_ref().ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no stringData"))
+    })?;
+    let username = template_data.get("POSTGRES_USER").ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_USER"))
+    })?;
+    let database = template_data.get("POSTGRES_DB").ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_DB"))
+    })?;
+    let component = template
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get("proofstorm.dev/component"))
+        .ok_or_else(|| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has no component identity"
+            ))
+        })?;
+    let mut entropy = [0_u8; 32];
+    getrandom::fill(&mut entropy).map_err(|error| {
+        Error::SecretContract(format!(
+            "could not generate credentials for {name:?}: {error}"
+        ))
+    })?;
+    let password = entropy
+        .iter()
+        .fold(String::with_capacity(64), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+            encoded
+        });
+    let url = format!("postgresql://{username}:{password}@{component}:5432/{database}");
+    let database_config = format!(
+        "\n[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = {url:?}\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
+    );
+    let mut desired = template.clone();
+    desired.string_data.get_or_insert_default().extend([
+        ("POSTGRES_PASSWORD".into(), password),
+        ("DATABASE_URL".into(), url),
+        ("database.toml".into(), database_config),
+    ]);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
+async fn ensure_generated_nutshell_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in ["PROOFSTORM_SECRET_KIND", "MINT_PRIVATE_KEY"] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let kind = template
+        .string_data
+        .as_ref()
+        .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"));
+    if kind.map(String::as_str) != Some("nutshell-mint") {
+        return Err(Error::SecretContract(format!(
+            "Secret template {name:?} is not a Nutshell mint secret"
+        )));
+    }
+    let mut entropy = [0_u8; 32];
+    getrandom::fill(&mut entropy).map_err(|error| {
+        Error::SecretContract(format!(
+            "could not generate credentials for {name:?}: {error}"
+        ))
+    })?;
+    let private_key = entropy
+        .iter()
+        .fold(String::with_capacity(64), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+            encoded
+        });
+    let mut desired = template.clone();
+    desired
+        .string_data
+        .get_or_insert_default()
+        .insert("MINT_PRIVATE_KEY".into(), private_key);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
+async fn ensure_generated_redis_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in ["PROOFSTORM_SECRET_KIND", "REDIS_PASSWORD", "REDIS_URL"] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let kind = template
+        .string_data
+        .as_ref()
+        .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"));
+    if kind.map(String::as_str) != Some("redis-cache") {
+        return Err(Error::SecretContract(format!(
+            "Secret template {name:?} is not a Redis cache secret"
+        )));
+    }
+    let component = template
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get("proofstorm.dev/component"))
+        .ok_or_else(|| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has no component identity"
+            ))
+        })?;
+    let mut entropy = [0_u8; 32];
+    getrandom::fill(&mut entropy).map_err(|error| {
+        Error::SecretContract(format!(
+            "could not generate credentials for {name:?}: {error}"
+        ))
+    })?;
+    let password = entropy
+        .iter()
+        .fold(String::with_capacity(64), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+            encoded
+        });
+    let url = format!("redis://:{password}@{component}:6379/0");
+    let mut desired = template.clone();
+    desired.string_data.get_or_insert_default().extend([
+        ("REDIS_PASSWORD".into(), password),
+        ("REDIS_URL".into(), url),
+    ]);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the generated Keycloak secret is one atomic administrator, realm, client, and test-user bootstrap contract"
+)]
+async fn ensure_generated_keycloak_secret(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    patch: &PatchParams,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let data = existing.data.as_ref().ok_or_else(|| {
+            Error::SecretContract(format!("Secret {name:?} has no generated data"))
+        })?;
+        for key in [
+            "PROOFSTORM_SECRET_KIND",
+            "KEYCLOAK_ADMIN_PASSWORD",
+            "OIDC_TEST_USERNAME",
+            "OIDC_TEST_PASSWORD",
+            "realm.json",
+        ] {
+            if !data.contains_key(key) {
+                return Err(Error::SecretContract(format!(
+                    "Secret {name:?} is missing key {key:?}"
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let template_data = template.string_data.as_ref().ok_or_else(|| {
+        Error::SecretContract(format!("Secret template {name:?} has no stringData"))
+    })?;
+    if template_data
+        .get("PROOFSTORM_SECRET_KIND")
+        .map(String::as_str)
+        != Some("keycloak-oidc")
+    {
+        return Err(Error::SecretContract(format!(
+            "Secret template {name:?} is not a Keycloak OIDC secret"
+        )));
+    }
+    let access_token_lifespan = template_data
+        .get("OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS")
+        .ok_or_else(|| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has no OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS"
+            ))
+        })?
+        .parse::<u64>()
+        .map_err(|error| {
+            Error::SecretContract(format!(
+                "Secret template {name:?} has an invalid OIDC token lifespan: {error}"
+            ))
+        })?;
+    let generate_password = || -> Result<String, Error> {
+        let mut entropy = [0_u8; 32];
+        getrandom::fill(&mut entropy).map_err(|error| {
+            Error::SecretContract(format!(
+                "could not generate credentials for {name:?}: {error}"
+            ))
+        })?;
+        Ok(entropy
+            .iter()
+            .fold(String::with_capacity(64), |mut encoded, byte| {
+                use std::fmt::Write as _;
+                write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+                encoded
+            }))
+    };
+    let administrator_password = generate_password()?;
+    let test_password = generate_password()?;
+    let test_username = "proofstorm-user";
+    let realm = serde_json::to_string_pretty(&serde_json::json!({
+        "realm": "proofstorm",
+        "enabled": true,
+        "sslRequired": "none",
+        "accessTokenLifespan": access_token_lifespan,
+        "clients": [{
+            "clientId": "cashu-client",
+            "protocol": "openid-connect",
+            "enabled": true,
+            "publicClient": true,
+            "standardFlowEnabled": true,
+            "directAccessGrantsEnabled": true,
+            "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "basic", "email"],
+            "optionalClientScopes": ["offline_access"],
+            "redirectUris": ["http://127.0.0.1:*", "http://localhost:*"],
+            "webOrigins": ["*"]
+        }],
+        "users": [{
+            "username": test_username,
+            "email": "proofstorm-user@example.invalid",
+            "firstName": "Proofstorm",
+            "lastName": "User",
+            "enabled": true,
+            "emailVerified": true,
+            "requiredActions": [],
+            "realmRoles": ["offline_access"],
+            "credentials": [{
+                "type": "password",
+                "value": test_password,
+                "temporary": false
+            }]
+        }]
+    }))
+    .map_err(|error| {
+        Error::SecretContract(format!("could not render realm for {name:?}: {error}"))
+    })?;
+    let mut desired = template.clone();
+    desired.string_data.get_or_insert_default().extend([
+        ("KEYCLOAK_ADMIN_PASSWORD".into(), administrator_password),
+        ("OIDC_TEST_USERNAME".into(), test_username.into()),
+        ("OIDC_TEST_PASSWORD".into(), test_password),
+        ("realm.json".into(), realm),
+    ]);
+    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    Ok(())
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "one reconciliation pass visibly applies the complete bounded instance inventory"
 )]
 async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
     validate_instance_key(&lab.spec.instance_key)?;
+    let workloads = render_lab(
+        &lab.spec.instance_key,
+        &lab.spec.revision_digest,
+        &lab.spec.lab,
+        &lab.spec.lock,
+    )?;
     let rendered = render_security_spine(&lab.spec.instance_key);
     let client = context.client.clone();
     let namespace_name = instance_namespace(&lab.spec.instance_key);
@@ -996,8 +1607,36 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         )
         .await?;
 
-    let workloads = render_lab(&lab.spec.instance_key, &lab.spec.lab, &lab.spec.lock)?;
     let client = context.client.clone();
+    let secrets = Api::<Secret>::namespaced(client.clone(), &namespace_name);
+    for resource in &workloads.secrets {
+        let secret_kind = resource
+            .string_data
+            .as_ref()
+            .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
+            .map(String::as_str);
+        match secret_kind {
+            Some("cdk-mint") => {
+                secrets
+                    .patch(
+                        resource.metadata.name.as_deref().unwrap_or_default(),
+                        &patch,
+                        &Patch::Apply(resource),
+                    )
+                    .await?;
+            }
+            Some("nutshell-mint") => {
+                ensure_generated_nutshell_secret(&secrets, resource, &patch).await?;
+            }
+            Some("redis-cache") => {
+                ensure_generated_redis_secret(&secrets, resource, &patch).await?;
+            }
+            Some("keycloak-oidc") => {
+                ensure_generated_keycloak_secret(&secrets, resource, &patch).await?;
+            }
+            _ => ensure_generated_postgres_secret(&secrets, resource, &patch).await?,
+        }
+    }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.config_maps {
         configs
@@ -1052,13 +1691,31 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     }
     let deployments = Api::<Deployment>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.deployments {
-        deployments
-            .patch(
-                resource.metadata.name.as_deref().unwrap_or_default(),
-                &patch,
-                &Patch::Apply(resource),
-            )
-            .await?;
+        let name = resource.metadata.name.as_deref().unwrap_or_default();
+        if name == PROTOCOL_PROBER_NAME && deployments.get_opt(name).await?.is_some() {
+            let mut desired = resource.clone();
+            if let Some(spec) = desired.spec.as_mut() {
+                spec.replicas = None;
+                if let Some(annotations) = spec
+                    .template
+                    .metadata
+                    .as_mut()
+                    .and_then(|metadata| metadata.annotations.as_mut())
+                {
+                    annotations.remove(PROTOCOL_PROBER_LEASE_ANNOTATION);
+                }
+            }
+            if let Some(annotations) = desired.metadata.annotations.as_mut() {
+                annotations.remove(PROTOCOL_PROBER_LEASE_ANNOTATION);
+            }
+            deployments
+                .patch(name, &PatchParams::default(), &Patch::Merge(&desired))
+                .await?;
+        } else {
+            deployments
+                .patch(name, &patch, &Patch::Apply(resource))
+                .await?;
+        }
     }
     let policies = Api::<NetworkPolicy>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.network_policies {
@@ -1106,43 +1763,41 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
         .await?;
 
-    let pods = Api::<Pod>::namespaced(client, &namespace_name)
-        .list(&ListParams::default().labels(&format!(
-            "proofstorm.dev/instance={}",
-            lab.spec.instance_key
-        )))
+    let instance_resources = ListParams::default().labels(&format!(
+        "proofstorm.dev/instance={}",
+        lab.spec.instance_key
+    ));
+    let observed_deployments = deployments.list(&instance_resources).await?;
+    let observed_stateful_sets = stateful_sets.list(&instance_resources).await?;
+    let observed_claims = claims.list(&instance_resources).await?;
+    let observed_services = services.list(&instance_resources).await?;
+    let observed_pods = Api::<Pod>::namespaced(client.clone(), &namespace_name)
+        .list(&instance_resources)
         .await?;
-    let components = lab
-        .spec
-        .lab
-        .components
-        .iter()
-        .map(|component| {
-            let ready = pods.items.iter().any(|pod| {
-                pod.metadata
-                    .labels
-                    .as_ref()
-                    .and_then(|labels| labels.get("proofstorm.dev/component"))
-                    .is_some_and(|id| id == &component.id)
-                    && pod
-                        .status
-                        .as_ref()
-                        .and_then(|status| status.conditions.as_ref())
-                        .is_some_and(|conditions| {
-                            conditions.iter().any(|condition| {
-                                condition.type_ == "Ready" && condition.status == "True"
-                            })
-                        })
-            });
-            proofstorm_core::ComponentStatus {
-                id: component.id.clone(),
-                kind: component.kind,
-                ready,
-                service: format!("{}.{}.svc", component.id, namespace_name),
-                ports: component_ports(component),
-            }
-        })
-        .collect::<Vec<_>>();
+    let endpoint_slices = Api::<EndpointSlice>::namespaced(client, &namespace_name)
+        .list(&ListParams::default())
+        .await?;
+    let observed_resources = ComponentObservationResources {
+        deployments: &observed_deployments.items,
+        stateful_sets: &observed_stateful_sets.items,
+        persistent_volume_claims: &observed_claims.items,
+        services: &observed_services.items,
+        endpoint_slices: &endpoint_slices.items,
+        pods: &observed_pods.items,
+    };
+    let previous_components = lab
+        .status
+        .as_ref()
+        .filter(|status| status.observed_revision_digest == lab.spec.revision_digest)
+        .map_or(&[][..], |status| status.components.as_slice());
+    let components = observe_component_statuses(
+        &namespace_name,
+        &workloads.plans,
+        &observed_resources,
+        previous_components,
+        &stopped_components,
+        now_unix(),
+    );
     let ready = components
         .iter()
         .all(|component| component.ready || stopped_components.contains(&component.id));
@@ -1158,6 +1813,11 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             },
             instance_namespace: Some(namespace_name),
             observed_generation: lab.metadata.generation,
+            observed_revision_digest: lab.spec.revision_digest.clone(),
+            observed_protocol_probe_lease: lab
+                .annotations()
+                .get(PROTOCOL_PROBER_LEASE_ANNOTATION)
+                .cloned(),
             components,
             inventory,
             inventory_digest: Some(inventory_digest),
@@ -1166,11 +1826,11 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         },
     )
     .await?;
-    Ok(Action::requeue(Duration::from_secs(if ready {
-        30
+    Ok(if ready {
+        jittered_requeue(&lab.spec.instance_key, 30, 10)
     } else {
-        3
-    })))
+        jittered_requeue(&lab.spec.instance_key, 3, 2)
+    })
 }
 
 async fn preserve_lifecycle_state(
@@ -1184,6 +1844,9 @@ async fn preserve_lifecycle_state(
     let Some(existing) = workloads.get_opt(name).await? else {
         return Ok(desired);
     };
+    if !same_lifecycle_identity(&existing, &desired) {
+        return Ok(desired);
+    }
     for key in [LIFECYCLE_STATE_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION] {
         if let Some(value) = existing
             .metadata
@@ -1227,6 +1890,37 @@ async fn preserve_lifecycle_state(
     Ok(desired)
 }
 
+fn same_lifecycle_identity(existing: &StatefulSet, desired: &StatefulSet) -> bool {
+    let existing = existing.metadata.annotations.as_ref();
+    let desired = desired.metadata.annotations.as_ref();
+    [BACKEND_ID_ANNOTATION, EXECUTION_STATE_CONTRACT_ANNOTATION]
+        .into_iter()
+        .all(|key| {
+            existing.and_then(|annotations| annotations.get(key))
+                == desired.and_then(|annotations| annotations.get(key))
+                && desired
+                    .and_then(|annotations| annotations.get(key))
+                    .is_some()
+        })
+}
+
+fn stateful_set_matches_plan(
+    workload: &StatefulSet,
+    plan: &proofstorm_core::ComponentPlanContract,
+) -> bool {
+    let annotations = workload.metadata.annotations.as_ref();
+    annotations.and_then(|values| values.get(BACKEND_ID_ANNOTATION)) == Some(&plan.backend_id)
+        && annotations.and_then(|values| values.get(EXECUTION_STATE_CONTRACT_ANNOTATION))
+            == Some(&plan.execution_context.state_contract)
+        && workload
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.template.metadata.as_ref())
+            .and_then(|metadata| metadata.annotations.as_ref())
+            .and_then(|values| values.get(proofstorm_kube::ROLLOUT_DIGEST_ANNOTATION))
+            == Some(&plan.rollout_digest)
+}
+
 async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
     let instance_namespace = instance_namespace(&lab.spec.instance_key);
     patch_status(
@@ -1236,6 +1930,13 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
             phase: LabPhase::Closing,
             instance_namespace: Some(instance_namespace.clone()),
             observed_generation: lab.metadata.generation,
+            observed_revision_digest: lab.status.as_ref().map_or_else(String::new, |status| {
+                status.observed_revision_digest.clone()
+            }),
+            observed_protocol_probe_lease: lab
+                .status
+                .as_ref()
+                .and_then(|status| status.observed_protocol_probe_lease.clone()),
             components: lab
                 .status
                 .as_ref()
@@ -1300,6 +2001,10 @@ async fn patch_status(
     context: &Context,
     status: ProofstormLabStatus,
 ) -> Result<(), Error> {
+    if !lab_status_update_required(lab.status.as_ref(), &status) {
+        return Ok(());
+    }
+    enforce_status_budget("ProofstormLab", &status, MAX_LAB_STATUS_BYTES)?;
     let namespace = lab
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
@@ -1312,6 +2017,32 @@ async fn patch_status(
     )
     .await?;
     Ok(())
+}
+
+fn lab_status_update_required(
+    current: Option<&ProofstormLabStatus>,
+    observed: &ProofstormLabStatus,
+) -> bool {
+    current != Some(observed)
+}
+
+fn enforce_status_budget<T: serde::Serialize>(
+    kind: &'static str,
+    status: &T,
+    maximum: usize,
+) -> Result<(), Error> {
+    let actual = serde_json::to_vec(status)
+        .map_err(|_| Error::ControllerInvariant("typed status did not serialize"))?
+        .len();
+    if actual <= maximum {
+        Ok(())
+    } else {
+        Err(Error::StatusBudgetExceeded {
+            kind,
+            actual,
+            maximum,
+        })
+    }
 }
 
 async fn write_teardown_receipt(
@@ -1373,18 +2104,38 @@ fn validate_instance_key(key: &str) -> Result<(), Error> {
     }
 }
 
-fn error_policy(_lab: Arc<ProofstormLab>, error: &Error, _context: Arc<Context>) -> Action {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "kube runtime requires an owned Arc in the error-policy callback signature"
+)]
+fn error_policy(lab: Arc<ProofstormLab>, error: &Error, _context: Arc<Context>) -> Action {
     eprintln!("retryable controller error: {error}");
-    Action::requeue(Duration::from_secs(5))
+    jittered_requeue(&lab.spec.instance_key, 5, 4)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "kube runtime requires an owned Arc in the error-policy callback signature"
+)]
 fn action_error_policy(
-    _action: Arc<ProofstormLabAction>,
+    action: Arc<ProofstormLabAction>,
     error: &Error,
     _context: Arc<Context>,
 ) -> Action {
     eprintln!("retryable action controller error: {error}");
-    Action::requeue(Duration::from_secs(5))
+    jittered_requeue(&action.spec.operation_id, 5, 4)
+}
+
+fn jittered_requeue(identity: &str, base_seconds: u64, spread_seconds: u64) -> Action {
+    Action::requeue(Duration::from_secs(
+        base_seconds + deterministic_jitter_seconds(identity, spread_seconds),
+    ))
+}
+
+fn deterministic_jitter_seconds(identity: &str, spread_seconds: u64) -> u64 {
+    let digest = proofstorm_core::digest_json(&identity);
+    u64::from_str_radix(&digest["sha256:".len().."sha256:".len() + 8], 16).unwrap_or_default()
+        % (spread_seconds + 1)
 }
 
 fn termination_message(pod: &Pod, target: &str) -> Option<String> {
@@ -1468,17 +2219,51 @@ fn container_failure(pod: &Pod) -> Option<serde_json::Value> {
         .iter()
         .chain(status.container_statuses.iter())
         .flatten()
-        .find_map(|container| {
+        .filter_map(|container| {
             let terminated = container.state.as_ref()?.terminated.as_ref()?;
             (terminated.exit_code != 0).then(|| {
-                serde_json::json!({
+                let mut failure = serde_json::json!({
                     "code": "container_failed",
                     "container": container.name,
                     "exit_code": terminated.exit_code,
                     "reason": terminated.reason,
-                })
+                });
+                if let Some(diagnostic) = terminated
+                    .message
+                    .as_deref()
+                    .and_then(|message| serde_json::from_str::<serde_json::Value>(message).ok())
+                    .filter(|diagnostic| {
+                        diagnostic.get("code").and_then(serde_json::Value::as_str)
+                            == Some("wallet_orchestration_failed")
+                    })
+                {
+                    for (source, target) in [
+                        ("code", "failure_code"),
+                        ("stage", "stage"),
+                        ("reason", "diagnostic_reason"),
+                    ] {
+                        if let Some(value) =
+                            diagnostic.get(source).and_then(serde_json::Value::as_str)
+                        {
+                            failure[target] = serde_json::json!(value);
+                        }
+                    }
+                }
+                failure
             })
         })
+        .max_by_key(container_failure_priority)
+}
+
+fn container_failure_priority(failure: &serde_json::Value) -> u8 {
+    match failure
+        .get("diagnostic_reason")
+        .and_then(serde_json::Value::as_str)
+    {
+        None => 0,
+        Some("payer_failed" | "wallet_failed" | "wallet_failed_after_payment") => 1,
+        Some(_) => 2,
+    }
 }
 
 fn now_unix() -> i64 {
@@ -1529,6 +2314,62 @@ mod tests {
     }
 
     #[test]
+    fn sanitized_stage_diagnostic_precedes_the_outer_deadline() {
+        let status = JobStatus {
+            conditions: Some(vec![k8s_openapi::api::batch::v1::JobCondition {
+                type_: "Failed".into(),
+                status: "True".into(),
+                reason: Some("DeadlineExceeded".into()),
+                ..Default::default()
+            }]),
+            ..JobStatus::default()
+        };
+        let pod = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": "wallet-fund"},
+            "status": {
+                "containerStatuses": [{
+                    "image": "wallet:test",
+                    "imageID": "wallet@test",
+                    "name": "wallet",
+                    "ready": false,
+                    "restartCount": 0,
+                    "state": {"terminated": {
+                        "exitCode": 1,
+                        "message": "{\"code\":\"wallet_orchestration_failed\",\"stage\":\"invoice\",\"reason\":\"invoice_exited_before_payment\",\"private\":\"not-forwarded\"}",
+                        "reason": "Error"
+                    }}
+                }, {
+                    "image": "lnd:test",
+                    "imageID": "lnd@test",
+                    "name": "payer",
+                    "ready": false,
+                    "restartCount": 0,
+                    "state": {"terminated": {
+                        "exitCode": 1,
+                        "message": "{\"code\":\"wallet_orchestration_failed\",\"stage\":\"invoice\",\"reason\":\"wallet_failed\"}",
+                        "reason": "Error"
+                    }}
+                }]
+            }
+        }))
+        .expect("pod");
+        assert_eq!(
+            action_failure(&status, &[pod]),
+            serde_json::json!({
+                "code": "container_failed",
+                "container": "wallet",
+                "diagnostic_reason": "invoice_exited_before_payment",
+                "exit_code": 1,
+                "failure_code": "wallet_orchestration_failed",
+                "reason": "Error",
+                "stage": "invoice"
+            })
+        );
+    }
+
+    #[test]
     fn execution_evidence_fences_missing_job_replay() {
         assert!(!action_execution_started(None));
         assert!(!action_execution_started(Some(
@@ -1542,6 +2383,156 @@ mod tests {
             ..ProofstormLabActionStatus::default()
         };
         assert!(action_execution_started(Some(&running)));
+    }
+
+    #[test]
+    fn controller_policy_is_bounded_deterministic_and_desynchronized() {
+        assert_eq!(LAB_CONTROLLER_CONCURRENCY, 8);
+        assert_eq!(ACTION_CONTROLLER_CONCURRENCY, 16);
+        let first = deterministic_jitter_seconds("instance-one", 10);
+        assert_eq!(first, deterministic_jitter_seconds("instance-one", 10));
+        assert!(first <= 10);
+        let offsets = (0..32)
+            .map(|index| deterministic_jitter_seconds(&format!("instance-{index}"), 10))
+            .collect::<BTreeSet<_>>();
+        assert!(offsets.len() > 1, "lab requeues must not synchronize");
+    }
+
+    #[test]
+    fn probe_rotation_drains_old_labs_before_activation() {
+        let pod = |instance: &str| {
+            let mut pod = Pod::default();
+            pod.metadata.labels = Some(BTreeMap::from([
+                (INSTANCE_LABEL.into(), instance.into()),
+                (PROTOCOL_PROBER_LABEL.into(), "true".into()),
+            ]));
+            pod
+        };
+        let active = BTreeSet::from(["instance-new".to_owned()]);
+        assert!(unscheduled_protocol_prober_exists(
+            &[pod("instance-old")],
+            &active
+        ));
+        assert!(!unscheduled_protocol_prober_exists(
+            &[pod("instance-new")],
+            &active
+        ));
+        assert!(unscheduled_protocol_prober_exists(
+            &[Pod::default()],
+            &active
+        ));
+    }
+
+    #[test]
+    fn lab_status_writes_are_semantic_and_budgeted_at_supported_scale() {
+        use proofstorm_core::{
+            ComponentCondition, ComponentConditionReason, ComponentConditionState,
+            ComponentConditionType, ComponentKind, ComponentStatus, InventoryEntry,
+        };
+
+        let condition_types = [
+            ComponentConditionType::WorkloadReady,
+            ComponentConditionType::StorageReady,
+            ComponentConditionType::CredentialsReady,
+            ComponentConditionType::ServiceReady,
+            ComponentConditionType::ProtocolReady,
+            ComponentConditionType::DependenciesReady,
+            ComponentConditionType::ComponentReady,
+            ComponentConditionType::ExperimentControllable,
+        ];
+        let components = (0..64)
+            .map(|index| ComponentStatus {
+                id: format!("wallet-{index}"),
+                kind: ComponentKind::Wallet,
+                observed_revision_digest: format!("sha256:{:064x}", index + 1),
+                observed_rollout_digest: format!("sha256:{:064x}", index + 65),
+                conditions: condition_types
+                    .iter()
+                    .map(|condition_type| ComponentCondition {
+                        condition_type: *condition_type,
+                        state: ComponentConditionState::Unknown,
+                        reason: ComponentConditionReason::NotObserved,
+                        message: "bounded readiness observation awaiting controller evidence"
+                            .into(),
+                        last_transition_unix: 1,
+                    })
+                    .collect(),
+                ready: false,
+                service: format!("wallet-{index}.instance.svc"),
+                ports: BTreeMap::from([("http".into(), 3_338)]),
+            })
+            .collect::<Vec<_>>();
+        let inventory = (0..64)
+            .flat_map(|index| {
+                (0..6).map(move |resource| InventoryEntry {
+                    api_version: "apps/v1".into(),
+                    kind: "StatefulSet".into(),
+                    namespace: "proofstorm-i0123456789012345678".into(),
+                    name: format!("wallet-{index}-resource-{resource}"),
+                })
+            })
+            .collect();
+        let status = ProofstormLabStatus {
+            phase: LabPhase::Pending,
+            instance_namespace: Some("proofstorm-i0123456789012345678".into()),
+            observed_generation: Some(1),
+            observed_revision_digest: "sha256:revision".into(),
+            observed_protocol_probe_lease: Some("lease-current".into()),
+            components,
+            inventory,
+            inventory_digest: Some(format!("sha256:{}", "a".repeat(64))),
+            message: Some("waiting for protocol component readiness".into()),
+            ..ProofstormLabStatus::default()
+        };
+
+        enforce_status_budget("ProofstormLab", &status, MAX_LAB_STATUS_BYTES)
+            .expect("maximum supported status remains within budget");
+        assert!(!lab_status_update_required(Some(&status), &status));
+        let mut changed = status.clone();
+        changed.phase = LabPhase::Ready;
+        assert!(lab_status_update_required(Some(&status), &changed));
+
+        let oversized = "x".repeat(MAX_LAB_STATUS_BYTES);
+        assert!(matches!(
+            enforce_status_budget("ProofstormLab", &oversized, MAX_LAB_STATUS_BYTES),
+            Err(Error::StatusBudgetExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn lifecycle_state_is_preserved_only_for_the_same_backend_state_identity() {
+        let workload = |revision: &str, backend: &str, state_contract: &str| {
+            serde_json::from_value::<StatefulSet>(serde_json::json!({
+                "apiVersion": "apps/v1",
+                "kind": "StatefulSet",
+                "metadata": {
+                    "name": "chain",
+                    "annotations": {
+                        BACKEND_ID_ANNOTATION: backend,
+                        EXECUTION_STATE_CONTRACT_ANNOTATION: state_contract,
+                        proofstorm_kube::REVISION_DIGEST_ANNOTATION: revision,
+                    }
+                },
+                "spec": {
+                    "selector": {"matchLabels": {"app": "chain"}},
+                    "serviceName": "chain",
+                    "template": {
+                        "metadata": {"labels": {"app": "chain"}},
+                        "spec": {"containers": [{"name": "component", "image": "example.invalid/image"}]}
+                    }
+                }
+            }))
+            .expect("stateful set")
+        };
+        let existing = workload("sha256:old", "bitcoin-core", "proofstorm/bitcoin-state/v1");
+        let revised = workload("sha256:new", "bitcoin-core", "proofstorm/bitcoin-state/v1");
+        assert!(same_lifecycle_identity(&existing, &revised));
+
+        let replaced = workload("sha256:new", "bitcoin-core", "proofstorm/bitcoin-state/v2");
+        assert!(!same_lifecycle_identity(&existing, &replaced));
+        let backend_changed =
+            workload("sha256:new", "other-bitcoin", "proofstorm/bitcoin-state/v1");
+        assert!(!same_lifecycle_identity(&existing, &backend_changed));
     }
 
     fn network_action(

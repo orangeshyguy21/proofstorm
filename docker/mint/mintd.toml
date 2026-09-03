@@ -5,20 +5,19 @@
 url = "http://mint:3338"
 listen_host = "0.0.0.0"
 listen_port = 3338
-mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+mnemonic = "env:CDK_MINTD_MNEMONIC"
 input_fee_ppk = 0
 
 [mint_info]
 name = "proofstorm"
 description = "proofstorm FakeWallet mint"
-urls = ["http://mint:3338"]
 
 [database]
 engine = "sqlite"
 
-# cdk-mintd 0.17: one [[ln]] entry per unit; min/max bounds required.
-[[ln]]
-ln_backend = "fakewallet"
+# cdk-mintd 0.18: payment backends use the generalized table and backend key.
+[[payment_backend]]
+backend = "fakewallet"
 unit = "sat"
 min_mint = 1
 max_mint = 500000

@@ -69,6 +69,11 @@ cargo run -p proofstorm-mcp
 
 The configured capability list replaces that principal's grants in the selected
 workspace. It is trusted operator configuration, never model-supplied input.
+Set `PROOFSTORM_TOOLSET=design`, `runtime`, or `evidence` to expose only the
+agent-facing tools for that phase; the default is `all`. A toolset only removes
+routes and is always intersected with the principal's durable capabilities, so
+it cannot grant authority. Focused toolsets reduce the MCP discovery schema
+loaded into an agent's context.
 
 To enable the Kubernetes-backed lifecycle tools, add
 `lab.materialize,lab.status,lab.close` to the capability list and set
@@ -82,6 +87,26 @@ refuses unsupported configuration versions, and the resolved lock records both
 versions plus a digest of that component's configuration. This lets adapter
 configuration evolve without pretending it is the same thing as upgrading the
 underlying Bitcoin, Lightning, mint, wallet, or attacker service.
+`proofstorm_lab_publish` returns only revision and lock digests plus a component
+count by default; `include_revision: true` explicitly embeds the complete lab
+and lock when a caller needs the bulk document.
+
+Catalog discovery is intentionally progressive. `proofstorm_catalog_list`
+returns only compact exact-version identities and accepts implementation, kind,
+feature, lifecycle, release-channel, and dependency filters with a digest-bound
+cursor. After selecting a version, use `proofstorm_catalog_entry_read` for its
+immutable image, compatibility, support matrix, and features, then
+`proofstorm_catalog_config_schema_read` for the complete configuration JSON
+Schema or one RFC 6901 fragment. Broad list calls never embed configuration
+schemas.
+
+Runtime observation follows the same pattern. `proofstorm_lab_status` is a
+compact receipt containing phase, revision and lock digests, readiness and
+inventory counts, and an inventory digest; it does not embed topology or
+Kubernetes inventory arrays. Use `proofstorm_lab_component_status_list` for
+cursor-paged component conditions and `proofstorm_lab_inventory_list` for
+cursor-paged sanitized object inventory. Both pages are capped at 50 items and
+shrink to a 32 KiB agent-response budget.
 
 Slice 2 introduces the Kubernetes security spine. Its pinned tool versions are
 in `tools/versions.env`; the local lifecycle is:
@@ -173,8 +198,10 @@ durable SQLite records with dedicated capabilities. Leases expire, carry a
 bounded action budget, and block conflicting leases, experiment close, and lab
 close. Slice 5 runtime operations now require a matching lease and are assigned
 an atomic experiment-wide sequence; `proofstorm_action_list` exposes bounded
-pages of that canonical journal in an object envelope with an explicit next
-sequence cursor.
+pages of compact canonical summaries in an object envelope with an explicit
+next sequence cursor. Summaries contain request and artifact digests, but omit
+stored request bodies, runtime resource names, and artifact content; use
+`proofstorm_operation_status` for one exact operation.
 
 Liquidity bootstrap, wallet round trip, and conservation oracle are
 controller-owned typed actions. MCP records and submits a
@@ -201,9 +228,11 @@ or remove logical components and add or remove typed links using optimistic
 draft versions and idempotency keys. Mutations resolve against the installed
 catalog, enforce implementation kind, control class, service version,
 configuration-contract version, configuration fields, topology compatibility,
-and policy limits, then store components and links in canonical order. Failed
-mutations are transactional, and component removal refuses until its links are
-removed explicitly.
+and policy limits, then store components and links in canonical order. Mutation
+tools return compact version, count, validation, and changed-path receipts;
+`proofstorm_lab_read` is the explicit full-document read. Failed mutations are
+transactional, and component removal refuses until its links are removed
+explicitly.
 
 The Kubernetes acceptance client constructs its seven-component, four-link lab
 from an empty draft through those MCP mutations before publishing it. That
@@ -296,20 +325,27 @@ heal; it does not pretend to support traffic shaping. The typed
 cannot exceed the delay. `proofstorm_network_loss` accepts 1–10,000 basis points
 of packet loss. With the current backend, both return
 `network_fault_unsupported` before operation admission, lease-budget
-consumption, or journal sequencing. The MCP surface now exposes 53 tools. The
+consumption, or journal sequencing. The MCP surface now exposes 61 tools. The
 live workflow records nine reachability observations spanning baseline,
 overlapping faults, controller reconstruction, and targeted heals, for a
 47-action canonical journal; the forty-eighth request is refused by the lease
 budget.
 
 `proofstorm_artifact_export` turns a closed experiment into a deterministic,
-content-hashed evidence bundle without consulting Kubernetes. It includes the
-complete immutable lab revision and resolved lock, a canonical projection of up
-to 100 terminal actions, all oracle artifact bodies by default, and up to 16
-explicitly selected sanitized artifacts. The bundle is capped at 512 KiB and
-omits runtime resource names, instance keys, component credentials, private
-payment material, and unbounded logs. Export requires both `experiment.read`
-and `artifact.read`; it does not consume a lease action.
+content-hashed evidence bundle without consulting Kubernetes. The default
+response is a compact manifest containing its identity, revision and lock
+digests, byte length, journal/artifact counts, and a stable `resource_uri`.
+Agents can read that URI through MCP `resources/read` when they deliberately
+need the complete bundle, or use `proofstorm_evidence_section_read` to inspect
+a bounded revision/lock JSON Pointer, a paged journal, or one selected artifact.
+`include_content: true` remains an explicit compatibility opt-in for embedding
+the complete immutable lab revision and
+resolved lock, a canonical projection of up to 100 terminal actions, all oracle
+artifact bodies by default, and up to 16 explicitly selected sanitized
+artifacts. The content is capped at 512 KiB and omits runtime resource names,
+instance keys, component credentials, private payment material, and unbounded
+logs. Export requires both `experiment.read` and `artifact.read`; it does not
+consume a lease action.
 
 The live k3d workflow exported the complete 47-action experiment after lease
 release and experiment close. The bundle contained the seven-component lab and
@@ -326,6 +362,127 @@ they do not assume both Lightning nodes ship the same CLI. CLN close Jobs run
 the close negotiation, bounded regtest mining, and terminal-state verification
 as coordinated containers so chain progress cannot deadlock behind a blocking
 adapter call.
+
+CDK 0.18.0 mints may select either an exact LND or CLN BOLT11/sat backend. The
+CLN path mounts the selected node's compiled state claim read-only, configures
+its regtest Unix socket, and explicitly disables BOLT12 until that capability
+has its own LDK-backed contract. Exercise the complete MCP materialization and
+live binary/configuration check with:
+
+```sh
+bash tests/kubernetes/cdk-cln-e2e.sh
+```
+
+CDK 0.18.0 also has a distinct embedded-LDK runtime. It links the mint directly
+to a selected Bitcoin Core node, persists the LDK node in the mint's own state,
+and exposes its P2P port without exposing the loopback administrative UI. A
+usable BOLT12 offer requires an introduction path, so the live acceptance adds
+a real CLN peer, connects it to embedded LDK, requests an actual 100-sat `lno`
+offer through the mint API, and verifies teardown:
+
+```sh
+bash tests/kubernetes/cdk-ldk-e2e.sh
+```
+
+The distinct CDK-BDK runtime uses CDK 0.18.0's standard image, where BDK is a
+default feature, and links an on-chain-only mint directly to a selected Bitcoin
+Core node. Its bounded stress acceptance creates 24 concurrent NUT-30 address
+quotes, exercises agent-authored input fees, keyset-v2 policy, quote lifetimes,
+mint/melt bounds, NUT-06 metadata, in-memory cache policy, and transaction input
+and output limits in the live native configuration and API, funds and confirms
+selected quotes, checks the authored minimum-deposit boundary, restarts the mint
+to prove persistence, and verifies teardown:
+
+```sh
+bash tests/kubernetes/cdk-bdk-stress-e2e.sh
+```
+
+CDK 0.18 makes the database, rather than a startup TOML, authoritative for mint
+configuration. Proofstorm therefore validates the immutable generated document
+and runs `config init --new-mint` in a dedicated init container before starting
+`cdk-mintd` without the legacy `--config` flag. On restart, the initializer
+reads the stored configuration and refuses to start if it differs from the
+resolved Proofstorm lock; it never silently reapplies changed settings. Secrets
+use CDK's `env:` and `file:` references, and PostgreSQL receives only its
+bootstrap connection setting through a Secret. Locks from the 0.17 configuration
+contract are rejected rather than reinterpreted as 0.18. Retained 0.17 databases
+must use CDK's explicit upstream migration workflow or be replaced by a new lab.
+CDK 0.18.0's BDK startup can leave an empty `bdk_wallet.sqlite` when its first
+Bitcoin RPC request fails; later starts then fail the persisted-wallet preflight
+instead of retrying initialization. Proofstorm does not delete or recreate that
+state. Its BDK and embedded-LDK pods first pass a bounded, authenticated
+`getblockchaininfo` dependency gate, so wallet initialization begins only after
+the selected regtest node is actually RPC-ready.
+The exact pinned standard and LDK binaries validate every generated backend and
+Compose document with:
+
+```sh
+bash tests/cdk18-config-contract.sh
+```
+
+Nutshell mint parity is the current control-plane increment. Nutshell 0.20.3 is
+now an exact-version mint catalog entry with a typed configuration contract,
+machine-readable field coverage, a pinned image digest, persistent state, a
+controller-generated private key, and exact BOLT11/sat bindings to LND and
+Core Lightning REST. The CLN binding creates a persistent mode-0600 rune that
+permits only the six RPC methods used by Nutshell; it is neither placed in
+public configuration nor returned through MCP. The adapter supports SQLite,
+the existing secret-backed PostgreSQL primary-storage contract, and an
+independent password-authenticated Redis cache contract. Redis 8.10.1 is
+digest-pinned, topology-selected through the typed `cache` database role,
+bounded by an authorable memory limit with `allkeys-lru` eviction, and
+intentionally ephemeral; its URL stays in a controller-generated Secret.
+PostgreSQL credentials and the mint private key remain stable across controller restarts,
+while database state survives both database and mint workload restarts. NUT-06
+metadata, quote lifetimes, proof/request limits, mint/melt and balance ceilings,
+fee reserve policy, rate limits, Redis cache TTL, MPP, and watchdog policy are
+agent-authorable and rollout-affecting. Health checks do not spend that authored
+request budget: workload readiness calls `/v1/info` over Nutshell's
+rate-limit-exempt loopback path, while the credential-free lab protocol prober
+checks Service-DNS reachability over TCP. Probe policy remains controller-owned
+rather than agent-authorable. OIDC environment and topology wiring
+are complete: the
+exact Nutshell 0.20.3 NUT-21 clear-auth and NUT-22 blind-auth settings,
+PVC-backed authentication ledger, and discovery/client policy are typed and
+rendered. A typed `authentication_backend` link selects digest-pinned Keycloak
+25.0.6 with mandatory PostgreSQL storage, a topology-derived discovery URL,
+bounded JVM heap, and controller-generated administrator, realm-import, and
+disposable test-user credentials. The generated public client includes the
+standard subject-bearing scopes and optional offline access. Native BAT
+issuance remains blocked by an upstream Nutshell 0.20.3 auth-ledger migration
+defect: its auth `promises` table does not match the shared CRUD write path.
+Proofstorm does not rewrite that schema. Non-LND/non-CLN payment backends and management RPC are not
+advertised until matching dependency and secret contracts exist. The current
+live acceptance gates are:
+
+```sh
+bash tests/kubernetes/nutshell-mint-e2e.sh
+bash tests/kubernetes/nutshell-cln-e2e.sh
+bash tests/kubernetes/nutshell-postgres-e2e.sh
+bash tests/kubernetes/cross-implementation-wallet-e2e.sh
+bash tests/kubernetes/nutshell-oidc-e2e.sh
+```
+
+The OIDC conformance gate obtains a real Keycloak access token with Nutshell's native
+`WalletAuth`, checks signed issuer/client/subject claims, exercises the NUT-21
+and NUT-22 missing/invalid and policy failures, then proceeds to native BAT
+issuance. Against upstream 0.20.3 it currently reproduces the auth-ledger
+schema failure and therefore does not satisfy the restart/replay exit gate.
+
+CDK is not claimed as an authenticated Nutshell client by this gate. CDK clients
+through 0.18.0 complete OIDC login and refresh against the generated Keycloak
+client, but the CLI does not retain the discovered auth settings in the wallet.
+CDK 0.18.0 also models `input_fee_ppk` as a non-null
+`u64`, so it discards Nutshell 0.20.3's auth keyset response when that field is
+`null`. These are upstream conformance findings, not Proofstorm compatibility
+shims.
+
+The cross-implementation gate materializes CDK 0.18.0 and Redis-backed
+Nutshell 0.20.3 in one lab, drives both through the same pinned Nutshell wallet
+adapter, verifies application-populated cache keys, stable Redis credentials,
+ephemeral cache restart and mint recovery, and
+requires identical initialize, zero-balance, 1,000 sat funding, self-pay round
+trip, and exact conservation-oracle behavior before verified teardown.
 
 The implementation-neutral wallet surface now includes
 `proofstorm_wallet_initialize`, `proofstorm_wallet_balance`, and
@@ -490,9 +647,9 @@ over HTTP** with independent, racing clients and a real LN backend (SPEC §1).
 | `SWAP_AMOUNT`                 | `1`      | Sats used in self-swap during smoke                          |
 | `WALLET_IMPL`                 | `cdk`    | `cdk` or `nutshell`                                          |
 | `MINT_IMPL`                   | `cdk`    | Mint implementation (cdk only today)                         |
-| `CDK_MINTD_VERSION`           | `0.17.1` | `cashubtc/mintd` tag                                         |
-| `CDK_CLI_VERSION`             | `0.17.1` | `cdk-cli` in wallet image                                    |
-| `NUTSHELL_VERSION`            | `0.20.2` | `cashubtc/nutshell` in wallet image                          |
+| `CDK_MINTD_VERSION`           | `0.18.0` | `cashubtc/mintd` tag                                         |
+| `CDK_CLI_VERSION`             | `0.18.0` | `cdk-cli` in wallet image                                    |
+| `NUTSHELL_VERSION`            | `0.20.3` | `cashubtc/nutshell` in wallet image                          |
 | `MINT_HOST_PORT`              | `3338`   | Host port for mint HTTP                                      |
 | `CONSERVATION_EXPECTED`       | _(auto)_ | Override expected total (`N * FUND_AMOUNT`)                  |
 | `CONSERVATION_TOLERANCE`      | `0`      | Allowed delta in fund/population check                       |
@@ -515,7 +672,7 @@ scripts/run-attack.sh    Phase 6 attack runner
 scenarios/               adversarial scenarios + lib/attack.sh helpers
 ```
 
-## Roadmap
+## Legacy Compose roadmap
 
 | Phase  | Status | Deliverable                                  |
 | ------ | ------ | -------------------------------------------- |
@@ -526,6 +683,30 @@ scenarios/               adversarial scenarios + lib/attack.sh helpers
 | 4 (V3) | done   | value-conservation check after smoke         |
 | 5      | next   | wallet-to-wallet token handoff               |
 | 6      | in progress | adversarial regtest harness — see [`SPEC.md`](SPEC.md) |
+
+The Kubernetes control-plane roadmap supersedes that historical table. CDK and
+Nutshell exact-version configuration coverage is complete. Nutshell's catalog,
+typed configuration, LND/SQLite and secret-backed PostgreSQL materialization,
+generated key handling, golden contract, restart persistence, and live
+acceptance clients are in tree and passing on k3d. The same pinned Nutshell
+wallet workflow also passes against CDK and Redis-backed Nutshell side by side.
+Redis support and OIDC environment wiring are complete. The exact 0.20.3
+authentication projection and typed in-lab Keycloak dependency pass, while the
+native NUT-22 gate is blocked by the reproduced upstream auth-ledger schema
+defect. CDK-to-Nutshell authenticated-client conformance follows that fix;
+additional payment backends
+and management RPC remain intentionally unsupported until their typed
+dependency, authority, and secret contracts are implemented.
+
+| Kubernetes Nutshell increment | Status | Exit gate |
+| ----------------------------- | ------ | --------- |
+| LND/CLN, SQLite/PostgreSQL, Redis | done | Exact-version golden, restart, and cross-implementation gates pass |
+| OIDC settings and auth-ledger wiring | done | Typed schema, exact 0.20.3 environment projection, PVC-backed auth persistence |
+| In-lab Keycloak dependency | done | Digest-pinned provider, generated credentials, topology-derived discovery URL |
+| NUT-21/NUT-22 live acceptance | blocked upstream | Nutshell 0.20.3 must mint and persist a BAT without a schema rewrite, then pass replay and restart recovery |
+| CDK authenticated-client interoperability | blocked upstream | Current CDK parses Nutshell auth keys, retains auth settings, and spends a BAT against the protected API |
+| Additional payment backends | queued | Exact backend and secret contracts selected and verified |
+| Management RPC | queued | Separate mTLS authority and bounded management capabilities |
 
 ## Notes
 

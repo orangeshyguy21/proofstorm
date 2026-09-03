@@ -1,0 +1,293 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "nutshell-wallet",
+    "component_id": "wallet",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "implementation": "nutshell-wallet"
+    },
+    "execution_context": {
+      "component_id": "wallet",
+      "environment": {
+        "HOME": "/wallet",
+        "PROOFSTORM_WALLET": "{component_id}"
+      },
+      "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+      "mounts": [
+        {
+          "mount_path": "/wallet",
+          "name": "wallet",
+          "read_only": false,
+          "source": {
+            "source": "component_persistent_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/nutshell-wallet-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "wallet",
+    "linked_targets": {},
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "peer_channel_mutation",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "wallet_payment",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "relevant_links": [],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:ffebbe477adf9efd071bd0e9dec32f5c9ce366be0fd23608caef6a6d5f2afcf5",
+    "storage": [
+      {
+        "claim_name": "wallet-data"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "nutshell-wallet",
+      "component_id": "wallet",
+      "kind": "wallet",
+      "ports": {},
+      "version": "0.20.3"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "deployment",
+      "name": "wallet"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "nutshell-wallet",
+            "proofstorm.dev/execution-state-contract": "proofstorm/nutshell-wallet-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "wallet",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "wallet"
+          },
+          "name": "wallet",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "wallet",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "wallet"
+            }
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:ffebbe477adf9efd071bd0e9dec32f5c9ce366be0fd23608caef6a6d5f2afcf5"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "wallet",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "wallet"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "command": [
+                    "/bin/sh",
+                    "-c",
+                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
+                  ],
+                  "env": [
+                    {
+                      "name": "HOME",
+                      "value": "/wallet"
+                    },
+                    {
+                      "name": "PROOFSTORM_WALLET",
+                      "value": "wallet"
+                    }
+                  ],
+                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/wallet",
+                      "name": "wallet"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "wallet",
+                  "persistentVolumeClaim": {
+                    "claimName": "wallet-data"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "persistentVolumeClaims": [
+      {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "wallet",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "wallet"
+          },
+          "name": "wallet-data",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "1Gi"
+            }
+          }
+        }
+      }
+    ],
+    "secrets": [],
+    "services": [],
+    "statefulSets": []
+  }
+}

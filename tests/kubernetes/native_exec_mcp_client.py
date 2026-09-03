@@ -116,7 +116,7 @@ lab = {
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
             "version": "30.0",
-            "config_version": "v1alpha1",
+            "config_version": "bitcoin-core/30/v1",
             "control": "laboratory",
             "config": {"txindex": True, "fallback_fee": 0.0002},
         },
@@ -125,7 +125,7 @@ lab = {
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
             "version": "30.0",
-            "config_version": "v1alpha1",
+            "config_version": "bitcoin-core/30/v1",
             "control": "laboratory",
             "config": {"txindex": True, "fallback_fee": 0.0002},
         },
@@ -134,7 +134,7 @@ lab = {
             "kind": "lightning",
             "implementation": "lnd",
             "version": "0.20.0-beta",
-            "config_version": "v1alpha1",
+            "config_version": "lnd/0.20/v1",
             "control": "laboratory",
             "config": {"alias": "native-exec-lnd"},
         },
@@ -142,8 +142,8 @@ lab = {
             "id": "wallet",
             "kind": "wallet",
             "implementation": "nutshell-wallet",
-            "version": "0.20.2",
-            "config_version": "v1alpha1",
+            "version": "0.20.3",
+            "config_version": "nutshell-wallet/0.20/v1",
             "control": "laboratory",
             "config": {},
         },
@@ -151,15 +151,15 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "cdk",
-            "version": "0.17.1",
-            "config_version": "v1alpha1",
+            "version": "0.18.0",
+            "config_version": "cdk-mintd/0.18/v1",
             "control": "target",
             "config": {"name": "Native Exec Mint"},
         },
     ],
     "links": [
-        {"kind": "chain_backend", "from": "lightning", "to": "chain"},
-        {"kind": "lightning_backend", "from": "mint", "to": "lightning"},
+        {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
+        {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}},
     ],
     "policy": {
         "allow": ["component.exec"],
@@ -170,7 +170,8 @@ draft = call(
     "proofstorm_lab_create",
     {"draft_id": draft_id, "lab": lab, "idempotency_key": f"create-{run_id}"},
 )
-validation = call("proofstorm_lab_validate", {"lab": draft["lab"]})
+draft_document = call("proofstorm_lab_read", {"draft_id": draft_id})
+validation = call("proofstorm_lab_validate", {"lab": draft_document["lab"]})
 if not validation["valid"]:
     fail(f"native exec lab is invalid: {validation}")
 published = call(
@@ -179,6 +180,7 @@ published = call(
         "draft_id": draft_id,
         "expected_version": draft["version"],
         "idempotency_key": f"publish-{run_id}",
+        "include_revision": True,
     },
 )
 locks = {entry["component_id"]: entry["image"] for entry in published["lock"]["entries"]}
@@ -388,6 +390,7 @@ evidence = call(
     {
         "experiment_id": experiment_id,
         "include_oracle_artifacts": False,
+        "include_content": True,
         "artifact_operation_ids": [operation["id"] for operation in operations],
     },
 )

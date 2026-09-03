@@ -73,6 +73,8 @@ def main():
             tools = read_response(process, selector, 2)["tools"]
             names = {tool["name"] for tool in tools}
             expected = {
+                "proofstorm_catalog_config_schema_read",
+                "proofstorm_catalog_entry_read",
                 "proofstorm_catalog_list",
                 "proofstorm_component_add",
                 "proofstorm_lab_materialize",
@@ -100,6 +102,9 @@ def main():
                 "proofstorm_conservation_oracle",
                 "proofstorm_reachability_oracle",
                 "proofstorm_artifact_export",
+                "proofstorm_evidence_section_read",
+                "proofstorm_lab_component_status_list",
+                "proofstorm_lab_inventory_list",
                 "proofstorm_lab_close",
             }
             missing = sorted(expected - names)

@@ -1,0 +1,1880 @@
+{
+  "inventory": [
+    {
+      "api_version": "apps/v1",
+      "kind": "Deployment",
+      "name": "mint",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "apps/v1",
+      "kind": "Deployment",
+      "name": "proofstorm-protocol-prober",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "apps/v1",
+      "kind": "StatefulSet",
+      "name": "chain",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "apps/v1",
+      "kind": "StatefulSet",
+      "name": "mint-cln",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "name": "allow-controller-actions",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "name": "chain",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "name": "mint",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "name": "mint-cln",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "v1",
+      "kind": "ConfigMap",
+      "name": "mint-config",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "v1",
+      "kind": "PersistentVolumeClaim",
+      "name": "mint-data",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "v1",
+      "kind": "Secret",
+      "name": "mint-credentials",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "v1",
+      "kind": "Service",
+      "name": "chain",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "v1",
+      "kind": "Service",
+      "name": "mint",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "v1",
+      "kind": "Service",
+      "name": "mint-cln",
+      "namespace": "proofstorm-i-golden-b2"
+    }
+  ],
+  "plans": [
+    {
+      "applicable_conditions": [
+        "workload_ready",
+        "storage_ready",
+        "service_ready",
+        "protocol_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "backend_id": "bitcoin-core",
+      "component_id": "chain",
+      "condition_aggregation": [
+        {
+          "all_of": [
+            "workload_ready",
+            "storage_ready",
+            "service_ready",
+            "protocol_ready"
+          ],
+          "condition": "component_ready"
+        }
+      ],
+      "condition_reasons": {
+        "component_ready": [
+          "stale_revision",
+          "component_operational",
+          "component_not_operational",
+          "intentionally_stopped"
+        ],
+        "experiment_controllable": [
+          "control_available",
+          "control_unavailable"
+        ],
+        "protocol_ready": [
+          "protocol_responding",
+          "protocol_probe_pending",
+          "protocol_probe_failed",
+          "intentionally_stopped"
+        ],
+        "service_ready": [
+          "not_observed",
+          "endpoints_ready",
+          "endpoints_missing"
+        ],
+        "storage_ready": [
+          "not_observed",
+          "storage_bound",
+          "storage_pending"
+        ],
+        "workload_ready": [
+          "not_observed",
+          "stale_revision",
+          "workload_available",
+          "workload_unavailable",
+          "intentionally_stopped"
+        ]
+      },
+      "credentials": [],
+      "effective_config": {
+        "config": {
+          "fallback_fee": 0.0002,
+          "txindex": true
+        },
+        "implementation": "bitcoin-core"
+      },
+      "execution_context": {
+        "component_id": "chain",
+        "environment": {
+          "HOME": "/home/bitcoin"
+        },
+        "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+        "mounts": [
+          {
+            "mount_path": "/home/bitcoin/.bitcoin",
+            "name": "data",
+            "read_only": false,
+            "source": {
+              "source": "stateful_data"
+            }
+          }
+        ],
+        "state_contract": "proofstorm/bitcoin-core-state/v1"
+      },
+      "instance_key": "i-golden-b2",
+      "kind": "bitcoin",
+      "linked_targets": {},
+      "operation_admission": [
+        {
+          "operation": "inspect",
+          "prerequisites": [
+            "accepted_identity"
+          ]
+        },
+        {
+          "operation": "start",
+          "prerequisites": [
+            "accepted_identity",
+            "storage"
+          ]
+        },
+        {
+          "operation": "stop",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "restart",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "native_exec",
+          "prerequisites": [
+            "execution_context"
+          ]
+        },
+        {
+          "operation": "network_heal",
+          "prerequisites": [
+            "fault_identity"
+          ]
+        },
+        {
+          "operation": "peer_channel_mutation",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        }
+      ],
+      "protocol_probe": {
+        "kind": "tcp",
+        "port": 18443
+      },
+      "relevant_links": [],
+      "revision_digest": "sha256:b2-golden-revision",
+      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
+      "storage": [
+        {
+          "claim_name": "data-chain-0"
+        }
+      ],
+      "target_descriptor": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
+        "ports": {
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
+        },
+        "version": "30.0"
+      },
+      "workload": {
+        "desired_replicas": 1,
+        "kind": "stateful_set",
+        "name": "chain"
+      }
+    },
+    {
+      "applicable_conditions": [
+        "workload_ready",
+        "storage_ready",
+        "credentials_ready",
+        "service_ready",
+        "protocol_ready",
+        "dependencies_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "backend_id": "nutshell",
+      "component_id": "mint",
+      "condition_aggregation": [
+        {
+          "all_of": [
+            "workload_ready",
+            "storage_ready",
+            "service_ready",
+            "protocol_ready",
+            "dependencies_ready"
+          ],
+          "condition": "component_ready"
+        }
+      ],
+      "condition_reasons": {
+        "component_ready": [
+          "stale_revision",
+          "component_operational",
+          "component_not_operational",
+          "intentionally_stopped"
+        ],
+        "credentials_ready": [
+          "not_observed",
+          "credentials_projected",
+          "credentials_missing"
+        ],
+        "dependencies_ready": [
+          "not_observed",
+          "dependencies_satisfied",
+          "dependencies_unsatisfied"
+        ],
+        "experiment_controllable": [
+          "control_available",
+          "control_unavailable"
+        ],
+        "protocol_ready": [
+          "protocol_responding",
+          "protocol_probe_pending",
+          "protocol_probe_failed",
+          "intentionally_stopped"
+        ],
+        "service_ready": [
+          "not_observed",
+          "endpoints_ready",
+          "endpoints_missing"
+        ],
+        "storage_ready": [
+          "not_observed",
+          "storage_bound",
+          "storage_pending"
+        ],
+        "workload_ready": [
+          "not_observed",
+          "stale_revision",
+          "workload_available",
+          "workload_unavailable",
+          "intentionally_stopped"
+        ]
+      },
+      "credentials": [
+        {
+          "claim_name": "data-mint-cln-0",
+          "identity": "cln:mint-mint-cln-lightning:mint-cln:data-mint-cln-0",
+          "mount_name": "cln",
+          "mount_path": "/cln",
+          "read_only": true,
+          "source_component_id": "mint-cln",
+          "source_state_contract": "proofstorm/cln-state/v1"
+        }
+      ],
+      "effective_config": {
+        "config": {
+          "auth_max_blind_tokens": 100,
+          "auth_rate_limit_per_minute": 5,
+          "clnrest_enable_mpp": true,
+          "contact_email": "",
+          "contact_nostr_public_key": "",
+          "database_lock_timeout_ms": 30000,
+          "description": "Proofstorm regtest Nutshell mint",
+          "description_long": "",
+          "disable_melt": false,
+          "disable_mint": false,
+          "global_rate_limit_per_minute": 60,
+          "icon_url": "",
+          "input_fee_ppk": 100,
+          "lightning_fee_percent": 1.0,
+          "lightning_reserve_fee_min_sat": 2,
+          "lnd_enable_mpp": true,
+          "max_balance_sat": 10000000,
+          "max_melt_sat": 500000,
+          "max_mint_sat": 500000,
+          "max_request_length": 1000,
+          "max_secret_length": 1024,
+          "max_witness_length": 1024,
+          "melt_quote_ttl_seconds": 120,
+          "mint_quote_ttl_seconds": 600,
+          "motd": "",
+          "name": "Proofstorm Nutshell mint",
+          "oidc_client_id": "cashu-client",
+          "oidc_discovery_url": "",
+          "quote_backend_check_rate_limit_seconds": 10,
+          "rate_limit": true,
+          "rate_limit_proxy_trust": false,
+          "redis_cache_ttl_seconds": 604800,
+          "regular_tasks_interval_seconds": 3600,
+          "tos_url": "",
+          "transaction_rate_limit_per_minute": 20,
+          "watchdog_balance_check_interval_seconds": 60,
+          "watchdog_enabled": false,
+          "websocket_read_timeout_seconds": 600
+        },
+        "implementation": "nutshell"
+      },
+      "execution_context": {
+        "component_id": "mint",
+        "environment": {
+          "CASHU_DIR": "/app/data",
+          "HOME": "/app/data"
+        },
+        "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+        "mounts": [
+          {
+            "mount_path": "/app/data",
+            "name": "data",
+            "read_only": false,
+            "source": {
+              "source": "component_persistent_data"
+            }
+          },
+          {
+            "mount_path": "/cln",
+            "name": "cln",
+            "read_only": true,
+            "source": {
+              "link_id": "mint-mint-cln-lightning",
+              "source": "linked_stateful_data"
+            }
+          }
+        ],
+        "state_contract": "proofstorm/nutshell-mint-state/v1"
+      },
+      "instance_key": "i-golden-b2",
+      "kind": "mint",
+      "linked_targets": {
+        "mint-mint-cln-lightning": {
+          "backend_id": "cln",
+          "component_id": "mint-cln",
+          "kind": "lightning",
+          "ports": {
+            "p2p": 9735,
+            "rest": 3010
+          },
+          "version": "26.06.7"
+        }
+      },
+      "operation_admission": [
+        {
+          "operation": "inspect",
+          "prerequisites": [
+            "accepted_identity"
+          ]
+        },
+        {
+          "operation": "start",
+          "prerequisites": [
+            "accepted_identity",
+            "storage"
+          ]
+        },
+        {
+          "operation": "stop",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "restart",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "native_exec",
+          "prerequisites": [
+            "execution_context"
+          ]
+        },
+        {
+          "operation": "network_heal",
+          "prerequisites": [
+            "fault_identity"
+          ]
+        },
+        {
+          "operation": "peer_channel_mutation",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        }
+      ],
+      "protocol_probe": {
+        "kind": "tcp",
+        "port": 3338
+      },
+      "relevant_links": [
+        {
+          "binding": {
+            "method": "bolt11",
+            "type": "payment",
+            "unit": "sat"
+          },
+          "from": "mint",
+          "id": "mint-mint-cln-lightning",
+          "kind": "payment_backend",
+          "to": "mint-cln"
+        }
+      ],
+      "revision_digest": "sha256:b2-golden-revision",
+      "rollout_digest": "sha256:76041815f355b97cdb5e5d93315e25cd7af85e055dddbd8e99de8064ec2c15f0",
+      "storage": [
+        {
+          "claim_name": "mint-data"
+        }
+      ],
+      "target_descriptor": {
+        "backend_id": "nutshell",
+        "component_id": "mint",
+        "kind": "mint",
+        "ports": {
+          "http": 3338
+        },
+        "version": "0.20.3"
+      },
+      "workload": {
+        "desired_replicas": 1,
+        "kind": "deployment",
+        "name": "mint"
+      }
+    },
+    {
+      "applicable_conditions": [
+        "workload_ready",
+        "storage_ready",
+        "service_ready",
+        "protocol_ready",
+        "dependencies_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "backend_id": "cln",
+      "component_id": "mint-cln",
+      "condition_aggregation": [
+        {
+          "all_of": [
+            "workload_ready",
+            "storage_ready",
+            "service_ready",
+            "protocol_ready",
+            "dependencies_ready"
+          ],
+          "condition": "component_ready"
+        }
+      ],
+      "condition_reasons": {
+        "component_ready": [
+          "stale_revision",
+          "component_operational",
+          "component_not_operational",
+          "intentionally_stopped"
+        ],
+        "dependencies_ready": [
+          "not_observed",
+          "dependencies_satisfied",
+          "dependencies_unsatisfied"
+        ],
+        "experiment_controllable": [
+          "control_available",
+          "control_unavailable"
+        ],
+        "protocol_ready": [
+          "protocol_responding",
+          "protocol_probe_pending",
+          "protocol_probe_failed",
+          "intentionally_stopped"
+        ],
+        "service_ready": [
+          "not_observed",
+          "endpoints_ready",
+          "endpoints_missing"
+        ],
+        "storage_ready": [
+          "not_observed",
+          "storage_bound",
+          "storage_pending"
+        ],
+        "workload_ready": [
+          "not_observed",
+          "stale_revision",
+          "workload_available",
+          "workload_unavailable",
+          "intentionally_stopped"
+        ]
+      },
+      "credentials": [],
+      "effective_config": {
+        "config": {
+          "alias": "mint-cln"
+        },
+        "implementation": "cln"
+      },
+      "execution_context": {
+        "component_id": "mint-cln",
+        "environment": {
+          "HOME": "/home/cln"
+        },
+        "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+        "mounts": [
+          {
+            "mount_path": "/home/cln/.lightning",
+            "name": "data",
+            "read_only": false,
+            "source": {
+              "source": "stateful_data"
+            }
+          }
+        ],
+        "state_contract": "proofstorm/cln-state/v1"
+      },
+      "instance_key": "i-golden-b2",
+      "kind": "lightning",
+      "linked_targets": {
+        "mint-cln-chain-chain": {
+          "backend_id": "bitcoin-core",
+          "component_id": "chain",
+          "kind": "bitcoin",
+          "ports": {
+            "p2p": 18444,
+            "rpc": 18443,
+            "zmq_block": 28334,
+            "zmq_tx": 28335
+          },
+          "version": "30.0"
+        }
+      },
+      "operation_admission": [
+        {
+          "operation": "inspect",
+          "prerequisites": [
+            "accepted_identity"
+          ]
+        },
+        {
+          "operation": "start",
+          "prerequisites": [
+            "accepted_identity",
+            "storage"
+          ]
+        },
+        {
+          "operation": "stop",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "restart",
+          "prerequisites": [
+            "workload_identity"
+          ]
+        },
+        {
+          "operation": "native_exec",
+          "prerequisites": [
+            "execution_context"
+          ]
+        },
+        {
+          "operation": "network_heal",
+          "prerequisites": [
+            "fault_identity"
+          ]
+        },
+        {
+          "operation": "peer_channel_mutation",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        }
+      ],
+      "protocol_probe": {
+        "kind": "tcp",
+        "port": 9735
+      },
+      "relevant_links": [
+        {
+          "binding": {
+            "network": "regtest",
+            "type": "chain"
+          },
+          "from": "mint-cln",
+          "id": "mint-cln-chain-chain",
+          "kind": "chain_backend",
+          "to": "chain"
+        }
+      ],
+      "revision_digest": "sha256:b2-golden-revision",
+      "rollout_digest": "sha256:dbdcc45fb1ae04686c46aaaae9159329ab13612838cc5ba0d0550a8d380ba96d",
+      "storage": [
+        {
+          "claim_name": "data-mint-cln-0"
+        }
+      ],
+      "target_descriptor": {
+        "backend_id": "cln",
+        "component_id": "mint-cln",
+        "kind": "lightning",
+        "ports": {
+          "p2p": 9735,
+          "rest": 3010
+        },
+        "version": "26.06.7"
+      },
+      "workload": {
+        "desired_replicas": 1,
+        "kind": "stateful_set",
+        "name": "mint-cln"
+      }
+    }
+  ],
+  "resources": {
+    "configMaps": [
+      {
+        "apiVersion": "v1",
+        "data": {
+          "CASHU_DIR": "/app/data",
+          "LIGHTNING_FEE_PERCENT": "1",
+          "LIGHTNING_RESERVE_FEE_MIN": "2",
+          "MELT_QUOTE_TTL": "120",
+          "MINT_AUTH_DATABASE": "/app/data",
+          "MINT_AUTH_MAX_BLIND_TOKENS": "100",
+          "MINT_AUTH_RATE_LIMIT_PER_MINUTE": "5",
+          "MINT_BACKEND_BOLT11_SAT": "CLNRestWallet",
+          "MINT_BOLT11_DISABLE_MELT": "FALSE",
+          "MINT_BOLT11_DISABLE_MINT": "FALSE",
+          "MINT_CLNREST_ENABLE_MPP": "TRUE",
+          "MINT_CLNREST_RUNE": "/app/data/.proofstorm/cln.rune",
+          "MINT_CLNREST_URL": "http://mint-cln:3010",
+          "MINT_DATABASE": "/app/data",
+          "MINT_DATABASE_LOCK_TIMEOUT": "30000",
+          "MINT_DERIVATION_PATH": "m/0'/0'/0'",
+          "MINT_FORWARDED_ALLOW_IPS": "127.0.0.1",
+          "MINT_GLOBAL_RATE_LIMIT_PER_MINUTE": "60",
+          "MINT_INFO_CONTACT": "[]",
+          "MINT_INFO_DESCRIPTION": "Proofstorm regtest Nutshell mint",
+          "MINT_INFO_DESCRIPTION_LONG": "",
+          "MINT_INFO_ICON_URL": "",
+          "MINT_INFO_MOTD": "",
+          "MINT_INFO_NAME": "Proofstorm Nutshell mint",
+          "MINT_INFO_TOS_URL": "",
+          "MINT_INFO_URLS": "[\"http://mint:3338\"]",
+          "MINT_INPUT_FEE_PPK": "100",
+          "MINT_LISTEN_HOST": "0.0.0.0",
+          "MINT_LISTEN_PORT": "3338",
+          "MINT_MAX_BALANCE": "10000000",
+          "MINT_MAX_MELT_BOLT11_SAT": "500000",
+          "MINT_MAX_MINT_BOLT11_SAT": "500000",
+          "MINT_MAX_REQUEST_LENGTH": "1000",
+          "MINT_MAX_SECRET_LENGTH": "1024",
+          "MINT_MAX_WITNESS_LENGTH": "1024",
+          "MINT_QUOTE_BACKEND_CHECK_RATE_LIMIT": "10",
+          "MINT_QUOTE_TTL": "600",
+          "MINT_RATE_LIMIT": "TRUE",
+          "MINT_RATE_LIMIT_PROXY_TRUST": "FALSE",
+          "MINT_REDIS_CACHE_CLUSTER": "FALSE",
+          "MINT_REDIS_CACHE_ENABLED": "FALSE",
+          "MINT_REDIS_CACHE_TTL": "604800",
+          "MINT_REGULAR_TASKS_INTERVAL_SECONDS": "3600",
+          "MINT_REQUIRE_AUTH": "FALSE",
+          "MINT_RPC_SERVER_ENABLE": "FALSE",
+          "MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE": "20",
+          "MINT_WATCHDOG_BALANCE_CHECK_INTERVAL_SECONDS": "60",
+          "MINT_WATCHDOG_ENABLED": "FALSE",
+          "MINT_WEBSOCKET_READ_TIMEOUT": "600",
+          "TOR": "FALSE"
+        },
+        "kind": "ConfigMap",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-config",
+          "namespace": "proofstorm-i-golden-b2"
+        }
+      }
+    ],
+    "deployments": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "nutshell",
+            "proofstorm.dev/execution-state-contract": "proofstorm/nutshell-mint-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "mint",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "mint"
+            }
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:76041815f355b97cdb5e5d93315e25cd7af85e055dddbd8e99de8064ec2c15f0"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "mint",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "mint"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "command": [
+                    "python3",
+                    "-c",
+                    "import json\nimport os\nimport socket\nimport time\n\nsocket_path = \"/cln/regtest/lightning-rpc\"\nrune_directory = \"/app/data/.proofstorm\"\nrune_path = f\"{rune_directory}/cln.rune\"\nif not os.path.exists(rune_path) or os.path.getsize(rune_path) == 0:\n    os.makedirs(rune_directory, mode=0o700, exist_ok=True)\n    for attempt in range(180):\n        try:\n            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n            connection.settimeout(10)\n            connection.connect(socket_path)\n            break\n        except OSError:\n            connection.close()\n            if attempt == 179:\n                raise\n            time.sleep(1)\n    request = {\n        \"jsonrpc\": \"2.0\",\n        \"id\": \"proofstorm-nutshell\",\n        \"method\": \"createrune\",\n        \"params\": {\n            \"restrictions\": [[\n                \"method=listfunds\",\n                \"method=invoice\",\n                \"method=pay\",\n                \"method=listinvoices\",\n                \"method=listpays\",\n                \"method=waitanyinvoice\",\n            ]]\n        },\n    }\n    connection.sendall(json.dumps(request, separators=(\",\", \":\")).encode() + b\"\\n\\n\")\n    response = b\"\"\n    while b\"\\n\\n\" not in response:\n        chunk = connection.recv(65536)\n        if not chunk:\n            raise RuntimeError(\"Core Lightning closed the rune request\")\n        response += chunk\n    connection.close()\n    result = json.loads(response.split(b\"\\n\\n\", 1)[0])\n    if \"error\" in result:\n        raise RuntimeError(f\"Core Lightning rune creation failed: {result['error']}\")\n    rune = result[\"result\"][\"rune\"]\n    temporary_path = f\"{rune_path}.tmp\"\n    descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n    with os.fdopen(descriptor, \"w\") as rune_file:\n        rune_file.write(rune)\n    os.replace(temporary_path, rune_path)\n\nfrom cashu.mint.main import main\nmain()\n"
+                  ],
+                  "env": [
+                    {
+                      "name": "MINT_PRIVATE_KEY",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "MINT_PRIVATE_KEY",
+                          "name": "mint-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "envFrom": [
+                    {
+                      "configMapRef": {
+                        "name": "mint-config"
+                      }
+                    }
+                  ],
+                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 3338,
+                      "name": "http"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "python3",
+                        "-c",
+                        "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()",
+                        "http://127.0.0.1:3338/v1/info"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 2
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/app/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/cln",
+                      "name": "cln",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "data",
+                  "persistentVolumeClaim": {
+                    "claimName": "mint-data"
+                  }
+                },
+                {
+                  "name": "cln",
+                  "persistentVolumeClaim": {
+                    "claimName": "data-mint-cln-0"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/prober-digest": "sha256:0fd9703b0923d6bc019091cdb452163b049f74b09f203a0f50e6f81a242a048b",
+            "proofstorm.dev/prober-lease": "inactive"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "proofstorm-protocol-prober",
+            "proofstorm.dev/operation": "protocol-prober",
+            "proofstorm.dev/prober": "true"
+          },
+          "name": "proofstorm-protocol-prober",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 0,
+          "selector": {
+            "matchLabels": {
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/prober": "true"
+            }
+          },
+          "strategy": {
+            "type": "Recreate"
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/prober-digest": "sha256:0fd9703b0923d6bc019091cdb452163b049f74b09f203a0f50e6f81a242a048b",
+                "proofstorm.dev/prober-lease": "inactive"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "proofstorm-protocol-prober",
+                "proofstorm.dev/operation": "protocol-prober",
+                "proofstorm.dev/prober": "true"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "command": [
+                    "sh",
+                    "-c",
+                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
+                  ],
+                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "probe-chain-6123e71c",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "nc",
+                        "-z",
+                        "-w",
+                        "2",
+                        "chain",
+                        "18443"
+                      ]
+                    },
+                    "failureThreshold": 3,
+                    "initialDelaySeconds": 1,
+                    "periodSeconds": 5,
+                    "successThreshold": 1,
+                    "timeoutSeconds": 2
+                  },
+                  "resources": {
+                    "limits": {
+                      "cpu": "25m",
+                      "memory": "16Mi"
+                    },
+                    "requests": {
+                      "cpu": "5m",
+                      "memory": "4Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-c",
+                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
+                  ],
+                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "probe-mint-2913daf3",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "nc",
+                        "-z",
+                        "-w",
+                        "2",
+                        "mint",
+                        "3338"
+                      ]
+                    },
+                    "failureThreshold": 3,
+                    "initialDelaySeconds": 1,
+                    "periodSeconds": 5,
+                    "successThreshold": 1,
+                    "timeoutSeconds": 2
+                  },
+                  "resources": {
+                    "limits": {
+                      "cpu": "25m",
+                      "memory": "16Mi"
+                    },
+                    "requests": {
+                      "cpu": "5m",
+                      "memory": "4Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-c",
+                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
+                  ],
+                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "probe-mint-cln-44220a6c",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "nc",
+                        "-z",
+                        "-w",
+                        "2",
+                        "mint-cln",
+                        "9735"
+                      ]
+                    },
+                    "failureThreshold": 3,
+                    "initialDelaySeconds": 1,
+                    "periodSeconds": 5,
+                    "successThreshold": 1,
+                    "timeoutSeconds": 2
+                  },
+                  "resources": {
+                    "limits": {
+                      "cpu": "25m",
+                      "memory": "16Mi"
+                    },
+                    "requests": {
+                      "cpu": "5m",
+                      "memory": "4Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  }
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "terminationGracePeriodSeconds": 1
+            }
+          }
+        }
+      }
+    ],
+    "networkPolicies": [
+      {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/instance": "i-golden-b2"
+          },
+          "name": "allow-controller-actions",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "egress": [
+            {
+              "to": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "ports": [
+                {
+                  "port": 53,
+                  "protocol": "UDP"
+                },
+                {
+                  "port": 53,
+                  "protocol": "TCP"
+                }
+              ],
+              "to": [
+                {
+                  "namespaceSelector": {
+                    "matchLabels": {
+                      "kubernetes.io/metadata.name": "kube-system"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "ingress": [
+            {
+              "from": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "podSelector": {
+            "matchExpressions": [
+              {
+                "key": "proofstorm.dev/operation",
+                "operator": "Exists"
+              }
+            ]
+          },
+          "policyTypes": [
+            "Ingress",
+            "Egress"
+          ]
+        }
+      },
+      {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "chain",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "chain"
+          },
+          "name": "chain",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "egress": [
+            {
+              "to": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "ports": [
+                {
+                  "port": 53,
+                  "protocol": "UDP"
+                },
+                {
+                  "port": 53,
+                  "protocol": "TCP"
+                }
+              ],
+              "to": [
+                {
+                  "namespaceSelector": {
+                    "matchLabels": {
+                      "kubernetes.io/metadata.name": "kube-system"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "ingress": [
+            {
+              "from": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "podSelector": {
+            "matchLabels": {
+              "proofstorm.dev/network-identity": "chain"
+            }
+          },
+          "policyTypes": [
+            "Ingress",
+            "Egress"
+          ]
+        }
+      },
+      {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "egress": [
+            {
+              "to": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "ports": [
+                {
+                  "port": 53,
+                  "protocol": "UDP"
+                },
+                {
+                  "port": 53,
+                  "protocol": "TCP"
+                }
+              ],
+              "to": [
+                {
+                  "namespaceSelector": {
+                    "matchLabels": {
+                      "kubernetes.io/metadata.name": "kube-system"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "ingress": [
+            {
+              "from": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "podSelector": {
+            "matchLabels": {
+              "proofstorm.dev/network-identity": "mint"
+            }
+          },
+          "policyTypes": [
+            "Ingress",
+            "Egress"
+          ]
+        }
+      },
+      {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint-cln",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint-cln"
+          },
+          "name": "mint-cln",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "egress": [
+            {
+              "to": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "ports": [
+                {
+                  "port": 53,
+                  "protocol": "UDP"
+                },
+                {
+                  "port": 53,
+                  "protocol": "TCP"
+                }
+              ],
+              "to": [
+                {
+                  "namespaceSelector": {
+                    "matchLabels": {
+                      "kubernetes.io/metadata.name": "kube-system"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "ingress": [
+            {
+              "from": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "podSelector": {
+            "matchLabels": {
+              "proofstorm.dev/network-identity": "mint-cln"
+            }
+          },
+          "policyTypes": [
+            "Ingress",
+            "Egress"
+          ]
+        }
+      }
+    ],
+    "persistentVolumeClaims": [
+      {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-data",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "1Gi"
+            }
+          }
+        }
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "chain",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "chain"
+          },
+          "name": "chain",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "p2p",
+              "port": 18444,
+              "targetPort": 18444
+            },
+            {
+              "name": "rpc",
+              "port": 18443,
+              "targetPort": 18443
+            },
+            {
+              "name": "zmq-block",
+              "port": 28334,
+              "targetPort": 28334
+            },
+            {
+              "name": "zmq-tx",
+              "port": 28335,
+              "targetPort": 28335
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "chain",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "chain"
+          }
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "http",
+              "port": 3338,
+              "targetPort": 3338
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          }
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint-cln",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint-cln"
+          },
+          "name": "mint-cln",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "p2p",
+              "port": 9735,
+              "targetPort": 9735
+            },
+            {
+              "name": "rest",
+              "port": 3010,
+              "targetPort": 3010
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint-cln",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint-cln"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "bitcoin-core",
+            "proofstorm.dev/execution-state-contract": "proofstorm/bitcoin-core-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "chain",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "chain"
+          },
+          "name": "chain",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "chain",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "chain"
+            }
+          },
+          "serviceName": "chain",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "chain",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "chain"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [
+                    "-regtest",
+                    "-datadir=/home/bitcoin/.bitcoin",
+                    "-server=1",
+                    "-rpcbind=0.0.0.0",
+                    "-rpcallowip=0.0.0.0/0",
+                    "-rpcuser=proofstorm",
+                    "-rpcpassword=proofstorm-regtest-only",
+                    "-rpcport=18443",
+                    "-txindex=1",
+                    "-zmqpubrawblock=tcp://0.0.0.0:28334",
+                    "-zmqpubrawtx=tcp://0.0.0.0:28335",
+                    "-fallbackfee=0.0002",
+                    "-debug=0"
+                  ],
+                  "command": [
+                    "bitcoind"
+                  ],
+                  "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "bitcoin-cli",
+                        "-regtest",
+                        "-rpcuser=proofstorm",
+                        "-rpcpassword=proofstorm-regtest-only",
+                        "getblockchaininfo"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/home/bitcoin/.bitcoin",
+                      "name": "data"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload"
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "chain",
+                  "proofstorm.dev/instance": "i-golden-b2",
+                  "proofstorm.dev/network-identity": "chain"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "cln",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cln-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint-cln",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint-cln"
+          },
+          "name": "mint-cln",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "mint-cln",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "mint-cln"
+            }
+          },
+          "serviceName": "mint-cln",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:dbdcc45fb1ae04686c46aaaae9159329ab13612838cc5ba0d0550a8d380ba96d"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "mint-cln",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "mint-cln"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [
+                    "--lightning-dir=/home/cln/.lightning",
+                    "--network=regtest",
+                    "--alias=mint-cln",
+                    "--developer",
+                    "--dev-no-reconnect",
+                    "--autoconnect-seeker-peers=0",
+                    "--bind-addr=0.0.0.0:9735",
+                    "--announce-addr=mint-cln:9735",
+                    "--clnrest-host=0.0.0.0",
+                    "--clnrest-port=3010",
+                    "--clnrest-protocol=http",
+                    "--bitcoin-rpcconnect=chain",
+                    "--bitcoin-rpcport=18443",
+                    "--bitcoin-rpcuser=proofstorm",
+                    "--bitcoin-rpcpassword=proofstorm-regtest-only",
+                    "--bitcoin-retry-timeout=60",
+                    "--log-level=info"
+                  ],
+                  "command": [
+                    "lightningd"
+                  ],
+                  "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "lightning-cli",
+                        "--lightning-dir=/home/cln/.lightning",
+                        "--network=regtest",
+                        "getinfo"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/home/cln/.lightning",
+                      "name": "data"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload"
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "mint-cln",
+                  "proofstorm.dev/instance": "i-golden-b2",
+                  "proofstorm.dev/network-identity": "mint-cln"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

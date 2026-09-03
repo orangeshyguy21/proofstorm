@@ -14,7 +14,7 @@ use proofstorm_core::{
     Capability, DraftMutation, Experiment, ExperimentLease, ExperimentPhase, LabInstance,
     LabOperation, LabSpec, LeasePhase, OperationArtifact, OperationKind, OperationPhase,
     PublishedRevision, WalletQuote, WalletQuoteDirection, WalletQuotePhase, apply_draft_mutation,
-    default_catalog, resolve_lock, validate_lab,
+    default_catalog, resolve_effective_lab, resolve_lock, validate_lab,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use schemars::JsonSchema;
@@ -739,12 +739,15 @@ impl Store {
                 &report.issues,
             )?));
         }
-        let lock = resolve_lock(&draft.lab, &default_catalog()).map_err(StoreError::Catalog)?;
-        let digest = proofstorm_core::publication_digest(workspace, &draft.lab, &lock);
+        let catalog = default_catalog();
+        let effective_lab =
+            resolve_effective_lab(&draft.lab, &catalog).map_err(StoreError::Catalog)?;
+        let lock = resolve_lock(&effective_lab, &catalog).map_err(StoreError::Catalog)?;
+        let digest = proofstorm_core::publication_digest(workspace, &effective_lab, &lock);
         let revision = PublishedRevision {
             workspace_id: workspace.to_owned(),
             digest: digest.clone(),
-            lab: draft.lab,
+            lab: effective_lab,
             lock,
         };
         self.lock()?.execute(

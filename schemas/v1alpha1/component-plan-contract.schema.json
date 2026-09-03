@@ -1,0 +1,1267 @@
+{
+  "$defs": {
+    "BitcoinCoreConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "fallback_fee": {
+          "format": "double",
+          "type": "number"
+        },
+        "txindex": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "txindex",
+        "fallback_fee"
+      ],
+      "type": "object"
+    },
+    "CdkMintConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "contact_email": {
+          "type": "string"
+        },
+        "contact_nostr_public_key": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "description_long": {
+          "type": "string"
+        },
+        "enable_info_page": {
+          "type": "boolean"
+        },
+        "http_cache_tti_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "http_cache_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "icon_url": {
+          "type": "string"
+        },
+        "input_fee_ppk": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_inputs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_melt_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_mint_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_outputs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "melt_quote_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_melt_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_mint_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mint_quote_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "motd": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tos_url": {
+          "type": "string"
+        },
+        "use_keyset_v2": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "description_long",
+        "motd",
+        "icon_url",
+        "contact_email",
+        "contact_nostr_public_key",
+        "tos_url",
+        "enable_info_page",
+        "input_fee_ppk",
+        "use_keyset_v2",
+        "mint_quote_ttl_seconds",
+        "melt_quote_ttl_seconds",
+        "http_cache_ttl_seconds",
+        "http_cache_tti_seconds",
+        "max_inputs",
+        "max_outputs",
+        "min_mint_sat",
+        "max_mint_sat",
+        "min_melt_sat",
+        "max_melt_sat"
+      ],
+      "type": "object"
+    },
+    "ClnConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "alias": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "alias"
+      ],
+      "type": "object"
+    },
+    "ComponentConditionReason": {
+      "enum": [
+        "observed",
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "storage_bound",
+        "storage_pending",
+        "credentials_projected",
+        "credentials_missing",
+        "endpoints_ready",
+        "endpoints_missing",
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped",
+        "control_available",
+        "control_unavailable"
+      ],
+      "type": "string"
+    },
+    "ComponentConditionType": {
+      "enum": [
+        "workload_ready",
+        "storage_ready",
+        "credentials_ready",
+        "service_ready",
+        "protocol_ready",
+        "dependencies_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "type": "string"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "database",
+        "identity_provider",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ConditionAggregationContract": {
+      "additionalProperties": false,
+      "properties": {
+        "all_of": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionType"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "condition": {
+          "$ref": "#/$defs/ComponentConditionType"
+        }
+      },
+      "required": [
+        "condition",
+        "all_of"
+      ],
+      "type": "object"
+    },
+    "CredentialObservationContract": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_name": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "mount_name": {
+          "type": "string"
+        },
+        "mount_path": {
+          "type": "string"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "source_component_id": {
+          "type": "string"
+        },
+        "source_state_contract": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "source_component_id",
+        "source_state_contract",
+        "claim_name",
+        "mount_name",
+        "mount_path",
+        "read_only"
+      ],
+      "type": "object"
+    },
+    "DependencyBinding": {
+      "additionalProperties": false,
+      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+      "properties": {
+        "method": {
+          "enum": [
+            "bolt11",
+            "bolt12",
+            "onchain"
+          ],
+          "type": "string"
+        },
+        "network": {
+          "enum": [
+            "regtest"
+          ],
+          "type": "string"
+        },
+        "protocol": {
+          "enum": [
+            "oidc"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "cache",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chain",
+            "payment",
+            "database",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "pattern": "^[a-z0-9-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol",
+          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))"
+        }
+      ]
+    },
+    "EffectiveComponentConfig": {
+      "oneOf": [
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/BitcoinCoreConfig"
+            },
+            "implementation": {
+              "const": "bitcoin-core",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/LndConfig"
+            },
+            "implementation": {
+              "const": "lnd",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/ClnConfig"
+            },
+            "implementation": {
+              "const": "cln",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/CdkMintConfig"
+            },
+            "implementation": {
+              "const": "cdk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/CdkMintConfig"
+            },
+            "implementation": {
+              "const": "cdk-ldk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/CdkMintConfig"
+            },
+            "implementation": {
+              "const": "cdk-bdk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/NutshellMintConfig"
+            },
+            "implementation": {
+              "const": "nutshell",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/PostgresConfig"
+            },
+            "implementation": {
+              "const": "postgresql",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/RedisConfig"
+            },
+            "implementation": {
+              "const": "redis",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/KeycloakConfig"
+            },
+            "implementation": {
+              "const": "keycloak",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "implementation": {
+              "const": "nutshell-wallet",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "implementation": {
+              "const": "attacker-workspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExecutionContextContract": {
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "type": "string"
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "image": {
+          "type": "string"
+        },
+        "mounts": {
+          "items": {
+            "$ref": "#/$defs/ExecutionMountContract"
+          },
+          "type": "array"
+        },
+        "state_contract": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component_id",
+        "image",
+        "state_contract",
+        "mounts",
+        "environment"
+      ],
+      "type": "object"
+    },
+    "ExecutionMountContract": {
+      "additionalProperties": false,
+      "properties": {
+        "mount_path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/ExecutionStorageSource"
+        }
+      },
+      "required": [
+        "name",
+        "mount_path",
+        "read_only",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ExecutionStorageSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "source": {
+              "const": "stateful_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_persistent_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_config",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "link_id": {
+              "type": "string"
+            },
+            "source": {
+              "const": "linked_stateful_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "link_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KeycloakConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "access_token_lifespan_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "access_token_lifespan_seconds"
+      ],
+      "type": "object"
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "payment_backend",
+        "database_backend",
+        "authentication_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
+    "LinkSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from": {
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable binding identity within one lab revision.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkKind"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "from",
+        "to"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "backend links require a binding; peer and network-path links forbid one",
+          "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend' || self.kind == 'authentication_backend') ? has(self.binding) : !has(self.binding)"
+        }
+      ]
+    },
+    "LndConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "alias": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "alias"
+      ],
+      "type": "object"
+    },
+    "NutshellMintConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_max_blind_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "auth_rate_limit_per_minute": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "clnrest_enable_mpp": {
+          "type": "boolean"
+        },
+        "contact_email": {
+          "type": "string"
+        },
+        "contact_nostr_public_key": {
+          "type": "string"
+        },
+        "database_lock_timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "description_long": {
+          "type": "string"
+        },
+        "disable_melt": {
+          "type": "boolean"
+        },
+        "disable_mint": {
+          "type": "boolean"
+        },
+        "global_rate_limit_per_minute": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "icon_url": {
+          "type": "string"
+        },
+        "input_fee_ppk": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lightning_fee_percent": {
+          "format": "double",
+          "type": "number"
+        },
+        "lightning_reserve_fee_min_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lnd_enable_mpp": {
+          "type": "boolean"
+        },
+        "max_balance_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_melt_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_mint_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_request_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_secret_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_witness_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "melt_quote_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mint_quote_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "motd": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "oidc_client_id": {
+          "type": "string"
+        },
+        "oidc_discovery_url": {
+          "type": "string"
+        },
+        "quote_backend_check_rate_limit_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_limit": {
+          "type": "boolean"
+        },
+        "rate_limit_proxy_trust": {
+          "type": "boolean"
+        },
+        "redis_cache_ttl_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "regular_tasks_interval_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tos_url": {
+          "type": "string"
+        },
+        "transaction_rate_limit_per_minute": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "watchdog_balance_check_interval_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "watchdog_enabled": {
+          "type": "boolean"
+        },
+        "websocket_read_timeout_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "description_long",
+        "motd",
+        "icon_url",
+        "contact_email",
+        "contact_nostr_public_key",
+        "tos_url",
+        "input_fee_ppk",
+        "mint_quote_ttl_seconds",
+        "melt_quote_ttl_seconds",
+        "max_secret_length",
+        "max_witness_length",
+        "max_request_length",
+        "max_mint_sat",
+        "max_melt_sat",
+        "max_balance_sat",
+        "disable_mint",
+        "disable_melt",
+        "rate_limit",
+        "rate_limit_proxy_trust",
+        "global_rate_limit_per_minute",
+        "transaction_rate_limit_per_minute",
+        "quote_backend_check_rate_limit_seconds",
+        "oidc_discovery_url",
+        "oidc_client_id",
+        "auth_rate_limit_per_minute",
+        "auth_max_blind_tokens",
+        "lightning_fee_percent",
+        "lightning_reserve_fee_min_sat",
+        "clnrest_enable_mpp",
+        "lnd_enable_mpp",
+        "redis_cache_ttl_seconds",
+        "watchdog_enabled",
+        "watchdog_balance_check_interval_seconds",
+        "database_lock_timeout_ms",
+        "regular_tasks_interval_seconds",
+        "websocket_read_timeout_seconds"
+      ],
+      "type": "object"
+    },
+    "OperationAdmissionContract": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/OperationClass"
+        },
+        "prerequisites": {
+          "items": {
+            "$ref": "#/$defs/ReadinessPrerequisite"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "operation",
+        "prerequisites"
+      ],
+      "type": "object"
+    },
+    "OperationClass": {
+      "enum": [
+        "inspect",
+        "start",
+        "stop",
+        "restart",
+        "native_exec",
+        "network_heal",
+        "peer_channel_mutation",
+        "wallet_payment"
+      ],
+      "type": "string"
+    },
+    "PostgresConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "database_name": {
+          "type": "string"
+        },
+        "storage_size": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "database_name",
+        "storage_size"
+      ],
+      "type": "object"
+    },
+    "ProtocolProbePlan": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "tcp",
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "http_get",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "port",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReadinessPrerequisite": {
+      "enum": [
+        "accepted_identity",
+        "storage",
+        "workload_identity",
+        "execution_context",
+        "target_descriptor",
+        "fault_identity",
+        "dependencies",
+        "protocol"
+      ],
+      "type": "string"
+    },
+    "RedisConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "maxmemory_mb": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxmemory_mb"
+      ],
+      "type": "object"
+    },
+    "StorageObservationContract": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_name"
+      ],
+      "type": "object"
+    },
+    "TargetDescriptorContract": {
+      "additionalProperties": false,
+      "properties": {
+        "backend_id": {
+          "type": "string"
+        },
+        "component_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "ports": {
+          "additionalProperties": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component_id",
+        "kind",
+        "backend_id",
+        "version",
+        "ports"
+      ],
+      "type": "object"
+    },
+    "WorkloadControllerKind": {
+      "enum": [
+        "deployment",
+        "stateful_set"
+      ],
+      "type": "string"
+    },
+    "WorkloadObservationContract": {
+      "additionalProperties": false,
+      "properties": {
+        "desired_replicas": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkloadControllerKind"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "desired_replicas"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applicable_conditions": {
+      "items": {
+        "$ref": "#/$defs/ComponentConditionType"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "backend_id": {
+      "type": "string"
+    },
+    "component_id": {
+      "type": "string"
+    },
+    "condition_aggregation": {
+      "items": {
+        "$ref": "#/$defs/ConditionAggregationContract"
+      },
+      "type": "array"
+    },
+    "condition_reasons": {
+      "additionalProperties": false,
+      "properties": {
+        "component_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "credentials_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "dependencies_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "experiment_controllable": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "protocol_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "service_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "storage_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "workload_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "credentials": {
+      "items": {
+        "$ref": "#/$defs/CredentialObservationContract"
+      },
+      "type": "array"
+    },
+    "effective_config": {
+      "$ref": "#/$defs/EffectiveComponentConfig"
+    },
+    "execution_context": {
+      "$ref": "#/$defs/ExecutionContextContract"
+    },
+    "instance_key": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ComponentKind"
+    },
+    "linked_targets": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TargetDescriptorContract"
+      },
+      "description": "Target descriptors keyed by stable `LinkSpec::id`, not component ID.",
+      "type": "object"
+    },
+    "operation_admission": {
+      "items": {
+        "$ref": "#/$defs/OperationAdmissionContract"
+      },
+      "type": "array"
+    },
+    "protocol_probe": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProtocolProbePlan"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "relevant_links": {
+      "items": {
+        "$ref": "#/$defs/LinkSpec"
+      },
+      "type": "array"
+    },
+    "revision_digest": {
+      "type": "string"
+    },
+    "rollout_digest": {
+      "type": "string"
+    },
+    "storage": {
+      "items": {
+        "$ref": "#/$defs/StorageObservationContract"
+      },
+      "type": "array"
+    },
+    "target_descriptor": {
+      "$ref": "#/$defs/TargetDescriptorContract"
+    },
+    "workload": {
+      "$ref": "#/$defs/WorkloadObservationContract"
+    }
+  },
+  "required": [
+    "instance_key",
+    "revision_digest",
+    "backend_id",
+    "component_id",
+    "kind",
+    "rollout_digest",
+    "effective_config",
+    "relevant_links",
+    "linked_targets",
+    "execution_context",
+    "target_descriptor",
+    "workload",
+    "storage",
+    "credentials",
+    "applicable_conditions",
+    "condition_reasons",
+    "condition_aggregation",
+    "operation_admission"
+  ],
+  "title": "ComponentPlanContract",
+  "type": "object"
+}

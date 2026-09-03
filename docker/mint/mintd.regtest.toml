@@ -6,7 +6,7 @@
 url = "http://cdk-mintd:3338"
 listen_host = "0.0.0.0"
 listen_port = 3338
-mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+mnemonic = "env:CDK_MINTD_MNEMONIC"
 # Non-zero input fee so overspend/underpay oracles (SPEC A6/A7) have a fee edge
 # to probe, matching orchard's e2e mint.
 input_fee_ppk = 100
@@ -14,12 +14,10 @@ input_fee_ppk = 100
 [mint_info]
 name = "proofstorm-regtest-cdk"
 description = "proofstorm regtest CDK mint (LND backend)"
-urls = ["http://cdk-mintd:3338"]
 
-# cdk-mintd 0.17: min/max mint+melt bounds are required on the [ln] backend and
-# [ln] is a single-or-many enum — keep a single [ln] table for the one sat unit.
-[ln]
-ln_backend = "lnd"
+# cdk-mintd 0.18 generalizes Lightning configuration as a payment backend.
+[payment_backend]
+backend = "lnd"
 unit = "sat"
 min_mint = 1
 max_mint = 500000

@@ -166,7 +166,7 @@ lab = {
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
             "version": "30.0",
-            "config_version": "v1alpha1",
+            "config_version": "bitcoin-core/30/v1",
             "control": "laboratory",
             "config": {"txindex": True, "fallback_fee": 0.0002},
         },
@@ -175,7 +175,7 @@ lab = {
             "kind": "lightning",
             "implementation": "lnd",
             "version": "0.20.0-beta",
-            "config_version": "v1alpha1",
+            "config_version": "lnd/0.20/v1",
             "control": "laboratory",
             "config": {"alias": "proofstorm-mint"},
         },
@@ -184,7 +184,7 @@ lab = {
             "kind": "lightning",
             "implementation": "lnd",
             "version": "0.20.0-beta",
-            "config_version": "v1alpha1",
+            "config_version": "lnd/0.20/v1",
             "control": "laboratory",
             "config": {"alias": "proofstorm-payer"},
         },
@@ -193,7 +193,7 @@ lab = {
             "kind": "lightning",
             "implementation": "cln",
             "version": "26.06.7",
-            "config_version": "v1alpha1",
+            "config_version": "cln/26.06/v1",
             "control": "attacker",
             "config": {"alias": "proofstorm-attacker"},
         },
@@ -201,8 +201,8 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "cdk",
-            "version": "0.17.1",
-            "config_version": "v1alpha1",
+            "version": "0.18.0",
+            "config_version": "cdk-mintd/0.18/v1",
             "control": "target",
             "config": {"name": "Proofstorm Slice 5", "description": "Agent-created Cashu lab"},
         },
@@ -210,8 +210,8 @@ lab = {
             "id": "wallet",
             "kind": "wallet",
             "implementation": "nutshell-wallet",
-            "version": "0.20.2",
-            "config_version": "v1alpha1",
+            "version": "0.20.3",
+            "config_version": "nutshell-wallet/0.20/v1",
             "control": "laboratory",
             "config": {},
         },
@@ -219,17 +219,17 @@ lab = {
             "id": "receiver-wallet",
             "kind": "wallet",
             "implementation": "nutshell-wallet",
-            "version": "0.20.2",
-            "config_version": "v1alpha1",
+            "version": "0.20.3",
+            "config_version": "nutshell-wallet/0.20/v1",
             "control": "laboratory",
             "config": {},
         },
     ],
     "links": [
-        {"kind": "chain_backend", "from": "mint-lnd", "to": "chain"},
-        {"kind": "chain_backend", "from": "payer-lnd", "to": "chain"},
-        {"kind": "chain_backend", "from": "attacker-cln", "to": "chain"},
-        {"kind": "lightning_backend", "from": "mint", "to": "mint-lnd"},
+        {"id": "mint-lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
+        {"id": "payer-lnd-chain", "kind": "chain_backend", "from": "payer-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
+        {"id": "attacker-cln-chain", "kind": "chain_backend", "from": "attacker-cln", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
+        {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "mint-lnd", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}},
     ],
     "policy": {
         "allow": [],
@@ -267,11 +267,12 @@ for link in links:
             "idempotency_key": f"add-link-{link['kind']}-{link['from']}-{link['to']}",
         },
     )
-if [component["id"] for component in draft["lab"]["components"]] != sorted(
+draft_document = call("proofstorm_lab_read", {"draft_id": "slice5"})
+if [component["id"] for component in draft_document["lab"]["components"]] != sorted(
     component["id"] for component in components
 ):
     fail("component composer did not produce canonical ordering")
-validation = call("proofstorm_lab_validate", {"lab": draft["lab"]})
+validation = call("proofstorm_lab_validate", {"lab": draft_document["lab"]})
 if not validation["valid"]:
     fail(f"agent-composed draft is invalid: {validation}")
 published = call(
@@ -280,6 +281,7 @@ published = call(
         "draft_id": "slice5",
         "expected_version": draft["version"],
         "idempotency_key": "publish-slice5",
+        "include_revision": True,
     },
 )
 if not all("@sha256:" in entry["image"] for entry in published["lock"]["entries"]):
@@ -301,7 +303,11 @@ for _ in range(180):
 else:
     fail(f"lab did not become ready: {status}")
 
-ready = sorted(component["id"] for component in status["components"] if component["ready"])
+component_status = call(
+    "proofstorm_lab_component_status_list",
+    {"instance_id": "slice5-instance", "limit": 50},
+)["components"]
+ready = sorted(component["id"] for component in component_status if component["ready"])
 if ready != [
     "attacker-cln",
     "chain",
@@ -311,7 +317,7 @@ if ready != [
     "receiver-wallet",
     "wallet",
 ]:
-    fail(f"lab topology is not ready: {status['components']}")
+    fail(f"lab topology is not ready: {component_status}")
 
 expect_tool_error(
     "proofstorm_network_delay",
@@ -1282,9 +1288,13 @@ if json.loads(stateful.stdout)["spec"]["replicas"] != 0:
     fail("stopped Lightning node did not retain zero desired replicas")
 for _ in range(60):
     stopped_lab = call("proofstorm_lab_status", {"instance_id": "slice5-instance"})
+    stopped_components = call(
+        "proofstorm_lab_component_status_list",
+        {"instance_id": "slice5-instance", "limit": 50},
+    )["components"]
     payer_status = next(
         component
-        for component in stopped_lab["components"]
+        for component in stopped_components
         if component["id"] == "payer-lnd"
     )
     if stopped_lab["phase"] == "ready" and not payer_status["ready"]:
@@ -2143,6 +2153,7 @@ evidence = call(
         "experiment_id": "slice5-experiment",
         "include_oracle_artifacts": True,
         "artifact_operation_ids": ["wallet-pay"],
+        "include_content": True,
     },
 )
 evidence_content = evidence.get("content", {})
@@ -2153,9 +2164,9 @@ if (
     or not 0 < evidence.get("byte_length", 0) <= 512 * 1024
     or evidence_content.get("api_version") != "proofstorm/evidence/v1alpha1"
     or evidence_content.get("instance", {}).get("revision_digest")
-    != status["instance"]["revision_digest"]
+    != status["revision_digest"]
     or evidence_content.get("instance", {}).get("lock_digest")
-    != status["instance"]["lock_digest"]
+    != status["lock_digest"]
     or [action["sequence"] for action in evidence_content.get("journal", [])]
     != list(range(1, 48))
 ):

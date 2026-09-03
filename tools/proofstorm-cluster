@@ -148,7 +148,71 @@ setup() {
   docker build --file "${ROOT_DIR}/Dockerfile.proofstormd" \
     --tag "localhost:5111/proofstormd:${PROOFSTORM_VERSION}" "${ROOT_DIR}"
   docker push "localhost:5111/proofstormd:${PROOFSTORM_VERSION}"
+  # Helm installs chart CRDs once, but intentionally does not upgrade them.
+  # Reconcile the checked-in API definitions before upgrading the controller so
+  # reused developer clusters cannot run a new controller against a stale API.
+  "${KUBECTL_BIN}" --context k3d-proofstorm apply --server-side --force-conflicts \
+    --field-manager=proofstorm-cluster -f "${ROOT_DIR}/charts/proofstorm/crds"
+  local existing_labs
+  existing_labs="$("${KUBECTL_BIN}" --context k3d-proofstorm get \
+    proofstormlabs.proofstorm.dev --all-namespaces -o json)"
+  if ! python3 -c '
+import json, re, sys
+labs = json.load(sys.stdin).get("items", [])
+valid_locks = all(
+    "rollout_digest" in entry
+    and "effective_config_digest" in entry
+    and "config_schema_digest" in entry
+    and "features" in entry
+    and "compatible_dependencies" in entry
+    for lab in labs
+    for entry in lab.get("spec", {}).get("lock", {}).get("entries", [])
+)
+valid_bindings = all(
+    "id" in link
+    and link.get("kind") != "lightning_backend"
+    and (
+        link.get("kind") not in {"chain_backend", "payment_backend", "database_backend"}
+        or (
+            isinstance(link.get("binding"), dict)
+            and (
+                (
+                    link["kind"] == "chain_backend"
+                    and set(link["binding"]) == {"type", "network"}
+                    and link["binding"].get("type") == "chain"
+                    and link["binding"].get("network") == "regtest"
+                )
+                or (
+                    link["kind"] == "payment_backend"
+                    and set(link["binding"]) == {"type", "method", "unit"}
+                    and link["binding"].get("type") == "payment"
+                    and link["binding"].get("method") in {"bolt11", "bolt12", "onchain"}
+                    and isinstance(link["binding"].get("unit"), str)
+                    and re.fullmatch(r"[a-z0-9-]{1,16}", link["binding"]["unit"])
+                )
+                or (
+                    link["kind"] == "database_backend"
+                    and set(link["binding"]) == {"type", "role"}
+                    and link["binding"].get("type") == "database"
+                    and link["binding"].get("role") == "primary"
+                )
+            )
+        )
+    )
+    for lab in labs
+    for link in lab.get("spec", {}).get("lab", {}).get("links", [])
+)
+valid = valid_locks and valid_bindings
+raise SystemExit(0 if valid else 1)
+' <<<"${existing_labs}"; then
+    echo "existing Proofstorm labs use an incompatible alpha schema" >&2
+    echo "labs are not migrated or deleted automatically; reset the disposable developer cluster:" >&2
+    echo "  tools/proofstorm-cluster down" >&2
+    echo "  tools/proofstorm-cluster setup" >&2
+    exit 1
+  fi
   "${HELM_BIN}" upgrade --install proofstorm "${ROOT_DIR}/charts/proofstorm" \
+    --kube-context k3d-proofstorm \
     --namespace proofstorm-system --create-namespace --rollback-on-failure --wait
   "${KUBECTL_BIN}" --context k3d-proofstorm rollout restart deployment/proofstormd -n proofstorm-system
   "${KUBECTL_BIN}" --context k3d-proofstorm rollout status deployment/proofstormd -n proofstorm-system --timeout=90s

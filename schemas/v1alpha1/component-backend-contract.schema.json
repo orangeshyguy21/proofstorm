@@ -1,0 +1,754 @@
+{
+  "$defs": {
+    "ComponentConditionReason": {
+      "enum": [
+        "observed",
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "storage_bound",
+        "storage_pending",
+        "credentials_projected",
+        "credentials_missing",
+        "endpoints_ready",
+        "endpoints_missing",
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped",
+        "control_available",
+        "control_unavailable"
+      ],
+      "type": "string"
+    },
+    "ComponentConditionType": {
+      "enum": [
+        "workload_ready",
+        "storage_ready",
+        "credentials_ready",
+        "service_ready",
+        "protocol_ready",
+        "dependencies_ready",
+        "component_ready",
+        "experiment_controllable"
+      ],
+      "type": "string"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "database",
+        "identity_provider",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ConditionAggregationContract": {
+      "additionalProperties": false,
+      "properties": {
+        "all_of": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionType"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "condition": {
+          "$ref": "#/$defs/ComponentConditionType"
+        }
+      },
+      "required": [
+        "condition",
+        "all_of"
+      ],
+      "type": "object"
+    },
+    "ConfigDefault": {
+      "oneOf": [
+        {
+          "properties": {
+            "source": {
+              "const": "literal",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "source",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConfigFieldContract": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ConfigSettingClass"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigDefault"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "enum_values": {
+          "items": true,
+          "type": "array"
+        },
+        "max_length": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maximum": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min_length": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minimum": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "value_kind": {
+          "$ref": "#/$defs/ConfigValueKind"
+        }
+      },
+      "required": [
+        "description",
+        "value_kind",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "ConfigRule": {
+      "oneOf": [
+        {
+          "properties": {
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "kind": {
+              "const": "mutually_exclusive",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "equals": true,
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "required_when",
+              "type": "string"
+            },
+            "required_field": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field",
+            "equals",
+            "required_field"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "less_than_or_equal",
+              "type": "string"
+            },
+            "maximum_field": {
+              "type": "string"
+            },
+            "minimum_field": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "minimum_field",
+            "maximum_field"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConfigSettingClass": {
+      "enum": [
+        "agent_authorable",
+        "topology_derived",
+        "generated_instance_secret",
+        "imported_secret_reference",
+        "runtime_policy"
+      ],
+      "type": "string"
+    },
+    "ConfigValueKind": {
+      "enum": [
+        "boolean",
+        "number",
+        "integer",
+        "string"
+      ],
+      "type": "string"
+    },
+    "DependencyBinding": {
+      "additionalProperties": false,
+      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+      "properties": {
+        "method": {
+          "enum": [
+            "bolt11",
+            "bolt12",
+            "onchain"
+          ],
+          "type": "string"
+        },
+        "network": {
+          "enum": [
+            "regtest"
+          ],
+          "type": "string"
+        },
+        "protocol": {
+          "enum": [
+            "oidc"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "cache",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chain",
+            "payment",
+            "database",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "pattern": "^[a-z0-9-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol",
+          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))"
+        }
+      ]
+    },
+    "ExecutionMountRequirement": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "group": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "at_least_one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "group"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExecutionMountTemplateContract": {
+      "additionalProperties": false,
+      "properties": {
+        "mount_path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "requirement": {
+          "$ref": "#/$defs/ExecutionMountRequirement",
+          "default": {
+            "kind": "required"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/ExecutionStorageTemplateSource"
+        }
+      },
+      "required": [
+        "name",
+        "mount_path",
+        "read_only",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ExecutionStorageTemplateSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "source": {
+              "const": "stateful_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_persistent_data",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_config",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "binding": {
+              "$ref": "#/$defs/DependencyBinding"
+            },
+            "link_kind": {
+              "$ref": "#/$defs/LinkKind"
+            },
+            "source": {
+              "const": "linked_stateful_data",
+              "type": "string"
+            },
+            "target_implementation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "link_kind",
+            "binding",
+            "target_implementation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "payment_backend",
+        "database_backend",
+        "authentication_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
+    "OperationAdmissionContract": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/OperationClass"
+        },
+        "prerequisites": {
+          "items": {
+            "$ref": "#/$defs/ReadinessPrerequisite"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "operation",
+        "prerequisites"
+      ],
+      "type": "object"
+    },
+    "OperationClass": {
+      "enum": [
+        "inspect",
+        "start",
+        "stop",
+        "restart",
+        "native_exec",
+        "network_heal",
+        "peer_channel_mutation",
+        "wallet_payment"
+      ],
+      "type": "string"
+    },
+    "ProtocolProbeContract": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "tcp",
+              "type": "string"
+            },
+            "port_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "port_name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "http_get",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "port_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "port_name",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReadinessPrerequisite": {
+      "enum": [
+        "accepted_identity",
+        "storage",
+        "workload_identity",
+        "execution_context",
+        "target_descriptor",
+        "fault_identity",
+        "dependencies",
+        "protocol"
+      ],
+      "type": "string"
+    },
+    "StorageRequirementTemplate": {
+      "oneOf": [
+        {
+          "properties": {
+            "source": {
+              "const": "stateful_claim_template",
+              "type": "string"
+            },
+            "template_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "template_name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "const": "component_claim",
+              "type": "string"
+            },
+            "suffix": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "suffix"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkloadControllerKind": {
+      "enum": [
+        "deployment",
+        "stateful_set"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applicable_conditions": {
+      "items": {
+        "$ref": "#/$defs/ComponentConditionType"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "condition_aggregation": {
+      "items": {
+        "$ref": "#/$defs/ConditionAggregationContract"
+      },
+      "type": "array"
+    },
+    "condition_reasons": {
+      "additionalProperties": false,
+      "properties": {
+        "component_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "credentials_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "dependencies_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "experiment_controllable": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "protocol_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "service_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "storage_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "workload_ready": {
+          "items": {
+            "$ref": "#/$defs/ComponentConditionReason"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "config_fields": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ConfigFieldContract"
+      },
+      "type": "object"
+    },
+    "config_rules": {
+      "items": {
+        "$ref": "#/$defs/ConfigRule"
+      },
+      "type": "array"
+    },
+    "config_version": {
+      "type": "string"
+    },
+    "execution_environment": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "execution_mounts": {
+      "items": {
+        "$ref": "#/$defs/ExecutionMountTemplateContract"
+      },
+      "type": "array"
+    },
+    "execution_state_contract": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ComponentKind"
+    },
+    "operation_admission": {
+      "items": {
+        "$ref": "#/$defs/OperationAdmissionContract"
+      },
+      "type": "array"
+    },
+    "protocol_probe": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProtocolProbeContract"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "service_ports": {
+      "additionalProperties": {
+        "format": "uint16",
+        "maximum": 65535,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "storage_requirements": {
+      "items": {
+        "$ref": "#/$defs/StorageRequirementTemplate"
+      },
+      "type": "array"
+    },
+    "workload_kind": {
+      "$ref": "#/$defs/WorkloadControllerKind"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "config_version",
+    "config_fields",
+    "config_rules",
+    "service_ports",
+    "execution_state_contract",
+    "execution_mounts",
+    "execution_environment",
+    "workload_kind",
+    "storage_requirements",
+    "applicable_conditions",
+    "condition_reasons",
+    "condition_aggregation",
+    "operation_admission"
+  ],
+  "title": "ComponentBackendContract",
+  "type": "object"
+}

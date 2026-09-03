@@ -13,6 +13,32 @@ fn exchange(stdin: &mut impl Write, stdout: &mut impl BufRead, message: &Value) 
     serde_json::from_str(&line).expect("parse MCP frame")
 }
 
+fn assert_resource_contract(stdin: &mut impl Write, stdout: &mut impl BufRead) {
+    let templates = exchange(
+        stdin,
+        stdout,
+        &json!({"jsonrpc": "2.0", "id": 20, "method": "resources/templates/list", "params": {}}),
+    );
+    assert_eq!(
+        templates["result"]["resourceTemplates"][0]["uriTemplate"],
+        "proofstorm://evidence/{experiment_id}/{digest}{?oracles,artifacts}"
+    );
+    let missing_resource = exchange(
+        stdin,
+        stdout,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "resources/read",
+            "params": {"uri": "proofstorm://unknown"}
+        }),
+    );
+    assert_eq!(
+        missing_resource["error"]["message"],
+        "unknown Proofstorm resource URI"
+    );
+}
+
 #[test]
 fn stdio_server_advertises_exact_slice_one_tools() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_proofstorm-mcp"))
@@ -40,6 +66,14 @@ fn stdio_server_advertises_exact_slice_one_tools() {
     );
     assert_eq!(initialized["id"], 1);
     assert!(initialized.get("result").is_some(), "{initialized}");
+    assert_eq!(
+        initialized["result"]["serverInfo"]["name"],
+        "proofstorm-mcp"
+    );
+    assert!(
+        initialized["result"]["capabilities"]["resources"].is_object(),
+        "{initialized}"
+    );
 
     writeln!(
         stdin,
@@ -63,10 +97,43 @@ fn stdio_server_advertises_exact_slice_one_tools() {
     assert_eq!(
         names,
         vec![
+            "proofstorm_catalog_config_schema_read",
+            "proofstorm_catalog_entry_read",
             "proofstorm_catalog_list",
             "proofstorm_lab_validate",
             "proofstorm_network_capabilities",
         ]
+    );
+
+    assert_resource_contract(&mut stdin, &mut stdout);
+
+    let catalog = exchange(
+        &mut stdin,
+        &mut stdout,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "proofstorm_catalog_list", "arguments": {}}
+        }),
+    );
+    assert_eq!(
+        catalog["result"]["structuredContent"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(12)
+    );
+    assert!(
+        serde_json::to_vec(&catalog["result"]["structuredContent"])
+            .expect("serialize catalog result")
+            .len()
+            < 8 * 1024
+    );
+    assert!(
+        serde_json::to_vec(&catalog)
+            .expect("serialize wire result")
+            .len()
+            < 20 * 1024
     );
 
     child.kill().expect("stop proofstorm-mcp");

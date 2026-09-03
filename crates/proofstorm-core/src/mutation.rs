@@ -69,11 +69,12 @@ pub fn apply_draft_mutation(
             }
         }
         DraftMutation::AddLink { link } => {
-            if candidate.links.contains(link) {
-                return Err(format!(
-                    "link {:?} {:?} -> {:?} already exists",
-                    link.kind, link.from, link.to
-                ));
+            if candidate
+                .links
+                .iter()
+                .any(|candidate| candidate.id == link.id)
+            {
+                return Err(format!("binding {:?} already exists", link.id));
             }
             candidate.links.push(link.clone());
         }
@@ -82,8 +83,8 @@ pub fn apply_draft_mutation(
             candidate.links.retain(|item| item != link);
             if candidate.links.len() == before {
                 return Err(format!(
-                    "link {:?} {:?} -> {:?} does not exist",
-                    link.kind, link.from, link.to
+                    "binding {:?} ({:?} {:?} -> {:?}) does not exist",
+                    link.id, link.kind, link.from, link.to
                 ));
             }
         }
@@ -131,7 +132,13 @@ mod tests {
             kind,
             implementation: implementation.into(),
             version: None,
-            config_version: "v1alpha1".into(),
+            config_version: match implementation {
+                "bitcoin-core" => "bitcoin-core/30/v1",
+                "lnd" => "lnd/0.20/v1",
+                "nutshell-wallet" => "nutshell-wallet/0.20/v1",
+                _ => panic!("unknown test implementation {implementation:?}"),
+            }
+            .into(),
             control,
             config: BTreeMap::new(),
         }
@@ -212,9 +219,13 @@ mod tests {
             .expect("component mutation");
         }
         let link = LinkSpec {
+            id: "node-chain".into(),
             kind: LinkKind::ChainBackend,
             from: "node".into(),
             to: "chain".into(),
+            binding: Some(crate::DependencyBinding::Chain {
+                network: crate::BitcoinNetwork::Regtest,
+            }),
         };
         apply_draft_mutation(
             &mut lab,
@@ -234,9 +245,14 @@ mod tests {
             .contains("remove them first")
         );
         let wrong = LinkSpec {
-            kind: LinkKind::LightningBackend,
+            id: "wrong-backend".into(),
+            kind: LinkKind::PaymentBackend,
             from: "node".into(),
             to: "chain".into(),
+            binding: Some(crate::DependencyBinding::Payment {
+                method: crate::PaymentMethod::Bolt11,
+                unit: "sat".into(),
+            }),
         };
         assert!(
             apply_draft_mutation(&mut lab, &DraftMutation::AddLink { link: wrong }, &catalog,)

@@ -1,0 +1,402 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "lnd",
+    "component_id": "lightning",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "config": {
+        "alias": "lightning"
+      },
+      "implementation": "lnd"
+    },
+    "execution_context": {
+      "component_id": "lightning",
+      "environment": {
+        "HOME": "/home/lnd"
+      },
+      "image": "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+      "mounts": [
+        {
+          "mount_path": "/home/lnd/.lnd",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "stateful_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/lnd-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "lightning",
+    "linked_targets": {
+      "lightning-chain-chain": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
+        "ports": {
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
+        },
+        "version": "30.0"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "peer_channel_mutation",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "wallet_payment",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 10009
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "chain"
+        },
+        "from": "lightning",
+        "id": "lightning-chain-chain",
+        "kind": "chain_backend",
+        "to": "chain"
+      }
+    ],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:fc72b15ad6e7108211be7f7b341261e4b0a3b73603e5b0b8983b1cd119a1956a",
+    "storage": [
+      {
+        "claim_name": "data-lightning-0"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "lnd",
+      "component_id": "lightning",
+      "kind": "lightning",
+      "ports": {
+        "p2p": 9735,
+        "rest": 8080,
+        "rpc": 10009
+      },
+      "version": "0.20.0-beta"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "stateful_set",
+      "name": "lightning"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [],
+    "persistentVolumeClaims": [],
+    "secrets": [],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "lightning",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "lightning"
+          },
+          "name": "lightning",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "p2p",
+              "port": 9735,
+              "targetPort": 9735
+            },
+            {
+              "name": "rest",
+              "port": 8080,
+              "targetPort": 8080
+            },
+            {
+              "name": "rpc",
+              "port": 10009,
+              "targetPort": 10009
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "lightning",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "lightning"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "lnd",
+            "proofstorm.dev/execution-state-contract": "proofstorm/lnd-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "lightning",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "lightning"
+          },
+          "name": "lightning",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "lightning",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "lightning"
+            }
+          },
+          "serviceName": "lightning",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:fc72b15ad6e7108211be7f7b341261e4b0a3b73603e5b0b8983b1cd119a1956a"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "lightning",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "lightning"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [
+                    "--lnddir=/home/lnd/.lnd",
+                    "--noseedbackup",
+                    "--alias=lightning",
+                    "--externalip=lightning",
+                    "--listen=0.0.0.0:9735",
+                    "--rpclisten=0.0.0.0:10009",
+                    "--restlisten=0.0.0.0:8080",
+                    "--bitcoin.active",
+                    "--bitcoin.regtest",
+                    "--bitcoin.node=bitcoind",
+                    "--bitcoind.rpchost=chain:18443",
+                    "--bitcoind.rpcuser=proofstorm",
+                    "--bitcoind.rpcpass=proofstorm-regtest-only",
+                    "--bitcoind.zmqpubrawblock=tcp://chain:28334",
+                    "--bitcoind.zmqpubrawtx=tcp://chain:28335",
+                    "--tlsextradomain=lightning",
+                    "--accept-keysend",
+                    "--debuglevel=info"
+                  ],
+                  "command": [
+                    "lnd"
+                  ],
+                  "image": "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "lncli",
+                        "--lnddir=/home/lnd/.lnd",
+                        "--network=regtest",
+                        "getinfo"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/home/lnd/.lnd",
+                      "name": "data"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload"
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "lightning",
+                  "proofstorm.dev/instance": "i-golden-b2",
+                  "proofstorm.dev/network-identity": "lightning"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

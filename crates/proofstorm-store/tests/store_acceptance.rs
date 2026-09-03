@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use proofstorm_core::{
-    API_VERSION, Capability, ComponentKind, ComponentSpec, ControlClass, DraftMutation, LabPolicy,
-    LabSpec, OperationKind, OperationPhase, WalletQuoteDirection, WalletQuotePhase,
+    API_VERSION, Capability, ComponentKind, ComponentSpec, ControlClass, DraftMutation,
+    LOCK_API_VERSION, LabPolicy, LabSpec, OperationKind, OperationPhase, WalletQuoteDirection,
+    WalletQuotePhase,
 };
 use proofstorm_store::{Store, StoreError, Workspace};
 
@@ -157,7 +158,7 @@ fn composer_mutations_are_idempotent_and_optimistic() {
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
             version: Some("30.0".into()),
-            config_version: "v1alpha1".into(),
+            config_version: "bitcoin-core/30/v1".into(),
             control: ControlClass::Laboratory,
             config: BTreeMap::new(),
         },
@@ -185,6 +186,58 @@ fn composer_mutations_are_idempotent_and_optimistic() {
         ),
         Err(StoreError::StaleDraft { actual: 2, .. })
     ));
+}
+
+#[test]
+fn publication_keeps_requested_draft_and_persists_effective_configuration() {
+    let store = Store::memory().expect("store");
+    seed(&store);
+    let mut requested = empty_lab("effective-publication");
+    requested.components.push(ComponentSpec {
+        id: "chain".into(),
+        kind: ComponentKind::Bitcoin,
+        implementation: "bitcoin-core".into(),
+        version: Some("30.0".into()),
+        config_version: "bitcoin-core/30/v1".into(),
+        control: ControlClass::Laboratory,
+        config: BTreeMap::new(),
+    });
+    store
+        .create_draft(
+            "alpha",
+            "designer",
+            "effective-publication",
+            &requested,
+            "create-effective-publication",
+        )
+        .expect("create draft");
+    let revision = store
+        .publish(
+            "alpha",
+            "designer",
+            "effective-publication",
+            1,
+            "publish-effective-publication",
+        )
+        .expect("publish effective revision");
+    let draft = store
+        .read_draft("alpha", "designer", "effective-publication")
+        .expect("read requested draft");
+
+    assert!(draft.lab.components[0].config.is_empty());
+    assert_eq!(revision.lab.components[0].config["txindex"], true);
+    assert_eq!(revision.lab.components[0].config["fallback_fee"], 0.0002);
+    assert_eq!(revision.lock.api_version, LOCK_API_VERSION);
+    assert!(
+        revision.lock.entries[0]
+            .effective_config_digest
+            .starts_with("sha256:")
+    );
+    assert!(
+        revision.lock.entries[0]
+            .rollout_digest
+            .starts_with("sha256:")
+    );
 }
 
 #[test]

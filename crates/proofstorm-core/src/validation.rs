@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{API_VERSION, ComponentKind, LabSpec, LinkKind};
+use crate::{
+    API_VERSION, ComponentKind, DependencyBinding, LabSpec, LinkKind, LinkSpec, PaymentMethod,
+};
 
 const HARD_MAX_COMPONENTS: usize = 128;
 const HARD_MAX_LINKS: usize = 1_024;
@@ -80,10 +82,102 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
         .map(|component| (component.id.as_str(), component.kind))
         .collect::<BTreeMap<_, _>>();
 
+    validate_links(lab, &ids, &kinds, &mut issues);
+    validate_authentication_topology(lab, &mut issues);
+
+    ValidationReport::from_issues(issues)
+}
+
+fn validate_authentication_topology(lab: &LabSpec, issues: &mut Vec<ValidationIssue>) {
+    for (index, component) in lab.components.iter().enumerate() {
+        if component.implementation == "keycloak" {
+            let primary_databases = lab
+                .links
+                .iter()
+                .filter(|link| {
+                    link.from == component.id
+                        && link.kind == LinkKind::DatabaseBackend
+                        && matches!(
+                            link.binding,
+                            Some(DependencyBinding::Database {
+                                role: crate::DatabaseRole::Primary
+                            })
+                        )
+                })
+                .count();
+            if primary_databases != 1 {
+                issue(
+                    issues,
+                    "keycloak_primary_database_required",
+                    format!("/components/{index}"),
+                    "Keycloak requires exactly one primary PostgreSQL dependency",
+                );
+            }
+        }
+        if component.implementation != "nutshell" {
+            continue;
+        }
+        let authentication_links = lab
+            .links
+            .iter()
+            .filter(|link| {
+                link.from == component.id && link.kind == LinkKind::AuthenticationBackend
+            })
+            .count();
+        if authentication_links > 1 {
+            issue(
+                issues,
+                "duplicate_authentication_provider",
+                format!("/components/{index}"),
+                "Nutshell accepts at most one authentication provider",
+            );
+        }
+        if authentication_links == 0 {
+            continue;
+        }
+        if component
+            .config
+            .get("oidc_discovery_url")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|url| !url.is_empty())
+        {
+            issue(
+                issues,
+                "ambiguous_oidc_discovery",
+                format!("/components/{index}/config/oidc_discovery_url"),
+                "linked authentication derives the discovery URL; remove the authored URL",
+            );
+        }
+        if component
+            .config
+            .get("oidc_client_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|client| client != "cashu-client")
+        {
+            issue(
+                issues,
+                "linked_oidc_client_mismatch",
+                format!("/components/{index}/config/oidc_client_id"),
+                "the in-lab Keycloak contract uses the fixed public client cashu-client",
+            );
+        }
+    }
+}
+
+fn validate_links(
+    lab: &LabSpec,
+    ids: &BTreeSet<&str>,
+    kinds: &BTreeMap<&str, ComponentKind>,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let mut link_ids = BTreeSet::new();
     for (index, link) in lab.links.iter().enumerate() {
+        validate_link_identity(index, link, &mut link_ids, issues);
+        validate_binding(index, link, issues);
+        validate_database_role(index, link, &lab.links[..index], issues);
         if link.from == link.to {
             issue(
-                &mut issues,
+                issues,
                 "self_link",
                 format!("/links/{index}"),
                 "link endpoints must be different",
@@ -92,7 +186,7 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
         for (field, endpoint) in [("from", &link.from), ("to", &link.to)] {
             if !ids.contains(endpoint.as_str()) {
                 issue(
-                    &mut issues,
+                    issues,
                     "missing_link_endpoint",
                     format!("/links/{index}/{field}"),
                     format!("component {endpoint:?} does not exist"),
@@ -111,16 +205,34 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
                     from == ComponentKind::Lightning && to == ComponentKind::Lightning
                 }
                 LinkKind::ChainBackend => {
-                    from == ComponentKind::Lightning && to == ComponentKind::Bitcoin
+                    matches!(from, ComponentKind::Lightning | ComponentKind::Mint)
+                        && to == ComponentKind::Bitcoin
                 }
-                LinkKind::LightningBackend => {
-                    from == ComponentKind::Mint && to == ComponentKind::Lightning
+                LinkKind::PaymentBackend => {
+                    from == ComponentKind::Mint
+                        && match &link.binding {
+                            Some(DependencyBinding::Payment {
+                                method: PaymentMethod::Onchain,
+                                ..
+                            }) => to == ComponentKind::Bitcoin,
+                            Some(DependencyBinding::Payment { .. }) => {
+                                to == ComponentKind::Lightning
+                            }
+                            _ => matches!(to, ComponentKind::Lightning | ComponentKind::Bitcoin),
+                        }
+                }
+                LinkKind::DatabaseBackend => {
+                    matches!(from, ComponentKind::Mint | ComponentKind::IdentityProvider)
+                        && to == ComponentKind::Database
+                }
+                LinkKind::AuthenticationBackend => {
+                    from == ComponentKind::Mint && to == ComponentKind::IdentityProvider
                 }
                 LinkKind::NetworkPath => true,
             };
             if !compatible {
                 issue(
-                    &mut issues,
+                    issues,
                     "incompatible_link_kinds",
                     format!("/links/{index}"),
                     format!("{:?} does not support {:?} -> {:?}", link.kind, from, to),
@@ -128,8 +240,126 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
             }
         }
     }
+}
 
-    ValidationReport::from_issues(issues)
+fn validate_database_role(
+    index: usize,
+    link: &LinkSpec,
+    previous: &[LinkSpec],
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(DependencyBinding::Database { role }) = link.binding else {
+        return;
+    };
+    if role == crate::DatabaseRole::Authentication {
+        issue(
+            issues,
+            "unsupported_database_role",
+            format!("/links/{index}/binding/role"),
+            "authentication databases are reserved for a future CDK auth slice",
+        );
+        return;
+    }
+    let duplicated = previous.iter().any(|candidate| {
+        candidate.from == link.from
+            && matches!(
+                candidate.binding,
+                Some(DependencyBinding::Database {
+                    role: candidate_role
+                }) if candidate_role == role
+            )
+    });
+    if duplicated {
+        let (code, message) = match role {
+            crate::DatabaseRole::Primary => (
+                "duplicate_primary_database",
+                "a component can bind exactly one primary database",
+            ),
+            crate::DatabaseRole::Cache => (
+                "duplicate_cache_database",
+                "a component can bind exactly one cache database",
+            ),
+            crate::DatabaseRole::Authentication => unreachable!(),
+        };
+        issue(issues, code, format!("/links/{index}"), message);
+    }
+}
+
+fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIssue>) {
+    let path = format!("/links/{index}/binding");
+    match (&link.kind, &link.binding) {
+        (LinkKind::ChainBackend, Some(DependencyBinding::Chain { .. }))
+        | (LinkKind::PaymentBackend, Some(DependencyBinding::Payment { .. }))
+        | (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { .. }))
+        | (LinkKind::AuthenticationBackend, Some(DependencyBinding::Authentication { .. })) => {}
+        (
+            LinkKind::ChainBackend
+            | LinkKind::PaymentBackend
+            | LinkKind::DatabaseBackend
+            | LinkKind::AuthenticationBackend,
+            None,
+        ) => {
+            issue(
+                issues,
+                "missing_dependency_binding",
+                path,
+                "backend links require a typed binding payload",
+            );
+        }
+        (
+            LinkKind::ChainBackend
+            | LinkKind::PaymentBackend
+            | LinkKind::DatabaseBackend
+            | LinkKind::AuthenticationBackend,
+            Some(_),
+        ) => issue(
+            issues,
+            "incompatible_dependency_binding",
+            path,
+            format!("binding payload does not match {:?}", link.kind),
+        ),
+        (_, Some(_)) => issue(
+            issues,
+            "unexpected_dependency_binding",
+            path,
+            "peer and network-path links cannot carry dependency binding payloads",
+        ),
+        (_, None) => {}
+    }
+    if let Some(DependencyBinding::Payment { unit, .. }) = &link.binding {
+        if !is_unit_identifier(unit) {
+            issue(
+                issues,
+                "invalid_payment_unit",
+                format!("/links/{index}/binding/unit"),
+                "must be a lowercase unit identifier of 1..=16 ASCII letters, digits, or '-'",
+            );
+        }
+    }
+}
+
+fn validate_link_identity<'a>(
+    index: usize,
+    link: &'a LinkSpec,
+    ids: &mut BTreeSet<&'a str>,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    if !is_slug(&link.id) {
+        issue(
+            issues,
+            "invalid_link_id",
+            format!("/links/{index}/id"),
+            "must be a lowercase kebab-case binding identifier of 1..=63 bytes",
+        );
+    }
+    if !ids.insert(link.id.as_str()) {
+        issue(
+            issues,
+            "duplicate_link_id",
+            format!("/links/{index}/id"),
+            format!("binding {:?} appears more than once", link.id),
+        );
+    }
 }
 
 fn validate_components<'a>(
@@ -163,12 +393,12 @@ fn validate_components<'a>(
                 "must be a lowercase kebab-case catalog identifier",
             );
         }
-        if !is_version_identifier(&component.config_version) {
+        if !is_config_version_identifier(&component.config_version) {
             issue(
                 issues,
                 "invalid_config_version",
                 format!("/components/{index}/config_version"),
-                "must be a non-empty version identifier of at most 64 ASCII alphanumeric, '.', '+', or '-' characters",
+                "must be an implementation-scoped identifier of 1..=128 ASCII alphanumeric, '.', '+', '-', or '/' characters with non-empty path segments",
             );
         }
         let config_bytes = serde_json::to_vec(&component.config).map_or(usize::MAX, |v| v.len());
@@ -259,12 +489,25 @@ fn is_slug(value: &str) -> bool {
     true
 }
 
-fn is_version_identifier(value: &str) -> bool {
+fn is_config_version_identifier(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 64
+        && value.len() <= 128
+        && value.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
+        })
+}
+
+fn is_unit_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 16
         && value
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 #[cfg(test)]
@@ -285,7 +528,7 @@ mod tests {
                     kind: ComponentKind::Bitcoin,
                     implementation: "bitcoin-core".into(),
                     version: Some("30.0".into()),
-                    config_version: "v1alpha1".into(),
+                    config_version: "bitcoin-core/30/v1".into(),
                     control: ControlClass::Laboratory,
                     config: BTreeMap::new(),
                 },
@@ -294,7 +537,7 @@ mod tests {
                     kind: ComponentKind::Lightning,
                     implementation: "lnd".into(),
                     version: None,
-                    config_version: "v1alpha1".into(),
+                    config_version: "lnd/0.20/v1".into(),
                     control: ControlClass::Laboratory,
                     config: BTreeMap::new(),
                 },
@@ -303,21 +546,30 @@ mod tests {
                     kind: ComponentKind::Mint,
                     implementation: "cdk".into(),
                     version: None,
-                    config_version: "v1alpha1".into(),
+                    config_version: "cdk-mintd/0.18/v1".into(),
                     control: ControlClass::Target,
                     config: BTreeMap::new(),
                 },
             ],
             links: vec![
                 LinkSpec {
+                    id: "lnd-chain".into(),
                     kind: LinkKind::ChainBackend,
                     from: "mint-lnd".into(),
                     to: "chain".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: crate::BitcoinNetwork::Regtest,
+                    }),
                 },
                 LinkSpec {
-                    kind: LinkKind::LightningBackend,
+                    id: "mint-lightning".into(),
+                    kind: LinkKind::PaymentBackend,
                     from: "target".into(),
                     to: "mint-lnd".into(),
+                    binding: Some(DependencyBinding::Payment {
+                        method: PaymentMethod::Bolt11,
+                        unit: "sat".into(),
+                    }),
                 },
             ],
             policy: LabPolicy::default(),
@@ -351,6 +603,117 @@ mod tests {
                 "missing_link_endpoint"
             ]
         );
+    }
+
+    #[test]
+    fn binding_id_is_required_valid_and_unique() {
+        let mut lab = valid_lab();
+        lab.links[0].id = "Not Valid".into();
+        lab.links[1].id = "Not Valid".into();
+        let report = validate_lab(&lab);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == "invalid_link_id" && issue.path == "/links/0/id")
+        );
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == "duplicate_link_id" && issue.path == "/links/1/id")
+        );
+    }
+
+    #[test]
+    fn backend_bindings_are_typed_and_payment_endpoints_follow_the_method() {
+        let mut lab = valid_lab();
+        lab.links[0].binding = None;
+        lab.links[1].binding = Some(DependencyBinding::Chain {
+            network: crate::BitcoinNetwork::Regtest,
+        });
+        let report = validate_lab(&lab);
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "missing_dependency_binding" && issue.path == "/links/0/binding"
+        }));
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "incompatible_dependency_binding" && issue.path == "/links/1/binding"
+        }));
+
+        let mut onchain = valid_lab();
+        onchain.links[1].binding = Some(DependencyBinding::Payment {
+            method: PaymentMethod::Onchain,
+            unit: "SAT".into(),
+        });
+        let report = validate_lab(&onchain);
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "invalid_payment_unit" && issue.path == "/links/1/binding/unit"
+        }));
+        assert!(
+            report.issues.iter().any(|issue| {
+                issue.code == "incompatible_link_kinds" && issue.path == "/links/1"
+            })
+        );
+    }
+
+    #[test]
+    fn keycloak_requires_primary_storage_and_linked_nutshell_refuses_oidc_overrides() {
+        let mut lab = valid_lab();
+        lab.components.extend([
+            ComponentSpec {
+                id: "identity-db".into(),
+                kind: ComponentKind::Database,
+                implementation: "postgresql".into(),
+                version: None,
+                config_version: "postgresql/17/v1".into(),
+                control: ControlClass::Laboratory,
+                config: BTreeMap::new(),
+            },
+            ComponentSpec {
+                id: "identity".into(),
+                kind: ComponentKind::IdentityProvider,
+                implementation: "keycloak".into(),
+                version: None,
+                config_version: "keycloak/25/v1".into(),
+                control: ControlClass::Laboratory,
+                config: BTreeMap::new(),
+            },
+        ]);
+        lab.components[2].implementation = "nutshell".into();
+        lab.components[2].config_version = "nutshell-mint/0.20/v1".into();
+        lab.components[2].config.insert(
+            "oidc_discovery_url".into(),
+            serde_json::json!("https://issuer.example/realm/.well-known/openid-configuration"),
+        );
+        lab.links.push(LinkSpec {
+            id: "mint-authentication".into(),
+            kind: LinkKind::AuthenticationBackend,
+            from: "target".into(),
+            to: "identity".into(),
+            binding: Some(DependencyBinding::Authentication {
+                protocol: crate::AuthenticationProtocol::Oidc,
+            }),
+        });
+        let report = validate_lab(&lab);
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "keycloak_primary_database_required" && issue.path == "/components/4"
+        }));
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "ambiguous_oidc_discovery"
+                && issue.path == "/components/2/config/oidc_discovery_url"
+        }));
+
+        lab.components[2].config.clear();
+        lab.links.push(LinkSpec {
+            id: "identity-database".into(),
+            kind: LinkKind::DatabaseBackend,
+            from: "identity".into(),
+            to: "identity-db".into(),
+            binding: Some(DependencyBinding::Database {
+                role: crate::DatabaseRole::Primary,
+            }),
+        });
+        assert_eq!(validate_lab(&lab), ValidationReport::from_issues(vec![]));
     }
 
     #[test]

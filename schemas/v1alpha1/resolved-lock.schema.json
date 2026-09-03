@@ -1,5 +1,59 @@
 {
   "$defs": {
+    "CatalogDependencySupport": {
+      "additionalProperties": false,
+      "properties": {
+        "implementation": {
+          "type": "string"
+        },
+        "link_kind": {
+          "$ref": "#/$defs/LinkKind"
+        },
+        "versions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "link_kind",
+        "implementation",
+        "versions"
+      ],
+      "type": "object"
+    },
+    "CatalogFeature": {
+      "enum": [
+        "native_cli",
+        "regtest",
+        "persistent_state",
+        "bolt11",
+        "bolt12",
+        "onchain",
+        "clear_auth",
+        "blind_auth",
+        "sqlite",
+        "postgres",
+        "redis_cache",
+        "oidc_provider",
+        "wallet_operations"
+      ],
+      "type": "string"
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "payment_backend",
+        "database_backend",
+        "authentication_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
     "LockEntry": {
       "additionalProperties": false,
       "properties": {
@@ -9,16 +63,41 @@
         "catalog_id": {
           "type": "string"
         },
+        "compatible_dependencies": {
+          "items": {
+            "$ref": "#/$defs/CatalogDependencySupport"
+          },
+          "type": "array"
+        },
         "component_id": {
           "type": "string"
         },
-        "config_digest": {
+        "config_schema_digest": {
           "type": "string"
         },
         "config_version": {
           "type": "string"
         },
+        "effective_config_digest": {
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "$ref": "#/$defs/CatalogFeature"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "image": {
+          "type": "string"
+        },
+        "protocol_action_adapter_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rollout_digest": {
           "type": "string"
         },
         "source_digest": {
@@ -34,7 +113,11 @@
         "adapter_version",
         "version",
         "config_version",
-        "config_digest",
+        "config_schema_digest",
+        "features",
+        "compatible_dependencies",
+        "effective_config_digest",
+        "rollout_digest",
         "image",
         "source_digest"
       ],

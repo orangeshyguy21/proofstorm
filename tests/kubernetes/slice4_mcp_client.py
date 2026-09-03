@@ -83,7 +83,7 @@ lab = {
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
             "version": "30.0",
-            "config_version": "v1alpha1",
+            "config_version": "bitcoin-core/30/v1",
             "control": "laboratory",
             "config": {"txindex": True, "fallback_fee": 0.0002},
         },
@@ -92,7 +92,7 @@ lab = {
             "kind": "lightning",
             "implementation": "lnd",
             "version": "0.20.0-beta",
-            "config_version": "v1alpha1",
+            "config_version": "lnd/0.20/v1",
             "control": "laboratory",
             "config": {"alias": "proofstorm-lightning"},
         },
@@ -100,15 +100,15 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "cdk",
-            "version": "0.17.1",
-            "config_version": "v1alpha1",
+            "version": "0.18.0",
+            "config_version": "cdk-mintd/0.18/v1",
             "control": "target",
             "config": {"name": "Proofstorm Slice 4", "description": "MCP-created static lab"},
         },
     ],
     "links": [
-        {"kind": "chain_backend", "from": "lightning", "to": "chain"},
-        {"kind": "lightning_backend", "from": "mint", "to": "lightning"},
+        {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
+        {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}},
     ],
     "policy": {
         "allow": [],
@@ -120,7 +120,7 @@ call(2, "proofstorm_lab_create", {"draft_id": "slice4", "lab": lab, "idempotency
 published = call(
     3,
     "proofstorm_lab_publish",
-    {"draft_id": "slice4", "expected_version": 1, "idempotency_key": "publish-slice4"},
+    {"draft_id": "slice4", "expected_version": 1, "idempotency_key": "publish-slice4", "include_revision": True},
 )
 if not all("@sha256:" in entry["image"] for entry in published["lock"]["entries"]):
     fail("published lock contains an unpinned image")
@@ -142,12 +142,17 @@ for identifier in range(5, 125):
 else:
     fail(f"lab did not become ready: {status}")
 
-if sorted(component["id"] for component in status["components"] if component["ready"]) != [
+component_status = call(
+    1000,
+    "proofstorm_lab_component_status_list",
+    {"instance_id": "slice4-instance", "limit": 50},
+)["components"]
+if sorted(component["id"] for component in component_status if component["ready"]) != [
     "chain",
     "lightning",
     "mint",
 ]:
-    fail(f"sanitized topology is not ready: {status['components']}")
+    fail(f"sanitized topology is not ready: {component_status}")
 encoded = json.dumps(status)
 if "macaroon" in encoded or "proofstorm-regtest-only" in encoded:
     fail("sanitized status leaked a credential")
