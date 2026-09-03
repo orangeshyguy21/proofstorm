@@ -27,6 +27,7 @@ const CAPABILITIES: &[&str] = &[
     "lease.acquire",
     "lease.release",
     "component.exec",
+    "component.logs",
     "artifact.read",
 ];
 
@@ -188,10 +189,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     client.call(
         "proofstorm_lease_acquire",
-        json!({"experiment_id": experiment, "lease_id": lease, "duration_seconds": 600, "max_actions": 6, "idempotency_key": format!("acquire-lease-{run_id}")}),
+        json!({"experiment_id": experiment, "lease_id": lease, "duration_seconds": 600, "max_actions": 7, "idempotency_key": format!("acquire-lease-{run_id}")}),
     )?;
 
     let mut records = Vec::new();
+    let mut serving_targets = 0;
     for (operation, component, target, script, fragments) in commands() {
         let request = json!({
             "instance_id": instance,
@@ -245,10 +247,69 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
         expect::within_bytes(content, 32 * 1024, "native artifact")?;
 
+        // A refused connection inside an exec is indistinguishable from a
+        // missing listener unless the artifact says whether the target's
+        // Service had ready endpoints. Serving components here are ready; a
+        // wallet publishes no Service at all and must say so instead.
+        let total = expect::integer(content, "/target_endpoints")?;
+        let ready = expect::integer(content, "/target_ready_endpoints")?;
+        let diagnostic = content.get("target_diagnostic").and_then(Value::as_str);
+        if total > 0 {
+            serving_targets += 1;
+            if ready < 1 || diagnostic.is_some() {
+                bail!("a ready target must report ready endpoints and no diagnostic: {content}");
+            }
+        } else if diagnostic != Some("no_service_endpoints") {
+            bail!("a target that publishes no Service must say so: {content}");
+        }
+
         records.push((
             expect::string(&finished, "/operation_id")?.to_string(),
             expect::string(&accepted, "/resource_name")?.to_string(),
         ));
+    }
+
+    if serving_targets == 0 {
+        bail!("no exec observed a serving target, so endpoint reporting is unproven");
+    }
+
+    // A component's own log is readable without starting a workload, which is
+    // the only way to see a native error from a component that never became
+    // ready. This target is healthy, so the read must still succeed and carry
+    // the pod state that explains the log.
+    let logs_operation = format!("native-exec-logs-{run_id}");
+    client.call(
+        "proofstorm_component_logs",
+        json!({
+            "instance_id": instance,
+            "experiment_id": experiment,
+            "lease_id": lease,
+            "operation_id": logs_operation,
+            "component": "chain",
+            "tail_lines": 25,
+            "idempotency_key": format!("{logs_operation}-component-logs")
+        }),
+    )?;
+    let logs = client.call(
+        "proofstorm_operation_wait",
+        json!({"operation_id": logs_operation, "timeout_seconds": 60}),
+    )?;
+    if expect::boolean(&logs, "/timed_out")? || expect::string(&logs, "/phase")? != "succeeded" {
+        bail!("component logs did not succeed: {logs}");
+    }
+    let log_content = logs
+        .pointer("/artifact/content")
+        .ok_or_else(|| anyhow::anyhow!("component logs produced no artifact"))?;
+    if expect::string(log_content, "/component")? != "chain"
+        || expect::integer(log_content, "/tail_lines")? != 25
+    {
+        bail!("component logs artifact lost its identity: {log_content}");
+    }
+    if !expect::boolean(log_content, "/container_ready")? {
+        bail!("a ready component must report container readiness: {log_content}");
+    }
+    if expect::string(log_content, "/log")?.trim().is_empty() {
+        bail!("a running Bitcoin node must have produced log output: {log_content}");
     }
 
     // Operator-side conformance: Proofstorm, not the MCP caller, fixed the
@@ -289,11 +350,20 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"experiment_id": experiment, "after_sequence": 0, "limit": 10}),
     )?;
     let journal = expect::array(&journal_page, "/actions")?;
+    if journal
+        .last()
+        .and_then(|entry| entry.get("kind"))
+        .and_then(Value::as_str)
+        != Some("component_logs")
+    {
+        bail!("the log read must be journaled like any other action: {journal_page}");
+    }
     let sequences: Vec<u64> = journal
         .iter()
         .map(|entry| expect::integer(entry, "/sequence"))
         .collect::<Result<_>>()?;
-    if sequences != [1, 2, 3, 4, 5, 6]
+    // Six native executions followed by the component log read.
+    if sequences != [1, 2, 3, 4, 5, 6, 7]
         || journal
             .iter()
             .any(|entry| entry.get("phase").and_then(Value::as_str) != Some("succeeded"))
@@ -311,7 +381,9 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
-    let operation_ids: Vec<&str> = records.iter().map(|(id, _)| id.as_str()).collect();
+    // The log read is evidence like any execution, so it is exported too.
+    let mut operation_ids: Vec<&str> = records.iter().map(|(id, _)| id.as_str()).collect();
+    operation_ids.push(logs_operation.as_str());
     let evidence = client.call(
         "proofstorm_artifact_export",
         json!({
@@ -322,8 +394,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         }),
     )?;
     if !expect::string(&evidence, "/digest")?.starts_with("sha256:")
-        || expect::array(&evidence, "/content/journal")?.len() != 6
-        || expect::array(&evidence, "/content/artifacts")?.len() != 6
+        || expect::array(&evidence, "/content/journal")?.len() != 7
+        || expect::array(&evidence, "/content/artifacts")?.len() != 7
     {
         bail!("native exec evidence is incomplete: {evidence}");
     }

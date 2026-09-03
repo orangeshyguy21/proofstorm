@@ -1797,6 +1797,33 @@ impl Store {
             .collect()
     }
 
+    /// Every pending or running operation recorded for one lab instance, in
+    /// journal order. The store is the ledger of record, so lab close uses this
+    /// to finalize operations whose runtime resources are about to disappear.
+    pub fn active_operations(
+        &self,
+        workspace: &str,
+        instance_id: &str,
+    ) -> Result<Vec<LabOperation>, StoreError> {
+        let ids = {
+            let connection = self.lock()?;
+            let mut statement = connection.prepare(
+                "SELECT id FROM actions
+                 WHERE workspace_id = ?1 AND instance_id = ?2
+                   AND phase_json IN ('\"pending\"', '\"running\"')
+                 ORDER BY experiment_id ASC, sequence ASC",
+            )?;
+            statement
+                .query_map(params![workspace, instance_id], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        ids.into_iter()
+            .map(|id| self.operation_unchecked(workspace, &id))
+            .collect()
+    }
+
     pub fn record_operation_result(
         &self,
         workspace: &str,

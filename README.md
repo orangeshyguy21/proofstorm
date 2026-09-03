@@ -155,7 +155,15 @@ make down
 Proofstorm also exposes `proofstorm_component_exec` under the separate,
 high-authority `component.exec` capability. It runs an unrestricted
 non-interactive shell program in the selected component's exact digest-pinned
-image with its canonical lab-local state mounted. `component` selects that
+image with its canonical lab-local state mounted. The program runs in a fresh
+short-lived Pod rather than inside the component's running container, so it
+shares the component's image and data but not its process space: `localhost` is
+not the component, and tools like `ps` cannot see the component's processes.
+Reach the component over the network using the injected endpoint variables. A
+component that is not ready has no Service endpoints, and connections to it are
+refused immediately rather than timing out, so the exec artifact reports the
+target's ready endpoint count to keep that case distinguishable from a missing
+listener or a blocked network policy. `component` selects that
 execution context; optional `target_component` selects which lab component's
 service metadata is exposed and defaults to the execution component. This lets
 one pinned Bitcoin CLI deliberately query any Bitcoin node in a multi-node lab.

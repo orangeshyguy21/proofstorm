@@ -141,6 +141,10 @@ pub struct WalletFundJobSpec<'a> {
     pub amount_sat: u64,
 }
 
+/// Settlement oracle shipped into the pinned Nutshell wallet image by the
+/// wallet pay job. See `drivers/wallet_pay_settlement.py`.
+const WALLET_PAY_SETTLEMENT_DRIVER: &str = include_str!("../drivers/wallet_pay_settlement.py");
+
 pub struct WalletInvoiceJobSpec<'a> {
     pub resource_name: &'a str,
     pub instance_key: &'a str,
@@ -476,7 +480,10 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
             (&request.from_component, Operation::Inspect),
             (&request.to_component, Operation::Inspect),
         ],
-        LabAction::NetworkHeal(_) => Vec::new(),
+        // Neither healing a fault nor reading a log has a component readiness
+        // prerequisite. For a log that is deliberate: an unready,
+        // crash-looping, or stopped component is when its log matters most.
+        LabAction::NetworkHeal(_) | LabAction::ComponentLogs(_) => Vec::new(),
         LabAction::WalletInitialize(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
@@ -538,6 +545,8 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::WalletRoundTrip(_) => "wallet",
         LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
         LabAction::NativeExec(_) => "exec",
+        // Never rendered as a Job; the controller reads the log itself.
+        LabAction::ComponentLogs(_) => "",
     }
 }
 
@@ -588,6 +597,11 @@ pub fn render_lab_action_job(
             render_reachability_oracle_action(action, lab, request)?
         }
         LabAction::NativeExec(request) => render_native_exec_action(action, lab, request)?,
+        LabAction::ComponentLogs(_) => {
+            return Err(ActionRenderError::InvalidPlan(
+                "component logs are fulfilled by the controller, not by a Job".to_owned(),
+            ));
+        }
     };
     mark_controller_owned(&mut job, &action.name_any());
     Ok(job)
@@ -2466,13 +2480,26 @@ pub fn render_wallet_pay_job(spec: &WalletPayJobSpec<'_>) -> Result<Job, serde_j
         amount_sat,
     } = *spec;
     let namespace = instance_namespace(instance_key);
+    // The CLI exit code is not a settlement oracle: `cashu pay` prints and
+    // returns normally when the mint rolls a failed melt back to UNPAID. The
+    // embedded driver reads the wallet's melt-quote ledger and the balance
+    // delta instead and decides the artifact phase from those.
     let script = format!(
-        "set -eu; cd /app; invoice_file=/recipient/.proofstorm/quotes/{quote_id}/invoice.log; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' \"$invoice_file\" 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu pay \"$invoice\" >/tmp/pay.log 2>&1; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"quote_id\":\"{quote_id}\",\"wallet\":\"{wallet}\",\"recipient_wallet\":\"{recipient_wallet}\",\"direction\":\"pay\",\"phase\":\"paid\",\"amount_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+        "set -eu; cd /app; invoice_file=/recipient/.proofstorm/quotes/{quote_id}/invoice.log; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' \"$invoice_file\" 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; read_balance() {{ cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1; }}; before=$(read_balance); test -n \"$before\"; set +e; cashu pay \"$invoice\" >/tmp/pay.log 2>&1; pay_rc=$?; set -e; after=$(read_balance); test -n \"$after\"; PROOFSTORM_INVOICE=\"$invoice\" PROOFSTORM_PAY_RC=\"$pay_rc\" PROOFSTORM_BALANCE_BEFORE=\"$before\" PROOFSTORM_BALANCE_AFTER=\"$after\" python3 -c \"$PROOFSTORM_SETTLEMENT_DRIVER\" >/dev/termination-log"
     );
+    let amount = amount_sat.to_string();
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false), mount("recipient", "/recipient", true)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")])],
+        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false), mount("recipient", "/recipient", true)], vec![
+            ("HOME", "/wallet"),
+            ("PYTHONUNBUFFERED", "1"),
+            ("PROOFSTORM_QUOTE_ID", quote_id),
+            ("PROOFSTORM_WALLET", wallet),
+            ("PROOFSTORM_RECIPIENT_WALLET", recipient_wallet),
+            ("PROOFSTORM_AMOUNT_SAT", amount.as_str()),
+            ("PROOFSTORM_SETTLEMENT_DRIVER", WALLET_PAY_SETTLEMENT_DRIVER),
+        ])],
         "volumes": [
             {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
             {"name": "recipient", "persistentVolumeClaim": {"claimName": format!("{recipient_wallet}-data")}}
@@ -2669,9 +2696,15 @@ where
     N: AsRef<str>,
     V: AsRef<str>,
 {
+    // Typed scripts send native command output to the Pod log, which the
+    // controller does not read for a failed action. FallbackToLogsOnError makes
+    // Kubernetes itself populate the termination message from that log whenever
+    // a container exits non-zero without writing its own diagnostic, so a
+    // failure carries the native error instead of a bare exit code.
     json!({"name": name, "image": image, "imagePullPolicy": "IfNotPresent",
         "command": ["/bin/sh", "-c", script], "volumeMounts": mounts,
         "env": environment.into_iter().map(|(name, value)| json!({"name": name.as_ref(), "value": value.as_ref()})).collect::<Vec<_>>(),
+        "terminationMessagePolicy": "FallbackToLogsOnError",
         "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}})
 }
 
@@ -3110,6 +3143,97 @@ mod tests {
             timeout_seconds: 30,
         });
         assert!(evaluate_action_admission(&action, &lab).is_ok());
+    }
+
+    #[test]
+    fn typed_job_containers_fall_back_to_logs_for_their_diagnostic() {
+        let job = render_bootstrap_job(&BootstrapJobSpec {
+            resource_name: "op-boot",
+            instance_key: "i0123456789012345678",
+            chain: "chain",
+            mint_lightning: "mint-lnd",
+            payer_lightning: "payer-lnd",
+            bitcoin_image: "bitcoin",
+            lnd_image: "lnd",
+            funding_sat: 100_000_000,
+            channel_sat: 10_000_000,
+            push_sat: 5_000_000,
+        })
+        .expect("job");
+        let pod = job.spec.expect("spec").template.spec.expect("pod");
+        let containers = pod
+            .init_containers
+            .iter()
+            .flatten()
+            .chain(pod.containers.iter());
+        let mut observed = 0;
+        for container in containers {
+            observed += 1;
+            assert_eq!(
+                container.termination_message_policy.as_deref(),
+                Some("FallbackToLogsOnError"),
+                "container {} must surface its native error on failure",
+                container.name
+            );
+        }
+        assert!(observed > 1, "the bootstrap renders staged containers");
+    }
+
+    #[test]
+    fn wallet_pay_job_derives_settlement_from_the_wallet_ledger() {
+        let job = render_wallet_pay_job(&WalletPayJobSpec {
+            resource_name: "op-pay",
+            instance_key: "i0123456789012345678",
+            quote_id: "quote-1",
+            wallet: "wallet-b",
+            mint: "mint",
+            recipient_wallet: "wallet-a",
+            wallet_image: "nutshell",
+            amount_sat: 1_000,
+        })
+        .expect("pay job");
+        let pod = job.spec.expect("spec").template.spec.expect("pod");
+        let container = &pod.containers[0];
+        let script = container
+            .command
+            .as_ref()
+            .expect("command")
+            .last()
+            .expect("script");
+        assert!(
+            !script.contains("\"phase\":\"paid\""),
+            "the pay script must not assert settlement itself"
+        );
+        assert!(script.contains("set +e; cashu pay"));
+        assert!(script.contains("PROOFSTORM_PAY_RC=\"$pay_rc\""));
+        assert!(script.contains("PROOFSTORM_BALANCE_BEFORE=\"$before\""));
+        assert!(
+            script.contains("python3 -c \"$PROOFSTORM_SETTLEMENT_DRIVER\" >/dev/termination-log")
+        );
+        #[cfg(unix)]
+        assert_shell_syntax(script);
+        let env = container.env.as_ref().expect("env");
+        let driver = env
+            .iter()
+            .find(|variable| variable.name == "PROOFSTORM_SETTLEMENT_DRIVER")
+            .and_then(|variable| variable.value.as_deref())
+            .expect("settlement driver shipped by environment");
+        assert!(driver.contains("bolt11_melt_quotes"));
+        assert!(driver.contains("melt_quote_missing"));
+        for (name, value) in [
+            ("PROOFSTORM_QUOTE_ID", "quote-1"),
+            ("PROOFSTORM_WALLET", "wallet-b"),
+            ("PROOFSTORM_RECIPIENT_WALLET", "wallet-a"),
+            ("PROOFSTORM_AMOUNT_SAT", "1000"),
+        ] {
+            assert_eq!(
+                env.iter()
+                    .find(|variable| variable.name == name)
+                    .and_then(|variable| variable.value.as_deref()),
+                Some(value),
+                "{name}"
+            );
+        }
     }
 
     #[test]

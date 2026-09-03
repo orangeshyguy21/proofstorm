@@ -49,6 +49,7 @@ spec:
                     - conservation_oracle
                     - reachability_oracle
                     - native_exec
+                    - component_logs
                     type: string
                   parameters:
                     properties:
@@ -135,6 +136,11 @@ spec:
                       service:
                         nullable: true
                         type: string
+                      tailLines:
+                        format: uint32
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
                       targetComponent:
                         nullable: true
                         type: string

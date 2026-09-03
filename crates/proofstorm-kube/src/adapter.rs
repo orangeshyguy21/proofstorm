@@ -29,7 +29,7 @@ use crate::{
     REVISION_DIGEST_ANNOTATION, ROLLOUT_DIGEST_ANNOTATION, instance_namespace,
 };
 
-const COMPONENT_LABEL: &str = "proofstorm.dev/component";
+pub const COMPONENT_LABEL: &str = "proofstorm.dev/component";
 const NETWORK_IDENTITY_LABEL: &str = "proofstorm.dev/network-identity";
 const RPC_USER: &str = "proofstorm";
 const RPC_PASSWORD: &str = "proofstorm-regtest-only";
@@ -2330,8 +2330,13 @@ fn nutshell_mint_environment(
             config.lightning_fee_percent.to_string(),
         ),
         (
+            // Nutshell compares this reserve against msat amounts, so the
+            // sat-denominated contract value is scaled at the boundary.
             "LIGHTNING_RESERVE_FEE_MIN".into(),
-            config.lightning_reserve_fee_min_sat.to_string(),
+            config
+                .lightning_reserve_fee_min_sat
+                .saturating_mul(1_000)
+                .to_string(),
         ),
         (
             "MELT_QUOTE_TTL".into(),

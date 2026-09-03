@@ -124,6 +124,7 @@ pub enum LabAction {
     ConservationOracle(ConservationOracleAction),
     ReachabilityOracle(ReachabilityOracleAction),
     NativeExec(NativeExecAction),
+    ComponentLogs(ComponentLogsAction),
 }
 
 // Kubernetes structural schemas cannot merge the different `kind` constants
@@ -163,6 +164,7 @@ enum LabActionKindSchema {
     ConservationOracle,
     ReachabilityOracle,
     NativeExec,
+    ComponentLogs,
 }
 
 #[derive(JsonSchema)]
@@ -198,12 +200,26 @@ struct LabActionParametersSchema {
     service: Option<String>,
     attempts: Option<u32>,
     script: Option<String>,
+    tail_lines: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NodeControlAction {
     pub component: String,
+}
+
+/// A bounded read of one component's own container log.
+///
+/// The controller fulfills this directly rather than rendering a Job: lab
+/// workloads deliberately carry no Kubernetes credentials, and the log must
+/// stay readable when the component is unready, crash-looping, or stopped,
+/// which is exactly when it is worth reading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentLogsAction {
+    pub component: String,
+    pub tail_lines: u32,
 }
 
 /// An unrestricted shell program executed in a component's locked image.

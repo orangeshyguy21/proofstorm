@@ -20,9 +20,9 @@ use proofstorm_core::{
 };
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionPhase, BootstrapLiquidityAction, ChannelCloseAction,
-    ChannelOpenAction, ChannelRebalanceAction, ConservationOracleAction, LabAction, LabPhase,
-    NativeExecAction, NetworkHealAction, NetworkPartitionAction, NodeControlAction,
-    PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
+    ChannelOpenAction, ChannelRebalanceAction, ComponentLogsAction, ConservationOracleAction,
+    LabAction, LabPhase, NativeExecAction, NetworkHealAction, NetworkPartitionAction,
+    NodeControlAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
     ProofstormLabActionSpec, ProofstormLabSpec, ReachabilityOracleAction, WalletBalanceAction,
     WalletFundAction, WalletInitializeAction, WalletInvoiceAction, WalletPayAction,
     WalletRoundTripAction, component_ports,
@@ -404,6 +404,20 @@ pub struct NodeControlRequest {
     pub lease_id: String,
     pub operation_id: String,
     pub component: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentLogsRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub component: String,
+    /// Lines to read from the end of the component's current container log,
+    /// between 1 and 2000. The artifact is additionally byte-bounded.
+    pub tail_lines: u32,
     pub idempotency_key: String,
 }
 
@@ -1803,7 +1817,45 @@ impl ProofstormMcp {
             .store
             .instance_for_close(&self.workspace, &self.principal, &request.instance_id)
             .map_err(store_error)?;
+        self.finalize_active_operations(&instance.id).await?;
         self.runtime()?.close(instance).await.map(Json)
+    }
+
+    /// Closing a lab deletes every runtime action resource, so the journal
+    /// must reach a terminal phase for each non-terminal operation first.
+    /// Cancellation is requested best-effort; the ledger outcome is recorded
+    /// regardless, because the lab will not produce one afterwards.
+    async fn finalize_active_operations(&self, instance_id: &str) -> Result<(), ErrorData> {
+        let active = self
+            .store
+            .active_operations(&self.workspace, instance_id)
+            .map_err(store_error)?;
+        for operation in active {
+            let token = proofstorm_core::digest_json(&(
+                &self.workspace,
+                &self.principal,
+                &operation.id,
+                "lab_close",
+            ));
+            let _ = self
+                .runtime()?
+                .request_action_cancellation(&operation, &token)
+                .await;
+            let finalized = self
+                .store
+                .record_operation_result(
+                    &self.workspace,
+                    &operation.id,
+                    OperationPhase::Cancelled,
+                    serde_json::json!({
+                        "code": "lab_closed",
+                        "message": "the lab instance was closed before the operation reached a terminal phase",
+                    }),
+                )
+                .map_err(store_error)?;
+            self.sync_wallet_quote_operation(&finalized)?;
+        }
+        Ok(())
     }
 
     #[tool(description = "Create a durable experiment bound to one lab instance")]
@@ -1957,7 +2009,63 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Run an unrestricted non-interactive shell program in a lab component's exact pinned image, with its component-local data and native CLI available. target_component optionally selects a distinct lab service and defaults to component; Proofstorm exposes generic PROOFSTORM_TARGET_* metadata plus native endpoint variables such as BITCOIN_RPC_HOST and BITCOIN_RPC_PORT without interpreting the command. The workload has no Kubernetes token, host access, or cross-lab credentials; combined output and exit code are journaled as a bounded experiment artifact"
+        description = "Read a bounded tail of one lab component's own container log, journaled as an experiment artifact. This reads the component's running container, unlike component_exec which starts a separate pod, and it keeps working while the component is unready, crash-looping, or stopped, which is when a native error is usually only visible in its log. The artifact also reports the pod phase, container readiness, and restart count"
+    )]
+    async fn proofstorm_component_logs(
+        &self,
+        Parameters(request): Parameters<ComponentLogsRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ComponentLogs)?;
+        if !(1..=2_000).contains(&request.tail_lines) {
+            return Err(invalid_operation("tail_lines must be in 1..=2000"));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ComponentLogs,
+            )
+            .map_err(store_error)?;
+        let component = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == request.component)
+            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+        component_image_any(&revision, &request.component, component.kind)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::ComponentLogs,
+            &request,
+            &request.idempotency_key,
+            Capability::ComponentLogs,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::ComponentLogs(ComponentLogsAction {
+                component: request.component,
+                tail_lines: request.tail_lines,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Run an unrestricted non-interactive shell program in a fresh short-lived pod built from a lab component's exact pinned image, with that component's local data volumes and native CLI available. It does not run inside the component's running container: localhost is not the component, and the component's own processes and listening sockets are not visible. Reach the component over the network instead, using the supplied variables rather than guessed addresses. target_component optionally selects a distinct lab service and defaults to component; Proofstorm exposes generic PROOFSTORM_TARGET_* metadata plus native endpoint variables such as BITCOIN_RPC_HOST and BITCOIN_RPC_PORT without interpreting the command. Targets resolve to a Service, so while a component is not ready its Service has no endpoints and connections to it are refused immediately rather than timing out; the artifact reports target_ready_endpoints so a refusal is distinguishable from a missing listener. The workload has no Kubernetes token, host access, or cross-lab credentials; combined output and exit code are journaled as a bounded experiment artifact"
     )]
     async fn proofstorm_component_exec(
         &self,
@@ -3117,10 +3225,24 @@ impl ProofstormMcp {
             &request.operation_id,
             &request.idempotency_key,
         ));
-        self.runtime()?
+        if self
+            .runtime()?
             .request_action_cancellation(&operation, &token)
-            .await?;
-        Ok(Json(operation))
+            .await?
+        {
+            return Ok(Json(operation));
+        }
+        let finalized = self
+            .store
+            .record_operation_result(
+                &self.workspace,
+                &operation.id,
+                OperationPhase::Failed,
+                missing_action_artifact(&operation),
+            )
+            .map_err(store_error)?;
+        self.sync_wallet_quote_operation(&finalized)?;
+        Ok(Json(finalized))
     }
 
     #[tool(
@@ -3992,6 +4114,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_wallet_balance", &[Capability::WalletControl]),
         ("proofstorm_wallet_fund", &[Capability::WalletFund]),
         ("proofstorm_wallet_invoice", &[Capability::WalletFund]),
+        ("proofstorm_component_logs", &[Capability::ComponentLogs]),
         (
             "proofstorm_wallet_pay",
             &[Capability::WalletControl, Capability::ArtifactRead],
@@ -4030,12 +4153,13 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     ]
 }
 
-fn wallet_quote_recovery_outcome(
+fn wallet_quote_recovery_outcome<'a>(
     kind: OperationKind,
     operation_phase: OperationPhase,
     quote_phase: WalletQuotePhase,
-    artifact_code: &str,
-) -> Option<(WalletQuotePhase, Option<&str>)> {
+    artifact_code: &'a str,
+    artifact_phase: Option<&str>,
+) -> Option<(WalletQuotePhase, Option<&'a str>)> {
     if quote_phase.is_terminal()
         || matches!(
             operation_phase,
@@ -4049,7 +4173,18 @@ fn wallet_quote_recovery_outcome(
             Some((WalletQuotePhase::Settled, None))
         }
         (OperationKind::WalletPay, OperationPhase::Succeeded) => {
-            Some((WalletQuotePhase::Paid, None))
+            // A finished pay job is an observation, not a settlement claim.
+            // The artifact phase comes from the wallet's melt-quote ledger.
+            let (next, code) = match artifact_phase {
+                Some("paid") => (WalletQuotePhase::Paid, None),
+                Some("unpaid") => (WalletQuotePhase::Failed, Some("melt_unpaid")),
+                Some("pending") => (WalletQuotePhase::Inconclusive, Some("melt_pending")),
+                _ => (
+                    WalletQuotePhase::Inconclusive,
+                    Some("settlement_unverified"),
+                ),
+            };
+            quote_phase.can_transition_to(next).then_some((next, code))
         }
         (_, OperationPhase::Cancelled)
             if matches!(
@@ -4248,6 +4383,10 @@ impl ProofstormMcp {
             .as_ref()
             .and_then(|artifact| artifact.content["code"].as_str())
             .unwrap_or("action_failed");
+        let artifact_phase = operation
+            .artifact
+            .as_ref()
+            .and_then(|artifact| artifact.content["phase"].as_str());
         for _ in 0..3 {
             let quote = self
                 .store
@@ -4261,6 +4400,7 @@ impl ProofstormMcp {
                 operation.phase,
                 quote.phase,
                 artifact_code,
+                artifact_phase,
             ) else {
                 return Ok(());
             };
@@ -4425,6 +4565,11 @@ fn runtime_action_resource(
     resource
 }
 
+/// On-chain headroom the bootstrap keeps for the channel funding transaction
+/// fee. Regtest funding transactions settle for a few thousand satoshis; this
+/// is deliberately generous relative to the 20,000 sat minimum channel.
+const BOOTSTRAP_FUNDING_MARGIN_SAT: u64 = 10_000;
+
 fn validate_bootstrap_bounds(request: &BootstrapLiquidityRequest) -> Result<(), ErrorData> {
     if !(1..=1_000_000_000).contains(&request.funding_sat) {
         return Err(invalid_operation(
@@ -4436,9 +4581,20 @@ fn validate_bootstrap_bounds(request: &BootstrapLiquidityRequest) -> Result<(), 
             "channel_sat must be between 20,000 and 100,000,000",
         ));
     }
-    if request.channel_sat > request.funding_sat || request.push_sat > request.channel_sat / 2 {
-        return Err(invalid_operation(
-            "channel_sat cannot exceed funding_sat and push_sat cannot exceed half the channel",
+    if request.push_sat > request.channel_sat / 2 {
+        return Err(invalid_operation("push_sat cannot exceed half the channel"));
+    }
+    // The funding transaction pays a miner fee out of the same on-chain output,
+    // so a channel equal to the funding amount always fails inside the Job with
+    // an insufficient-funds error that only reaches the node's own log.
+    if request.channel_sat + BOOTSTRAP_FUNDING_MARGIN_SAT > request.funding_sat {
+        return Err(coded_invalid_request(
+            "insufficient_funding_margin",
+            format!(
+                "funding_sat must exceed channel_sat by at least {BOOTSTRAP_FUNDING_MARGIN_SAT} sat to pay the funding transaction fee; channel_sat {} needs funding_sat of at least {}",
+                request.channel_sat,
+                request.channel_sat + BOOTSTRAP_FUNDING_MARGIN_SAT
+            ),
         ));
     }
     if request.mint_lightning == request.payer_lightning {
@@ -4795,16 +4951,18 @@ impl KubernetesRuntime {
     ) -> Result<Option<(OperationPhase, serde_json::Value)>, ErrorData> {
         let actions =
             Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
-        let action = actions
+        let Some(action) = actions
             .get_opt(&operation.resource_name)
             .await
             .map_err(kube_error)?
-            .ok_or_else(|| {
-                ErrorData::resource_not_found(
-                    format!("action {:?} was not found", operation.resource_name),
-                    Some(serde_json::json!({"code": "action_runtime_not_found"})),
-                )
-            })?;
+        else {
+            // The runtime resource is gone (lab closed, or garbage collected)
+            // before the journal saw a terminal phase. A running operation
+            // whose resource vanished is a terminal outcome, never a live
+            // one; a pending operation may simply not be applied yet.
+            return Ok((operation.phase == OperationPhase::Running)
+                .then(|| (OperationPhase::Failed, missing_action_artifact(operation))));
+        };
         let Some(status) = action.status else {
             return Ok(None);
         };
@@ -4831,23 +4989,23 @@ impl KubernetesRuntime {
         }
     }
 
+    /// Request cancellation of a runtime action. Returns `false` when the
+    /// runtime resource no longer exists, so the caller finalizes the journal
+    /// entry itself instead of leaving it non-terminal forever.
     async fn request_action_cancellation(
         &self,
         operation: &LabOperation,
         token: &str,
-    ) -> Result<(), ErrorData> {
+    ) -> Result<bool, ErrorData> {
         let actions =
             Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
-        let action = actions
+        let Some(action) = actions
             .get_opt(&operation.resource_name)
             .await
             .map_err(kube_error)?
-            .ok_or_else(|| {
-                ErrorData::resource_not_found(
-                    format!("action {:?} was not found", operation.resource_name),
-                    Some(serde_json::json!({"code": "action_runtime_not_found"})),
-                )
-            })?;
+        else {
+            return Ok(false);
+        };
         if action.spec.workspace_id != operation.workspace_id
             || action.spec.instance_id != operation.instance_id
             || action.spec.experiment_id != operation.experiment_id
@@ -4867,7 +5025,7 @@ impl KubernetesRuntime {
             )
         }) || action.annotations().contains_key(ACTION_CANCEL_ANNOTATION)
         {
-            return Ok(());
+            return Ok(true);
         }
         actions
             .patch(
@@ -4879,7 +5037,7 @@ impl KubernetesRuntime {
             )
             .await
             .map_err(kube_error)?;
-        Ok(())
+        Ok(true)
     }
 
     async fn materialize(
@@ -4987,6 +5145,14 @@ fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> LabI
         }),
         message: status.message,
     }
+}
+
+fn missing_action_artifact(operation: &LabOperation) -> serde_json::Value {
+    serde_json::json!({
+        "code": "action_runtime_not_found",
+        "resource_name": operation.resource_name,
+        "message": "the runtime action resource no longer exists; its outcome was not observed",
+    })
 }
 
 #[allow(
@@ -5281,6 +5447,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn component_logs_requires_its_capability_and_bounded_lines() {
+        let store = seeded_store();
+        let unauthorized = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .expect("session without component.logs");
+        let request = |tail_lines: u32| ComponentLogsRequest {
+            instance_id: "instance-one".into(),
+            experiment_id: "experiment-one".into(),
+            lease_id: "lease-one".into(),
+            operation_id: "operation-logs".into(),
+            component: "chain".into(),
+            tail_lines,
+            idempotency_key: "logs-one".into(),
+        };
+        let Err(denied) = unauthorized
+            .proofstorm_component_logs(Parameters(request(100)))
+            .await
+        else {
+            panic!("component.logs is a separate authority");
+        };
+        assert_eq!(denied.data.expect("denial data")["code"], "access_denied");
+
+        store
+            .grant("alpha", "designer", Capability::ComponentLogs)
+            .expect("grant component.logs");
+        let authorized =
+            ProofstormMcp::new(store, "alpha", "designer").expect("session with component.logs");
+        for lines in [0, 2_001] {
+            let Err(rejected) = authorized
+                .proofstorm_component_logs(Parameters(request(lines)))
+                .await
+            else {
+                panic!("tail_lines {lines} must be rejected");
+            };
+            assert_eq!(
+                rejected.data.expect("bounds data")["code"],
+                "invalid_operation",
+                "tail_lines {lines} is out of bounds"
+            );
+        }
+    }
+
     #[test]
     fn draft_mutations_return_compact_receipts() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
@@ -5346,7 +5554,13 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 61);
+        assert_eq!(service.tool_names().len(), 62);
+        assert!(
+            service
+                .tool_names()
+                .contains(&"proofstorm_component_logs".to_owned()),
+            "reading a component log is a first-class runtime observation"
+        );
         assert!(
             encoded.len() < 190 * 1024,
             "fully authorized tool discovery is {} bytes",
@@ -6265,6 +6479,7 @@ mod tests {
                 OperationPhase::Failed,
                 WalletQuotePhase::Ready,
                 "action_deadline_exceeded",
+                None,
             ),
             Some((WalletQuotePhase::Expired, Some("action_deadline_exceeded")))
         );
@@ -6274,6 +6489,7 @@ mod tests {
                 OperationPhase::Cancelled,
                 WalletQuotePhase::Ready,
                 "action_cancelled",
+                None,
             ),
             Some((WalletQuotePhase::Cancelled, Some("action_cancelled")))
         );
@@ -6284,6 +6500,7 @@ mod tests {
                     OperationPhase::Failed,
                     WalletQuotePhase::Pending,
                     code,
+                    None,
                 ),
                 Some((WalletQuotePhase::Inconclusive, Some(code)))
             );
@@ -6294,6 +6511,7 @@ mod tests {
                 OperationPhase::Succeeded,
                 WalletQuotePhase::Inconclusive,
                 "action_failed",
+                None,
             ),
             Some((WalletQuotePhase::Settled, None))
         );
@@ -6303,6 +6521,7 @@ mod tests {
                 OperationPhase::Succeeded,
                 WalletQuotePhase::Inconclusive,
                 "action_failed",
+                Some("paid"),
             ),
             Some((WalletQuotePhase::Paid, None))
         );
@@ -6312,11 +6531,62 @@ mod tests {
                 OperationPhase::Failed,
                 WalletQuotePhase::Pending,
                 "action_deadline_exceeded",
+                None,
             ),
             Some((
                 WalletQuotePhase::Inconclusive,
                 Some("action_deadline_exceeded")
             ))
+        );
+    }
+
+    #[test]
+    fn wallet_pay_settlement_phase_drives_the_quote_outcome() {
+        assert_eq!(
+            wallet_quote_recovery_outcome(
+                OperationKind::WalletPay,
+                OperationPhase::Succeeded,
+                WalletQuotePhase::Pending,
+                "action_failed",
+                Some("unpaid"),
+            ),
+            Some((WalletQuotePhase::Failed, Some("melt_unpaid"))),
+            "a rolled-back melt never promotes the receive quote"
+        );
+        assert_eq!(
+            wallet_quote_recovery_outcome(
+                OperationKind::WalletPay,
+                OperationPhase::Succeeded,
+                WalletQuotePhase::Pending,
+                "action_failed",
+                Some("pending"),
+            ),
+            Some((WalletQuotePhase::Inconclusive, Some("melt_pending")))
+        );
+        assert_eq!(
+            wallet_quote_recovery_outcome(
+                OperationKind::WalletPay,
+                OperationPhase::Succeeded,
+                WalletQuotePhase::Pending,
+                "action_failed",
+                None,
+            ),
+            Some((
+                WalletQuotePhase::Inconclusive,
+                Some("settlement_unverified")
+            )),
+            "an artifact without a ledger-derived phase is not a settlement"
+        );
+        assert_eq!(
+            wallet_quote_recovery_outcome(
+                OperationKind::WalletPay,
+                OperationPhase::Succeeded,
+                WalletQuotePhase::Inconclusive,
+                "action_failed",
+                Some("unpaid"),
+            ),
+            None,
+            "an ambiguous quote is never downgraded to failed by a later unpaid observation"
         );
     }
 }

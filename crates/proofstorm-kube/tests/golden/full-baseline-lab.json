@@ -132,6 +132,7 @@
                   ]
                 }
               },
+              "terminationMessagePolicy": "FallbackToLogsOnError",
               "volumeMounts": [
                 {
                   "mountPath": "/home/bitcoin/.bitcoin",

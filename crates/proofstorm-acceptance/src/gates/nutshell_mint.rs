@@ -98,7 +98,7 @@ fn expected_settings() -> Value {
         "global_rate_limit": 77,
         "transaction_rate_limit": 33,
         "lightning_fee_percent": 0.5,
-        "lightning_reserve_fee_min": 7,
+        "lightning_reserve_fee_min": 7000,
         "backend": "LndRestWallet",
         "lnd_endpoint": "https://lightning:8080",
         "database": "/app/data",

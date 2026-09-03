@@ -624,6 +624,22 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
     assert!(completed.artifact.is_some());
     assert_eq!(
         store
+            .active_operations("alpha", "operations-instance")
+            .expect("active operations")
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["operation-1", "operation-2", "operation-3"],
+        "a terminal result leaves the ledger's active set"
+    );
+    assert!(
+        store
+            .active_operations("alpha", "no-such-instance")
+            .expect("unknown instance has no active operations")
+            .is_empty()
+    );
+    assert_eq!(
+        store
             .record_operation_result(
                 "alpha",
                 "operation-0",

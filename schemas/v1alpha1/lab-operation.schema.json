@@ -100,7 +100,8 @@
         "wallet_round_trip",
         "conservation_oracle",
         "reachability_oracle",
-        "native_exec"
+        "native_exec",
+        "component_logs"
       ],
       "type": "string"
     },

@@ -14,9 +14,9 @@ pub const REVISION_DIGEST_ANNOTATION: &str = "proofstorm.dev/revision-digest";
 pub const ROLLOUT_DIGEST_ANNOTATION: &str = "proofstorm.dev/rollout-digest";
 
 pub use adapter::{
-    AdapterError, ComponentObservationResources, PROTOCOL_PROBER_DIGEST_ANNOTATION,
-    PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION, PROTOCOL_PROBER_NAME,
-    RenderedComponent, RenderedLab, compile_component_plans, component_ports,
+    AdapterError, COMPONENT_LABEL, ComponentObservationResources,
+    PROTOCOL_PROBER_DIGEST_ANNOTATION, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
+    PROTOCOL_PROBER_NAME, RenderedComponent, RenderedLab, compile_component_plans, component_ports,
     observe_component_statuses, render_attacker_component, render_bitcoin_component,
     render_cdk_component, render_cln_component, render_component_network_policy,
     render_keycloak_component, render_lab, render_lnd_component, render_nutshell_mint_component,
@@ -25,12 +25,12 @@ pub use adapter::{
 };
 pub use api::{
     ActionPhase, BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction,
-    ChannelRebalanceAction, ConservationOracleAction, LabAction, LabPhase, NativeExecAction,
-    NetworkHealAction, NetworkPartitionAction, NodeControlAction, PeerConnectAction,
-    PeerDisconnectAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
-    ProofstormLabActionStatus, ProofstormLabSpec, ProofstormLabStatus, ReachabilityOracleAction,
-    TeardownReceipt, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
-    WalletInvoiceAction, WalletPayAction, WalletRoundTripAction,
+    ChannelRebalanceAction, ComponentLogsAction, ConservationOracleAction, LabAction, LabPhase,
+    NativeExecAction, NetworkHealAction, NetworkPartitionAction, NodeControlAction,
+    PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
+    ProofstormLabActionSpec, ProofstormLabActionStatus, ProofstormLabSpec, ProofstormLabStatus,
+    ReachabilityOracleAction, TeardownReceipt, WalletBalanceAction, WalletFundAction,
+    WalletInitializeAction, WalletInvoiceAction, WalletPayAction, WalletRoundTripAction,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, BootstrapJobSpec, ChannelCloseJobSpec,
