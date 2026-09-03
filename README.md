@@ -51,6 +51,9 @@ The MCP configuration is operator-owned. Its principal and capability set are
 not agent inputs, and the agent never receives kubeconfig. A principal granted
 `component.exec` can inspect component-local credentials from inside that lab,
 so that capability must be treated as secret-bearing authority.
+`authentication.test` is narrower: it permits a fixed controller-rendered
+authentication conformance action to consume disposable test-user credentials
+inside the lab, while MCP returns only its typed, secret-free result.
 
 Run the hermetic Slice 1 suite:
 
@@ -478,11 +481,19 @@ make e2e-cross-implementation-wallet
 make e2e-nutshell-oidc
 ```
 
-The OIDC conformance gate obtains a real Keycloak access token with Nutshell's native
-`WalletAuth`, checks signed issuer/client/subject claims, exercises the NUT-21
-and NUT-22 missing/invalid and policy failures, then proceeds to native BAT
-issuance. Against upstream 0.20.3 it currently reproduces the auth-ledger
-schema failure and therefore does not satisfy the restart/replay exit gate.
+The OIDC conformance gate now drives authentication through three typed
+`authentication.test` actions. Fixed in-lab Jobs consume the generated
+test-user credential through Kubernetes Secret references, obtain a real
+Keycloak access token with Nutshell's native `WalletAuth`, check the
+issuer/client/subject/lifetime claims, exercise the NUT-21 and NUT-22
+missing/invalid and policy failures, mint DLEQ-backed BATs, and spend one
+against a protected endpoint. The controller retains that spent BAT in an
+immutable, instance-scoped Secret identified to MCP only by its source
+operation; after a mint restart, the replay action requires spent-token
+rejection and proves a fresh BAT still works. Neither credentials nor bearer
+tokens cross the MCP boundary. Against upstream 0.20.3 the typed baseline
+currently reproduces the auth-ledger schema failure and therefore cannot yet
+reach the protected-spend and restart/replay exit gates.
 
 CDK is not claimed as an authenticated Nutshell client by this gate. CDK clients
 through 0.18.0 complete OIDC login and refresh against the generated Keycloak

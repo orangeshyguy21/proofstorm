@@ -6,12 +6,12 @@ use kube::{
     api::{DeleteParams, Patch, PatchParams},
 };
 use proofstorm_core::{
-    Capability, CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogSupportMatrix,
-    ComponentKind, ComponentSpec, ComponentStatus, ControlClass, DraftMutation,
-    EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent,
-    EvidenceInstance, Experiment, ExperimentLease, ExperimentPhase, InstancePhase, InventoryEntry,
-    LabInstance, LabInstanceStatus, LabOperation, LabSpec, LinkKind, LinkSpec,
-    MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
+    AuthenticationProtocol, Capability, CatalogDependencySupport, CatalogEntry, CatalogFeature,
+    CatalogSupportMatrix, ComponentKind, ComponentSpec, ComponentStatus, ControlClass,
+    DraftMutation, EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle,
+    EvidenceBundleContent, EvidenceInstance, Experiment, ExperimentLease, ExperimentPhase,
+    InstancePhase, InventoryEntry, LabInstance, LabInstanceStatus, LabOperation, LabSpec, LinkKind,
+    LinkSpec, MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
     NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature, OperationArtifact,
     OperationKind, OperationPhase, PublishedRevision, ReleaseChannel, SupportLifecycle,
     TeardownReceipt as CoreTeardownReceipt, ValidateLabRequest, ValidationReport, WalletQuote,
@@ -19,13 +19,14 @@ use proofstorm_core::{
     network_policy_fault_backend, validate_lab,
 };
 use proofstorm_kube::{
-    ACTION_CANCEL_ANNOTATION, ActionPhase, BootstrapLiquidityAction, ChannelCloseAction,
-    ChannelOpenAction, ChannelRebalanceAction, ComponentLogsAction, ConservationOracleAction,
-    LabAction, LabPhase, NativeExecAction, NetworkHealAction, NetworkPartitionAction,
-    NodeControlAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
-    ProofstormLabActionSpec, ProofstormLabSpec, ReachabilityOracleAction, WalletBalanceAction,
-    WalletFundAction, WalletInitializeAction, WalletInvoiceAction, WalletPayAction,
-    WalletRoundTripAction, component_ports,
+    ACTION_CANCEL_ANNOTATION, ActionPhase, AuthenticationConformanceAction,
+    AuthenticationProtectedSpendAction, AuthenticationReplayAction, BootstrapLiquidityAction,
+    ChannelCloseAction, ChannelOpenAction, ChannelRebalanceAction, ComponentLogsAction,
+    ConservationOracleAction, LabAction, LabPhase, NativeExecAction, NetworkHealAction,
+    NetworkPartitionAction, NodeControlAction, PeerConnectAction, PeerDisconnectAction,
+    ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec, ProofstormLabSpec,
+    ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
+    WalletInvoiceAction, WalletPayAction, WalletRoundTripAction, component_ports,
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
@@ -418,6 +419,43 @@ pub struct ComponentLogsRequest {
     /// Lines to read from the end of the component's current container log,
     /// between 1 and 2000. The artifact is additionally byte-bounded.
     pub tail_lines: u32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationConformanceRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationProtectedSpendRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationReplayRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub source_operation_id: String,
     pub idempotency_key: String,
 }
 
@@ -2055,6 +2093,176 @@ impl ProofstormMcp {
             LabAction::ComponentLogs(ComponentLogsAction {
                 component: request.component,
                 tail_lines: request.tail_lines,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Run the fixed Nutshell and Keycloak OIDC/CAT/BAT baseline using the controller-generated disposable test identity. Credentials and issued bearer material remain inside the bounded Job; the terminal artifact contains only typed conformance observations"
+    )]
+    async fn proofstorm_authentication_conformance(
+        &self,
+        Parameters(request): Parameters<AuthenticationConformanceRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::AuthenticationTest)?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::AuthenticationTest,
+            )
+            .map_err(store_error)?;
+        validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::AuthenticationConformance,
+            &request,
+            &request.idempotency_key,
+            Capability::AuthenticationTest,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::AuthenticationConformance(AuthenticationConformanceAction {
+                mint: request.mint,
+                identity_provider: request.identity_provider,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Mint valid BATs with the disposable test identity, spend one against a protected mint endpoint, and retain the spent bearer token as an opaque in-lab session. MCP returns only typed conformance observations and the source operation identity"
+    )]
+    async fn proofstorm_authentication_protected_spend(
+        &self,
+        Parameters(request): Parameters<AuthenticationProtectedSpendRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::AuthenticationTest)?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::AuthenticationTest,
+            )
+            .map_err(store_error)?;
+        validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::AuthenticationProtectedSpend,
+            &request,
+            &request.idempotency_key,
+            Capability::AuthenticationTest,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::AuthenticationProtectedSpend(AuthenticationProtectedSpendAction {
+                mint: request.mint,
+                identity_provider: request.identity_provider,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "After a mint restart, replay a BAT retained by a successful protected-spend operation, require spent-token rejection, then mint and spend a fresh BAT. Test credentials and bearer tokens remain inside fixed Proofstorm jobs"
+    )]
+    async fn proofstorm_authentication_replay(
+        &self,
+        Parameters(request): Parameters<AuthenticationReplayRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize_all(&[Capability::AuthenticationTest, Capability::ArtifactRead])?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::AuthenticationTest,
+            )
+            .map_err(store_error)?;
+        validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
+        let source = self
+            .store
+            .operation(
+                &self.workspace,
+                &self.principal,
+                &request.source_operation_id,
+            )
+            .map_err(store_error)?;
+        let source_valid = source.instance_id == request.instance_id
+            && source.experiment_id == request.experiment_id
+            && source.lease_id == request.lease_id
+            && source.principal_id == self.principal
+            && source.kind == OperationKind::AuthenticationProtectedSpend
+            && source.phase == OperationPhase::Succeeded
+            && source.artifact.as_ref().is_some_and(|artifact| {
+                artifact.content["contract"] == "proofstorm/authentication-protected-spend/v1"
+                    && artifact.content["conformant"] == true
+                    && artifact.content["session_operation_id"] == source.id
+                    && artifact.content["mint"] == request.mint
+                    && artifact.content["identity_provider"] == request.identity_provider
+            });
+        if !source_valid {
+            return Err(invalid_operation(
+                "source operation must be a successful protected spend in the same instance, experiment, lease, principal, mint, and identity provider",
+            ));
+        }
+        let session_secret = format!("{}-auth-session", source.resource_name);
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::AuthenticationReplay,
+            &request,
+            &request.idempotency_key,
+            Capability::AuthenticationTest,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::AuthenticationReplay(AuthenticationReplayAction {
+                mint: request.mint,
+                identity_provider: request.identity_provider,
+                session_secret,
+                source_operation_id: request.source_operation_id,
             }),
         );
         self.runtime()?.apply_action(&instance, &resource).await?;
@@ -4116,6 +4324,18 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_wallet_invoice", &[Capability::WalletFund]),
         ("proofstorm_component_logs", &[Capability::ComponentLogs]),
         (
+            "proofstorm_authentication_conformance",
+            &[Capability::AuthenticationTest],
+        ),
+        (
+            "proofstorm_authentication_protected_spend",
+            &[Capability::AuthenticationTest],
+        ),
+        (
+            "proofstorm_authentication_replay",
+            &[Capability::AuthenticationTest, Capability::ArtifactRead],
+        ),
+        (
             "proofstorm_wallet_pay",
             &[Capability::WalletControl, Capability::ArtifactRead],
         ),
@@ -4521,6 +4741,43 @@ fn component_image_any(
         .find(|entry| entry.component_id == id && entry.catalog_id == component.implementation)
         .map(|entry| entry.image.clone())
         .ok_or_else(|| invalid_operation(&format!("component {id:?} has no immutable lock entry")))
+}
+
+fn validate_authentication_components(
+    revision: &PublishedRevision,
+    mint: &str,
+    identity_provider: &str,
+) -> Result<(), ErrorData> {
+    component_image(revision, mint, ComponentKind::Mint, "nutshell")?;
+    component_image(
+        revision,
+        identity_provider,
+        ComponentKind::IdentityProvider,
+        "keycloak",
+    )?;
+    let links = revision
+        .lab
+        .links
+        .iter()
+        .filter(|link| {
+            link.kind == LinkKind::AuthenticationBackend
+                && link.from == mint
+                && link.to == identity_provider
+                && matches!(
+                    link.binding.as_ref(),
+                    Some(proofstorm_core::DependencyBinding::Authentication {
+                        protocol: AuthenticationProtocol::Oidc
+                    })
+                )
+        })
+        .count();
+    if links == 1 {
+        Ok(())
+    } else {
+        Err(invalid_operation(&format!(
+            "authentication conformance requires exactly one OIDC link from {mint:?} to {identity_provider:?}"
+        )))
+    }
 }
 
 fn runtime_action_resource(
@@ -5489,6 +5746,74 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn authentication_conformance_is_a_separate_capability() {
+        let store = seeded_store();
+        let unauthorized = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .expect("session without authentication.test");
+        let Err(denied) = unauthorized
+            .proofstorm_authentication_conformance(Parameters(AuthenticationConformanceRequest {
+                instance_id: "instance-one".into(),
+                experiment_id: "experiment-one".into(),
+                lease_id: "lease-one".into(),
+                operation_id: "operation-auth".into(),
+                mint: "mint".into(),
+                identity_provider: "identity".into(),
+                idempotency_key: "auth-one".into(),
+            }))
+            .await
+        else {
+            panic!("authentication conformance must require its own capability");
+        };
+        assert_eq!(denied.data.expect("denial data")["code"], "access_denied");
+        assert!(
+            !unauthorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_conformance".to_owned())
+        );
+        assert!(
+            !unauthorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_protected_spend".to_owned())
+        );
+        assert!(
+            !unauthorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_replay".to_owned())
+        );
+
+        store
+            .grant("alpha", "designer", Capability::AuthenticationTest)
+            .expect("grant authentication.test");
+        let authorized =
+            ProofstormMcp::new(store.clone(), "alpha", "designer").expect("authorized session");
+        assert!(
+            authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_conformance".to_owned())
+        );
+        assert!(
+            authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_protected_spend".to_owned())
+        );
+        assert!(
+            !authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_replay".to_owned())
+        );
+        store
+            .grant("alpha", "designer", Capability::ArtifactRead)
+            .expect("grant artifact.read");
+        let replay_authorized =
+            ProofstormMcp::new(store, "alpha", "designer").expect("replay-authorized session");
+        assert!(
+            replay_authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_replay".to_owned())
+        );
+    }
+
     #[test]
     fn draft_mutations_return_compact_receipts() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
@@ -5554,7 +5879,7 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 62);
+        assert_eq!(service.tool_names().len(), 65);
         assert!(
             service
                 .tool_names()

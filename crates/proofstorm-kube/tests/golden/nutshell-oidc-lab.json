@@ -137,6 +137,13 @@
             "dependencies",
             "protocol"
           ]
+        },
+        {
+          "operation": "authentication",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
         }
       ],
       "protocol_probe": {
@@ -321,6 +328,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -581,6 +595,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"

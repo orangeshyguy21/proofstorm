@@ -202,6 +202,7 @@ spec:
                           - network.heal
                           - component.logs
                           - component.exec
+                          - authentication.test
                           - traffic.capture
                           - oracle.list
                           - oracle.run

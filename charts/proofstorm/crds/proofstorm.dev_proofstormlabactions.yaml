@@ -50,6 +50,9 @@ spec:
                     - reachability_oracle
                     - native_exec
                     - component_logs
+                    - authentication_conformance
+                    - authentication_protected_spend
+                    - authentication_replay
                     type: string
                   parameters:
                     properties:
@@ -93,6 +96,9 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      identityProvider:
+                        nullable: true
+                        type: string
                       incomingChannelId:
                         nullable: true
                         type: string
@@ -134,6 +140,12 @@ spec:
                         nullable: true
                         type: string
                       service:
+                        nullable: true
+                        type: string
+                      sessionSecret:
+                        nullable: true
+                        type: string
+                      sourceOperationId:
                         nullable: true
                         type: string
                       tailLines:
@@ -209,6 +221,7 @@ spec:
                 - network.heal
                 - component.logs
                 - component.exec
+                - authentication.test
                 - traffic.capture
                 - oracle.list
                 - oracle.run

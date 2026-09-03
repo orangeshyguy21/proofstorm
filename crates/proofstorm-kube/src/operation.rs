@@ -9,14 +9,24 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
-    BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction, ChannelRebalanceAction,
-    ConservationOracleAction, LabAction, NativeExecAction, PeerConnectAction, PeerDisconnectAction,
-    ProofstormLab, ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction,
-    WalletFundAction, WalletInitializeAction, WalletInvoiceAction, WalletPayAction,
-    WalletRoundTripAction, component_ports, instance_namespace,
+    AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
+    AuthenticationReplayAction, BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction,
+    ChannelRebalanceAction, ConservationOracleAction, LabAction, NativeExecAction,
+    PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
+    ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
+    WalletInvoiceAction, WalletPayAction, WalletRoundTripAction, component_ports,
+    instance_namespace,
 };
 
 const REACHABILITY_PROBE_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+
+/// Fixed driver for the secret-bearing OIDC/CAT/BAT baseline. It writes only
+/// an allowlisted result to the termination log.
+const AUTHENTICATION_CONFORMANCE_DRIVER: &str =
+    include_str!("../drivers/authentication_conformance.py");
+const AUTHENTICATION_PROTECTED_SPEND_DRIVER: &str =
+    include_str!("../drivers/authentication_protected_spend.py");
+const AUTHENTICATION_REPLAY_DRIVER: &str = include_str!("../drivers/authentication_replay.py");
 
 pub struct BootstrapJobSpec<'a> {
     pub resource_name: &'a str,
@@ -165,6 +175,32 @@ pub struct WalletPayJobSpec<'a> {
     pub recipient_wallet: &'a str,
     pub wallet_image: &'a str,
     pub amount_sat: u64,
+}
+
+pub struct AuthenticationConformanceJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub mint: &'a str,
+    pub identity_provider: &'a str,
+    pub mint_image: &'a str,
+}
+
+pub struct AuthenticationProtectedSpendJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub mint: &'a str,
+    pub identity_provider: &'a str,
+    pub mint_image: &'a str,
+}
+
+pub struct AuthenticationReplayJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub mint: &'a str,
+    pub identity_provider: &'a str,
+    pub mint_image: &'a str,
+    pub session_secret: &'a str,
+    pub source_operation_id: &'a str,
 }
 
 #[derive(Debug, Error)]
@@ -519,6 +555,18 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
             vec![(&request.from_component, Operation::NativeExec)]
         }
         LabAction::NativeExec(request) => vec![(&request.component, Operation::NativeExec)],
+        LabAction::AuthenticationConformance(request) => vec![
+            (&request.mint, Operation::Authentication),
+            (&request.identity_provider, Operation::Authentication),
+        ],
+        LabAction::AuthenticationProtectedSpend(request) => vec![
+            (&request.mint, Operation::Authentication),
+            (&request.identity_provider, Operation::Authentication),
+        ],
+        LabAction::AuthenticationReplay(request) => vec![
+            (&request.mint, Operation::Authentication),
+            (&request.identity_provider, Operation::Authentication),
+        ],
     }
 }
 
@@ -545,6 +593,9 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::WalletRoundTrip(_) => "wallet",
         LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
         LabAction::NativeExec(_) => "exec",
+        LabAction::AuthenticationConformance(_)
+        | LabAction::AuthenticationProtectedSpend(_)
+        | LabAction::AuthenticationReplay(_) => "authentication",
         // Never rendered as a Job; the controller reads the log itself.
         LabAction::ComponentLogs(_) => "",
     }
@@ -597,6 +648,15 @@ pub fn render_lab_action_job(
             render_reachability_oracle_action(action, lab, request)?
         }
         LabAction::NativeExec(request) => render_native_exec_action(action, lab, request)?,
+        LabAction::AuthenticationConformance(request) => {
+            render_authentication_conformance_action(action, lab, request)?
+        }
+        LabAction::AuthenticationProtectedSpend(request) => {
+            render_authentication_protected_spend_action(action, lab, request)?
+        }
+        LabAction::AuthenticationReplay(request) => {
+            render_authentication_replay_action(action, lab, request)?
+        }
         LabAction::ComponentLogs(_) => {
             return Err(ActionRenderError::InvalidPlan(
                 "component logs are fulfilled by the controller, not by a Job".to_owned(),
@@ -605,6 +665,102 @@ pub fn render_lab_action_job(
     };
     mark_controller_owned(&mut job, &action.name_any());
     Ok(job)
+}
+
+fn render_authentication_conformance_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &AuthenticationConformanceAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::AuthenticationTest {
+        return Err(ActionRenderError::Capability);
+    }
+    let mint_image = authentication_components(lab, &request.mint, &request.identity_provider)?;
+    render_authentication_conformance_job(&AuthenticationConformanceJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        mint: &request.mint,
+        identity_provider: &request.identity_provider,
+        mint_image,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_authentication_protected_spend_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &AuthenticationProtectedSpendAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::AuthenticationTest {
+        return Err(ActionRenderError::Capability);
+    }
+    let mint_image = authentication_components(lab, &request.mint, &request.identity_provider)?;
+    render_authentication_protected_spend_job(&AuthenticationProtectedSpendJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        mint: &request.mint,
+        identity_provider: &request.identity_provider,
+        mint_image,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_authentication_replay_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &AuthenticationReplayAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::AuthenticationTest {
+        return Err(ActionRenderError::Capability);
+    }
+    let mint_image = authentication_components(lab, &request.mint, &request.identity_provider)?;
+    render_authentication_replay_job(&AuthenticationReplayJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        mint: &request.mint,
+        identity_provider: &request.identity_provider,
+        mint_image,
+        session_secret: &request.session_secret,
+        source_operation_id: &request.source_operation_id,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn authentication_components<'a>(
+    lab: &'a ProofstormLab,
+    mint: &str,
+    identity_provider: &str,
+) -> Result<&'a str, ActionRenderError> {
+    let mint_image = locked_component_image(lab, mint, ComponentKind::Mint, "nutshell")?;
+    locked_component_image(
+        lab,
+        identity_provider,
+        ComponentKind::IdentityProvider,
+        "keycloak",
+    )?;
+    let links = lab
+        .spec
+        .lab
+        .links
+        .iter()
+        .filter(|link| {
+            link.kind == proofstorm_core::LinkKind::AuthenticationBackend
+                && link.from == mint
+                && link.to == identity_provider
+                && matches!(
+                    link.binding.as_ref(),
+                    Some(proofstorm_core::DependencyBinding::Authentication {
+                        protocol: proofstorm_core::AuthenticationProtocol::Oidc
+                    })
+                )
+        })
+        .count();
+    if links != 1 {
+        return Err(ActionRenderError::InvalidPlan(format!(
+            "authentication conformance requires exactly one OIDC link from {mint:?} to {identity_provider:?}, found {links}"
+        )));
+    }
+    Ok(mint_image)
 }
 
 fn render_native_exec_action(
@@ -2308,6 +2464,243 @@ pub fn render_channel_close_job(spec: &ChannelCloseJobSpec<'_>) -> Result<Job, s
     )
 }
 
+/// Run the fixed secret-bearing authentication baseline in the locked mint image.
+///
+/// # Panics
+///
+/// Panics only if the controller-owned container template stops rendering its
+/// environment as a JSON array.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_authentication_conformance_job(
+    spec: &AuthenticationConformanceJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let AuthenticationConformanceJobSpec {
+        resource_name,
+        instance_key,
+        mint,
+        identity_provider,
+        mint_image,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let mint_url = format!("http://{mint}:3338");
+    let script = "exec python3 -c \"$PROOFSTORM_AUTHENTICATION_DRIVER\"";
+    let mut authentication = container_with_env(
+        "authentication",
+        mint_image,
+        script,
+        &[],
+        vec![
+            (
+                "PROOFSTORM_AUTHENTICATION_DRIVER",
+                AUTHENTICATION_CONFORMANCE_DRIVER,
+            ),
+            ("PROOFSTORM_MINT", mint),
+            ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
+            ("PROOFSTORM_MINT_URL", mint_url.as_str()),
+            ("PYTHONUNBUFFERED", "1"),
+        ],
+    );
+    authentication["env"]
+        .as_array_mut()
+        .expect("authentication environment is an array")
+        .extend([
+            json!({
+                "name": "OIDC_TEST_USERNAME",
+                "valueFrom": {"secretKeyRef": {
+                    "name": format!("{identity_provider}-credentials"),
+                    "key": "OIDC_TEST_USERNAME"
+                }}
+            }),
+            json!({
+                "name": "OIDC_TEST_PASSWORD",
+                "valueFrom": {"secretKeyRef": {
+                    "name": format!("{identity_provider}-credentials"),
+                    "key": "OIDC_TEST_PASSWORD"
+                }}
+            }),
+        ]);
+    // This driver handles every exception and emits a fixed diagnostic. Do not
+    // fall back to container logs: an unexpected library traceback is not a
+    // valid secret-bearing artifact.
+    authentication["terminationMessagePolicy"] = json!("File");
+    let pod = json!({
+        "restartPolicy": "Never",
+        "serviceAccountName": "proofstorm-workload",
+        "automountServiceAccountToken": false,
+        "enableServiceLinks": false,
+        "securityContext": pod_security(),
+        "affinity": instance_affinity(instance_key),
+        "containers": [authentication]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "authentication-conformance",
+        120,
+        &pod,
+    )
+}
+
+/// Mint and spend a BAT while keeping the token in a private termination message.
+///
+/// # Panics
+///
+/// Panics only if the controller-owned container template stops rendering its
+/// environment as a JSON array.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_authentication_protected_spend_job(
+    spec: &AuthenticationProtectedSpendJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let AuthenticationProtectedSpendJobSpec {
+        resource_name,
+        instance_key,
+        mint,
+        identity_provider,
+        mint_image,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let mint_url = format!("http://{mint}:3338");
+    let script = "exec python3 -c \"$PROOFSTORM_AUTHENTICATION_DRIVER\"";
+    let mut authentication = container_with_env(
+        "authentication",
+        mint_image,
+        script,
+        &[],
+        vec![
+            (
+                "PROOFSTORM_AUTHENTICATION_DRIVER",
+                AUTHENTICATION_PROTECTED_SPEND_DRIVER,
+            ),
+            ("PROOFSTORM_MINT", mint),
+            ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
+            ("PROOFSTORM_MINT_URL", mint_url.as_str()),
+            ("PYTHONUNBUFFERED", "1"),
+        ],
+    );
+    authentication["env"]
+        .as_array_mut()
+        .expect("authentication environment is an array")
+        .extend(authentication_identity_environment(identity_provider));
+    authentication["terminationMessagePolicy"] = json!("File");
+    let pod = json!({
+        "restartPolicy": "Never",
+        "serviceAccountName": "proofstorm-workload",
+        "automountServiceAccountToken": false,
+        "enableServiceLinks": false,
+        "securityContext": pod_security(),
+        "affinity": instance_affinity(instance_key),
+        "containers": [authentication]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "authentication-protected-spend",
+        120,
+        &pod,
+    )
+}
+
+/// Replay a private spent BAT and prove that a fresh BAT still works.
+///
+/// # Panics
+///
+/// Panics only if the controller-owned container template stops rendering its
+/// environment as a JSON array.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_authentication_replay_job(
+    spec: &AuthenticationReplayJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let AuthenticationReplayJobSpec {
+        resource_name,
+        instance_key,
+        mint,
+        identity_provider,
+        mint_image,
+        session_secret,
+        source_operation_id,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let mint_url = format!("http://{mint}:3338");
+    let script = "exec python3 -c \"$PROOFSTORM_AUTHENTICATION_DRIVER\"";
+    let mut authentication = container_with_env(
+        "authentication",
+        mint_image,
+        script,
+        &[],
+        vec![
+            (
+                "PROOFSTORM_AUTHENTICATION_DRIVER",
+                AUTHENTICATION_REPLAY_DRIVER,
+            ),
+            ("PROOFSTORM_MINT", mint),
+            ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
+            ("PROOFSTORM_MINT_URL", mint_url.as_str()),
+            ("PROOFSTORM_SOURCE_OPERATION_ID", source_operation_id),
+            ("PYTHONUNBUFFERED", "1"),
+        ],
+    );
+    let mut private_environment = authentication_identity_environment(identity_provider);
+    private_environment.push(json!({
+        "name": "PROOFSTORM_SPENT_BAT",
+        "valueFrom": {"secretKeyRef": {
+            "name": session_secret,
+            "key": "SPENT_BAT"
+        }}
+    }));
+    authentication["env"]
+        .as_array_mut()
+        .expect("authentication environment is an array")
+        .extend(private_environment);
+    authentication["terminationMessagePolicy"] = json!("File");
+    let pod = json!({
+        "restartPolicy": "Never",
+        "serviceAccountName": "proofstorm-workload",
+        "automountServiceAccountToken": false,
+        "enableServiceLinks": false,
+        "securityContext": pod_security(),
+        "affinity": instance_affinity(instance_key),
+        "containers": [authentication]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "authentication-replay",
+        120,
+        &pod,
+    )
+}
+
+fn authentication_identity_environment(identity_provider: &str) -> Vec<Value> {
+    vec![
+        json!({
+            "name": "OIDC_TEST_USERNAME",
+            "valueFrom": {"secretKeyRef": {
+                "name": format!("{identity_provider}-credentials"),
+                "key": "OIDC_TEST_USERNAME"
+            }}
+        }),
+        json!({
+            "name": "OIDC_TEST_PASSWORD",
+            "valueFrom": {"secretKeyRef": {
+                "name": format!("{identity_provider}-credentials"),
+                "key": "OIDC_TEST_PASSWORD"
+            }}
+        }),
+    ]
+}
+
 /// Initialize a persistent logical wallet through its locked adapter.
 ///
 /// # Errors
@@ -3177,6 +3570,97 @@ mod tests {
             );
         }
         assert!(observed > 1, "the bootstrap renders staged containers");
+    }
+
+    #[test]
+    fn authentication_conformance_job_keeps_credentials_in_secret_refs() {
+        let job = render_authentication_conformance_job(&AuthenticationConformanceJobSpec {
+            resource_name: "op-auth",
+            instance_key: "i0123456789012345678",
+            mint: "mint",
+            identity_provider: "identity",
+            mint_image: "nutshell-image",
+        })
+        .expect("authentication conformance job");
+        let encoded = serde_json::to_value(&job).expect("job JSON");
+        let pod = &encoded["spec"]["template"]["spec"];
+        assert_eq!(pod["automountServiceAccountToken"], false);
+        let container = &pod["containers"][0];
+        assert_eq!(container["name"], "authentication");
+        assert_eq!(container["image"], "nutshell-image");
+        assert_eq!(container["terminationMessagePolicy"], "File");
+        let environment = container["env"].as_array().expect("environment");
+        for (name, key) in [
+            ("OIDC_TEST_USERNAME", "OIDC_TEST_USERNAME"),
+            ("OIDC_TEST_PASSWORD", "OIDC_TEST_PASSWORD"),
+        ] {
+            let variable = environment
+                .iter()
+                .find(|entry| entry["name"] == name)
+                .expect("secret environment variable");
+            assert_eq!(
+                variable["valueFrom"]["secretKeyRef"]["name"],
+                "identity-credentials"
+            );
+            assert_eq!(variable["valueFrom"]["secretKeyRef"]["key"], key);
+            assert!(variable.get("value").is_none());
+        }
+        let driver = environment
+            .iter()
+            .find(|entry| entry["name"] == "PROOFSTORM_AUTHENTICATION_DRIVER")
+            .and_then(|entry| entry["value"].as_str())
+            .expect("fixed driver");
+        assert!(driver.contains("proofstorm/authentication-conformance/v1"));
+        assert!(driver.contains("os.environ[\"OIDC_TEST_PASSWORD\"]"));
+        assert!(!driver.contains("traceback"));
+
+        let protected =
+            render_authentication_protected_spend_job(&AuthenticationProtectedSpendJobSpec {
+                resource_name: "op-auth-spend",
+                instance_key: "i0123456789012345678",
+                mint: "mint",
+                identity_provider: "identity",
+                mint_image: "nutshell-image",
+            })
+            .expect("protected spend job");
+        let protected = serde_json::to_value(protected).expect("protected job JSON");
+        let protected_container = &protected["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(protected_container["terminationMessagePolicy"], "File");
+        assert!(
+            protected_container["env"]
+                .as_array()
+                .expect("environment")
+                .iter()
+                .any(|entry| entry["name"] == "OIDC_TEST_PASSWORD"
+                    && entry["valueFrom"]["secretKeyRef"]["name"] == "identity-credentials")
+        );
+
+        let replay = render_authentication_replay_job(&AuthenticationReplayJobSpec {
+            resource_name: "op-auth-replay",
+            instance_key: "i0123456789012345678",
+            mint: "mint",
+            identity_provider: "identity",
+            mint_image: "nutshell-image",
+            session_secret: "op-source-auth-session",
+            source_operation_id: "auth-source",
+        })
+        .expect("authentication replay job");
+        let replay = serde_json::to_value(replay).expect("replay job JSON");
+        let replay_pod = &replay["spec"]["template"]["spec"];
+        assert_eq!(replay_pod["automountServiceAccountToken"], false);
+        let replay_environment = replay_pod["containers"][0]["env"]
+            .as_array()
+            .expect("replay environment");
+        let spent_bat = replay_environment
+            .iter()
+            .find(|entry| entry["name"] == "PROOFSTORM_SPENT_BAT")
+            .expect("private spent BAT");
+        assert_eq!(
+            spent_bat["valueFrom"]["secretKeyRef"]["name"],
+            "op-source-auth-session"
+        );
+        assert_eq!(spent_bat["valueFrom"]["secretKeyRef"]["key"], "SPENT_BAT");
+        assert!(spent_bat.get("value").is_none());
     }
 
     #[test]

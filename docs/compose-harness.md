@@ -181,8 +181,13 @@ acceptance clients are in tree and passing on k3d. The same pinned Nutshell
 wallet workflow also passes against CDK and Redis-backed Nutshell side by side.
 Redis support and OIDC environment wiring are complete. The exact 0.20.3
 authentication projection and typed in-lab Keycloak dependency pass, while the
-native NUT-22 gate is blocked by the reproduced upstream auth-ledger schema
-defect. CDK-to-Nutshell authenticated-client conformance follows that fix;
+native NUT-22 baseline now runs as a typed `authentication.test` action that
+consumes the disposable test credential in-lab and returns only a secret-free
+conformance result. It is blocked by the reproduced upstream auth-ledger schema
+defect. Typed follow-up actions spend a valid BAT, retain the spent bearer as
+an opaque instance-scoped session, reject its replay after restart, and prove a
+fresh BAT still works; no authentication driver reads credentials operator-side.
+CDK-to-Nutshell authenticated-client conformance follows that fix;
 additional payment backends
 and management RPC remain intentionally unsupported until their typed
 dependency, authority, and secret contracts are implemented.

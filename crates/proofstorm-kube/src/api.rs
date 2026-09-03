@@ -125,6 +125,9 @@ pub enum LabAction {
     ReachabilityOracle(ReachabilityOracleAction),
     NativeExec(NativeExecAction),
     ComponentLogs(ComponentLogsAction),
+    AuthenticationConformance(AuthenticationConformanceAction),
+    AuthenticationProtectedSpend(AuthenticationProtectedSpendAction),
+    AuthenticationReplay(AuthenticationReplayAction),
 }
 
 // Kubernetes structural schemas cannot merge the different `kind` constants
@@ -165,6 +168,9 @@ enum LabActionKindSchema {
     ReachabilityOracle,
     NativeExec,
     ComponentLogs,
+    AuthenticationConformance,
+    AuthenticationProtectedSpend,
+    AuthenticationReplay,
 }
 
 #[derive(JsonSchema)]
@@ -192,6 +198,9 @@ struct LabActionParametersSchema {
     wallet: Option<String>,
     recipient_wallet: Option<String>,
     mint: Option<String>,
+    identity_provider: Option<String>,
+    session_secret: Option<String>,
+    source_operation_id: Option<String>,
     quote_id: Option<String>,
     amount_sat: Option<u64>,
     timeout_seconds: Option<u32>,
@@ -220,6 +229,130 @@ pub struct NodeControlAction {
 pub struct ComponentLogsAction {
     pub component: String,
     pub tail_lines: u32,
+}
+
+/// Run the fixed positive and negative OIDC/CAT/BAT baseline without exposing
+/// the disposable identity credential or issued bearer material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationConformanceAction {
+    pub mint: String,
+    pub identity_provider: String,
+}
+
+/// Mint and spend a BAT while retaining the spent token inside the lab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationProtectedSpendAction {
+    pub mint: String,
+    pub identity_provider: String,
+}
+
+/// Replay a previously spent BAT after a restart, then prove fresh BAT use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationReplayAction {
+    pub mint: String,
+    pub identity_provider: String,
+    /// Controller-derived Secret for the source operation's opaque session.
+    pub session_secret: String,
+    pub source_operation_id: String,
+}
+
+/// Secret-free result emitted by the fixed authentication conformance driver.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the wire contract records independent conformance observations, not interchangeable state"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationConformanceResult {
+    pub contract: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub advertised_nut21: bool,
+    pub advertised_nut22: bool,
+    pub invalid_oidc_password_rejected: bool,
+    pub missing_cat_rejected: bool,
+    pub invalid_cat_code: Option<u32>,
+    pub missing_bat_rejected: bool,
+    pub invalid_bat_code: Option<u32>,
+    pub oidc_login: bool,
+    pub claims_match: bool,
+    pub mint_accepted_cat: bool,
+    pub bat_issued: bool,
+    pub bat_dleq: bool,
+    pub bat_max_code: Option<u32>,
+    pub rate_limit_code: Option<u32>,
+    pub conformant: bool,
+    pub failure_stage: Option<AuthenticationConformanceFailureStage>,
+    pub failure_status: Option<u16>,
+    pub failure_protocol_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationConformanceFailureStage {
+    MintInfo,
+    AuthAdvertisement,
+    AuthPolicy,
+    OidcDiscovery,
+    InvalidOidcPassword,
+    MissingCat,
+    InvalidCat,
+    MissingBat,
+    InvalidBat,
+    OidcLogin,
+    OidcClaims,
+    BatMaximum,
+    BatIssuance,
+    BatSignature,
+    CatRateLimit,
+}
+
+/// Secret-free result of minting and spending a valid BAT.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationProtectedSpendResult {
+    pub contract: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub bat_count: u32,
+    pub bat_dleq: bool,
+    pub protected_request: bool,
+    pub session_operation_id: Option<String>,
+    pub conformant: bool,
+    pub failure_stage: Option<AuthenticationSessionFailureStage>,
+    pub failure_status: Option<u16>,
+    pub failure_protocol_code: Option<u32>,
+}
+
+/// Secret-free replay and fresh-authentication result after a mint restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationReplayResult {
+    pub contract: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub source_operation_id: String,
+    pub spent_bat_replay_code: Option<u32>,
+    pub fresh_bat_count: u32,
+    pub fresh_bat_dleq: bool,
+    pub protected_request: bool,
+    pub conformant: bool,
+    pub failure_stage: Option<AuthenticationSessionFailureStage>,
+    pub failure_status: Option<u16>,
+    pub failure_protocol_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationSessionFailureStage {
+    OidcLogin,
+    BatIssuance,
+    BatSignature,
+    ProtectedRequest,
+    SpentBatReplay,
 }
 
 /// An unrestricted shell program executed in a component's locked image.

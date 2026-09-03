@@ -41,6 +41,7 @@
         "network.heal",
         "component.logs",
         "component.exec",
+        "authentication.test",
         "traffic.capture",
         "oracle.list",
         "oracle.run",
@@ -703,7 +704,10 @@
         "conservation_oracle",
         "reachability_oracle",
         "native_exec",
-        "component_logs"
+        "component_logs",
+        "authentication_conformance",
+        "authentication_protected_spend",
+        "authentication_replay"
       ],
       "type": "string"
     },

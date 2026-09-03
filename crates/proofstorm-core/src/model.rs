@@ -91,6 +91,8 @@ pub enum Capability {
     ComponentLogs,
     #[serde(rename = "component.exec")]
     ComponentExec,
+    #[serde(rename = "authentication.test")]
+    AuthenticationTest,
     #[serde(rename = "traffic.capture")]
     TrafficCapture,
     #[serde(rename = "oracle.list")]

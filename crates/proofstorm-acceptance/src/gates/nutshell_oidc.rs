@@ -15,16 +15,29 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, gate::CONTROL_NAMESPACE, json as expect, lab};
-
-/// All three drivers run inside the mint image, which ships `httpx` and the
-/// `cashu` wallet library.
-const PRE_RESTART_DRIVER: &str = include_str!("../../drivers/oidc_pre_restart.py");
-const POST_RESTART_DRIVER: &str = include_str!("../../drivers/oidc_post_restart.py");
-const REPLAY_DRIVER: &str = include_str!("../../drivers/oidc_replay.py");
+use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect, lab};
 
 const INSTANCE: &str = "nutshell-oidc-instance";
 const DRAFT: &str = "nutshell-oidc";
+const EXPERIMENT: &str = "nutshell-oidc-experiment";
+const LEASE: &str = "nutshell-oidc-lease";
+const CAPABILITIES: &[&str] = &[
+    "catalog.read",
+    "lab.read",
+    "lab.create",
+    "lab.validate",
+    "lab.publish",
+    "lab.materialize",
+    "lab.status",
+    "lab.close",
+    "experiment.create",
+    "experiment.read",
+    "experiment.close",
+    "lease.acquire",
+    "lease.release",
+    "authentication.test",
+    "artifact.read",
+];
 
 fn lab_document() -> Value {
     json!({
@@ -58,29 +71,8 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
     context.kubectl.exec(namespace, "statefulset/chain", &argv)
 }
 
-/// Run one in-container driver, feeding it the login payload on stdin.
-fn exec_driver(
-    context: &GateContext,
-    namespace: &str,
-    driver: &str,
-    payload: &Value,
-) -> Result<Value> {
-    let output = context.kubectl.exec_stdin(
-        namespace,
-        "deployment/mint",
-        &["python3", "-c", driver],
-        &serde_json::to_string(payload)?,
-    )?;
-    let last = output
-        .lines()
-        .last()
-        .ok_or_else(|| anyhow::anyhow!("driver produced no output"))?;
-    serde_json::from_str(last.trim())
-        .map_err(|error| anyhow::anyhow!("parse driver output {last:?}: {error}"))
-}
-
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session("nutshell-oidc-live", "designer", LIFECYCLE_CAPABILITIES)?;
+    let mut client = context.session("nutshell-oidc-live", "designer", CAPABILITIES)?;
     let kubectl = &context.kubectl;
 
     client.call(
@@ -186,58 +178,40 @@ pub fn run(context: &GateContext) -> Result<()> {
     let identity_digest = kubectl.digest(&identity_args)?;
     let database_digest = kubectl.digest(&database_args)?;
 
-    let credentials = kubectl.secret_data(&namespace, "identity-credentials")?;
-    let mut keys: Vec<&str> = credentials.keys().map(String::as_str).collect();
-    keys.sort_unstable();
-    if keys
-        != [
-            "KEYCLOAK_ADMIN_PASSWORD",
-            "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS",
-            "OIDC_TEST_PASSWORD",
-            "OIDC_TEST_USERNAME",
-            "PROOFSTORM_SECRET_KIND",
-            "realm.json",
-        ]
-    {
-        bail!("generated Keycloak Secret has unexpected keys: {keys:?}");
-    }
-
-    let realm: Value = serde_json::from_str(
-        credentials
-            .get("realm.json")
-            .ok_or_else(|| anyhow::anyhow!("no realm.json in the generated Secret"))?,
+    client.call(
+        "proofstorm_experiment_create",
+        json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-nutshell-oidc-experiment"}),
     )?;
-    if expect::string(&realm, "/realm")? != "proofstorm"
-        || expect::integer(&realm, "/accessTokenLifespan")? != 600
-    {
-        bail!("generated Keycloak realm does not preserve authored policy");
+    client.call(
+        "proofstorm_lease_acquire",
+        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 3, "idempotency_key": "acquire-nutshell-oidc-lease"}),
+    )?;
+    client.call(
+        "proofstorm_authentication_conformance",
+        json!({
+            "instance_id": INSTANCE,
+            "experiment_id": EXPERIMENT,
+            "lease_id": LEASE,
+            "operation_id": "nutshell-oidc-baseline",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "idempotency_key": "nutshell-oidc-baseline"
+        }),
+    )?;
+    let baseline = lab::wait_operation(&mut client, "nutshell-oidc-baseline", 60)?;
+    let baseline = lab::artifact_content(&baseline)?;
+    expect::equals(
+        baseline,
+        "/contract",
+        &Value::from("proofstorm/authentication-conformance/v1"),
+    )?;
+    expect::equals(baseline, "/mint", &Value::from("mint"))?;
+    expect::equals(baseline, "/identity_provider", &Value::from("identity"))?;
+    if !expect::boolean(baseline, "/conformant")? {
+        client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+        lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
+        bail!("Nutshell OIDC baseline reported a conformance finding: {baseline}");
     }
-    if expect::string(&realm, "/clients/0/clientId")? != "cashu-client"
-        || !expect::boolean(&realm, "/clients/0/directAccessGrantsEnabled")?
-    {
-        bail!("generated Keycloak client does not support the acceptance login flow");
-    }
-    let scopes = expect::array(&realm, "/clients/0/defaultClientScopes")?;
-    if !scopes.iter().any(|scope| scope.as_str() == Some("basic")) {
-        bail!("generated Keycloak client does not request the standard subject claim");
-    }
-
-    let public_config = serde_json::to_string(&mint_config)?;
-    for key in ["OIDC_TEST_PASSWORD", "KEYCLOAK_ADMIN_PASSWORD"] {
-        let secret = credentials
-            .get(key)
-            .ok_or_else(|| anyhow::anyhow!("no {key} in the generated Secret"))?;
-        if public_config.contains(secret) {
-            bail!("public mint configuration contains generated Keycloak credentials");
-        }
-    }
-
-    let login = json!({
-        "username": credentials.get("OIDC_TEST_USERNAME"),
-        "password": credentials.get("OIDC_TEST_PASSWORD")
-    });
-
-    exec_driver(context, &namespace, PRE_RESTART_DRIVER, &login)?;
 
     kubectl.rollout_restart(CONTROL_NAMESPACE, "deployment/proofstormd")?;
     sleep(Duration::from_secs(5));
@@ -256,11 +230,60 @@ pub fn run(context: &GateContext) -> Result<()> {
         kubectl.rollout_restart(&namespace, target)?;
     }
 
-    exec_driver(context, &namespace, POST_RESTART_DRIVER, &login)?;
+    client.call(
+        "proofstorm_authentication_protected_spend",
+        json!({
+            "instance_id": INSTANCE,
+            "experiment_id": EXPERIMENT,
+            "lease_id": LEASE,
+            "operation_id": "nutshell-oidc-protected-spend",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "idempotency_key": "nutshell-oidc-protected-spend"
+        }),
+    )?;
+    let protected = lab::wait_operation(&mut client, "nutshell-oidc-protected-spend", 60)?;
+    let protected = lab::artifact_content(&protected)?;
+    expect::equals(
+        protected,
+        "/contract",
+        &Value::from("proofstorm/authentication-protected-spend/v1"),
+    )?;
+    if !expect::boolean(protected, "/conformant")?
+        || !expect::boolean(protected, "/protected_request")?
+    {
+        client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+        lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
+        bail!("Nutshell OIDC protected spend reported a conformance finding: {protected}");
+    }
 
     kubectl.rollout_restart(&namespace, "deployment/mint")?;
 
-    exec_driver(context, &namespace, REPLAY_DRIVER, &login)?;
+    client.call(
+        "proofstorm_authentication_replay",
+        json!({
+            "instance_id": INSTANCE,
+            "experiment_id": EXPERIMENT,
+            "lease_id": LEASE,
+            "operation_id": "nutshell-oidc-replay",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "source_operation_id": "nutshell-oidc-protected-spend",
+            "idempotency_key": "nutshell-oidc-replay"
+        }),
+    )?;
+    let replay = lab::wait_operation(&mut client, "nutshell-oidc-replay", 60)?;
+    let replay = lab::artifact_content(&replay)?;
+    expect::equals(
+        replay,
+        "/contract",
+        &Value::from("proofstorm/authentication-replay/v1"),
+    )?;
+    if !expect::boolean(replay, "/conformant")? || !expect::boolean(replay, "/protected_request")? {
+        client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+        lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
+        bail!("Nutshell OIDC replay reported a conformance finding: {replay}");
+    }
 
     lab::wait_phase(&mut client, INSTANCE, "ready", 100, Duration::from_secs(3))?;
 

@@ -29,15 +29,17 @@ use kube::{
 use proofstorm_core::{BackendContractRegistry, default_backend_registry};
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
-    BACKEND_ID_ANNOTATION, COMPONENT_LABEL, ComponentObservationResources,
-    EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
-    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LabAction, LabPhase,
-    MAX_PROTOCOL_PROBES_PER_LAB, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
-    PROTOCOL_PROBER_NAME, ProofstormLab, ProofstormLabAction, ProofstormLabActionStatus,
-    ProofstormLabStatus, action_result_container, compile_component_plans,
-    evaluate_action_admission, instance_namespace, observe_component_statuses,
-    render_component_network_policy, render_lab, render_lab_action_cleanup_job,
-    render_lab_action_job, render_security_spine, schedule_protocol_probers,
+    AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
+    AuthenticationReplayResult, AuthenticationSessionFailureStage, BACKEND_ID_ANNOTATION,
+    COMPONENT_LABEL, ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
+    INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION,
+    LIFECYCLE_STATE_ANNOTATION, LabAction, LabPhase, MAX_PROTOCOL_PROBES_PER_LAB,
+    PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION, PROTOCOL_PROBER_NAME, ProofstormLab,
+    ProofstormLabAction, ProofstormLabActionStatus, ProofstormLabStatus, action_result_container,
+    compile_component_plans, evaluate_action_admission, instance_namespace,
+    observe_component_statuses, render_component_network_policy, render_lab,
+    render_lab_action_cleanup_job, render_lab_action_job, render_security_spine,
+    schedule_protocol_probers,
 };
 use thiserror::Error;
 
@@ -276,6 +278,15 @@ async fn reconcile_action(
             let endpoint_slices =
                 Api::<EndpointSlice>::namespaced(context.client.clone(), &instance_namespace);
             native_exec_artifact(&pod_api, &endpoint_slices, action.as_ref(), &pods.items).await?
+        } else if matches!(action.spec.action, LabAction::AuthenticationConformance(_)) {
+            authentication_conformance_artifact(action.as_ref(), &pods.items)
+        } else if matches!(
+            action.spec.action,
+            LabAction::AuthenticationProtectedSpend(_)
+        ) {
+            authentication_protected_spend_artifact(action.as_ref(), &pods.items, &context).await?
+        } else if matches!(action.spec.action, LabAction::AuthenticationReplay(_)) {
+            authentication_replay_artifact(action.as_ref(), &pods.items)
         } else {
             pods.items
                 .iter()
@@ -2294,6 +2305,243 @@ fn termination_message(pod: &Pod, target: &str) -> Option<String> {
         .clone()
 }
 
+fn authentication_conformance_artifact(
+    action: &ProofstormLabAction,
+    pods: &[Pod],
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let LabAction::AuthenticationConformance(request) = &action.spec.action else {
+        return None;
+    };
+    let message = pods
+        .iter()
+        .find_map(|pod| termination_message(pod, "authentication"))?;
+    validate_authentication_conformance_result(request, &message)
+}
+
+fn validate_authentication_conformance_result(
+    request: &proofstorm_kube::AuthenticationConformanceAction,
+    message: &str,
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let result = serde_json::from_str::<AuthenticationConformanceResult>(message).ok()?;
+    if result.contract != "proofstorm/authentication-conformance/v1"
+        || result.mint != request.mint
+        || result.identity_provider != request.identity_provider
+        || (result.conformant
+            && (!result.advertised_nut21
+                || !result.advertised_nut22
+                || !result.invalid_oidc_password_rejected
+                || !result.missing_cat_rejected
+                || result.invalid_cat_code != Some(80_002)
+                || !result.missing_bat_rejected
+                || result.invalid_bat_code != Some(81_002)
+                || !result.oidc_login
+                || !result.claims_match
+                || !result.mint_accepted_cat
+                || !result.bat_issued
+                || !result.bat_dleq
+                || result.bat_max_code != Some(81_003)
+                || result.rate_limit_code != Some(81_004)
+                || result.failure_stage.is_some()
+                || result.failure_status.is_some()
+                || result.failure_protocol_code.is_some()))
+        || (!result.conformant && result.failure_stage.is_none())
+    {
+        return None;
+    }
+    Some(status_object(
+        serde_json::to_value(result).expect("typed authentication result serializes"),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateAuthenticationProtectedSpendResult {
+    contract: String,
+    mint: String,
+    identity_provider: String,
+    bat_count: u32,
+    bat_dleq: bool,
+    protected_request: bool,
+    conformant: bool,
+    failure_stage: Option<AuthenticationSessionFailureStage>,
+    failure_status: Option<u16>,
+    failure_protocol_code: Option<u32>,
+    spent_bat: Option<String>,
+}
+
+async fn authentication_protected_spend_artifact(
+    action: &ProofstormLabAction,
+    pods: &[Pod],
+    context: &Context,
+) -> Result<Option<std::collections::BTreeMap<String, serde_json::Value>>, Error> {
+    if !matches!(
+        action.spec.action,
+        LabAction::AuthenticationProtectedSpend(_)
+    ) {
+        return Ok(None);
+    }
+    let Some(message) = pods
+        .iter()
+        .find_map(|pod| termination_message(pod, "authentication"))
+    else {
+        return Ok(None);
+    };
+    let Some((public, spent_bat)) =
+        validate_authentication_protected_spend_result(action, &message)
+    else {
+        return Ok(None);
+    };
+    if let Some(spent_bat) = spent_bat {
+        persist_authentication_session(action, &spent_bat, context).await?;
+    }
+    Ok(Some(status_object(
+        serde_json::to_value(public).expect("typed protected-spend result serializes"),
+    )))
+}
+
+fn validate_authentication_protected_spend_result(
+    action: &ProofstormLabAction,
+    message: &str,
+) -> Option<(AuthenticationProtectedSpendResult, Option<String>)> {
+    let LabAction::AuthenticationProtectedSpend(request) = &action.spec.action else {
+        return None;
+    };
+    let result = serde_json::from_str::<PrivateAuthenticationProtectedSpendResult>(message).ok()?;
+    if result.contract != "proofstorm/authentication-protected-spend-private/v1"
+        || result.mint != request.mint
+        || result.identity_provider != request.identity_provider
+    {
+        return None;
+    }
+
+    let (session_operation_id, spent_bat) = if result.conformant {
+        let spent_bat = result.spent_bat.as_deref()?;
+        if result.bat_count != 3
+            || !result.bat_dleq
+            || !result.protected_request
+            || result.failure_stage.is_some()
+            || result.failure_status.is_some()
+            || result.failure_protocol_code.is_some()
+            || !spent_bat.starts_with("authA")
+            || spent_bat.len() > 4_096
+        {
+            return None;
+        }
+        (
+            Some(action.spec.operation_id.clone()),
+            Some(spent_bat.to_owned()),
+        )
+    } else {
+        if result.failure_stage.is_none() || result.spent_bat.is_some() {
+            return None;
+        }
+        (None, None)
+    };
+    let public = AuthenticationProtectedSpendResult {
+        contract: "proofstorm/authentication-protected-spend/v1".to_owned(),
+        mint: result.mint,
+        identity_provider: result.identity_provider,
+        bat_count: result.bat_count,
+        bat_dleq: result.bat_dleq,
+        protected_request: result.protected_request,
+        session_operation_id,
+        conformant: result.conformant,
+        failure_stage: result.failure_stage,
+        failure_status: result.failure_status,
+        failure_protocol_code: result.failure_protocol_code,
+    };
+    Some((public, spent_bat))
+}
+
+async fn persist_authentication_session(
+    action: &ProofstormLabAction,
+    spent_bat: &str,
+    context: &Context,
+) -> Result<(), Error> {
+    let namespace = instance_namespace(&action.spec.instance_key);
+    let name = format!("{}-auth-session", action.name_any());
+    let secrets = Api::<Secret>::namespaced(context.client.clone(), &namespace);
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let matches = existing
+            .data
+            .as_ref()
+            .and_then(|data| data.get("SPENT_BAT"))
+            .is_some_and(|value| value.0 == spent_bat.as_bytes());
+        if matches {
+            return Ok(());
+        }
+        return Err(Error::SecretContract(format!(
+            "authentication session Secret {name:?} does not match its source operation"
+        )));
+    }
+    let secret = serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/instance": action.spec.instance_key,
+                "proofstorm.dev/authentication-session": "true"
+            },
+            "annotations": {
+                "proofstorm.dev/source-operation": action.spec.operation_id
+            }
+        },
+        "immutable": true,
+        "type": "Opaque",
+        "stringData": {"SPENT_BAT": spent_bat}
+    });
+    secrets
+        .patch(
+            &name,
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(secret),
+        )
+        .await?;
+    Ok(())
+}
+
+fn authentication_replay_artifact(
+    action: &ProofstormLabAction,
+    pods: &[Pod],
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let LabAction::AuthenticationReplay(request) = &action.spec.action else {
+        return None;
+    };
+    let message = pods
+        .iter()
+        .find_map(|pod| termination_message(pod, "authentication"))?;
+    validate_authentication_replay_result(request, &message)
+}
+
+fn validate_authentication_replay_result(
+    request: &proofstorm_kube::AuthenticationReplayAction,
+    message: &str,
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let result = serde_json::from_str::<AuthenticationReplayResult>(message).ok()?;
+    if result.contract != "proofstorm/authentication-replay/v1"
+        || result.mint != request.mint
+        || result.identity_provider != request.identity_provider
+        || result.source_operation_id != request.source_operation_id
+        || (result.conformant
+            && (result.spent_bat_replay_code != Some(81_002)
+                || result.fresh_bat_count != 3
+                || !result.fresh_bat_dleq
+                || !result.protected_request
+                || result.failure_stage.is_some()
+                || result.failure_status.is_some()
+                || result.failure_protocol_code.is_some()))
+        || (!result.conformant && result.failure_stage.is_none())
+    {
+        return None;
+    }
+    Some(status_object(
+        serde_json::to_value(result).expect("typed authentication replay result serializes"),
+    ))
+}
+
 /// Ready and total endpoint addresses across one Service's `EndpointSlice` set.
 ///
 /// A `ready` condition that is absent means unknown, which the `EndpointSlice`
@@ -2551,6 +2799,152 @@ fn status_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authentication_request() -> proofstorm_kube::AuthenticationConformanceAction {
+        proofstorm_kube::AuthenticationConformanceAction {
+            mint: "mint".into(),
+            identity_provider: "identity".into(),
+        }
+    }
+
+    fn authentication_result(conformant: bool) -> serde_json::Value {
+        serde_json::json!({
+            "contract": "proofstorm/authentication-conformance/v1",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "advertised_nut21": true,
+            "advertised_nut22": true,
+            "invalid_oidc_password_rejected": true,
+            "missing_cat_rejected": true,
+            "invalid_cat_code": 80002,
+            "missing_bat_rejected": true,
+            "invalid_bat_code": 81002,
+            "oidc_login": true,
+            "claims_match": true,
+            "mint_accepted_cat": true,
+            "bat_issued": conformant,
+            "bat_dleq": conformant,
+            "bat_max_code": 81003,
+            "rate_limit_code": if conformant { Some(81004) } else { None },
+            "conformant": conformant,
+            "failure_stage": if conformant { None } else { Some("bat_issuance") },
+            "failure_status": if conformant { None } else { Some(400) },
+            "failure_protocol_code": null
+        })
+    }
+
+    fn protected_spend_action() -> ProofstormLabAction {
+        ProofstormLabAction::new(
+            "op-auth-spend-resource",
+            proofstorm_kube::ProofstormLabActionSpec {
+                lab_name: "lab-auth".into(),
+                workspace_id: "workspace".into(),
+                instance_id: "instance".into(),
+                instance_key: "i0123456789012345678".into(),
+                experiment_id: "experiment".into(),
+                lease_id: "lease".into(),
+                principal_id: "principal".into(),
+                sequence: 1,
+                operation_id: "auth-spend".into(),
+                request_digest: "sha256:request".into(),
+                capability: proofstorm_core::Capability::AuthenticationTest,
+                accepted_at_unix: 1,
+                action: LabAction::AuthenticationProtectedSpend(
+                    proofstorm_kube::AuthenticationProtectedSpendAction {
+                        mint: "mint".into(),
+                        identity_provider: "identity".into(),
+                    },
+                ),
+            },
+        )
+    }
+
+    #[test]
+    fn authentication_artifact_accepts_only_the_secret_free_typed_shape() {
+        let request = authentication_request();
+        let valid = authentication_result(true);
+        assert!(validate_authentication_conformance_result(&request, &valid.to_string()).is_some());
+
+        let finding = authentication_result(false);
+        assert!(
+            validate_authentication_conformance_result(&request, &finding.to_string()).is_some()
+        );
+
+        let mut leaked = finding;
+        leaked["password"] = serde_json::json!("sentinel-secret");
+        assert!(
+            validate_authentication_conformance_result(&request, &leaked.to_string()).is_none(),
+            "unknown fields, including leaked credentials, fail closed"
+        );
+
+        let mut wrong_identity = authentication_result(false);
+        wrong_identity["identity_provider"] = serde_json::json!("other");
+        assert!(
+            validate_authentication_conformance_result(&request, &wrong_identity.to_string())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn protected_spend_and_replay_strip_or_reject_bearer_material() {
+        let action = protected_spend_action();
+        let private = serde_json::json!({
+            "contract": "proofstorm/authentication-protected-spend-private/v1",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "bat_count": 3,
+            "bat_dleq": true,
+            "protected_request": true,
+            "conformant": true,
+            "failure_stage": null,
+            "failure_status": null,
+            "failure_protocol_code": null,
+            "spent_bat": "authAprivate-bearer"
+        });
+        let (public, token) =
+            validate_authentication_protected_spend_result(&action, &private.to_string())
+                .expect("valid private protected-spend result");
+        assert_eq!(token.as_deref(), Some("authAprivate-bearer"));
+        let public = serde_json::to_string(&public).expect("public result");
+        assert!(!public.contains("private-bearer"));
+        assert!(!public.contains("spent_bat"));
+
+        let mut leaked = private;
+        leaked["password"] = serde_json::json!("sentinel-secret");
+        assert!(
+            validate_authentication_protected_spend_result(&action, &leaked.to_string()).is_none()
+        );
+
+        let replay_request = proofstorm_kube::AuthenticationReplayAction {
+            mint: "mint".into(),
+            identity_provider: "identity".into(),
+            session_secret: "op-auth-spend-resource-auth-session".into(),
+            source_operation_id: "auth-spend".into(),
+        };
+        let replay = serde_json::json!({
+            "contract": "proofstorm/authentication-replay/v1",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "source_operation_id": "auth-spend",
+            "spent_bat_replay_code": 81002,
+            "fresh_bat_count": 3,
+            "fresh_bat_dleq": true,
+            "protected_request": true,
+            "conformant": true,
+            "failure_stage": null,
+            "failure_status": null,
+            "failure_protocol_code": null
+        });
+        assert!(
+            validate_authentication_replay_result(&replay_request, &replay.to_string()).is_some()
+        );
+        let mut leaked_replay = replay;
+        leaked_replay["spent_bat"] = serde_json::json!("authAprivate-bearer");
+        assert!(
+            validate_authentication_replay_result(&replay_request, &leaked_replay.to_string())
+                .is_none()
+        );
+    }
 
     #[test]
     fn native_error_tail_keeps_the_end_of_the_output_within_bounds() {

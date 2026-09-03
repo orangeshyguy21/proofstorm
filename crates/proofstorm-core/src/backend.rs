@@ -72,6 +72,7 @@ pub enum OperationClass {
     NetworkHeal,
     PeerChannelMutation,
     WalletPayment,
+    Authentication,
 }
 
 #[derive(
@@ -3170,6 +3171,10 @@ fn default_operation_admission() -> Vec<OperationAdmissionContract> {
         ),
         admission(
             Operation::WalletPayment,
+            BTreeSet::from([Requirement::Dependencies, Requirement::Protocol]),
+        ),
+        admission(
+            Operation::Authentication,
             BTreeSet::from([Requirement::Dependencies, Requirement::Protocol]),
         ),
     ]

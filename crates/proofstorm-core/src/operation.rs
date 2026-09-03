@@ -29,6 +29,9 @@ pub enum OperationKind {
     ReachabilityOracle,
     NativeExec,
     ComponentLogs,
+    AuthenticationConformance,
+    AuthenticationProtectedSpend,
+    AuthenticationReplay,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
