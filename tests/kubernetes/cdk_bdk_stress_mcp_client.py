@@ -120,8 +120,8 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "cdk-bdk",
-            "version": "0.17.6",
-            "config_version": "cdk-mintd-bdk/0.17/v1",
+            "version": "0.18.0",
+            "config_version": "cdk-mintd-bdk/0.18/v1",
             "control": "target",
             "config": {
                 "name": "Proofstorm CDK BDK",
@@ -171,8 +171,8 @@ published = call(
     {"draft_id": "cdk-bdk", "expected_version": 1, "idempotency_key": "publish-cdk-bdk", "include_revision": True},
 )
 bdk_lock = next(entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "cdk-bdk")
-expected_image = "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00"
-if bdk_lock["version"] != "0.17.6" or bdk_lock["image"] != expected_image:
+expected_image = "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0"
+if bdk_lock["version"] != "0.18.0" or bdk_lock["image"] != expected_image:
     fail(f"unexpected CDK-BDK lock: {bdk_lock}")
 
 status = call(
@@ -214,7 +214,7 @@ for expected in [
     'tos_url = "https://proofstorm.invalid/terms"',
     "max_inputs = 64",
     "max_outputs = 96",
-    'ln_backend = "none"',
+    '[payment_backend]\nbackend = "none"',
     "min_mint = 1200",
     "max_mint = 5000",
     "min_melt = 1300",
@@ -235,7 +235,7 @@ version = subprocess.run(
     ["kubectl", "--context", "k3d-proofstorm", "exec", "deployment/mint", "-n", namespace, "--", "cdk-mintd", "--version"],
     check=True, capture_output=True, text=True,
 ).stdout.strip()
-if "0.17.6" not in version:
+if "0.18.0" not in version:
     fail(f"live mint reports the wrong version: {version!r}")
 
 

@@ -626,6 +626,12 @@ impl BackendContractRegistry {
                 input.component.id, input.lock.component_id
             ));
         }
+        if input.lock.config_version != backend.config_version {
+            return Err(format!(
+                "backend_lock_config_version_mismatch: component {:?} lock config version {:?} does not match installed backend {:?} config version {:?}",
+                input.component.id, input.lock.config_version, backend.id, backend.config_version
+            ));
+        }
         let effective = self.resolve_effective_component(&input.component)?;
         let effective_config = EffectiveComponentConfig::try_from_component(&effective)?;
         let mut relevant_links = input.relevant_links.clone();
@@ -1554,7 +1560,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "cdk",
             ComponentKind::Mint,
-            "cdk-mintd/0.17/v1",
+            "cdk-mintd/0.18/v1",
             cdk_config_fields(
                 "Proofstorm CDK mint",
                 "Proofstorm regtest CDK mint",
@@ -1568,7 +1574,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "cdk-ldk",
             ComponentKind::Mint,
-            "cdk-mintd-ldk/0.17/v1",
+            "cdk-mintd-ldk/0.18/v1",
             cdk_config_fields(
                 "Proofstorm CDK LDK mint",
                 "Proofstorm regtest CDK LDK mint",
@@ -1582,7 +1588,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "cdk-bdk",
             ComponentKind::Mint,
-            "cdk-mintd-bdk/0.17/v1",
+            "cdk-mintd-bdk/0.18/v1",
             cdk_config_fields(
                 "Proofstorm CDK BDK mint",
                 "Proofstorm regtest CDK BDK mint",
@@ -3174,9 +3180,9 @@ mod tests {
                 "bitcoin-core" => "bitcoin-core/30/v1",
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
-                "cdk" => "cdk-mintd/0.17/v1",
-                "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
-                "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+                "cdk" => "cdk-mintd/0.18/v1",
+                "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
+                "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
                 "nutshell" => "nutshell-mint/0.20/v1",
                 "postgresql" => "postgresql/17/v1",
                 "redis" => "redis/8.10/v1",
@@ -3635,6 +3641,37 @@ mod tests {
         ));
         assert_eq!(compiled.execution_context.image, lock.entries[0].image);
         assert_eq!(compiled.target_descriptor.ports["rpc"], 18_443);
+    }
+
+    #[test]
+    fn compiled_contract_refuses_a_lock_from_an_older_backend_config_contract() {
+        let mut component = component("mint", "cdk", ComponentKind::Mint);
+        component.control = ControlClass::Target;
+        let lab = crate::LabSpec {
+            api_version: crate::API_VERSION.into(),
+            name: "stale-cdk-lock".into(),
+            components: vec![component.clone()],
+            links: vec![],
+            policy: crate::LabPolicy::default(),
+        };
+        let mut lock = resolve_lock(&lab, &crate::default_catalog()).expect("resolve current lock");
+        lock.entries[0].config_version = "cdk-mintd/0.17/v1".into();
+
+        let error = default_backend_registry()
+            .compile_contract(&ComponentPlanInput {
+                instance_key: "instance-key".into(),
+                revision_digest: "sha256:revision".into(),
+                component,
+                lock: lock.entries[0].clone(),
+                relevant_links: vec![],
+                linked_targets: BTreeMap::new(),
+                linked_state: BTreeMap::new(),
+            })
+            .expect_err("a stale CDK contract must not be reinterpreted as 0.18");
+
+        assert!(error.starts_with("backend_lock_config_version_mismatch:"));
+        assert!(error.contains("cdk-mintd/0.17/v1"));
+        assert!(error.contains("cdk-mintd/0.18/v1"));
     }
 
     #[test]

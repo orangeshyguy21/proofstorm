@@ -363,7 +363,7 @@ the close negotiation, bounded regtest mining, and terminal-state verification
 as coordinated containers so chain progress cannot deadlock behind a blocking
 adapter call.
 
-CDK 0.17.6 mints may select either an exact LND or CLN BOLT11/sat backend. The
+CDK 0.18.0 mints may select either an exact LND or CLN BOLT11/sat backend. The
 CLN path mounts the selected node's compiled state claim read-only, configures
 its regtest Unix socket, and explicitly disables BOLT12 until that capability
 has its own LDK-backed contract. Exercise the complete MCP materialization and
@@ -373,7 +373,7 @@ live binary/configuration check with:
 bash tests/kubernetes/cdk-cln-e2e.sh
 ```
 
-CDK 0.17.6 also has a distinct embedded-LDK runtime. It links the mint directly
+CDK 0.18.0 also has a distinct embedded-LDK runtime. It links the mint directly
 to a selected Bitcoin Core node, persists the LDK node in the mint's own state,
 and exposes its P2P port without exposing the loopback administrative UI. A
 usable BOLT12 offer requires an introduction path, so the live acceptance adds
@@ -384,7 +384,7 @@ offer through the mint API, and verifies teardown:
 bash tests/kubernetes/cdk-ldk-e2e.sh
 ```
 
-The distinct CDK-BDK runtime uses CDK 0.17.6's standard image, where BDK is a
+The distinct CDK-BDK runtime uses CDK 0.18.0's standard image, where BDK is a
 default feature, and links an on-chain-only mint directly to a selected Bitcoin
 Core node. Its bounded stress acceptance creates 24 concurrent NUT-30 address
 quotes, exercises agent-authored input fees, keyset-v2 policy, quote lifetimes,
@@ -395,6 +395,29 @@ to prove persistence, and verifies teardown:
 
 ```sh
 bash tests/kubernetes/cdk-bdk-stress-e2e.sh
+```
+
+CDK 0.18 makes the database, rather than a startup TOML, authoritative for mint
+configuration. Proofstorm therefore validates the immutable generated document
+and runs `config init --new-mint` in a dedicated init container before starting
+`cdk-mintd` without the legacy `--config` flag. On restart, the initializer
+reads the stored configuration and refuses to start if it differs from the
+resolved Proofstorm lock; it never silently reapplies changed settings. Secrets
+use CDK's `env:` and `file:` references, and PostgreSQL receives only its
+bootstrap connection setting through a Secret. Locks from the 0.17 configuration
+contract are rejected rather than reinterpreted as 0.18. Retained 0.17 databases
+must use CDK's explicit upstream migration workflow or be replaced by a new lab.
+CDK 0.18.0's BDK startup can leave an empty `bdk_wallet.sqlite` when its first
+Bitcoin RPC request fails; later starts then fail the persisted-wallet preflight
+instead of retrying initialization. Proofstorm does not delete or recreate that
+state. Its BDK and embedded-LDK pods first pass a bounded, authenticated
+`getblockchaininfo` dependency gate, so wallet initialization begins only after
+the selected regtest node is actually RPC-ready.
+The exact pinned standard and LDK binaries validate every generated backend and
+Compose document with:
+
+```sh
+bash tests/cdk18-config-contract.sh
 ```
 
 Nutshell mint parity is the current control-plane increment. Nutshell 0.20.3 is
@@ -446,15 +469,15 @@ and NUT-22 missing/invalid and policy failures, then proceeds to native BAT
 issuance. Against upstream 0.20.3 it currently reproduces the auth-ledger
 schema failure and therefore does not satisfy the restart/replay exit gate.
 
-CDK is not claimed as an authenticated Nutshell client by this gate. The pinned
-0.17.6 client completes OIDC login and refresh against the generated Keycloak
-client, but its CLI does not retain the discovered auth settings in the wallet.
-Both CDK 0.17.6 and current 0.18.0 also model `input_fee_ppk` as a non-null
-`u64`, so they discard Nutshell 0.20.3's auth keyset response when that field is
+CDK is not claimed as an authenticated Nutshell client by this gate. CDK clients
+through 0.18.0 complete OIDC login and refresh against the generated Keycloak
+client, but the CLI does not retain the discovered auth settings in the wallet.
+CDK 0.18.0 also models `input_fee_ppk` as a non-null
+`u64`, so it discards Nutshell 0.20.3's auth keyset response when that field is
 `null`. These are upstream conformance findings, not Proofstorm compatibility
 shims.
 
-The cross-implementation gate materializes CDK 0.17.6 and Redis-backed
+The cross-implementation gate materializes CDK 0.18.0 and Redis-backed
 Nutshell 0.20.3 in one lab, drives both through the same pinned Nutshell wallet
 adapter, verifies application-populated cache keys, stable Redis credentials,
 ephemeral cache restart and mint recovery, and
@@ -624,8 +647,8 @@ over HTTP** with independent, racing clients and a real LN backend (SPEC §1).
 | `SWAP_AMOUNT`                 | `1`      | Sats used in self-swap during smoke                          |
 | `WALLET_IMPL`                 | `cdk`    | `cdk` or `nutshell`                                          |
 | `MINT_IMPL`                   | `cdk`    | Mint implementation (cdk only today)                         |
-| `CDK_MINTD_VERSION`           | `0.17.6` | `cashubtc/mintd` tag                                         |
-| `CDK_CLI_VERSION`             | `0.17.6` | `cdk-cli` in wallet image                                    |
+| `CDK_MINTD_VERSION`           | `0.18.0` | `cashubtc/mintd` tag                                         |
+| `CDK_CLI_VERSION`             | `0.18.0` | `cdk-cli` in wallet image                                    |
 | `NUTSHELL_VERSION`            | `0.20.3` | `cashubtc/nutshell` in wallet image                          |
 | `MINT_HOST_PORT`              | `3338`   | Host port for mint HTTP                                      |
 | `CONSERVATION_EXPECTED`       | _(auto)_ | Override expected total (`N * FUND_AMOUNT`)                  |

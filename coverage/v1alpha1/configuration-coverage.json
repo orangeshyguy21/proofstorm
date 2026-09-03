@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:5f8eb984591d0bb6177d1e6203bcf5ace4942daa462b98fce3e97e10290a708c",
+  "catalog_digest": "sha256:2ceac6aa155ef3ae9336c90eaf2c022c36c82914389fb3a68a53d4d20277157a",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -109,12 +109,12 @@
     {
       "implementation": "cdk",
       "kind": "mint",
-      "upstream_version": "0.17.6",
+      "upstream_version": "0.18.0",
       "release_channel": "stable",
       "support_lifecycle": "preferred",
-      "config_version": "cdk-mintd/0.17/v1",
-      "config_schema_digest": "sha256:5a28860e2d49f2601e79bc295511d753cc7d87c6f1afa55f80fbc8ae264c0606",
-      "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
+      "config_version": "cdk-mintd/0.18/v1",
+      "config_schema_digest": "sha256:9e7839870cd95fc053e97cf8dc82dfe72f40ea82511c009b6c0988438fa4d628",
+      "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
       "fields": {
         "contact_email": {
           "classification": "agent_authorable",
@@ -333,12 +333,12 @@
     {
       "implementation": "cdk-bdk",
       "kind": "mint",
-      "upstream_version": "0.17.6",
+      "upstream_version": "0.18.0",
       "release_channel": "stable",
       "support_lifecycle": "preferred",
-      "config_version": "cdk-mintd-bdk/0.17/v1",
-      "config_schema_digest": "sha256:ff615898d2e1e7609f817800e91bc450750a37fc890838618d92d9569bcc688e",
-      "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
+      "config_version": "cdk-mintd-bdk/0.18/v1",
+      "config_schema_digest": "sha256:190541bab32f4faa1eb8625af8ab1fb8e76ac9ea29c2311b2f17f88af29cd872",
+      "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
       "fields": {
         "bdk_mnemonic": {
           "classification": "runtime_policy",
@@ -531,12 +531,12 @@
     {
       "implementation": "cdk-ldk",
       "kind": "mint",
-      "upstream_version": "0.17.6",
+      "upstream_version": "0.18.0",
       "release_channel": "stable",
       "support_lifecycle": "preferred",
-      "config_version": "cdk-mintd-ldk/0.17/v1",
-      "config_schema_digest": "sha256:5b280c64036ec446b3987994a92710ab388af3047a7518a283768ac42e9bf5f6",
-      "image": "docker.io/cashubtc/mintd@sha256:418527bb3642a2cfd9091caca9d706b5f7582c5c5923cb852f3fe6c29f587392",
+      "config_version": "cdk-mintd-ldk/0.18/v1",
+      "config_schema_digest": "sha256:93030590b158dd0f7c336a7e7fe28b1f85e808ea874bf68c844f1f16cccb2ae3",
+      "image": "docker.io/cashubtc/mintd@sha256:2b0e9ff0430710b5c3df93cfaccdea01ffa2efc6d66c50daca4730f0c542d9be",
       "fields": {
         "chain_backend_credentials": {
           "classification": "runtime_policy",

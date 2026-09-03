@@ -132,8 +132,8 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "cdk-ldk",
-            "version": "0.17.6",
-            "config_version": "cdk-mintd-ldk/0.17/v1",
+            "version": "0.18.0",
+            "config_version": "cdk-mintd-ldk/0.18/v1",
             "control": "target",
             "config": {
                 "name": "Proofstorm CDK LDK",
@@ -171,9 +171,9 @@ published = call(
     {"draft_id": "cdk-ldk", "expected_version": 1, "idempotency_key": "publish-cdk-ldk", "include_revision": True},
 )
 ldk_lock = next(entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "cdk-ldk")
-if ldk_lock["version"] != "0.17.6":
+if ldk_lock["version"] != "0.18.0":
     fail(f"unexpected CDK-LDK version: {ldk_lock}")
-if ldk_lock["image"] != "docker.io/cashubtc/mintd@sha256:418527bb3642a2cfd9091caca9d706b5f7582c5c5923cb852f3fe6c29f587392":
+if ldk_lock["image"] != "docker.io/cashubtc/mintd@sha256:2b0e9ff0430710b5c3df93cfaccdea01ffa2efc6d66c50daca4730f0c542d9be":
     fail(f"unexpected CDK-LDK image: {ldk_lock}")
 
 status = call(
@@ -201,7 +201,7 @@ config = subprocess.run(
     text=True,
 ).stdout
 for expected in [
-    'ln_backend = "ldknode"',
+    '[payment_backend]\nbackend = "ldk-node"',
     'chain_source_type = "bitcoinrpc"',
     'bitcoind_rpc_host = "chain"',
     'ldk_node_host = "0.0.0.0"',
@@ -219,7 +219,7 @@ version = subprocess.run(
     capture_output=True,
     text=True,
 ).stdout.strip()
-if "0.17.6" not in version:
+if "0.18.0" not in version:
     fail(f"live mint reports the wrong version: {version!r}")
 
 mint_logs = subprocess.run(

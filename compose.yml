@@ -32,7 +32,7 @@ x-wallet: &wallet
     context: .
     dockerfile: ${WALLET_DOCKERFILE:-docker/wallet/Dockerfile.cdk}
     args:
-      CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.17.6}
+      CDK_CLI_VERSION: ${CDK_CLI_VERSION:-0.18.0}
       NUTSHELL_VERSION: ${NUTSHELL_VERSION:-0.20.3}
   restart: on-failure
   networks: [net]
@@ -45,7 +45,7 @@ x-wallet: &wallet
 
 services:
   mint:
-    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.17.6}
+    image: cashubtc/mintd:${CDK_MINTD_VERSION:-0.18.0}
     container_name: proofstorm-mint
     restart: on-failure
     networks: [net]
@@ -53,10 +53,15 @@ services:
       - "${MINT_HOST_PORT:-3338}:3338"
     volumes:
       - ./docker/mint/mintd.toml:/config.toml:ro
+      - ./docker/mint/cdk-0.18-entrypoint.sh:/usr/local/bin/proofstorm-cdk-entrypoint.sh:ro
       - mint-data:/app/data
     environment:
       CDK_MINTD_WORK_DIR: /app/data
-    command: ["cdk-mintd", "--config", "/config.toml"]
+      CDK_MINTD_DATABASE: sqlite
+      CDK_MINTD_CONFIG_FILE: /config.toml
+      CDK_MINTD_INIT_MODE: ${CDK_MINTD_INIT_MODE:-new}
+      CDK_MINTD_MNEMONIC: ${CDK_MINTD_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+    command: ["/bin/sh", "/usr/local/bin/proofstorm-cdk-entrypoint.sh"]
     healthcheck:
       test:
         ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3338/v1/info || exit 1"]

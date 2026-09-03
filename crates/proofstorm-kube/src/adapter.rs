@@ -1876,15 +1876,32 @@ fn cdk_runtime_resources(
             database_config,
         )?
     };
-    let init_containers = vec![json!({
+    let mut init_containers = Vec::new();
+    if matches!(plan.backend_id.as_str(), "cdk-ldk" | "cdk-bdk") {
+        let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
+        let chain_rpc = target_port(chain, "rpc")?;
+        let readiness_command = format!(
+            "auth=$(printf 'proofstorm:%s' \"$(cat /mint-secrets/bitcoin-rpc-password)\" | base64); for attempt in $(seq 1 120); do response=$(wget -q -T 2 -O - --header \"Authorization: Basic $auth\" --header 'Content-Type: application/json' --post-data '{{\"jsonrpc\":\"1.0\",\"id\":\"proofstorm-readiness\",\"method\":\"getblockchaininfo\",\"params\":[]}}' http://{}:{}/ 2>/dev/null) || true; if printf '%s' \"$response\" | grep -q '\"error\":[[:space:]]*null'; then exit 0; fi; sleep 1; done; echo 'Bitcoin RPC dependency did not become ready before CDK wallet initialization' >&2; exit 1",
+            chain.component_id, chain_rpc
+        );
+        init_containers.push(json!({
+            "name": "wait-for-chain",
+            "image": plan.execution_context.image,
+            "imagePullPolicy": "IfNotPresent",
+            "command": ["sh", "-ec", readiness_command],
+            "securityContext": container_security(),
+            "volumeMounts": [{"name": "mint-secrets", "mountPath": "/mint-secrets", "readOnly": true}]
+        }));
+    }
+    init_containers.push(json!({
         "name": "initialize-config",
         "image": plan.execution_context.image,
         "imagePullPolicy": "IfNotPresent",
-        "command": ["sh", "-ec", "if cdk-mintd config show >/dev/null 2>&1; then cdk-mintd config apply --file /config/config.toml --validate-only; else cdk-mintd config validate --file /config/config.toml && cdk-mintd config init --new-mint --file /config/config.toml; fi"],
+        "command": ["sh", "-ec", "if stored_config=$(cdk-mintd config show 2>/dev/null); then desired_config=$(cat /config/config.toml); if test \"$stored_config\" != \"$desired_config\"; then echo 'stored CDK configuration differs from the immutable Proofstorm lock; refusing implicit config apply' >&2; exit 1; fi; cdk-mintd config apply --file /config/config.toml --validate-only; else cdk-mintd config validate --file /config/config.toml && cdk-mintd config init --new-mint --file /config/config.toml; fi"],
         "env": env,
         "securityContext": container_security(),
         "volumeMounts": volume_mounts
-    })];
+    }));
     Ok(CdkRuntimeResources {
         native_config,
         env,
@@ -2982,7 +2999,7 @@ fn mint_common_config(component: &str, http_port: u16, config: &CdkMintConfig) -
     }
     write!(
         &mut rendered,
-        "urls = [\"http://{component}:{http_port}\"]\n\n[limits]\nmax_inputs = {}\nmax_outputs = {}\n\n",
+        "\n[limits]\nmax_inputs = {}\nmax_outputs = {}\n\n",
         config.max_inputs, config.max_outputs
     )
     .expect("writing native configuration to a String cannot fail");
@@ -3135,9 +3152,9 @@ mod tests {
                 "bitcoin-core" => "bitcoin-core/30/v1",
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
-                "cdk" => "cdk-mintd/0.17/v1",
-                "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
-                "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+                "cdk" => "cdk-mintd/0.18/v1",
+                "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
+                "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
                 "attacker-workspace" => "attacker-workspace/0.1/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),
@@ -3853,6 +3870,17 @@ mod tests {
         ));
     }
 
+    fn assert_cdk_018_config_contract(config: &str) {
+        for expected in [
+            "mnemonic = \"file:/mint-secrets/mint-mnemonic\"",
+            "[payment_backend]",
+            "backend = \"lnd\"",
+        ] {
+            assert!(config.contains(expected));
+        }
+        assert!(!config.contains("[ln]"));
+    }
+
     #[test]
     fn cdk_plan_rendering_is_deterministic_private_and_rollout_scoped() {
         let lab = cdk_lab();
@@ -3902,14 +3930,38 @@ mod tests {
             deployment["spec"]["template"]["metadata"]["annotations"][ROLLOUT_DIGEST_ANNOTATION],
             plan.rollout_digest
         );
+        let volumes = deployment["spec"]["template"]["spec"]["volumes"]
+            .as_array()
+            .expect("volumes");
+        let lnd_volume = volumes
+            .iter()
+            .find(|volume| volume["name"] == "lnd")
+            .expect("LND volume");
         assert_eq!(
-            deployment["spec"]["template"]["spec"]["volumes"][2]["persistentVolumeClaim"]["claimName"],
+            lnd_volume["persistentVolumeClaim"]["claimName"],
             "data-mint-lnd-a-0"
         );
+        let mounts = deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+            .as_array()
+            .expect("volume mounts");
         assert_eq!(
-            deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][2]["readOnly"],
+            mounts
+                .iter()
+                .find(|mount| mount["name"] == "lnd")
+                .expect("LND mount")["readOnly"],
             true
         );
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["initContainers"][0]["name"],
+            "initialize-config"
+        );
+        assert!(
+            deployment["spec"]["template"]["spec"]["initContainers"][0]["command"][2]
+                .as_str()
+                .expect("configuration initializer")
+                .contains("refusing implicit config apply")
+        );
+        assert_cdk_018_config_contract(config);
 
         let revised_plans = compile_component_plans(
             "i0123456789012345678",
@@ -3959,18 +4011,20 @@ mod tests {
             .as_ref()
             .and_then(|data| data.get("config.toml"))
             .expect("mint config");
-        assert!(config.contains("ln_backend = \"cln\""));
+        assert!(config.contains("backend = \"cln\""));
         assert!(config.contains("rpc_path = \"/cln/regtest/lightning-rpc\""));
         assert!(config.contains("bolt12 = false"));
         assert!(!config.contains("[lnd]"));
 
         let deployment = serde_json::to_value(&rendered.deployments[0]).expect("deployment");
+        let volumes = deployment["spec"]["template"]["spec"]["volumes"]
+            .as_array()
+            .expect("volumes");
         assert_eq!(
-            deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][2]["name"],
-            "cln"
-        );
-        assert_eq!(
-            deployment["spec"]["template"]["spec"]["volumes"][2]["persistentVolumeClaim"]["claimName"],
+            volumes
+                .iter()
+                .find(|volume| volume["name"] == "cln")
+                .expect("CLN volume")["persistentVolumeClaim"]["claimName"],
             "data-mint-cln-0"
         );
     }
@@ -4038,16 +4092,32 @@ mod tests {
             "max_inputs = 64",
             "max_outputs = 96",
             "max_mint = 42000",
-            "ln_backend = \"ldknode\"",
+            "backend = \"ldk-node\"",
             "bitcoin_network = \"regtest\"",
             "chain_source_type = \"bitcoinrpc\"",
             "bitcoind_rpc_host = \"chain\"",
             "storage_dir_path = \"/app/data/ldk-node\"",
             "ldk_node_port = 9735",
+            "ldk_node_mnemonic = \"file:/mint-secrets/wallet-mnemonic\"",
+            "bitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"",
         ] {
             assert!(config.contains(expected), "missing {expected:?}");
         }
         let deployment = serde_json::to_value(&rendered.deployments[0]).expect("deployment");
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["initContainers"][0]["name"],
+            "wait-for-chain"
+        );
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["initContainers"][1]["name"],
+            "initialize-config"
+        );
+        assert!(
+            deployment["spec"]["template"]["spec"]["initContainers"][0]["command"][2]
+                .as_str()
+                .expect("chain readiness command")
+                .contains("getblockchaininfo")
+        );
         assert_eq!(
             deployment["spec"]["template"]["spec"]["containers"][0]["ports"][1]["name"],
             "p2p"
@@ -4057,7 +4127,7 @@ mod tests {
                 .as_array()
                 .expect("mounts")
                 .len(),
-            2
+            3
         );
     }
 
@@ -4140,8 +4210,14 @@ mod tests {
                 .deployments[0],
         )
         .expect("deployment value");
+        let volumes = rendered["spec"]["template"]["spec"]["volumes"]
+            .as_array()
+            .expect("volumes");
         assert_eq!(
-            rendered["spec"]["template"]["spec"]["volumes"][2]["persistentVolumeClaim"]["claimName"],
+            volumes
+                .iter()
+                .find(|volume| volume["name"] == "lnd")
+                .expect("LND volume")["persistentVolumeClaim"]["claimName"],
             "opaque-linked-state"
         );
 

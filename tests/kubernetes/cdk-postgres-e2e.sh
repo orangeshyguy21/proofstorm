@@ -10,4 +10,4 @@ cargo build --locked --manifest-path "${ROOT_DIR}/Cargo.toml" -p proofstorm-mcp
 python3 "${ROOT_DIR}/tests/kubernetes/cdk_postgres_mcp_client.py" \
   "${ROOT_DIR}/target/debug/proofstorm-mcp" "${TMP_DIR}/proofstorm.sqlite3"
 
-echo "CDK 0.17.6 + PostgreSQL MCP materialization, Secret preservation, restart persistence, and teardown passed"
+echo "CDK 0.18.0 + PostgreSQL MCP materialization, database-backed configuration, Secret preservation, restart persistence, and teardown passed"

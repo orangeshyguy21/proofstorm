@@ -546,7 +546,7 @@ mod tests {
                     kind: ComponentKind::Mint,
                     implementation: "cdk".into(),
                     version: None,
-                    config_version: "cdk-mintd/0.17/v1".into(),
+                    config_version: "cdk-mintd/0.18/v1".into(),
                     control: ControlClass::Target,
                     config: BTreeMap::new(),
                 },

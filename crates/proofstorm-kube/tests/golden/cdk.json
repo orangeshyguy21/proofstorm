@@ -112,7 +112,7 @@
         "CDK_MINTD_WORK_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
+      "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
       "mounts": [
         {
           "mount_path": "/config",
@@ -229,7 +229,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:733c74b77922326531abaddc7c072ec93e9ec80c3da8535579645753f7ace7f6",
+    "rollout_digest": "sha256:c90b5817e47fb8cd9c535af91a5757574b8ab060426f0dd7516ed198c37ab771",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -242,7 +242,7 @@
       "ports": {
         "http": 3338
       },
-      "version": "0.17.6"
+      "version": "0.18.0"
     },
     "workload": {
       "desired_replicas": 1,
@@ -255,7 +255,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\nurls = [\"http://mint:3338\"]\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[ln]\nln_backend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -302,7 +302,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:733c74b77922326531abaddc7c072ec93e9ec80c3da8535579645753f7ace7f6"
+                "proofstorm.dev/rollout-digest": "sha256:c90b5817e47fb8cd9c535af91a5757574b8ab060426f0dd7516ed198c37ab771"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -329,10 +329,6 @@
               "automountServiceAccountToken": false,
               "containers": [
                 {
-                  "args": [
-                    "--config",
-                    "/config/config.toml"
-                  ],
                   "command": [
                     "cdk-mintd"
                   ],
@@ -340,9 +336,13 @@
                     {
                       "name": "CDK_MINTD_WORK_DIR",
                       "value": "/app/data"
+                    },
+                    {
+                      "name": "CDK_MINTD_DATABASE",
+                      "value": "sqlite"
                     }
                   ],
-                  "image": "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00",
+                  "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -374,6 +374,11 @@
                       "readOnly": true
                     },
                     {
+                      "mountPath": "/mint-secrets",
+                      "name": "mint-secrets",
+                      "readOnly": true
+                    },
+                    {
                       "mountPath": "/app/data",
                       "name": "data"
                     },
@@ -386,6 +391,57 @@
                 }
               ],
               "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "if stored_config=$(cdk-mintd config show 2>/dev/null); then desired_config=$(cat /config/config.toml); if test \"$stored_config\" != \"$desired_config\"; then echo 'stored CDK configuration differs from the immutable Proofstorm lock; refusing implicit config apply' >&2; exit 1; fi; cdk-mintd config apply --file /config/config.toml --validate-only; else cdk-mintd config validate --file /config/config.toml && cdk-mintd config init --new-mint --file /config/config.toml; fi"
+                  ],
+                  "env": [
+                    {
+                      "name": "CDK_MINTD_WORK_DIR",
+                      "value": "/app/data"
+                    },
+                    {
+                      "name": "CDK_MINTD_DATABASE",
+                      "value": "sqlite"
+                    }
+                  ],
+                  "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "initialize-config",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/config",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/mint-secrets",
+                      "name": "mint-secrets",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/app/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/lnd",
+                      "name": "lnd",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -402,6 +458,12 @@
                     "name": "mint-config"
                   },
                   "name": "config"
+                },
+                {
+                  "name": "mint-secrets",
+                  "secret": {
+                    "secretName": "mint-secrets"
+                  }
                 },
                 {
                   "name": "data",
@@ -447,7 +509,29 @@
         }
       }
     ],
-    "secrets": [],
+    "secrets": [
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-secrets",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "cdk-mint",
+          "bitcoin-rpc-password": "proofstorm-regtest-only",
+          "mint-mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "wallet-mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow"
+        },
+        "type": "Opaque"
+      }
+    ],
     "services": [
       {
         "apiVersion": "v1",

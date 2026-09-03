@@ -5109,7 +5109,7 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "cdk")
             .expect("CDK support contract");
-        assert_eq!(cdk.config_version, "cdk-mintd/0.17/v1");
+        assert_eq!(cdk.config_version, "cdk-mintd/0.18/v1");
         assert_eq!(
             cdk.support_matrix.storage,
             [
@@ -5173,7 +5173,7 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "cdk-ldk")
             .expect("embedded LDK support contract");
-        assert_eq!(cdk_ldk.config_version, "cdk-mintd-ldk/0.17/v1");
+        assert_eq!(cdk_ldk.config_version, "cdk-mintd-ldk/0.18/v1");
         assert_eq!(cdk_ldk.support_matrix.embedded_payment_bindings.len(), 2);
         assert!(
             cdk_ldk

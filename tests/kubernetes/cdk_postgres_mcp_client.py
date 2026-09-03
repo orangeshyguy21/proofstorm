@@ -92,6 +92,11 @@ catalog = call(
 postgres = next((entry for entry in catalog["items"] if entry["id"] == "postgresql"), None)
 if not postgres or postgres["version"] != "17.11":
     fail(f"PostgreSQL 17.11 is absent from the catalog: {postgres}")
+postgres_detail = call(
+    268,
+    "proofstorm_catalog_entry_read",
+    {"id": postgres["id"], "version": postgres["version"]},
+)
 cdk_summary = next(entry for entry in catalog["items"] if entry["id"] == "cdk")
 cdk = call(
     267,
@@ -136,8 +141,8 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "cdk",
-            "version": "0.17.6",
-            "config_version": "cdk-mintd/0.17/v1",
+            "version": "0.18.0",
+            "config_version": "cdk-mintd/0.18/v1",
             "control": "target",
             "config": {
                 "name": "Proofstorm CDK PostgreSQL",
@@ -194,7 +199,7 @@ published = call(
 database_lock = next(
     entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "postgresql"
 )
-if database_lock["image"] != postgres["image"] or "@sha256:" not in database_lock["image"]:
+if database_lock["image"] != postgres_detail["image"] or "@sha256:" not in database_lock["image"]:
     fail(f"PostgreSQL lock is not the catalog-pinned image: {database_lock}")
 
 status = call(
@@ -216,21 +221,37 @@ else:
 
 namespace = status["instance_namespace"]
 public_config = kubectl("get", "configmap/mint-config", "-n", namespace, "-o", "jsonpath={.data.config\\.toml}")
-if "postgresql://" in public_config or "[database]" in public_config:
-    fail("the public mint ConfigMap contains the private database configuration")
+if "postgresql://" in public_config or "@database:5432" in public_config:
+    fail("the public mint ConfigMap contains the private database URL")
+if '[database]\nengine = "postgres"' not in public_config:
+    fail("the public mint ConfigMap is missing the CDK 0.18 database selector")
+if 'url = "env:CDK_MINTD_POSTGRES_URL"' not in public_config:
+    fail("the public mint ConfigMap does not use CDK 0.18's secret environment reference")
 
 private_config = kubectl("exec", "deployment/mint", "-n", namespace, "--", "cat", "/config/config.toml")
 for expected in [
     '[database]\nengine = "postgres"',
-    "[database.postgres]",
-    'tls_mode = "disable"',
-    "max_connections = 20",
-    "connection_timeout_seconds = 10",
+    'url = "env:CDK_MINTD_POSTGRES_URL"',
 ]:
     if expected not in private_config:
         fail(f"materialized mint configuration is missing {expected!r}")
-if "@database:5432/proofstorm_mint" not in private_config:
-    fail("materialized mint configuration does not target the selected database component")
+if "postgresql://" in private_config or "@database:5432" in private_config:
+    fail("materialized public configuration leaked the private database URL")
+
+mint_environment = json.loads(
+    kubectl("get", "deployment/mint", "-n", namespace, "-o", "json")
+)["spec"]["template"]["spec"]
+for container_group in ["initContainers", "containers"]:
+    environment_entries = mint_environment[container_group][0].get("env", [])
+    postgres_url = next(
+        (entry for entry in environment_entries if entry["name"] == "CDK_MINTD_POSTGRES_URL"),
+        None,
+    )
+    if not postgres_url or postgres_url.get("valueFrom", {}).get("secretKeyRef") != {
+        "name": "database-credentials",
+        "key": "DATABASE_URL",
+    }:
+        fail(f"{container_group} does not receive the secret-backed PostgreSQL bootstrap URL")
 
 secret_data = kubectl("get", "secret/database-credentials", "-n", namespace, "-o", "json")
 secret_digest = hashlib.sha256(secret_data.encode()).hexdigest()

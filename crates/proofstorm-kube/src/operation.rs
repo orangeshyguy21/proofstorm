@@ -2713,7 +2713,7 @@ mod tests {
                 "bitcoin-core" => "bitcoin-core/30/v1",
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
-                "cdk" => "cdk-mintd/0.17/v1",
+                "cdk" => "cdk-mintd/0.18/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),
             }

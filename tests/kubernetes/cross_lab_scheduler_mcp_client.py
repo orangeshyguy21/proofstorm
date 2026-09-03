@@ -75,42 +75,57 @@ def kubectl_json(*arguments):
 
 
 def prober_snapshot():
-    deployments = kubectl_json(
-        "get", "deployments", "-A", "-l", "proofstorm.dev/prober=true"
-    )["items"]
-    pods = kubectl_json("get", "pods", "-A", "-l", "proofstorm.dev/prober=true")[
-        "items"
-    ]
-    labs = kubectl_json("get", "proofstormlabs", "-n", "proofstorm-system")["items"]
-    lab_leases = {
-        item["spec"]["instanceKey"]: item.get("metadata", {})
-        .get("annotations", {})
-        .get("proofstorm.dev/prober-lease")
-        for item in labs
-    }
-    active = set()
-    for deployment in deployments:
-        instance = deployment["metadata"]["labels"]["proofstorm.dev/instance"]
-        replicas = deployment.get("spec", {}).get("replicas", 0)
-        if replicas == 1:
+    mismatch = None
+    for _ in range(20):
+        deployments = kubectl_json(
+            "get", "deployments", "-A", "-l", "proofstorm.dev/prober=true"
+        )["items"]
+        pods = kubectl_json("get", "pods", "-A", "-l", "proofstorm.dev/prober=true")[
+            "items"
+        ]
+        labs = kubectl_json("get", "proofstormlabs", "-n", "proofstorm-system")[
+            "items"
+        ]
+        lab_leases = {
+            item["spec"]["instanceKey"]: item.get("metadata", {})
+            .get("annotations", {})
+            .get("proofstorm.dev/prober-lease")
+            for item in labs
+        }
+        active = set()
+        mismatch = None
+        for deployment in deployments:
+            instance = deployment["metadata"]["labels"]["proofstorm.dev/instance"]
+            replicas = deployment.get("spec", {}).get("replicas", 0)
+            if replicas != 1:
+                continue
             active.add(instance)
-            deployment_lease = deployment.get("metadata", {}).get("annotations", {}).get(
-                "proofstorm.dev/prober-lease"
+            deployment_lease = (
+                deployment.get("metadata", {})
+                .get("annotations", {})
+                .get("proofstorm.dev/prober-lease")
             )
             if not deployment_lease or deployment_lease == "inactive":
-                fail(f"active deployment {instance} has no current scheduler lease")
+                mismatch = f"active deployment {instance} has no current scheduler lease"
+                break
             if lab_leases.get(instance) != deployment_lease:
-                fail(
+                mismatch = (
                     f"lab/deployment scheduler lease mismatch for {instance}: "
                     f"{lab_leases.get(instance)} != {deployment_lease}"
                 )
-    running_pods = {
-        pod["metadata"]["labels"]["proofstorm.dev/instance"]
-        for pod in pods
-        if pod.get("metadata", {}).get("deletionTimestamp") is None
-        and pod.get("status", {}).get("phase") == "Running"
-    }
-    return len(deployments), active, running_pods
+                break
+        running_pods = {
+            pod["metadata"]["labels"]["proofstorm.dev/instance"]
+            for pod in pods
+            if pod.get("metadata", {}).get("deletionTimestamp") is None
+            and pod.get("status", {}).get("phase") == "Running"
+        }
+        if len(active) > 4 or len(running_pods) > 4:
+            fail(f"global scheduler cap exceeded: active={active}, running={running_pods}")
+        if mismatch is None:
+            return len(deployments), active, running_pods
+        time.sleep(0.1)
+    fail(f"scheduler lease annotations did not converge for observation: {mismatch}")
 
 
 request(

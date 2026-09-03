@@ -100,8 +100,8 @@ lab = {
             "id": "mint",
             "kind": "mint",
             "implementation": "cdk",
-            "version": "0.17.6",
-            "config_version": "cdk-mintd/0.17/v1",
+            "version": "0.18.0",
+            "config_version": "cdk-mintd/0.18/v1",
             "control": "target",
             "config": {"name": "Proofstorm CDK CLN", "description": "Native CDK and CLN lab"},
         },
@@ -135,9 +135,9 @@ published = call(
     {"draft_id": "cdk-cln", "expected_version": 1, "idempotency_key": "publish-cdk-cln", "include_revision": True},
 )
 cdk_lock = next(entry for entry in published["lock"]["entries"] if entry["catalog_id"] == "cdk")
-if cdk_lock["version"] != "0.17.6":
+if cdk_lock["version"] != "0.18.0":
     fail(f"unexpected CDK version: {cdk_lock}")
-if cdk_lock["image"] != "docker.io/cashubtc/mintd@sha256:e6018ad5ed3e9914c7892a53239cf602250e788c1fd7c055d4123803cee8dd00":
+if cdk_lock["image"] != "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0":
     fail(f"unexpected CDK image: {cdk_lock}")
 
 status = call(
@@ -165,7 +165,7 @@ config = subprocess.run(
     text=True,
 ).stdout
 for expected in [
-    'ln_backend = "cln"',
+    '[payment_backend]\nbackend = "cln"',
     'rpc_path = "/cln/regtest/lightning-rpc"',
     "bolt12 = false",
 ]:
@@ -180,7 +180,7 @@ version = subprocess.run(
     capture_output=True,
     text=True,
 ).stdout.strip()
-if "0.17.6" not in version:
+if "0.18.0" not in version:
     fail(f"live mint reports the wrong version: {version!r}")
 
 call(165, "proofstorm_lab_close", {"instance_id": "cdk-cln-instance"})

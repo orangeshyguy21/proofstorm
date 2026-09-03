@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import subprocess
@@ -54,28 +55,57 @@ def assert_materialized(namespace, private_config, database_name):
         "-o",
         "jsonpath={.data.config\\.toml}",
     )
-    if "postgresql://" in public_config or "[database]" in public_config:
-        raise RuntimeError("public mint ConfigMap contains private PostgreSQL configuration")
+    if "postgresql://" in public_config or "@database:5432" in public_config:
+        raise RuntimeError("public mint ConfigMap contains the private PostgreSQL URL")
     for expected in [
         '[database]\nengine = "postgres"',
         "[database.postgres]",
+        'url = "env:CDK_MINTD_POSTGRES_URL"',
         'tls_mode = "disable"',
         "max_connections = 20",
         "connection_timeout_seconds = 10",
-        f"@database:5432/{database_name}",
     ]:
         if expected not in private_config:
-            raise RuntimeError(f"private PostgreSQL configuration is missing {expected!r}")
+            raise RuntimeError(f"CDK PostgreSQL configuration is missing {expected!r}")
+    if "postgresql://" in private_config or "@database:5432" in private_config:
+        raise RuntimeError("materialized CDK configuration leaked the private PostgreSQL URL")
     secret = json.loads(
         kubectl(namespace, "get", "secret/database-credentials", "-o", "json")
     )
     if set(secret.get("data", {})) != {
+        "DATABASE_URL",
         "POSTGRES_DB",
         "POSTGRES_PASSWORD",
         "POSTGRES_USER",
         "database.toml",
     }:
         raise RuntimeError("generated PostgreSQL Secret has an unexpected key contract")
+    database_url = base64.b64decode(secret["data"]["DATABASE_URL"]).decode()
+    if f"@database:5432/{database_name}" not in database_url:
+        raise RuntimeError("private PostgreSQL URL does not target the selected database")
+    deployment = json.loads(kubectl(namespace, "get", "deployment/mint", "-o", "json"))
+    pod_spec = deployment["spec"]["template"]["spec"]
+    for container_group in ["initContainers", "containers"]:
+        config_container = next(
+            container
+            for container in pod_spec[container_group]
+            if container["name"] in {"initialize-config", "component"}
+        )
+        postgres_url = next(
+            (
+                entry
+                for entry in config_container.get("env", [])
+                if entry["name"] == "CDK_MINTD_POSTGRES_URL"
+            ),
+            None,
+        )
+        if not postgres_url or postgres_url.get("valueFrom", {}).get("secretKeyRef") != {
+            "name": "database-credentials",
+            "key": "DATABASE_URL",
+        }:
+            raise RuntimeError(
+                f"{config_container['name']} does not receive the secret-backed PostgreSQL URL"
+            )
     table_count = int(
         kubectl(
             namespace,

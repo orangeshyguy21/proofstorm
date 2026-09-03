@@ -298,7 +298,7 @@ mod tests {
         match implementation {
             "bitcoin-core" => "bitcoin-core/30/v1",
             "lnd" => "lnd/0.20/v1",
-            "cdk" => "cdk-mintd/0.17/v1",
+            "cdk" => "cdk-mintd/0.18/v1",
             "nutshell" => "nutshell-mint/0.20/v1",
             "postgresql" => "postgresql/17/v1",
             "redis" => "redis/8.10/v1",

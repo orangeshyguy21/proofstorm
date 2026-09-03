@@ -33,9 +33,9 @@ fn component(
             "bitcoin-core" => "bitcoin-core/30/v1",
             "lnd" => "lnd/0.20/v1",
             "cln" => "cln/26.06/v1",
-            "cdk" => "cdk-mintd/0.17/v1",
-            "cdk-ldk" => "cdk-mintd-ldk/0.17/v1",
-            "cdk-bdk" => "cdk-mintd-bdk/0.17/v1",
+            "cdk" => "cdk-mintd/0.18/v1",
+            "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
+            "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
             "nutshell" => "nutshell-mint/0.20/v1",
             "postgresql" => "postgresql/17/v1",
             "redis" => "redis/8.10/v1",
@@ -530,6 +530,20 @@ fn nutshell_cln_lab() -> LabSpec {
     )
 }
 
+fn assert_postgres_bootstrap_env(container: &Value) {
+    let environment = container["env"]
+        .as_array()
+        .expect("CDK container environment");
+    let postgres_url = environment
+        .iter()
+        .find(|entry| entry["name"] == "CDK_MINTD_POSTGRES_URL")
+        .expect("PostgreSQL bootstrap URL");
+    assert_eq!(
+        postgres_url["valueFrom"]["secretKeyRef"],
+        json!({"name": "database-credentials", "key": "DATABASE_URL"})
+    );
+}
+
 #[test]
 fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
     let spec = lab(
@@ -588,7 +602,8 @@ fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
         .and_then(|data| data.get("config.toml"))
         .expect("mint public config");
     assert!(!mint_config.contains("postgresql://"));
-    assert!(!mint_config.contains("[database]"));
+    assert!(mint_config.contains("[database]\nengine = \"postgres\""));
+    assert!(mint_config.contains("url = \"env:CDK_MINTD_POSTGRES_URL\""));
     let mint = rendered
         .deployments
         .iter()
@@ -597,11 +612,24 @@ fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
     let mint = serde_json::to_value(mint).expect("mint JSON");
     assert_eq!(
         mint.pointer("/spec/template/spec/initContainers/0/name"),
-        Some(&json!("materialize-config"))
+        Some(&json!("initialize-config"))
     );
-    assert_eq!(
-        mint.pointer("/spec/template/spec/volumes/2/secret/secretName"),
-        Some(&json!("database-credentials"))
+    assert_postgres_bootstrap_env(&mint["spec"]["template"]["spec"]["containers"][0]);
+    assert_postgres_bootstrap_env(&mint["spec"]["template"]["spec"]["initContainers"][0]);
+    assert_golden(
+        "cdk-postgres-lab",
+        &json!({
+            "plans": &rendered.plans,
+            "resources": {
+                "configMaps": &rendered.config_maps,
+                "secrets": &rendered.secrets,
+                "services": &rendered.services,
+                "statefulSets": &rendered.stateful_sets,
+                "deployments": &rendered.deployments,
+                "persistentVolumeClaims": &rendered.persistent_volume_claims,
+                "networkPolicies": &rendered.network_policies,
+            }
+        }),
     );
 }
 

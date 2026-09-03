@@ -122,8 +122,8 @@ mod tests {
             .iter()
             .find(|entry| entry.implementation == "cdk")
             .expect("CDK coverage");
-        assert_eq!(cdk.upstream_version, "0.17.6");
-        assert_eq!(cdk.config_version, "cdk-mintd/0.17/v1");
+        assert_eq!(cdk.upstream_version, "0.18.0");
+        assert_eq!(cdk.config_version, "cdk-mintd/0.18/v1");
         assert_eq!(
             cdk.support.storage,
             [StorageBackend::Sqlite, StorageBackend::Postgres].into()
