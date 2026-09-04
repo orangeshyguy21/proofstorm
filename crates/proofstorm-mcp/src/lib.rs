@@ -566,6 +566,57 @@ impl TryFrom<AddLinkInput> for LinkSpec {
     }
 }
 
+impl TryFrom<LinkSpec> for AddLinkInput {
+    type Error = String;
+
+    fn try_from(link: LinkSpec) -> Result<Self, Self::Error> {
+        let LinkSpec {
+            id,
+            kind,
+            from,
+            to,
+            binding,
+        } = link;
+        match (kind, binding) {
+            (LinkKind::BitcoinPeer, None) => Ok(Self::BitcoinPeer { id, from, to }),
+            (LinkKind::LightningPeer, None) => Ok(Self::LightningPeer { id, from, to }),
+            (LinkKind::ChainBackend, Some(DependencyBinding::Chain { network })) => {
+                Ok(Self::ChainBackend {
+                    id,
+                    from,
+                    to,
+                    network,
+                })
+            }
+            (LinkKind::PaymentBackend, Some(DependencyBinding::Payment { method, unit })) => {
+                Ok(Self::PaymentBackend {
+                    id,
+                    from,
+                    to,
+                    method,
+                    unit,
+                })
+            }
+            (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { role })) => {
+                Ok(Self::DatabaseBackend { id, from, to, role })
+            }
+            (
+                LinkKind::AuthenticationBackend,
+                Some(DependencyBinding::Authentication { protocol }),
+            ) => Ok(Self::AuthenticationBackend {
+                id,
+                from,
+                to,
+                protocol,
+            }),
+            (LinkKind::NetworkPath, None) => Ok(Self::NetworkPath { id, from, to }),
+            _ => Err(format!(
+                "canonical {kind:?} link {id:?} has a missing or mismatched binding"
+            )),
+        }
+    }
+}
+
 /// Complete lab input accepted at the MCP boundary. Unlike the persisted core
 /// model, backend-link variants require their binding fields as flat scalars.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -590,12 +641,44 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
-    match value {
+    let value = match value {
         serde_json::Value::String(encoded) => {
-            serde_json::from_str(&encoded).map_err(serde::de::Error::custom)
+            serde_json::from_str(&encoded).map_err(serde::de::Error::custom)?
         }
-        value => serde_json::from_value(value).map_err(serde::de::Error::custom),
+        value => value,
+    };
+    let authored_error = match serde_json::from_value(value.clone()) {
+        Ok(authored) => return Ok(authored),
+        Err(error) => error,
+    };
+    let has_canonical_binding = value
+        .get("links")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|links| {
+            links.iter().any(|link| {
+                link.as_object()
+                    .is_some_and(|link| link.contains_key("binding"))
+            })
+        });
+    if !has_canonical_binding {
+        return Err(serde::de::Error::custom(authored_error));
     }
+    let canonical: LabSpec = match serde_json::from_value(value) {
+        Ok(canonical) => canonical,
+        Err(_) => return Err(serde::de::Error::custom(authored_error)),
+    };
+    Ok(AuthoredLabSpec {
+        api_version: canonical.api_version,
+        name: canonical.name,
+        components: canonical.components,
+        links: canonical
+            .links
+            .into_iter()
+            .map(AddLinkInput::try_from)
+            .collect::<Result<_, _>>()
+            .map_err(serde::de::Error::custom)?,
+        policy: canonical.policy,
+    })
 }
 
 impl TryFrom<AuthoredLabSpec> for LabSpec {
@@ -8632,6 +8715,33 @@ mod tests {
     }
 
     #[test]
+    fn persisted_lab_output_round_trips_back_into_validation() {
+        let request = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
+            "lab": {
+                "api_version": API_VERSION,
+                "name": "canonical-round-trip",
+                "components": [],
+                "links": [{
+                    "id": "backend",
+                    "kind": "chain_backend",
+                    "from": "lightning",
+                    "to": "chain",
+                    "binding": {"type": "chain", "network": "regtest"}
+                }],
+                "policy": {}
+            }
+        }))
+        .expect("persisted canonical lab output must remain valid MCP input");
+        assert!(matches!(
+            request.lab.links.as_slice(),
+            [AddLinkInput::ChainBackend {
+                network: BitcoinNetwork::Regtest,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
     fn stringified_lab_still_enforces_the_strict_contract() {
         for invalid in [
             "not json".to_owned(),
@@ -9298,7 +9408,10 @@ mod tests {
         });
         let error = serde_json::from_value::<ValidateLabRequest>(bulk)
             .expect_err("bulk lab backend links must require flat binding fields");
-        assert!(error.to_string().contains("network"));
+        assert!(
+            error.to_string().contains("network"),
+            "unexpected diagnostic: {error}"
+        );
 
         let mut nested_binding = common.clone();
         nested_binding["link"] = serde_json::json!({
