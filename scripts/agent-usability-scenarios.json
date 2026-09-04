@@ -136,6 +136,61 @@
       }
     },
     {
+      "id": "live-component-control",
+      "family": "component-lifecycle",
+      "novelty": "native-control",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Build a disposable Bitcoin, LND, Nutshell mint, and wallet lab. Use each component's native CLI in its real running container to show Bitcoin and Lightning are healthy. Restart the mint, verify it returns without losing its persistent state, export evidence, and tear the lab down.",
+        "Create a small regtest system using Bitcoin Core, CLN, a Nutshell mint, and a wallet. Prove bitcoin-cli and lightning-cli can talk to the actual running services, restart the wallet and mint, and show both recover. Keep offline inspection separate from commands that need a live process. Save evidence and remove the lab.",
+        "Make a disposable CDK-on-LND lab with a compatible wallet. Exercise a normal wallet flow, inspect one implementation detail offline, then run a native status command in the live LND container and restart the mint. Verify the lab still works, export evidence, and clean up."
+      ],
+      "manual_gates": [
+        "correct_topology",
+        "native_cli_used_in_live_component",
+        "mint_restart_observed",
+        "persistent_state_preserved",
+        "execution_modes_not_confused",
+        "ordered_evidence_supports_claims"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 6
+      }
+    },
+    {
+      "id": "melt-quote-recovery",
+      "family": "payment-recovery",
+      "novelty": "typed-recovery",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Build a disposable cross-mint Nutshell payment lab and create an unroutable Lightning payment so the payer wallet has a failed or pending melt. Poll that exact payer-side melt quote through the wallet, show whether its reserved proofs are released, restart the payer mint and verify recovery, export evidence, and tear everything down.",
+        "Create a small regtest system with two independently backed mints and one wallet per mint, establish a funded cross-mint baseline, then break the Lightning route and attempt a payment. Reconcile the exact payer-side melt quote using the wallet's typed refresh operation and report before-and-after state, reserved proof count, and spendable balance. Restart the payer mint, preserve evidence, and fully clean up."
+      ],
+      "manual_gates": [
+        "correct_topology",
+        "baseline_funded",
+        "failed_or_pending_melt_observed",
+        "exact_quote_refreshed",
+        "reservation_claim_supported",
+        "mint_restart_observed"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 1,
+        "raw_exec_max": 2
+      }
+    },
+    {
       "id": "impossible-plan",
       "family": "planning-failure",
       "novelty": "negative",

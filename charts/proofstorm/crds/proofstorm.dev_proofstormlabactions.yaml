@@ -32,7 +32,6 @@ spec:
                     - node_stop
                     - node_restart
                     - component_restart
-                    - component_restart
                     - bootstrap_liquidity
                     - peer_connect
                     - peer_disconnect
@@ -48,12 +47,11 @@ spec:
                     - wallet_fund
                     - wallet_invoice
                     - wallet_pay
-                    - wallet_melt_quote_refresh
                     - wallet_quote_claim
+                    - wallet_melt_quote_refresh
                     - wallet_round_trip
                     - conservation_oracle
-                    - component_forensics
-                    - component_exec_live
+                    - reachability_oracle
                     - component_forensics
                     - component_exec_live
                     - component_logs
@@ -128,11 +126,11 @@ spec:
                       maxFeeSat:
                         format: uint64
                         minimum: 0.0
+                        nullable: true
+                        type: integer
                       meltQuoteId:
                         nullable: true
                         type: string
-                        nullable: true
-                        type: integer
                       mint:
                         nullable: true
                         type: string
@@ -233,7 +231,6 @@ spec:
                 - topology.inspect
                 - topology.mutate
                 - node.add
-                - component.control
                 - node.remove
                 - node.control
                 - component.control
@@ -251,8 +248,7 @@ spec:
                 - chain.reorg
                 - network.delay
                 - network.drop
-                - component.exec_live
-                - component.forensics
+                - network.partition
                 - network.heal
                 - component.logs
                 - component.exec_live

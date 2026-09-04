@@ -517,25 +517,17 @@ fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
         LabAction::ComponentForensics(request) => {
             Some((&request.component, &request.target_component))
         }
-            Some((&request.component, &request.target_component))
-        }
         LabAction::ReachabilityOracle(request) => {
             Some((&request.from_component, &request.to_component))
         }
         _ => None,
     }
-#[allow(
-    clippy::too_many_lines,
-    reason = "the exhaustive action-to-participant contract is clearest in one match"
-)]
 }
 
 #[allow(
     clippy::too_many_lines,
     reason = "the exhaustive action-to-participant contract is clearest in one match"
-        LabAction::NodeRestart(request) | LabAction::ComponentRestart(request) => {
-            vec![(&request.component, Operation::Restart)]
-        }
+)]
 fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
     use OperationClass as Operation;
     match action {
@@ -601,10 +593,6 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
         ],
         LabAction::WalletPay(request) => vec![
             (&request.wallet, Operation::WalletPayment),
-        LabAction::WalletMeltQuoteRefresh(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-        ],
             (&request.mint, Operation::WalletPayment),
             (&request.recipient_wallet, Operation::WalletPayment),
             (&request.recipient_mint, Operation::WalletPayment),
@@ -613,16 +601,15 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
         ],
+        LabAction::WalletMeltQuoteRefresh(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
+        ],
         LabAction::WalletRoundTrip(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
             (&request.payer_lightning, Operation::WalletPayment),
-        LabAction::ComponentForensics(request) => {
-            vec![(&request.component, Operation::NativeExec)]
-        }
-        LabAction::ComponentExecLive(request) => {
-            vec![(&request.component, Operation::NativeExec)]
-        }
+        ],
         LabAction::ConservationOracle(request) => vec![
             (&request.wallet, Operation::Inspect),
             (&request.mint, Operation::Inspect),
@@ -644,7 +631,6 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
             (&request.mint, Operation::Authentication),
             (&request.identity_provider, Operation::Authentication),
         ],
-        | LabAction::ComponentRestart(_)
         LabAction::AuthenticationReplay(request) => vec![
             (&request.mint, Operation::Authentication),
             (&request.identity_provider, Operation::Authentication),
@@ -661,21 +647,21 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::ComponentRestart(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_)
-        | LabAction::WalletMeltQuoteRefresh(_)
         | LabAction::BootstrapLiquidity(_)
         | LabAction::PeerConnect(_)
-        LabAction::ComponentForensics(_) => "forensics",
+        | LabAction::PeerDisconnect(_)
         | LabAction::ChannelOpen(_)
         | LabAction::ChannelPolicySet(_)
         | LabAction::ChannelClose(_)
         | LabAction::ChannelForceClose(_)
-        LabAction::ComponentLogs(_) | LabAction::ComponentExecLive(_) => "",
+        | LabAction::ChannelRebalance(_) => "result",
         LabAction::WalletInitialize(_)
         | LabAction::WalletBalance(_)
         | LabAction::WalletFund(_)
         | LabAction::WalletInvoice(_)
         | LabAction::WalletPay(_)
         | LabAction::WalletQuoteClaim(_)
+        | LabAction::WalletMeltQuoteRefresh(_)
         | LabAction::WalletRoundTrip(_) => "wallet",
         LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
         LabAction::ComponentForensics(_) => "forensics",
@@ -688,8 +674,6 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
 }
 
 /// Validate a typed action against its immutable lab and render its deterministic Job.
-        | LabAction::ComponentRestart(_)
-        | LabAction::ComponentExecLive(_)
 ///
 /// # Errors
 ///
@@ -722,15 +706,12 @@ pub fn render_lab_action_job(
         LabAction::ChannelClose(request) => {
             render_channel_close_action(action, lab, request, false)?
         }
-        LabAction::WalletMeltQuoteRefresh(request) => {
-            render_wallet_melt_quote_refresh_action(action, lab, request)?
-        }
         LabAction::ChannelForceClose(request) => {
             render_channel_close_action(action, lab, request, true)?
         }
         LabAction::ChannelRebalance(request) => {
             render_channel_rebalance_action(action, lab, request)?
-        LabAction::ComponentForensics(request) => render_native_exec_action(action, lab, request)?,
+        }
         LabAction::WalletInitialize(request) => {
             render_wallet_initialize_action(action, lab, request)?
         }
@@ -740,6 +721,9 @@ pub fn render_lab_action_job(
         LabAction::WalletPay(request) => render_wallet_pay_action(action, lab, request)?,
         LabAction::WalletQuoteClaim(request) => {
             render_wallet_quote_claim_action(action, lab, request)?
+        }
+        LabAction::WalletMeltQuoteRefresh(request) => {
+            render_wallet_melt_quote_refresh_action(action, lab, request)?
         }
         LabAction::WalletRoundTrip(request) => render_wallet_action(action, lab, request)?,
         LabAction::ConservationOracle(request) => render_oracle_action(action, lab, request)?,
@@ -849,9 +833,9 @@ fn authentication_components<'a>(
                 && matches!(
                     link.binding.as_ref(),
                     Some(proofstorm_core::DependencyBinding::Authentication {
-    request: &ComponentForensicsAction,
+                        protocol: proofstorm_core::AuthenticationProtocol::Oidc
                     })
-    if action.spec.capability != Capability::ComponentForensics {
+                )
         })
         .count();
     if links != 1 {
@@ -1539,6 +1523,22 @@ fn render_wallet_quote_claim_action(
     if !(1..=120).contains(&request.timeout_seconds) {
         return Err(ActionRenderError::Bounds(
             "timeout_seconds must be in 1..=120",
+        ));
+    }
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    render_wallet_quote_claim_job(&WalletQuoteClaimJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        mint_quote_id: &request.mint_quote_id,
+        wallet_image,
+        timeout_seconds: request.timeout_seconds,
+    })
+    .map_err(ActionRenderError::from)
+}
+
 fn render_wallet_melt_quote_refresh_action(
     action: &ProofstormLabAction,
     lab: &ProofstormLab,
@@ -1561,22 +1561,6 @@ fn render_wallet_melt_quote_refresh_action(
         wallet: &request.wallet,
         mint: &request.mint,
         melt_quote_id: &request.melt_quote_id,
-        wallet_image,
-        timeout_seconds: request.timeout_seconds,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-        ));
-    }
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
-    render_wallet_quote_claim_job(&WalletQuoteClaimJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        mint_quote_id: &request.mint_quote_id,
         wallet_image,
         timeout_seconds: request.timeout_seconds,
     })
@@ -3171,6 +3155,22 @@ pub fn render_wallet_quote_claim_job(
     let namespace = instance_namespace(instance_key);
     let script = "set -eu; cd /app; python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log";
     let timeout = timeout_seconds.to_string();
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "claim-receive"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id), ("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", timeout.as_str())])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-quote-claim",
+        i64::from(timeout_seconds.saturating_add(30)),
+        &pod,
+    )
+}
+
 /// Refresh an exact payer-side melt quote and prove reservation release.
 ///
 /// # Errors
@@ -3202,22 +3202,6 @@ pub fn render_wallet_melt_quote_refresh_job(
         &namespace,
         instance_key,
         "wallet-melt-quote-refresh",
-        i64::from(timeout_seconds.saturating_add(30)),
-        &pod,
-    )
-}
-
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "claim-receive"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id), ("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", timeout.as_str())])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-quote-claim",
         i64::from(timeout_seconds.saturating_add(30)),
         &pod,
     )
@@ -3615,7 +3599,7 @@ mod tests {
             .status
             .as_mut()
             .expect("status")
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+            .components
             .iter_mut()
             .find(|status| status.id == component)
             .expect("component status")
@@ -3790,7 +3774,7 @@ mod tests {
         ready_admission_status(&mut lab);
         lab.status
             .as_mut()
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+            .expect("status")
             .observed_revision_digest = "sha256:previous-revision".into();
 
         action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
@@ -3833,7 +3817,7 @@ mod tests {
 
         action.spec.action = LabAction::PeerConnect(PeerConnectAction {
             from_lightning: "mint-lnd".into(),
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+            to_lightning: "payer-lnd".into(),
         });
         assert!(matches!(
             evaluate_action_admission(&action, &lab),
@@ -4031,6 +4015,22 @@ mod tests {
             assert_eq!(
                 env.iter()
                     .find(|variable| variable.name == name)
+                    .and_then(|variable| variable.value.as_deref()),
+                Some(value),
+                "{name}"
+            );
+        }
+        let mint_mount = container
+            .volume_mounts
+            .as_ref()
+            .expect("volume mounts")
+            .iter()
+            .find(|mount| mount.name == "payer-mint")
+            .expect("payer mint database mount");
+        assert_eq!(mint_mount.mount_path, "/payer-mint");
+        assert_eq!(mint_mount.read_only, Some(false));
+    }
+
     #[test]
     fn wallet_melt_refresh_is_exact_bounded_and_uses_the_wallet_identity() {
         let job = render_wallet_melt_quote_refresh_job(&WalletMeltQuoteRefreshJobSpec {
@@ -4074,22 +4074,6 @@ mod tests {
         );
     }
 
-                    .and_then(|variable| variable.value.as_deref()),
-                Some(value),
-                "{name}"
-            );
-        }
-        let mint_mount = container
-            .volume_mounts
-            .as_ref()
-            .expect("volume mounts")
-            .iter()
-            .find(|mount| mount.name == "payer-mint")
-            .expect("payer mint database mount");
-        assert_eq!(mint_mount.mount_path, "/payer-mint");
-        assert_eq!(mint_mount.read_only, Some(false));
-    }
-
     #[test]
     fn bounded_jobs_have_deadlines_and_no_service_account_tokens() {
         let job = render_bootstrap_job(&BootstrapJobSpec {
@@ -4112,8 +4096,8 @@ mod tests {
             Some(300)
         );
         let pod = &job.spec.expect("spec").template.spec.expect("pod");
-        action.spec.capability = Capability::ComponentForensics;
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+        assert_eq!(pod.automount_service_account_token, Some(false));
+    }
 
     #[test]
     fn native_exec_uses_locked_component_image_data_and_uninterpolated_script() {
@@ -4146,7 +4130,7 @@ mod tests {
         assert_eq!(exec.image.as_deref(), Some(locked_bitcoin.as_str()));
         assert!(exec.command.as_ref().expect("wrapper command")[2].contains("$PROOFSTORM_SCRIPT"));
         assert!(!exec.command.as_ref().expect("wrapper command")[2].contains(script));
-        assert_eq!(action_result_container(&action.spec.action), "forensics");
+        assert_eq!(
             exec.env
                 .as_ref()
                 .expect("exec environment")
@@ -4166,8 +4150,8 @@ mod tests {
         let pod_labels = job
             .spec
             .as_ref()
-        action.spec.capability = Capability::ComponentForensics;
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+            .and_then(|spec| spec.template.metadata.as_ref())
+            .and_then(|metadata| metadata.labels.as_ref())
             .expect("pod labels");
         assert_eq!(
             pod_labels
@@ -4223,8 +4207,8 @@ mod tests {
         assert_eq!(environment["BITCOIN_RPC_PORT"], "18443");
         assert_eq!(environment["BITCOIN_RPC_USER"], "proofstorm");
         assert_eq!(
-        action.spec.capability = Capability::ComponentForensics;
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+            environment["BITCOIN_RPC_PASSWORD"],
+            "proofstorm-regtest-only"
         );
         let labels = job
             .spec

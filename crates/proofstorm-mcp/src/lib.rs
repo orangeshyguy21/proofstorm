@@ -617,172 +617,6 @@ impl TryFrom<LinkSpec> for AddLinkInput {
     }
 }
 
-impl TryFrom<LinkSpec> for AddLinkInput {
-    type Error = String;
-
-    fn try_from(link: LinkSpec) -> Result<Self, Self::Error> {
-        let LinkSpec {
-            id,
-            kind,
-            from,
-            to,
-            binding,
-        } = link;
-        match (kind, binding) {
-            (LinkKind::BitcoinPeer, None) => Ok(Self::BitcoinPeer { id, from, to }),
-            (LinkKind::LightningPeer, None) => Ok(Self::LightningPeer { id, from, to }),
-            (LinkKind::ChainBackend, Some(DependencyBinding::Chain { network })) => {
-                Ok(Self::ChainBackend {
-                    id,
-                    from,
-                    to,
-                    network,
-                })
-            }
-            (LinkKind::PaymentBackend, Some(DependencyBinding::Payment { method, unit })) => {
-                Ok(Self::PaymentBackend {
-    let value = match value {
-                    from,
-            serde_json::from_str(&encoded).map_err(serde::de::Error::custom)?
-                    method,
-        value => value,
-    };
-    let authored_error = match serde_json::from_value(value.clone()) {
-        Ok(authored) => return Ok(authored),
-        Err(error) => error,
-    };
-    let has_canonical_binding = value
-        .get("links")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|links| {
-            links.iter().any(|link| {
-                link.as_object()
-                    .is_some_and(|link| link.contains_key("binding"))
-            })
-        });
-    if !has_canonical_binding {
-        return Err(serde::de::Error::custom(authored_error));
-                })
-    let canonical: LabSpec = match serde_json::from_value(value) {
-        Ok(canonical) => canonical,
-        Err(_) => return Err(serde::de::Error::custom(authored_error)),
-    };
-    Ok(AuthoredLabSpec {
-        api_version: canonical.api_version,
-        name: canonical.name,
-        components: canonical.components,
-        links: canonical
-            .links
-            .into_iter()
-            .map(AddLinkInput::try_from)
-            .collect::<Result<_, _>>()
-            .map_err(serde::de::Error::custom)?,
-        policy: canonical.policy,
-    })
-            }
-            (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { role })) => {
-                Ok(Self::DatabaseBackend { id, from, to, role })
-            }
-            (
-                LinkKind::AuthenticationBackend,
-                Some(DependencyBinding::Authentication { protocol }),
-            ) => Ok(Self::AuthenticationBackend {
-                id,
-                from,
-                to,
-                protocol,
-            }),
-            (LinkKind::NetworkPath, None) => Ok(Self::NetworkPath { id, from, to }),
-            _ => Err(format!(
-                "canonical {kind:?} link {id:?} has a missing or mismatched binding"
-            )),
-        }
-    }
-}
-
-impl TryFrom<LinkSpec> for AddLinkInput {
-    type Error = String;
-
-    fn try_from(link: LinkSpec) -> Result<Self, Self::Error> {
-        let LinkSpec {
-            id,
-            kind,
-            from,
-            to,
-            binding,
-        } = link;
-        match (kind, binding) {
-            (LinkKind::BitcoinPeer, None) => Ok(Self::BitcoinPeer { id, from, to }),
-            (LinkKind::LightningPeer, None) => Ok(Self::LightningPeer { id, from, to }),
-            (LinkKind::ChainBackend, Some(DependencyBinding::Chain { network })) => {
-                Ok(Self::ChainBackend {
-                    id,
-                    from,
-                    to,
-                    network,
-                })
-            }
-            (LinkKind::PaymentBackend, Some(DependencyBinding::Payment { method, unit })) => {
-                Ok(Self::PaymentBackend {
-    let value = match value {
-                    from,
-            serde_json::from_str(&encoded).map_err(serde::de::Error::custom)?
-                    method,
-        value => value,
-    };
-    let authored_error = match serde_json::from_value(value.clone()) {
-        Ok(authored) => return Ok(authored),
-        Err(error) => error,
-    };
-    let has_canonical_binding = value
-        .get("links")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|links| {
-            links.iter().any(|link| {
-                link.as_object()
-                    .is_some_and(|link| link.contains_key("binding"))
-            })
-        });
-    if !has_canonical_binding {
-        return Err(serde::de::Error::custom(authored_error));
-                })
-    let canonical: LabSpec = match serde_json::from_value(value) {
-        Ok(canonical) => canonical,
-        Err(_) => return Err(serde::de::Error::custom(authored_error)),
-    };
-    Ok(AuthoredLabSpec {
-        api_version: canonical.api_version,
-        name: canonical.name,
-        components: canonical.components,
-        links: canonical
-            .links
-            .into_iter()
-            .map(AddLinkInput::try_from)
-            .collect::<Result<_, _>>()
-            .map_err(serde::de::Error::custom)?,
-        policy: canonical.policy,
-    })
-            }
-            (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { role })) => {
-                Ok(Self::DatabaseBackend { id, from, to, role })
-            }
-            (
-                LinkKind::AuthenticationBackend,
-                Some(DependencyBinding::Authentication { protocol }),
-            ) => Ok(Self::AuthenticationBackend {
-                id,
-                from,
-                to,
-                protocol,
-            }),
-            (LinkKind::NetworkPath, None) => Ok(Self::NetworkPath { id, from, to }),
-            _ => Err(format!(
-                "canonical {kind:?} link {id:?} has a missing or mismatched binding"
-            )),
-        }
-    }
-}
-
 /// Complete lab input accepted at the MCP boundary. Unlike the persisted core
 /// model, backend-link variants require their binding fields as flat scalars.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1002,37 +836,6 @@ pub struct LabInventoryListRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ComponentExecLiveRequest {
-    pub instance_id: String,
-    pub experiment_id: String,
-    pub lease_id: String,
-    pub operation_id: String,
-    pub component: String,
-    /// An unrestricted non-interactive shell program executed inside the
-    /// selected running component container.
-    pub script: String,
-    pub timeout_seconds: u32,
-    pub idempotency_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WalletMeltQuoteRefreshRequest {
-    pub instance_id: String,
-    pub experiment_id: String,
-    pub lease_id: String,
-    pub operation_id: String,
-    pub wallet: String,
-    pub mint: String,
-    pub melt_quote_id: String,
-    /// Bounded wallet-to-database/mint round-trip deadline.
-    #[schemars(range(min = 1, max = 30))]
-    pub timeout_seconds: u32,
-    pub idempotency_key: String,
-}
-
 #[serde(deny_unknown_fields)]
 pub struct LabInventoryListResponse {
     pub instance_id: String,
@@ -1116,37 +919,6 @@ pub struct OperationWaitManyResult {
     /// one omitted body.
     pub artifact_bodies_omitted: bool,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ComponentExecLiveRequest {
-    pub instance_id: String,
-    pub experiment_id: String,
-    pub lease_id: String,
-    pub operation_id: String,
-    pub component: String,
-    /// An unrestricted non-interactive shell program executed inside the
-    /// selected running component container.
-    pub script: String,
-    pub timeout_seconds: u32,
-    pub idempotency_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WalletMeltQuoteRefreshRequest {
-    pub instance_id: String,
-    pub experiment_id: String,
-    pub lease_id: String,
-    pub operation_id: String,
-    pub wallet: String,
-    pub mint: String,
-    pub melt_quote_id: String,
-    /// Bounded wallet-to-database/mint round-trip deadline.
-    #[schemars(range(min = 1, max = 30))]
-    pub timeout_seconds: u32,
-    pub idempotency_key: String,
-}
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1226,6 +998,37 @@ pub struct ComponentExecRequest {
     /// the component's pinned image. Native command failures are returned as
     /// an exit code in the terminal artifact.
     pub script: String,
+    pub timeout_seconds: u32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentExecLiveRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub component: String,
+    /// An unrestricted non-interactive shell program executed inside the
+    /// selected running component container.
+    pub script: String,
+    pub timeout_seconds: u32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WalletMeltQuoteRefreshRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub wallet: String,
+    pub mint: String,
+    pub melt_quote_id: String,
+    /// Bounded wallet-to-database/mint round-trip deadline.
+    #[schemars(range(min = 1, max = 30))]
     pub timeout_seconds: u32,
     pub idempotency_key: String,
 }
@@ -1404,7 +1207,6 @@ pub struct PeerDisconnectRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-    #[schemars(range(min = 1, max = 30))]
 pub struct ChannelOpenRequest {
     pub instance_id: String,
     pub experiment_id: String,
@@ -1602,6 +1404,7 @@ pub struct WalletQuoteClaimRequest {
     pub mint: String,
     pub mint_quote_id: String,
     #[serde(default = "default_claim_timeout_seconds")]
+    #[schemars(range(min = 1, max = 30))]
     pub timeout_seconds: u32,
     pub idempotency_key: String,
 }
@@ -1878,9 +1681,6 @@ pub struct EvidenceSectionReadRequest {
     #[schemars(range(min = 1, max = 50))]
     pub limit: u32,
 }
-            | "proofstorm_component_restart"
-            | "proofstorm_component_exec_live"
-            | "proofstorm_component_forensics"
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1892,7 +1692,6 @@ pub struct EvidenceSectionReadResponse {
     pub next_after_sequence: Option<u64>,
 }
 
-            | "proofstorm_wallet_melt_quote_refresh"
 const fn default_true() -> bool {
     true
 }
@@ -1996,9 +1795,6 @@ impl ProofstormToolset {
             Self::Design => matches!(
                 tool,
                 "proofstorm_workspace_read"
-            | "proofstorm_component_restart"
-            | "proofstorm_component_exec_live"
-            | "proofstorm_component_forensics"
                     | "proofstorm_catalog_list"
                     | "proofstorm_catalog_entry_read"
                     | "proofstorm_catalog_config_schema_read"
@@ -2082,6 +1878,9 @@ fn experiment_tool(tool: &str) -> bool {
             | "proofstorm_lease_read"
             | "proofstorm_lease_release"
             | "proofstorm_node_restart"
+            | "proofstorm_component_restart"
+            | "proofstorm_component_exec_live"
+            | "proofstorm_component_forensics"
             | "proofstorm_component_logs"
             | "proofstorm_liquidity_bootstrap"
             | "proofstorm_peer_connect"
@@ -2093,6 +1892,7 @@ fn experiment_tool(tool: &str) -> bool {
             | "proofstorm_wallet_balance"
             | "proofstorm_wallet_fund"
             | "proofstorm_wallet_invoice"
+            | "proofstorm_wallet_melt_quote_refresh"
             | "proofstorm_wallet_pay"
             | "proofstorm_conservation_oracle"
             | "proofstorm_reachability_oracle"
@@ -3136,59 +2936,7 @@ impl ProofstormMcp {
                 &request.experiment_id,
                 &request.instance_id,
                 &request.idempotency_key,
-        description = "Restart any running lab component, whether its workload is a Deployment or StatefulSet, and wait for the exact accepted rollout to become ready. Use this for mints and wallets as well as Bitcoin and Lightning nodes"
-    )]
-    async fn proofstorm_component_restart(
-        &self,
-        Parameters(request): Parameters<NodeControlRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::ComponentControl)?;
-        let (instance, revision) = self
-            .store
-            .operation_context(
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-                Capability::ComponentControl,
             )
-            .map_err(store_error)?;
-        let component = revision
-            .lab
-            .components
-            .iter()
-            .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
-        component_image_any(&revision, &request.component, component.kind)?;
-        let operation = self.create_operation(
-            &request.instance_id,
-            &request.experiment_id,
-            &request.lease_id,
-            &request.operation_id,
-            OperationKind::ComponentRestart,
-            &request,
-            &request.idempotency_key,
-            Capability::ComponentControl,
-        )?;
-        if operation.phase != OperationPhase::Pending {
-            return Ok(Json(operation));
-        }
-        let action = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            LabAction::ComponentRestart(NodeControlAction {
-                component: request.component,
-            }),
-        );
-        self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
-    }
-
-    #[tool(
-        description = "Read a bounded tail of one lab component's own container log, journaled as an experiment artifact. This reads the selected running or failed component pod and keeps working while the component is unready, crash-looping, or stopped. The artifact also reports pod phase, container readiness, and restart count"
             .map(Json)
             .map_err(store_error)
     }
@@ -3305,59 +3053,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         let status = self.runtime()?.status(instance).await?;
         if status.phase != InstancePhase::Ready {
-        description = "Restart any running lab component, whether its workload is a Deployment or StatefulSet, and wait for the exact accepted rollout to become ready. Use this for mints and wallets as well as Bitcoin and Lightning nodes"
-    )]
-    async fn proofstorm_component_restart(
-        &self,
-        Parameters(request): Parameters<NodeControlRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::ComponentControl)?;
-        let (instance, revision) = self
-            .store
-            .operation_context(
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-                Capability::ComponentControl,
-            )
-            .map_err(store_error)?;
-        let component = revision
-            .lab
-            .components
-            .iter()
-            .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
-        component_image_any(&revision, &request.component, component.kind)?;
-        let operation = self.create_operation(
-            &request.instance_id,
-            &request.experiment_id,
-            &request.lease_id,
-            &request.operation_id,
-            OperationKind::ComponentRestart,
-            &request,
-            &request.idempotency_key,
-            Capability::ComponentControl,
-        )?;
-        if operation.phase != OperationPhase::Pending {
-            return Ok(Json(operation));
-        }
-        let action = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            LabAction::ComponentRestart(NodeControlAction {
-                component: request.component,
-            }),
-        );
-        self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
-    }
-
-    #[tool(
-        description = "Read a bounded tail of one lab component's own container log, journaled as an experiment artifact. This reads the selected running or failed component pod and keeps working while the component is unready, crash-looping, or stopped. The artifact also reports pod phase, container readiness, and restart count"
+            return Err(coded_invalid_request(
                 "instance_not_ready",
                 format!(
                     "lab instance {:?} is not ready for a lease",
@@ -3414,13 +3110,13 @@ impl ProofstormMcp {
     async fn proofstorm_node_start(
         &self,
         Parameters(request): Parameters<NodeControlRequest>,
-        description = "Run bounded offline forensics in a disposable pod built from a component's pinned image and declared data mounts. This is not the running component and does not promise its localhost, Unix sockets, process identity, or live CLI connectivity. Use it for source and database inspection; use component_exec_live for a running component's native CLI"
+    ) -> Result<Json<LabOperation>, ErrorData> {
         self.submit_node_control(request, OperationKind::NodeStart)
-    async fn proofstorm_component_forensics(
+            .await
     }
 
     #[tool(description = "Stop a logical Bitcoin or Lightning node without deleting its state")]
-        self.authorize(Capability::ComponentForensics)?;
+    async fn proofstorm_node_stop(
         &self,
         Parameters(request): Parameters<NodeControlRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
@@ -3435,12 +3131,64 @@ impl ProofstormMcp {
         &self,
         Parameters(request): Parameters<NodeControlRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
-                Capability::ComponentForensics,
+        self.submit_node_control(request, OperationKind::NodeRestart)
             .await
     }
 
     #[tool(
-        description = "Read a bounded tail of one lab component's own container log, journaled as an experiment artifact. This reads the component's running container, unlike component_exec which starts a separate pod, and it keeps working while the component is unready, crash-looping, or stopped, which is when a native error is usually only visible in its log. The artifact also reports the pod phase, container readiness, and restart count"
+        description = "Restart any running lab component, whether its workload is a Deployment or StatefulSet, and wait for the exact accepted rollout to become ready. Use this for mints and wallets as well as Bitcoin and Lightning nodes"
+    )]
+    async fn proofstorm_component_restart(
+        &self,
+        Parameters(request): Parameters<NodeControlRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ComponentControl)?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ComponentControl,
+            )
+            .map_err(store_error)?;
+        let component = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == request.component)
+            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+        component_image_any(&revision, &request.component, component.kind)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::ComponentRestart,
+            &request,
+            &request.idempotency_key,
+            Capability::ComponentControl,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::ComponentRestart(NodeControlAction {
+                component: request.component,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Read a bounded tail of one lab component's own container log, journaled as an experiment artifact. This reads the selected running or failed component pod and keeps working while the component is unready, crash-looping, or stopped. The artifact also reports pod phase, container readiness, and restart count"
     )]
     async fn proofstorm_component_logs(
         &self,
@@ -3464,10 +3212,10 @@ impl ProofstormMcp {
             .components
             .iter()
             .find(|component| component.id == request.component)
-            OperationKind::ComponentForensics,
+            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
         component_image_any(&revision, &request.component, component.kind)?;
         let operation = self.create_operation(
-            Capability::ComponentForensics,
+            &request.instance_id,
             &request.experiment_id,
             &request.lease_id,
             &request.operation_id,
@@ -3476,7 +3224,7 @@ impl ProofstormMcp {
             &request.idempotency_key,
             Capability::ComponentLogs,
         )?;
-            LabAction::ComponentForensics(ComponentForensicsAction {
+        if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
         let resource = runtime_action_resource(
@@ -3490,68 +3238,6 @@ impl ProofstormMcp {
         );
         self.runtime()?.apply_action(&instance, &resource).await?;
         self.store
-    #[tool(
-        description = "Execute a bounded non-interactive shell program inside the selected running component container. This shares the component's real network namespace, user, files, localhost APIs, and Unix sockets. Native CLIs still require their own flags; read the selected catalog entry's runtime endpoint limitations for exact invocation hints. Prefer typed actions for routine mutations; this powerful escape hatch is fully journaled"
-    )]
-    async fn proofstorm_component_exec_live(
-        &self,
-        Parameters(request): Parameters<ComponentExecLiveRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::ComponentExecLive)?;
-        if request.script.is_empty() || request.script.len() > 16 * 1024 {
-            return Err(invalid_operation(
-                "script must contain 1..=16384 UTF-8 bytes",
-            ));
-        }
-        if !(1..=300).contains(&request.timeout_seconds) {
-            return Err(invalid_operation("timeout_seconds must be in 1..=300"));
-        }
-        let (instance, revision) = self
-            .store
-            .operation_context(
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-                Capability::ComponentExecLive,
-            )
-            .map_err(store_error)?;
-        let component = revision
-            .lab
-            .components
-            .iter()
-            .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
-        component_image_any(&revision, &request.component, component.kind)?;
-        let operation = self.create_operation(
-            &request.instance_id,
-            &request.experiment_id,
-            &request.lease_id,
-            &request.operation_id,
-            OperationKind::ComponentExecLive,
-            &request,
-            &request.idempotency_key,
-            Capability::ComponentExecLive,
-        )?;
-        if operation.phase != OperationPhase::Pending {
-            return Ok(Json(operation));
-        }
-        let action = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            LabAction::ComponentExecLive(ComponentExecLiveAction {
-                component: request.component,
-                script: request.script,
-                timeout_seconds: request.timeout_seconds,
-            }),
-        );
-        self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
-    }
-
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
             .map(Json)
             .map_err(store_error)
@@ -3645,13 +3331,13 @@ impl ProofstormMcp {
             }),
         );
         self.runtime()?.apply_action(&instance, &resource).await?;
-        description = "Run bounded offline forensics in a disposable pod built from a component's pinned image and declared data mounts. This is not the running component and does not promise its localhost, Unix sockets, process identity, or live CLI connectivity. Use it for source and database inspection; use component_exec_live for a running component's native CLI"
+        self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-    async fn proofstorm_component_forensics(
+            .map(Json)
             .map_err(store_error)
     }
 
-        self.authorize(Capability::ComponentForensics)?;
+    #[tool(
         description = "After a mint restart, replay a BAT retained by a successful protected-spend operation, require spent-token rejection, then mint and spend a fresh BAT. Test credentials and bearer tokens remain inside fixed Proofstorm jobs"
     )]
     async fn proofstorm_authentication_replay(
@@ -3666,7 +3352,7 @@ impl ProofstormMcp {
                 &self.principal,
                 &request.instance_id,
                 Capability::AuthenticationTest,
-                Capability::ComponentForensics,
+            )
             .map_err(store_error)?;
         validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
         let source = self
@@ -3695,10 +3381,10 @@ impl ProofstormMcp {
                 "source operation must be a successful protected spend in the same instance, experiment, lease, principal, mint, and identity provider",
             ));
         }
-            OperationKind::ComponentForensics,
+        let session_secret = format!("{}-auth-session", source.resource_name);
         let operation = self.create_operation(
             &request.instance_id,
-            Capability::ComponentForensics,
+            &request.experiment_id,
             &request.lease_id,
             &request.operation_id,
             OperationKind::AuthenticationReplay,
@@ -3707,7 +3393,7 @@ impl ProofstormMcp {
             Capability::AuthenticationTest,
         )?;
         if operation.phase != OperationPhase::Pending {
-            LabAction::ComponentForensics(ComponentForensicsAction {
+            return Ok(Json(operation));
         }
         let resource = runtime_action_resource(
             &self.runtime()?.control_namespace,
@@ -3721,6 +3407,89 @@ impl ProofstormMcp {
             }),
         );
         self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Run bounded offline forensics in a disposable pod built from a component's pinned image and declared data mounts. This is not the running component and does not promise its localhost, Unix sockets, process identity, or live CLI connectivity. Use it for source and database inspection; use component_exec_live for a running component's native CLI"
+    )]
+    async fn proofstorm_component_forensics(
+        &self,
+        Parameters(request): Parameters<ComponentExecRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ComponentForensics)?;
+        if request.script.is_empty() || request.script.len() > 16 * 1024 {
+            return Err(invalid_operation(
+                "script must contain 1..=16384 UTF-8 bytes",
+            ));
+        }
+        if !(1..=300).contains(&request.timeout_seconds) {
+            return Err(invalid_operation("timeout_seconds must be in 1..=300"));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ComponentForensics,
+            )
+            .map_err(store_error)?;
+        let component = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == request.component)
+            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+        component_image_any(&revision, &request.component, component.kind)?;
+        let target_component = request
+            .target_component
+            .as_deref()
+            .unwrap_or(&request.component)
+            .to_owned();
+        let target = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == target_component)
+            .ok_or_else(|| {
+                invalid_operation("target_component is not part of this lab revision")
+            })?;
+        component_image_any(&revision, &target_component, target.kind)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::ComponentForensics,
+            &request,
+            &request.idempotency_key,
+            Capability::ComponentForensics,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::ComponentForensics(ComponentForensicsAction {
+                component: request.component,
+                target_component,
+                script: request.script,
+                timeout_seconds: request.timeout_seconds,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
     #[tool(
         description = "Execute a bounded non-interactive shell program inside the selected running component container. This shares the component's real network namespace, user, files, localhost APIs, and Unix sockets. Native CLIs still require their own flags; read the selected catalog entry's runtime endpoint limitations for exact invocation hints. Prefer typed actions for routine mutations; this powerful escape hatch is fully journaled"
     )]
@@ -3772,89 +3541,6 @@ impl ProofstormMcp {
             &operation,
             LabAction::ComponentExecLive(ComponentExecLiveAction {
                 component: request.component,
-                script: request.script,
-                timeout_seconds: request.timeout_seconds,
-            }),
-        );
-        self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
-    }
-
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
-    }
-
-    #[tool(
-        description = "Last-resort shell execution in a fresh pod using a component's pinned image, volumes, and CLI. Prefer typed actions and component_logs. This is not the running component: localhost is wrong; use supplied PROOFSTORM_TARGET_* or native endpoint variables. The bounded artifact reports output, exit code, and target endpoint readiness"
-    )]
-    async fn proofstorm_component_exec(
-        &self,
-        Parameters(request): Parameters<ComponentExecRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::ComponentExec)?;
-        if request.script.is_empty() || request.script.len() > 16 * 1024 {
-            return Err(invalid_operation(
-                "script must contain 1..=16384 UTF-8 bytes",
-            ));
-        }
-        if !(1..=300).contains(&request.timeout_seconds) {
-            return Err(invalid_operation("timeout_seconds must be in 1..=300"));
-        }
-        let (instance, revision) = self
-            .store
-            .operation_context(
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-                Capability::ComponentExec,
-            )
-            .map_err(store_error)?;
-        let component = revision
-            .lab
-            .components
-            .iter()
-            .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
-        component_image_any(&revision, &request.component, component.kind)?;
-        let target_component = request
-            .target_component
-            .as_deref()
-            .unwrap_or(&request.component)
-            .to_owned();
-        let target = revision
-            .lab
-            .components
-            .iter()
-            .find(|component| component.id == target_component)
-            .ok_or_else(|| {
-                invalid_operation("target_component is not part of this lab revision")
-            })?;
-        component_image_any(&revision, &target_component, target.kind)?;
-        let operation = self.create_operation(
-            &request.instance_id,
-            &request.experiment_id,
-            &request.lease_id,
-            &request.operation_id,
-            OperationKind::NativeExec,
-            &request,
-            &request.idempotency_key,
-            Capability::ComponentExec,
-        )?;
-        if operation.phase != OperationPhase::Pending {
-            return Ok(Json(operation));
-        }
-        let action = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            LabAction::NativeExec(NativeExecAction {
-                component: request.component,
-                target_component,
                 script: request.script,
                 timeout_seconds: request.timeout_seconds,
             }),
@@ -4070,7 +3756,7 @@ impl ProofstormMcp {
 
             let quote_ids = [cln_quote, lnd_quote];
             for (direction, quote_id) in ROUTING_FEE_RECIPE_PAYMENT_DIRECTIONS
-        description = "Set the outgoing routing policy from one Lightning node to its peer. base_fee_sat is in satoshis (like all other agent-facing amounts); fee_rate_ppm is parts per million. Proofstorm converts the base fee to native millisatoshis and resolves the channel/adapter; prefer this typed operation over a native CLI"
+                .into_iter()
                 .zip(quote_ids)
             {
                 let suffix = format!("pay-{treatment_id}-{}", direction.id);
@@ -4301,7 +3987,7 @@ impl ProofstormMcp {
             &request.instance_id,
             &request.experiment_id,
             &request.lease_id,
-        description = "Set the outgoing routing policy from one Lightning node to its peer. base_fee_sat is in satoshis (like all other agent-facing amounts); fee_rate_ppm is parts per million. Proofstorm converts the base fee to native millisatoshis and resolves the channel/adapter; prefer this typed operation over a native CLI"
+            &request.operation_id,
             OperationKind::PeerDisconnect,
             &request,
             &request.idempotency_key,
@@ -4384,7 +4070,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Set the outgoing routing policy from one Lightning node to its peer. base_fee_sat is in satoshis (like all other agent-facing amounts); fee_rate_ppm is parts per million. Proofstorm converts the base fee to native millisatoshis and resolves the channel/adapter; do not use component_exec for fee policy"
+        description = "Set the outgoing routing policy from one Lightning node to its peer. base_fee_sat is in satoshis (like all other agent-facing amounts); fee_rate_ppm is parts per million. Proofstorm converts the base fee to native millisatoshis and resolves the channel/adapter; prefer this typed operation over a native CLI"
     )]
     async fn proofstorm_channel_policy_set(
         &self,
@@ -4641,9 +4327,9 @@ impl ProofstormMcp {
             &request.instance_id,
             &request.experiment_id,
             &request.lease_id,
-        if !(1..=30).contains(&request.timeout_seconds) {
+            &request.operation_id,
             OperationKind::NetworkHeal,
-                "timeout_seconds must be between 1 and 30; no operation was created",
+            &request,
             &request.idempotency_key,
             Capability::NetworkHeal,
         )?;
@@ -4688,62 +4374,6 @@ impl ProofstormMcp {
             &request.lease_id,
             &request.operation_id,
             OperationKind::WalletInitialize,
-    #[tool(
-        description = "Refresh one exact payer-side melt quote through the wallet adapter. This performs the wallet's native mint round-trip and, when the mint reports UNPAID, releases proofs reserved by that melt. The artifact reports before/after quote state, reserved proof count, and available balance"
-    )]
-    async fn proofstorm_wallet_melt_quote_refresh(
-        &self,
-        Parameters(request): Parameters<WalletMeltQuoteRefreshRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::WalletControl)?;
-        validate_quote_id(&request.melt_quote_id)?;
-        if !(1..=30).contains(&request.timeout_seconds) {
-            return Err(invalid_operation(
-                "timeout_seconds must be between 1 and 30; no operation was created",
-            ));
-        }
-        let (instance, revision) = self
-            .store
-            .operation_context(
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-                Capability::WalletControl,
-            )
-            .map_err(store_error)?;
-        component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
-        component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
-        let operation = self.create_operation(
-            &request.instance_id,
-            &request.experiment_id,
-            &request.lease_id,
-            &request.operation_id,
-            OperationKind::WalletMeltQuoteRefresh,
-            &request,
-            &request.idempotency_key,
-            Capability::WalletControl,
-        )?;
-        if operation.phase != OperationPhase::Pending {
-            return Ok(Json(operation));
-        }
-        let action = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            LabAction::WalletMeltQuoteRefresh(WalletMeltQuoteRefreshAction {
-                wallet: request.wallet,
-                mint: request.mint,
-                melt_quote_id: request.melt_quote_id,
-                timeout_seconds: request.timeout_seconds,
-            }),
-        );
-        self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
-    }
-
             &request,
             &request.idempotency_key,
             Capability::WalletCreate,
@@ -5011,9 +4641,9 @@ impl ProofstormMcp {
         Parameters(request): Parameters<WalletQuoteClaimRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize(Capability::WalletControl)?;
-        if !(1..=120).contains(&request.timeout_seconds) {
+        if !(1..=30).contains(&request.timeout_seconds) {
             return Err(invalid_operation(
-                "timeout_seconds must be between 1 and 120",
+                "timeout_seconds must be between 1 and 30; no operation was created",
             ));
         }
         let (instance, revision) = self
@@ -5048,6 +4678,62 @@ impl ProofstormMcp {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 mint_quote_id: request.mint_quote_id.clone(),
+                timeout_seconds: request.timeout_seconds,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Refresh one exact payer-side melt quote through the wallet adapter. This performs the wallet's native mint round-trip and, when the mint reports UNPAID, releases proofs reserved by that melt. The artifact reports before/after quote state, reserved proof count, and available balance"
+    )]
+    async fn proofstorm_wallet_melt_quote_refresh(
+        &self,
+        Parameters(request): Parameters<WalletMeltQuoteRefreshRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::WalletControl)?;
+        validate_quote_id(&request.melt_quote_id)?;
+        if !(1..=30).contains(&request.timeout_seconds) {
+            return Err(invalid_operation(
+                "timeout_seconds must be between 1 and 30; no operation was created",
+            ));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::WalletControl,
+            )
+            .map_err(store_error)?;
+        component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
+        component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::WalletMeltQuoteRefresh,
+            &request,
+            &request.idempotency_key,
+            Capability::WalletControl,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::WalletMeltQuoteRefresh(WalletMeltQuoteRefreshAction {
+                wallet: request.wallet,
+                mint: request.mint,
+                melt_quote_id: request.melt_quote_id,
                 timeout_seconds: request.timeout_seconds,
             }),
         );
@@ -5508,11 +5194,6 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         let source_has_more =
             if actions.len() == usize::try_from(request.limit).unwrap_or(usize::MAX) {
-            (OperationKind::WalletMeltQuoteRefresh, WalletQuoteObservationRole::PaymentMelt) => {
-                field("wallet") == Some(&observation.wallet_id)
-                    && field("mint") == Some(&observation.mint_id)
-                    && field("melt_quote_id") == Some(&observation.quote_id)
-            }
                 let after = actions
                     .last()
                     .map_or(request.after_sequence, |action| action.sequence);
@@ -5826,6 +5507,11 @@ fn validate_operation_quote_observations(
             (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentMelt) => {
                 field("wallet") == Some(&observation.wallet_id)
                     && field("mint") == Some(&observation.mint_id)
+            }
+            (OperationKind::WalletMeltQuoteRefresh, WalletQuoteObservationRole::PaymentMelt) => {
+                field("wallet") == Some(&observation.wallet_id)
+                    && field("mint") == Some(&observation.mint_id)
+                    && field("melt_quote_id") == Some(&observation.quote_id)
             }
             (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentReceive) => {
                 field("recipient_wallet") == Some(&observation.wallet_id)
@@ -6908,18 +6594,7 @@ fn preferred_recipe_component(
         config_version: entry.config_version.clone(),
         control,
         config,
-        (
-            "proofstorm_component_restart",
-            &[Capability::ComponentControl],
-        ),
-        (
-            "proofstorm_component_exec_live",
-            &[Capability::ComponentExecLive],
-        ),
-        (
-            "proofstorm_component_forensics",
-            &[Capability::ComponentForensics],
-        ),
+    })
 }
 
 #[allow(
@@ -7019,10 +6694,6 @@ fn lab_from_recipe(recipe: LabRecipe, name: String) -> Result<LabSpec, ErrorData
                     }),
                 },
                 LinkSpec {
-        (
-            "proofstorm_wallet_melt_quote_refresh",
-            &[Capability::WalletControl],
-        ),
                     id: "cln-chain".into(),
                     kind: LinkKind::ChainBackend,
                     from: "cln-backend".into(),
@@ -7154,18 +6825,7 @@ fn tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
 fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
         ("proofstorm_workspace_read", &[Capability::LabRead]),
-        (
-            "proofstorm_component_restart",
-            &[Capability::ComponentControl],
-        ),
-        (
-            "proofstorm_component_exec_live",
-            &[Capability::ComponentExecLive],
-        ),
-        (
-            "proofstorm_component_forensics",
-            &[Capability::ComponentForensics],
-        ),
+        ("proofstorm_catalog_list", &[Capability::CatalogRead]),
         ("proofstorm_catalog_entry_read", &[Capability::CatalogRead]),
         (
             "proofstorm_catalog_config_schema_read",
@@ -7248,7 +6908,18 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_node_start", &[Capability::NodeControl]),
         ("proofstorm_node_stop", &[Capability::NodeControl]),
         ("proofstorm_node_restart", &[Capability::NodeControl]),
-        ("proofstorm_component_exec", &[Capability::ComponentExec]),
+        (
+            "proofstorm_component_restart",
+            &[Capability::ComponentControl],
+        ),
+        (
+            "proofstorm_component_exec_live",
+            &[Capability::ComponentExecLive],
+        ),
+        (
+            "proofstorm_component_forensics",
+            &[Capability::ComponentForensics],
+        ),
         (
             "proofstorm_lab_recipe_bootstrap",
             &[
@@ -7346,6 +7017,10 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ),
         (
             "proofstorm_wallet_quote_claim",
+            &[Capability::WalletControl],
+        ),
+        (
+            "proofstorm_wallet_melt_quote_refresh",
             &[Capability::WalletControl],
         ),
         (
@@ -7851,20 +7526,6 @@ const fn component_kind_name(kind: ComponentKind) -> &'static str {
         ComponentKind::Oracle => "oracle",
     }
 }
-fn validate_quote_id(quote_id: &str) -> Result<(), ErrorData> {
-    if quote_id.is_empty()
-        || quote_id.len() > 256
-        || quote_id
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(invalid_operation(
-            "melt_quote_id must be a non-empty opaque identifier of at most 256 bytes without whitespace",
-        ));
-    }
-    Ok(())
-}
-
 
 fn revision_integrity_error(component_id: &str) -> ErrorData {
     ErrorData::internal_error(
@@ -8190,6 +7851,20 @@ fn validate_channel_id(channel_id: &str) -> Result<(), ErrorData> {
     Ok(())
 }
 
+fn validate_quote_id(quote_id: &str) -> Result<(), ErrorData> {
+    if quote_id.is_empty()
+        || quote_id.len() > 256
+        || quote_id
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(invalid_operation(
+            "melt_quote_id must be a non-empty opaque identifier of at most 256 bytes without whitespace",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_rebalance_bounds(request: &ChannelRebalanceRequest) -> Result<(), ErrorData> {
     if request.outgoing_channel_id == request.incoming_channel_id {
         return Err(invalid_operation(
@@ -8317,7 +7992,7 @@ fn conservation_observation(
     }))
 }
 
-            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and lease, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Prefer typed channel_policy_set for routing policies; reserve live native CLI execution for behavior without a typed control.",
+struct ConservationTreatmentEvidence {
     actual_sat: u64,
     melt_state: String,
     amount_sat: u64,
@@ -8559,7 +8234,7 @@ fn status_page_start<T>(
     items: &[T],
     cursor_for: impl Fn(&T) -> String,
 ) -> Result<usize, ErrorData> {
-            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and lease, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Prefer typed channel_policy_set for routing policies; reserve live native CLI execution for behavior without a typed control.",
+    let Some(cursor) = cursor else {
         return Ok(0);
     };
     items
@@ -8642,7 +8317,7 @@ fn compact_lab_wait(
 const fn runtime_guidance(phase: InstancePhase) -> Option<&'static str> {
     match phase {
         InstancePhase::Ready => Some(
-            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and lease, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Set routing policies with channel_policy_set, not component_exec.",
+            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and lease, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Prefer typed channel_policy_set for routing policies; reserve live native CLI execution for behavior without a typed control.",
         ),
         _ => None,
     }
@@ -8954,33 +8629,6 @@ impl KubernetesRuntime {
             || action.spec.principal_id != operation.principal_id
             || action.spec.request_digest != operation.request_digest
         {
-    #[test]
-    fn persisted_lab_output_round_trips_back_into_validation() {
-        let request = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
-            "lab": {
-                "api_version": API_VERSION,
-                "name": "canonical-round-trip",
-                "components": [],
-                "links": [{
-                    "id": "backend",
-                    "kind": "chain_backend",
-                    "from": "lightning",
-                    "to": "chain",
-                    "binding": {"type": "chain", "network": "regtest"}
-                }],
-                "policy": {}
-            }
-        }))
-        .expect("persisted canonical lab output must remain valid MCP input");
-        assert!(matches!(
-            request.lab.links.as_slice(),
-            [AddLinkInput::ChainBackend {
-                network: BitcoinNetwork::Regtest,
-                ..
-            }]
-        ));
-    }
-
             return Err(coded_invalid_request(
                 "action_identity_conflict",
                 "action cancellation identity does not match the journal",
@@ -9223,33 +8871,6 @@ mod tests {
         };
         let lab = proofstorm_core::resolve_effective_lab(&authored, catalog)
             .expect("effective component fixture");
-    #[test]
-    fn persisted_lab_output_round_trips_back_into_validation() {
-        let request = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
-            "lab": {
-                "api_version": API_VERSION,
-                "name": "canonical-round-trip",
-                "components": [],
-                "links": [{
-                    "id": "backend",
-                    "kind": "chain_backend",
-                    "from": "lightning",
-                    "to": "chain",
-                    "binding": {"type": "chain", "network": "regtest"}
-                }],
-                "policy": {}
-            }
-        }))
-        .expect("persisted canonical lab output must remain valid MCP input");
-        assert!(matches!(
-            request.lab.links.as_slice(),
-            [AddLinkInput::ChainBackend {
-                network: BitcoinNetwork::Regtest,
-                ..
-            }]
-        ));
-    }
-
         let lock = proofstorm_core::resolve_lock(&lab, catalog).expect("locked component fixture");
         PublishedRevision {
             workspace_id: "alpha".into(),
@@ -9648,10 +9269,7 @@ mod tests {
                     config: BTreeMap::new(),
                 },
                 LabPlanComponentInput {
-        assert!(
-            error.to_string().contains("network"),
-            "unexpected diagnostic: {error}"
-        );
+                    id: "backend".into(),
                     implementation: "lnd".into(),
                     version: None,
                     control: None,
@@ -9920,10 +9538,7 @@ mod tests {
     }
 
     #[test]
-        assert!(
-            error.to_string().contains("network"),
-            "unexpected diagnostic: {error}"
-        );
+    fn recipe_fee_matrix_derives_bounded_kebab_case_child_operation_ids() {
         let request = LabRecipeFeeMatrixRequest {
             instance_id: "instance-with-a-long-but-valid-identifier-01234567890123456789".into(),
             experiment_id: "experiment-with-a-long-but-valid-identifier-012345678901234567".into(),
@@ -10410,7 +10025,7 @@ mod tests {
             panic!("authentication conformance must require its own capability");
         };
         assert_eq!(denied.data.expect("denial data")["code"], "access_denied");
-        assert_eq!(service.tool_names().len(), 76);
+        assert!(
             !unauthorized
                 .tool_names()
                 .contains(&"proofstorm_authentication_conformance".to_owned())
@@ -10429,17 +10044,6 @@ mod tests {
         store
             .grant("alpha", "designer", Capability::AuthenticationTest)
             .expect("grant authentication.test");
-        for required in [
-            "proofstorm_component_restart",
-            "proofstorm_component_exec_live",
-            "proofstorm_component_forensics",
-            "proofstorm_wallet_melt_quote_refresh",
-        ] {
-            assert!(
-                service.tool_names().contains(&required.to_owned()),
-                "{required} must be discoverable with its explicit capability"
-            );
-        }
         let authorized =
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("authorized session");
         assert!(
@@ -10447,14 +10051,14 @@ mod tests {
                 .tool_names()
                 .contains(&"proofstorm_authentication_conformance".to_owned())
         );
-            encoded.len() < 240 * 1024,
+        assert!(
             authorized
                 .tool_names()
                 .contains(&"proofstorm_authentication_protected_spend".to_owned())
         );
-            (ProofstormToolset::Experiment, 145 * 1024),
+        assert!(
             !authorized
-            (ProofstormToolset::Runtime, 200 * 1024),
+                .tool_names()
                 .contains(&"proofstorm_authentication_replay".to_owned())
         );
         store
@@ -10473,7 +10077,7 @@ mod tests {
     fn draft_mutations_return_compact_receipts() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
         let receipt = service
-                .contains(&"proofstorm_component_exec_live".to_owned())
+            .proofstorm_lab_create(Parameters(CreateDraftRequest {
                 draft_id: "compact-draft".into(),
                 lab: authored_lab("compact-draft"),
                 idempotency_key: "create-compact-draft".into(),
@@ -10492,10 +10096,7 @@ mod tests {
         assert!(receipt.valid);
         assert!(receipt.warnings[0].starts_with("empty_topology:"));
         assert_eq!(receipt.changed_paths, ["/"]);
-            "proofstorm_component_restart",
-            "proofstorm_component_exec_live",
         let encoded = serde_json::to_string(&receipt).expect("serialize receipt");
-            "proofstorm_wallet_melt_quote_refresh",
         assert!(!encoded.contains("api_version"));
         assert!(serialized_size(&receipt).expect("receipt size") < 1024);
 
@@ -10584,42 +10185,24 @@ mod tests {
             ],
             "links": [{"id":"pay","kind":"payment_backend","from":"mint","to":"backend-lnd","binding":{"type":"payment","method":"bolt11","unit":"sat"}}],
             "policy": {}
-    fn component_execution_modes_are_hidden_without_their_distinct_capabilities() {
+        }))
         .expect("typed lab");
 
         let error = validate_wallet_fund_payer(&authored, "mint", "backend-lnd")
             .expect_err("a backend cannot pay its own invoice");
         let data = error.data.expect("structured admission error");
         assert_eq!(data["code"], "self_payment_unsupported");
-                .contains(&"proofstorm_component_exec_live".to_owned())
-        );
-        assert!(
-            !restricted
-                .tool_names()
-                .contains(&"proofstorm_component_forensics".to_owned())
+        assert!(error.message.contains("router-lnd"));
         validate_wallet_fund_payer(&authored, "mint", "router-lnd")
             .expect("a distinct LND payer is accepted");
     }
-            .grant("alpha", "designer", Capability::ComponentExecLive)
-            .expect("live exec grant");
-        let live = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("live session");
-        clippy::too_many_lines,
-            live.tool_names()
-                .contains(&"proofstorm_component_exec_live".to_owned())
-        );
-        assert!(
-            !live
-    )]
-                .contains(&"proofstorm_component_forensics".to_owned())
-        );
 
-        store
-            .grant("alpha", "designer", Capability::ComponentForensics)
-            .expect("forensics grant");
-        let both = ProofstormMcp::new(store, "alpha", "designer").expect("execution session");
-        assert!(
-            both.tool_names()
-                .contains(&"proofstorm_component_forensics".to_owned())
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one table-style contract test keeps every valid and rejected conservation provenance case together"
+    )]
+    fn conservation_expectation_is_anchored_before_a_later_treatment() {
         let operation = |id: &str,
                          sequence: u64,
                          kind: OperationKind,
@@ -10740,14 +10323,14 @@ mod tests {
         assert_eq!(evidence["expected_sat"], 18_996);
         assert_eq!(evidence["actual_sat"], 18_996);
         assert_eq!(evidence["conserved"], true);
-            encoded.len() < 240 * 1024,
+
         let mut incomplete = paid;
         incomplete
             .artifact
             .as_mut()
-            (ProofstormToolset::Experiment, 145 * 1024),
+            .expect("incomplete artifact")
             .content
-            (ProofstormToolset::Runtime, 200 * 1024),
+            .as_object_mut()
             .expect("artifact object")
             .remove("input_fee_sat");
         let error = conservation_observation(&request, &baseline, &incomplete, "alpha", "designer")
@@ -10766,7 +10349,7 @@ mod tests {
             "components": [
                 {"id":"mint-a","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
                 {"id":"mint-b","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                .contains(&"proofstorm_component_exec_live".to_owned())
+                {"id":"backend-a","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
                 {"id":"backend-b","kind":"lightning","implementation":"cln","version":"26.06","config_version":"cln/26.06/v1","control":"laboratory","config":{}},
                 {"id":"router","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}}
             ],
@@ -10785,8 +10368,6 @@ mod tests {
                 .iter()
                 .any(|warning| warning.starts_with("direct_mint_backend_peer:"))
         );
-            "proofstorm_component_restart",
-            "proofstorm_component_exec_live",
     }
 
     #[test]
@@ -10829,7 +10410,7 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 73);
+        assert_eq!(service.tool_names().len(), 76);
         assert!(
             !service
                 .tool_names()
@@ -10848,6 +10429,17 @@ mod tests {
                 .contains(&"proofstorm_component_logs".to_owned()),
             "reading a component log is a first-class runtime observation"
         );
+        for required in [
+            "proofstorm_component_restart",
+            "proofstorm_component_exec_live",
+            "proofstorm_component_forensics",
+            "proofstorm_wallet_melt_quote_refresh",
+        ] {
+            assert!(
+                service.tool_names().contains(&required.to_owned()),
+                "{required} must be discoverable with its explicit capability"
+            );
+        }
         assert!(
             service
                 .tool_names()
@@ -10855,14 +10447,14 @@ mod tests {
             "routing policy is a first-class typed runtime operation"
         );
         assert!(
-            encoded.len() < 218 * 1024,
+            encoded.len() < 240 * 1024,
             "fully authorized tool discovery is {} bytes",
             encoded.len()
         );
         for (toolset, maximum) in [
-            (ProofstormToolset::Experiment, 125 * 1024),
+            (ProofstormToolset::Experiment, 145 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 180 * 1024),
+            (ProofstormToolset::Runtime, 200 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);
@@ -10876,49 +10468,34 @@ mod tests {
             );
             assert!(size < maximum, "{toolset:?} discovery is {size} bytes");
             assert!(tools.contains(&"proofstorm_catalog_list".to_owned()));
-    fn component_execution_modes_are_hidden_without_their_distinct_capabilities() {
+        }
         let design = service.clone().with_toolset(ProofstormToolset::Design);
         assert!(
             !design
                 .tool_names()
-                .contains(&"proofstorm_component_exec".to_owned())
-        );
                 .contains(&"proofstorm_component_exec_live".to_owned())
         );
-        assert!(
-            !restricted
-                .tool_names()
-                .contains(&"proofstorm_component_forensics".to_owned())
+        let evidence = service.with_toolset(ProofstormToolset::Evidence);
         assert!(
             !evidence
                 .tool_names()
-            .grant("alpha", "designer", Capability::ComponentExecLive)
-            .expect("live exec grant");
-        let live = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("live session");
-
-            live.tool_names()
-                .contains(&"proofstorm_component_exec_live".to_owned())
+                .contains(&"proofstorm_wallet_pay".to_owned())
         );
-        assert!(
-            !live
+    }
+
+    #[test]
     fn experiment_toolset_is_generic_and_one_session_capable() {
-                .contains(&"proofstorm_component_forensics".to_owned())
-        );
-
-        store
-            .grant("alpha", "designer", Capability::ComponentForensics)
-            .expect("forensics grant");
-        let both = ProofstormMcp::new(store, "alpha", "designer").expect("execution session");
-        assert!(
-            both.tool_names()
-                .contains(&"proofstorm_component_forensics".to_owned())
+        for required in [
             "proofstorm_catalog_list",
             "proofstorm_lab_plan",
             "proofstorm_lab_apply",
             "proofstorm_liquidity_bootstrap",
             "proofstorm_channel_open",
             "proofstorm_channel_policy_set",
+            "proofstorm_component_restart",
+            "proofstorm_component_exec_live",
             "proofstorm_wallet_pay",
+            "proofstorm_wallet_melt_quote_refresh",
             "proofstorm_network_partition",
             "proofstorm_authentication_replay",
             "proofstorm_operation_wait_many",
@@ -11007,24 +10584,42 @@ mod tests {
     }
 
     #[test]
-    fn native_exec_is_hidden_without_its_distinct_capability() {
+    fn component_execution_modes_are_hidden_without_their_distinct_capabilities() {
         let store = seeded_store();
         let restricted =
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("restricted session");
         assert!(
             !restricted
                 .tool_names()
-                .contains(&"proofstorm_component_exec".to_owned())
+                .contains(&"proofstorm_component_exec_live".to_owned())
+        );
+        assert!(
+            !restricted
+                .tool_names()
+                .contains(&"proofstorm_component_forensics".to_owned())
         );
 
         store
-            .grant("alpha", "designer", Capability::ComponentExec)
-            .expect("exec grant");
-        let authorized = ProofstormMcp::new(store, "alpha", "designer").expect("exec session");
+            .grant("alpha", "designer", Capability::ComponentExecLive)
+            .expect("live exec grant");
+        let live = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("live session");
         assert!(
-            authorized
+            live.tool_names()
+                .contains(&"proofstorm_component_exec_live".to_owned())
+        );
+        assert!(
+            !live
                 .tool_names()
-                .contains(&"proofstorm_component_exec".to_owned())
+                .contains(&"proofstorm_component_forensics".to_owned())
+        );
+
+        store
+            .grant("alpha", "designer", Capability::ComponentForensics)
+            .expect("forensics grant");
+        let both = ProofstormMcp::new(store, "alpha", "designer").expect("execution session");
+        assert!(
+            both.tool_names()
+                .contains(&"proofstorm_component_forensics".to_owned())
         );
     }
 

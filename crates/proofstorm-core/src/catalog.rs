@@ -981,24 +981,6 @@ fn runtime_endpoint(
             .map(str::to_owned),
         );
     }
-    let mut controls = controls
-        .iter()
-        .map(|control| (*control).to_owned())
-        controls,
-    // These controls operate against the primary workload itself and are
-    // intentionally implementation-agnostic. New component implementations
-    // inherit them without growing a new MCP surface.
-    if id == "component" {
-        controls.extend(
-            [
-                "component_exec_live",
-                "component_forensics",
-                "component_restart",
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        );
-    }
     CatalogRuntimeEndpoint {
         id: id.into(),
         kind: kind.into(),
@@ -1011,9 +993,7 @@ fn runtime_endpoint(
 }
 
 /// Installed driver registry. Protocol support and runtime controllability are
-            &[
-                "live bitcoin-cli requires -regtest -rpcconnect=127.0.0.1 -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only",
-            ],
+/// deliberately separate: an image can implement Lightning while its current
 /// Proofstorm driver does not yet expose peer/channel controls.
 #[allow(
     clippy::too_many_lines,
@@ -1028,7 +1008,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
             &[
                 "chain_mine",
                 "component_logs",
-            &["live lncli uses --network=regtest --lnddir=/home/lnd/.lnd"],
+                "node_restart",
                 "reachability_oracle",
             ],
             &[
@@ -1041,10 +1021,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
             &[
                 "channel_open",
                 "channel_policy_set",
-            &[
-                "liquidity_bootstrap and wallet_fund currently require an LND endpoint",
-                "live lightning-cli uses --network=regtest --lightning-dir=/home/cln/.lightning",
-            ],
+                "component_logs",
                 "liquidity_bootstrap",
                 "node_restart",
                 "peer_connect",
@@ -1106,12 +1083,9 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "lightning",
                 &[],
                 &[
-                "wallet_melt_quote_refresh",
                     "the embedded LDK backend supports payments but its installed driver does not yet expose peer or channel controls",
                 ],
-            &[
-                "live Nutshell CLI entrypoint is HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -- --help; prefer typed wallet controls when available",
-            ],
+            ),
         ],
         "cdk-bdk" => vec![
             runtime_endpoint("component", "mint", OBSERVE, &[]),
@@ -1132,6 +1106,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "wallet_fund",
                 "wallet_initialize",
                 "wallet_invoice",
+                "wallet_melt_quote_refresh",
                 "wallet_pay",
             ],
             &[

@@ -204,11 +204,8 @@ BEFORE_NAMESPACES="$RUN_ROOT/namespaces-before.json"
 AFTER_NAMESPACES="$RUN_ROOT/namespaces-after.json"
 "$KUBECTL" --context k3d-proofstorm get namespaces \
   -l proofstorm.dev/instance -o json >"$BEFORE_NAMESPACES"
-if [[ "$(jq '.items | length' "$BEFORE_NAMESPACES")" != "0" ]]; then
-  printf '%s\n' "cluster has existing Proofstorm instances; refusing an ambiguous benchmark" >&2
-  jq -r '.items[].metadata.name' "$BEFORE_NAMESPACES" >&2
-  exit 1
-fi
+# Existing user labs are out of scope. Snapshot them so teardown grading only
+# considers namespaces created by this benchmark run.
 
 DATABASE="$RUN_ROOT/proofstorm.sqlite3"
 CONFIG="$RUN_ROOT/opencode.json"
@@ -364,9 +361,10 @@ jq -s \
   --argjson export_exit "$EXPORT_STATUS" \
   --argjson kubectl_exit "$KUBECTL_STATUS" \
   --arg limit_reason "$LIMIT_REASON" \
+  --slurpfile namespaces_before "$BEFORE_NAMESPACES" \
   --slurpfile namespaces "$AFTER_NAMESPACES" \
-  'def tool_events: [.[] | select(.type == "tool_use")];
-   def step_events: [.[] | select(.type == "step_finish")];
+  'def tool_events: [.[] | select(type == "object" and .type == "tool_use")];
+   def step_events: [.[] | select(type == "object" and .type == "step_finish")];
    def parsed_outputs:
      [tool_events[]
       | (.part.state.output? // empty)
@@ -464,14 +462,19 @@ jq -s \
          + completed_tool_count("proofstorm_proofstorm_lab_apply")
        ),
        whole_document_edits: tool_count("proofstorm_proofstorm_lab_edit"),
-       raw_exec_calls: tool_count("proofstorm_proofstorm_component_exec"),
+       raw_exec_calls: (
+         tool_count("proofstorm_proofstorm_component_exec_live")
+         + tool_count("proofstorm_proofstorm_component_forensics")
+       ),
+       live_exec_calls: tool_count("proofstorm_proofstorm_component_exec_live"),
+       forensics_calls: tool_count("proofstorm_proofstorm_component_forensics"),
        evidence_exports: completed_tool_count("proofstorm_proofstorm_artifact_export"),
        operation_failures:
          (terminal_outputs | map(select(.terminal? == true and .phase? == "failed")) | length),
        native_exec_nonzero_exits:
          (terminal_outputs
           | map(select(
-              .kind? == "native_exec"
+              (.kind? == "component_forensics" or .kind? == "component_exec_live")
               and (.artifact?.content?.exit_code? // 0) != 0
             ))
           | length),
@@ -499,7 +502,10 @@ jq -s \
           | max // 0)
      },
      remaining_instance_namespaces:
-       (if $kubectl_exit == 0 then ($namespaces[0].items | map(.metadata.name)) else null end)
+       (if $kubectl_exit == 0 then
+          (($namespaces[0].items | map(.metadata.name))
+           - ($namespaces_before[0].items | map(.metadata.name)))
+        else null end)
    }' "$EVENTS" >"$METRICS"
 
 jq -n \
