@@ -49,8 +49,10 @@ make down
 
 The MCP configuration is operator-owned. Its principal and capability set are
 not agent inputs, and the agent never receives kubeconfig. A principal granted
-`component.exec` can inspect component-local credentials from inside that lab,
-so that capability must be treated as secret-bearing authority.
+`component.exec_live` or `component.forensics` can inspect component-local
+credentials, so both capabilities must be treated as secret-bearing authority.
+Live execution additionally shares the running component's process, network,
+user, localhost, and Unix-socket context.
 `authentication.test` is narrower: it permits a fixed controller-rendered
 authentication conformance action to consume disposable test-user credentials
 inside the lab, while MCP returns only its typed, secret-free result.
@@ -155,31 +157,18 @@ make e2e-slice5
 make down
 ```
 
-Proofstorm also exposes `proofstorm_component_exec` under the separate,
-high-authority `component.exec` capability. It runs an unrestricted
-non-interactive shell program in the selected component's exact digest-pinned
-image with its canonical lab-local state mounted. The program runs in a fresh
-short-lived Pod rather than inside the component's running container, so it
-shares the component's image and data but not its process space: `localhost` is
-not the component, and tools like `ps` cannot see the component's processes.
-Reach the component over the network using the injected endpoint variables. A
-component that is not ready has no Service endpoints, and connections to it are
-refused immediately rather than timing out, so the exec artifact reports the
-target's ready endpoint count to keep that case distinguishable from a missing
-listener or a blocked network policy. `component` selects that
-execution context; optional `target_component` selects which lab component's
-service metadata is exposed and defaults to the execution component. This lets
-one pinned Bitcoin CLI deliberately query any Bitcoin node in a multi-node lab.
-The command receives generic `PROOFSTORM_TARGET_*` identity, DNS, and named-port
-metadata plus implementation-native endpoint variables such as
-`BITCOIN_RPC_HOST` and `BITCOIN_RPC_PORT`; Proofstorm never parses or replaces
-the native command. Proofstorm still owns the
-namespace, image, volumes, pod identity, network policy, deadline, and output
-limit; the workload receives no Kubernetes service-account token, host mount,
-or cross-lab credential. The terminal artifact records the native exit code and
-up to 20 KiB of combined output. Use typed actions for portable orchestration
-and native exec when protocol fidelity or implementation-specific attack
-surfaces matter.
+Proofstorm exposes two deliberately different native shell primitives.
+`proofstorm_component_exec_live` (`component.exec_live`) runs inside the
+selected running container, so native CLIs see the component's real localhost,
+Unix sockets, files, credentials, user, and network identity. It is bounded,
+fully journaled, and fail-closed against replay after controller interruption.
+`proofstorm_component_forensics` (`component.forensics`) instead creates a
+short-lived pod from the locked image and data mounts. It is useful for offline
+source/database inspection, but explicitly does not promise live CLI or socket
+connectivity. Both record bounded output and an exit code; prefer typed actions
+for portable orchestration. `proofstorm_component_restart`
+(`component.control`) rolls any primary component workload, including mints and
+wallets, while preserving its persistent state.
 
 Run the live native-protocol acceptance gate with:
 

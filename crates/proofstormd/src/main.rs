@@ -18,7 +18,9 @@ use k8s_openapi::api::{
 };
 use kube::{
     Api, Client, ResourceExt,
-    api::{DeleteParams, ListParams, LogParams, Patch, PatchParams, PropagationPolicy},
+    api::{
+        AttachParams, DeleteParams, ListParams, LogParams, Patch, PatchParams, PropagationPolicy,
+    },
     runtime::{
         Controller,
         controller::Action,
@@ -26,6 +28,7 @@ use kube::{
         watcher,
     },
 };
+use proofstorm_core::WorkloadControllerKind;
 use proofstorm_core::{BackendContractRegistry, default_backend_registry};
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
@@ -42,6 +45,7 @@ use proofstorm_kube::{
     schedule_protocol_probers,
 };
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 const FINALIZER: &str = "proofstorm.dev/lab-cleanup";
 const FIELD_MANAGER: &str = "proofstormd";
@@ -81,6 +85,8 @@ enum Error {
         actual: usize,
         maximum: usize,
     },
+    #[error("live component execution failed: {0}")]
+    LiveExec(String),
 }
 
 #[tokio::main]
@@ -162,6 +168,9 @@ async fn reconcile_action(
     ) {
         return reconcile_node_lifecycle(action.as_ref(), &lab, &context).await;
     }
+    if matches!(action.spec.action, LabAction::ComponentRestart(_)) {
+        return reconcile_component_restart(action.as_ref(), &lab, &context).await;
+    }
     if matches!(
         action.spec.action,
         LabAction::NetworkPartition(_) | LabAction::NetworkHeal(_)
@@ -170,6 +179,9 @@ async fn reconcile_action(
     }
     if matches!(action.spec.action, LabAction::ComponentLogs(_)) {
         return reconcile_component_logs(action.as_ref(), &lab, &context).await;
+    }
+    if matches!(action.spec.action, LabAction::ComponentExecLive(_)) {
+        return reconcile_component_exec_live(action.as_ref(), &lab, &context).await;
     }
     let job = match render_lab_action_job(action.as_ref(), &lab) {
         Ok(job) => job,
@@ -274,7 +286,7 @@ async fn reconcile_action(
             ..ProofstormLabActionStatus::default()
         }
     } else {
-        let artifact = if matches!(action.spec.action, LabAction::NativeExec(_)) {
+        let artifact = if matches!(action.spec.action, LabAction::ComponentForensics(_)) {
             let endpoint_slices =
                 Api::<EndpointSlice>::namespaced(context.client.clone(), &instance_namespace);
             native_exec_artifact(&pod_api, &endpoint_slices, action.as_ref(), &pods.items).await?
@@ -651,6 +663,449 @@ async fn reconcile_node_lifecycle(
     Ok(Action::await_change())
 }
 
+/// Restart any component workload without assuming that it is a logical node
+/// or that its controller is a `StatefulSet`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the deployment and stateful rollout fences remain explicit and locally auditable"
+)]
+async fn reconcile_component_restart(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    context: &Context,
+) -> Result<Action, Error> {
+    if action.spec.capability != proofstorm_core::Capability::ComponentControl {
+        return patch_invalid_action(
+            action,
+            context,
+            "component restart requires component.control",
+        )
+        .await;
+    }
+    let LabAction::ComponentRestart(request) = &action.spec.action else {
+        return Err(Error::ControllerInvariant(
+            "expected component restart action",
+        ));
+    };
+    let plans = compile_component_plans(
+        &lab.spec.instance_key,
+        &lab.spec.revision_digest,
+        &lab.spec.lab,
+        &lab.spec.lock,
+    )?;
+    let Some(component) = plans
+        .iter()
+        .find(|plan| plan.component_id == request.component)
+    else {
+        return patch_invalid_action(action, context, "component is not in the immutable lab")
+            .await;
+    };
+    if action.status.is_none() {
+        patch_action_status(
+            action,
+            context,
+            ProofstormLabActionStatus {
+                phase: ActionPhase::Running,
+                observed_generation: action.metadata.generation,
+                started_at_unix: Some(now_unix()),
+                ..ProofstormLabActionStatus::default()
+            },
+        )
+        .await?;
+        return Ok(Action::requeue(Duration::from_secs(1)));
+    }
+
+    let namespace = instance_namespace(&action.spec.instance_key);
+    let restart_token = format!("{}-{}", action.spec.sequence, action.spec.operation_id);
+    let patch = serde_json::json!({
+        "spec": {"template": {"metadata": {"annotations": {
+            LIFECYCLE_RESTART_ANNOTATION: restart_token,
+        }}}}
+    });
+    let complete = match component.workload.kind {
+        WorkloadControllerKind::StatefulSet => {
+            let workloads = Api::<StatefulSet>::namespaced(context.client.clone(), &namespace);
+            let Some(workload) = workloads.get_opt(&component.workload.name).await? else {
+                return Ok(Action::requeue(Duration::from_secs(1)));
+            };
+            if !stateful_set_matches_plan(&workload, component) {
+                return patch_action_failure(
+                    action,
+                    context,
+                    "stale_component_plan",
+                    "component workload does not match the accepted plan",
+                )
+                .await;
+            }
+            let current_restart = workload
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.template.metadata.as_ref())
+                .and_then(|metadata| metadata.annotations.as_ref())
+                .and_then(|annotations| annotations.get(LIFECYCLE_RESTART_ANNOTATION));
+            if current_restart != Some(&restart_token) {
+                workloads
+                    .patch(
+                        &component.workload.name,
+                        &PatchParams::default(),
+                        &Patch::Merge(&patch),
+                    )
+                    .await?;
+                return Ok(Action::requeue(Duration::from_secs(1)));
+            }
+            let status = workload.status.as_ref();
+            status
+                .and_then(|status| status.observed_generation)
+                .zip(workload.metadata.generation)
+                .is_some_and(|(observed, desired)| observed >= desired)
+                && status
+                    .and_then(|status| status.ready_replicas)
+                    .unwrap_or_default()
+                    >= i32::from(component.workload.desired_replicas)
+                && status.and_then(|status| status.current_revision.as_ref())
+                    == status.and_then(|status| status.update_revision.as_ref())
+        }
+        WorkloadControllerKind::Deployment => {
+            let workloads = Api::<Deployment>::namespaced(context.client.clone(), &namespace);
+            let Some(workload) = workloads.get_opt(&component.workload.name).await? else {
+                return Ok(Action::requeue(Duration::from_secs(1)));
+            };
+            if !deployment_matches_plan(&workload, component) {
+                return patch_action_failure(
+                    action,
+                    context,
+                    "stale_component_plan",
+                    "component workload does not match the accepted plan",
+                )
+                .await;
+            }
+            let current_restart = workload
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.template.metadata.as_ref())
+                .and_then(|metadata| metadata.annotations.as_ref())
+                .and_then(|annotations| annotations.get(LIFECYCLE_RESTART_ANNOTATION));
+            if current_restart != Some(&restart_token) {
+                workloads
+                    .patch(
+                        &component.workload.name,
+                        &PatchParams::default(),
+                        &Patch::Merge(&patch),
+                    )
+                    .await?;
+                return Ok(Action::requeue(Duration::from_secs(1)));
+            }
+            let status = workload.status.as_ref();
+            status
+                .and_then(|status| status.observed_generation)
+                .zip(workload.metadata.generation)
+                .is_some_and(|(observed, desired)| observed >= desired)
+                && status
+                    .and_then(|status| status.ready_replicas)
+                    .unwrap_or_default()
+                    >= i32::from(component.workload.desired_replicas)
+                && status
+                    .and_then(|status| status.updated_replicas)
+                    .unwrap_or_default()
+                    >= i32::from(component.workload.desired_replicas)
+                && status
+                    .and_then(|status| status.unavailable_replicas)
+                    .unwrap_or_default()
+                    == 0
+        }
+    };
+    if !complete {
+        return Ok(Action::requeue(Duration::from_secs(1)));
+    }
+    patch_action_status(
+        action,
+        context,
+        ProofstormLabActionStatus {
+            phase: ActionPhase::Succeeded,
+            observed_generation: action.metadata.generation,
+            started_at_unix: action
+                .status
+                .as_ref()
+                .and_then(|status| status.started_at_unix),
+            completed_at_unix: Some(now_unix()),
+            artifact: Some(status_object(serde_json::json!({
+                "component": request.component,
+                "kind": component.kind,
+                "workload_kind": component.workload.kind,
+                "restarted": true,
+                "sequence": action.spec.sequence,
+            }))),
+            ..ProofstormLabActionStatus::default()
+        },
+    )
+    .await?;
+    Ok(Action::await_change())
+}
+
+const LIVE_EXEC_OUTPUT_LIMIT: usize = 20 * 1024;
+const LIVE_EXEC_AUTHORIZED_MARKER: &str = "live-exec-authorized";
+const LIVE_EXEC_STARTED_MARKER: &str = "live-exec-started";
+
+/// Execute once inside the actual component container. The two-phase status marker is
+/// deliberately fail-closed: after the controller records that execution started, a
+/// later reconciliation will never replay an arbitrary command after a controller crash.
+#[allow(
+    clippy::too_many_lines,
+    clippy::single_match_else,
+    reason = "authorization, replay fencing, execution, and terminal journaling stay visibly contiguous"
+)]
+async fn reconcile_component_exec_live(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    context: &Context,
+) -> Result<Action, Error> {
+    if action.spec.capability != proofstorm_core::Capability::ComponentExecLive {
+        return patch_invalid_action(
+            action,
+            context,
+            "live component execution requires component.exec_live",
+        )
+        .await;
+    }
+    let LabAction::ComponentExecLive(request) = &action.spec.action else {
+        return Err(Error::ControllerInvariant(
+            "expected live component execution action",
+        ));
+    };
+    let plans = compile_component_plans(
+        &lab.spec.instance_key,
+        &lab.spec.revision_digest,
+        &lab.spec.lab,
+        &lab.spec.lock,
+    )?;
+    let Some(component) = plans
+        .iter()
+        .find(|plan| plan.component_id == request.component)
+    else {
+        return patch_invalid_action(action, context, "component is not in the immutable lab")
+            .await;
+    };
+
+    match action
+        .status
+        .as_ref()
+        .and_then(|status| status.job_name.as_deref())
+    {
+        None => {
+            patch_action_status(
+                action,
+                context,
+                ProofstormLabActionStatus {
+                    phase: ActionPhase::Running,
+                    observed_generation: action.metadata.generation,
+                    job_name: Some(LIVE_EXEC_AUTHORIZED_MARKER.to_owned()),
+                    started_at_unix: Some(now_unix()),
+                    ..ProofstormLabActionStatus::default()
+                },
+            )
+            .await?;
+            return Ok(Action::requeue(Duration::from_millis(250)));
+        }
+        Some(LIVE_EXEC_STARTED_MARKER) => {
+            let started = action
+                .status
+                .as_ref()
+                .and_then(|status| status.started_at_unix)
+                .unwrap_or_else(now_unix);
+            let replay_fence_deadline = started
+                .saturating_add(i64::from(request.timeout_seconds))
+                .saturating_add(10);
+            if now_unix() <= replay_fence_deadline {
+                // A status update can enqueue another reconciliation while the
+                // original WebSocket command is still draining. Wait for that
+                // execution to journal its terminal result; never replay it.
+                return Ok(Action::requeue(Duration::from_secs(1)));
+            }
+            return patch_action_failure(
+                action,
+                context,
+                "live_exec_interrupted",
+                "live execution did not journal a result before its timeout; the command was not replayed",
+            )
+            .await;
+        }
+        Some(LIVE_EXEC_AUTHORIZED_MARKER) => {}
+        Some(_) => {
+            return patch_invalid_action(action, context, "invalid live execution journal marker")
+                .await;
+        }
+    }
+
+    patch_action_status(
+        action,
+        context,
+        ProofstormLabActionStatus {
+            phase: ActionPhase::Running,
+            observed_generation: action.metadata.generation,
+            job_name: Some(LIVE_EXEC_STARTED_MARKER.to_owned()),
+            started_at_unix: action
+                .status
+                .as_ref()
+                .and_then(|status| status.started_at_unix),
+            ..ProofstormLabActionStatus::default()
+        },
+    )
+    .await?;
+
+    let namespace = instance_namespace(&action.spec.instance_key);
+    let pods = Api::<Pod>::namespaced(context.client.clone(), &namespace);
+    let selector = format!(
+        "{COMPONENT_LABEL}={},{INSTANCE_LABEL}={}",
+        request.component, action.spec.instance_key
+    );
+    let mut candidates = pods
+        .list(&ListParams::default().labels(&selector))
+        .await?
+        .items;
+    candidates.retain(|pod| {
+        pod.status
+            .as_ref()
+            .and_then(|status| status.phase.as_deref())
+            == Some("Running")
+            && pod.metadata.deletion_timestamp.is_none()
+    });
+    candidates.sort_by_key(|pod| pod.metadata.creation_timestamp.clone());
+    let Some(pod) = candidates.pop() else {
+        return patch_action_failure(
+            action,
+            context,
+            "component_pod_not_ready",
+            "no running component pod was available; the command was not executed",
+        )
+        .await;
+    };
+    let pod_name = pod.name_any();
+    let container = pod
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.containers.first())
+        .map(|container| container.name.clone())
+        .ok_or_else(|| Error::LiveExec("component pod has no primary container".to_owned()))?;
+    let attach = AttachParams::default()
+        .container(container.clone())
+        .stdout(true)
+        .stderr(true);
+    let command = vec!["/bin/sh", "-c", request.script.as_str()];
+    let execution = async {
+        let mut process = pods.exec(&pod_name, command, &attach).await?;
+        let stdout = process
+            .stdout()
+            .ok_or_else(|| Error::LiveExec("stdout stream was not attached".to_owned()))?;
+        let stderr = process
+            .stderr()
+            .ok_or_else(|| Error::LiveExec("stderr stream was not attached".to_owned()))?;
+        let status = process
+            .take_status()
+            .ok_or_else(|| Error::LiveExec("exit status stream was not attached".to_owned()))?;
+        let (stdout, stderr, status) = tokio::join!(
+            read_bounded_output(stdout),
+            read_bounded_output(stderr),
+            status
+        );
+        process
+            .join()
+            .await
+            .map_err(|error| Error::LiveExec(error.to_string()))?;
+        Ok::<_, Error>((stdout?, stderr?, status))
+    };
+    let timeout = Duration::from_secs(u64::from(request.timeout_seconds));
+    let ((stdout, stdout_truncated), (stderr, stderr_truncated), status) =
+        match tokio::time::timeout(timeout, execution).await {
+            Ok(result) => result?,
+            Err(_) => {
+                patch_action_status(
+                    action,
+                    context,
+                    ProofstormLabActionStatus {
+                        phase: ActionPhase::Succeeded,
+                        observed_generation: action.metadata.generation,
+                        job_name: Some(LIVE_EXEC_STARTED_MARKER.to_owned()),
+                        started_at_unix: action
+                            .status
+                            .as_ref()
+                            .and_then(|status| status.started_at_unix),
+                        completed_at_unix: Some(now_unix()),
+                        artifact: Some(status_object(serde_json::json!({
+                            "component": request.component,
+                            "kind": component.kind,
+                            "pod": pod_name,
+                            "container": container,
+                            "execution_context": "live_component",
+                            "exit_code": null,
+                            "stdout": "",
+                            "stderr": "command exceeded its declared timeout",
+                            "output_truncated": false,
+                            "timed_out": true,
+                        }))),
+                        ..ProofstormLabActionStatus::default()
+                    },
+                )
+                .await?;
+                return Ok(Action::await_change());
+            }
+        };
+    let exit_code = exec_exit_code(status.as_ref());
+    patch_action_status(
+        action,
+        context,
+        ProofstormLabActionStatus {
+            phase: ActionPhase::Succeeded,
+            observed_generation: action.metadata.generation,
+            job_name: Some(LIVE_EXEC_STARTED_MARKER.to_owned()),
+            started_at_unix: action
+                .status
+                .as_ref()
+                .and_then(|status| status.started_at_unix),
+            completed_at_unix: Some(now_unix()),
+            artifact: Some(status_object(serde_json::json!({
+                "component": request.component,
+                "kind": component.kind,
+                "pod": pod_name,
+                "container": container,
+                "execution_context": "live_component",
+                "exit_code": exit_code,
+                "stdout": String::from_utf8_lossy(&stdout),
+                "stderr": String::from_utf8_lossy(&stderr),
+                "output_truncated": stdout_truncated || stderr_truncated,
+                "timed_out": false,
+            }))),
+            ..ProofstormLabActionStatus::default()
+        },
+    )
+    .await?;
+    Ok(Action::await_change())
+}
+
+async fn read_bounded_output(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, bool), Error> {
+    let mut bytes = Vec::new();
+    reader
+        .take((LIVE_EXEC_OUTPUT_LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| Error::LiveExec(error.to_string()))?;
+    let truncated = bytes.len() > LIVE_EXEC_OUTPUT_LIMIT;
+    bytes.truncate(LIVE_EXEC_OUTPUT_LIMIT);
+    Ok((bytes, truncated))
+}
+
+fn exec_exit_code(status: Option<&k8s_openapi::apimachinery::pkg::apis::meta::v1::Status>) -> i32 {
+    if status.and_then(|status| status.status.as_deref()) == Some("Success") {
+        return 0;
+    }
+    status
+        .and_then(|status| status.details.as_ref())
+        .and_then(|details| details.causes.as_ref())
+        .and_then(|causes| causes.iter().find_map(|cause| cause.message.as_deref()))
+        .and_then(|message| message.split_whitespace().last())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1)
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "network fault reconciliation keeps journal validation, policy application, and terminal proof contiguous"
@@ -972,6 +1427,8 @@ async fn reconcile_action_cancellation(
         LabAction::NodeStart(_)
             | LabAction::NodeStop(_)
             | LabAction::NodeRestart(_)
+            | LabAction::ComponentRestart(_)
+            | LabAction::ComponentExecLive(_)
             | LabAction::NetworkPartition(_)
             | LabAction::NetworkHeal(_)
     ) && action_execution_started(action.status.as_ref())
@@ -2073,6 +2530,23 @@ fn stateful_set_matches_plan(
             == Some(&plan.rollout_digest)
 }
 
+fn deployment_matches_plan(
+    workload: &Deployment,
+    plan: &proofstorm_core::ComponentPlanContract,
+) -> bool {
+    let annotations = workload.metadata.annotations.as_ref();
+    annotations.and_then(|values| values.get(BACKEND_ID_ANNOTATION)) == Some(&plan.backend_id)
+        && annotations.and_then(|values| values.get(EXECUTION_STATE_CONTRACT_ANNOTATION))
+            == Some(&plan.execution_context.state_contract)
+        && workload
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.template.metadata.as_ref())
+            .and_then(|metadata| metadata.annotations.as_ref())
+            .and_then(|values| values.get(proofstorm_kube::ROLLOUT_DIGEST_ANNOTATION))
+            == Some(&plan.rollout_digest)
+}
+
 async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
     let instance_namespace = instance_namespace(&lab.spec.instance_key);
     patch_status(
@@ -2617,7 +3091,7 @@ async fn native_exec_artifact(
     const LOG_LIMIT_BYTES: i64 = 20 * 1024;
     const ARTIFACT_TARGET_BYTES: usize = 30 * 1024;
 
-    let LabAction::NativeExec(request) = &action.spec.action else {
+    let LabAction::ComponentForensics(request) = &action.spec.action else {
         return Ok(None);
     };
     let Some((pod, metadata)) = observed.iter().find_map(|pod| {
@@ -3311,6 +3785,34 @@ mod tests {
         let backend_changed =
             workload("sha256:new", "other-bitcoin", "proofstorm/bitcoin-state/v1");
         assert!(!same_lifecycle_identity(&existing, &backend_changed));
+    }
+
+    #[test]
+    fn live_exec_exit_status_is_preserved_as_experiment_data() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Status, StatusCause, StatusDetails};
+
+        assert_eq!(
+            exec_exit_code(Some(&Status {
+                status: Some("Success".into()),
+                ..Status::default()
+            })),
+            0
+        );
+        assert_eq!(
+            exec_exit_code(Some(&Status {
+                status: Some("Failure".into()),
+                details: Some(StatusDetails {
+                    causes: Some(vec![StatusCause {
+                        message: Some("command terminated with exit code 42".into()),
+                        ..StatusCause::default()
+                    }]),
+                    ..StatusDetails::default()
+                }),
+                ..Status::default()
+            })),
+            42
+        );
+        assert_eq!(exec_exit_code(None), 1);
     }
 
     fn network_action(

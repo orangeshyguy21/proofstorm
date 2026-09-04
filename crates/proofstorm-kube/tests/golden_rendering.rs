@@ -6,12 +6,12 @@ use proofstorm_core::{
     PaymentMethod, default_backend_registry, default_catalog, resolve_lock,
 };
 use proofstorm_kube::{
-    LabAction, NativeExecAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
-    ProofstormLabSpec, RenderedComponent, compile_component_plans, render_attacker_component,
-    render_bitcoin_component, render_cdk_component, render_cln_component,
-    render_keycloak_component, render_lab, render_lab_action_job, render_lnd_component,
-    render_nutshell_mint_component, render_postgres_component, render_redis_component,
-    render_security_spine, render_wallet_component,
+    ComponentForensicsAction, LabAction, ProofstormLab, ProofstormLabAction,
+    ProofstormLabActionSpec, ProofstormLabSpec, RenderedComponent, compile_component_plans,
+    render_attacker_component, render_bitcoin_component, render_cdk_component,
+    render_cln_component, render_keycloak_component, render_lab, render_lab_action_job,
+    render_lnd_component, render_nutshell_mint_component, render_postgres_component,
+    render_redis_component, render_security_spine, render_wallet_component,
 };
 use serde_json::{Value, json};
 
@@ -1160,9 +1160,9 @@ fn full_baseline_lab_matches_its_golden_contract() {
             sequence: 1,
             operation_id: "operation-golden".into(),
             request_digest: "sha256:golden-native-exec".into(),
-            capability: Capability::ComponentExec,
+            capability: Capability::ComponentForensics,
             accepted_at_unix: 1,
-            action: LabAction::NativeExec(NativeExecAction {
+            action: LabAction::ComponentForensics(ComponentForensicsAction {
                 component: "chain-a".into(),
                 target_component: "chain-b".into(),
                 script: "bitcoin-cli getblockchaininfo".into(),

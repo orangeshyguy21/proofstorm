@@ -11,11 +11,11 @@ use thiserror::Error;
 use crate::{
     AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
     AuthenticationReplayAction, BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction,
-    ChannelPolicySetAction, ChannelRebalanceAction, ConservationOracleAction, LabAction,
-    NativeExecAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
-    ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
-    WalletInvoiceAction, WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction,
-    component_ports, instance_namespace,
+    ChannelPolicySetAction, ChannelRebalanceAction, ComponentForensicsAction,
+    ConservationOracleAction, LabAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab,
+    ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
+    WalletInitializeAction, WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction,
+    WalletQuoteClaimAction, WalletRoundTripAction, component_ports, instance_namespace,
 };
 
 const REACHABILITY_PROBE_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
@@ -504,7 +504,9 @@ fn unsatisfied(
 
 fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
     match action {
-        LabAction::NativeExec(request) => Some((&request.component, &request.target_component)),
+        LabAction::ComponentForensics(request) => {
+            Some((&request.component, &request.target_component))
+        }
         LabAction::ReachabilityOracle(request) => {
             Some((&request.from_component, &request.to_component))
         }
@@ -512,12 +514,18 @@ fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive action-to-participant contract is clearest in one match"
+)]
 fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
     use OperationClass as Operation;
     match action {
         LabAction::NodeStart(request) => vec![(&request.component, Operation::Start)],
         LabAction::NodeStop(request) => vec![(&request.component, Operation::Stop)],
-        LabAction::NodeRestart(request) => vec![(&request.component, Operation::Restart)],
+        LabAction::NodeRestart(request) | LabAction::ComponentRestart(request) => {
+            vec![(&request.component, Operation::Restart)]
+        }
         LabAction::BootstrapLiquidity(request) => vec![
             (&request.chain, Operation::PeerChannelMutation),
             (&request.mint_lightning, Operation::PeerChannelMutation),
@@ -595,7 +603,12 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
         LabAction::ReachabilityOracle(request) => {
             vec![(&request.from_component, Operation::NativeExec)]
         }
-        LabAction::NativeExec(request) => vec![(&request.component, Operation::NativeExec)],
+        LabAction::ComponentForensics(request) => {
+            vec![(&request.component, Operation::NativeExec)]
+        }
+        LabAction::ComponentExecLive(request) => {
+            vec![(&request.component, Operation::NativeExec)]
+        }
         LabAction::AuthenticationConformance(request) => vec![
             (&request.mint, Operation::Authentication),
             (&request.identity_provider, Operation::Authentication),
@@ -617,6 +630,7 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentRestart(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_)
         | LabAction::BootstrapLiquidity(_)
@@ -635,12 +649,12 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::WalletQuoteClaim(_)
         | LabAction::WalletRoundTrip(_) => "wallet",
         LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
-        LabAction::NativeExec(_) => "exec",
+        LabAction::ComponentForensics(_) => "forensics",
         LabAction::AuthenticationConformance(_)
         | LabAction::AuthenticationProtectedSpend(_)
         | LabAction::AuthenticationReplay(_) => "authentication",
         // Never rendered as a Job; the controller reads the log itself.
-        LabAction::ComponentLogs(_) => "",
+        LabAction::ComponentLogs(_) | LabAction::ComponentExecLive(_) => "",
     }
 }
 
@@ -659,6 +673,8 @@ pub fn render_lab_action_job(
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentRestart(_)
+        | LabAction::ComponentExecLive(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_) => {
             return Err(ActionRenderError::Bounds(
@@ -696,7 +712,7 @@ pub fn render_lab_action_job(
         LabAction::ReachabilityOracle(request) => {
             render_reachability_oracle_action(action, lab, request)?
         }
-        LabAction::NativeExec(request) => render_native_exec_action(action, lab, request)?,
+        LabAction::ComponentForensics(request) => render_native_exec_action(action, lab, request)?,
         LabAction::AuthenticationConformance(request) => {
             render_authentication_conformance_action(action, lab, request)?
         }
@@ -815,9 +831,9 @@ fn authentication_components<'a>(
 fn render_native_exec_action(
     action: &ProofstormLabAction,
     lab: &ProofstormLab,
-    request: &NativeExecAction,
+    request: &ComponentForensicsAction,
 ) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::ComponentExec {
+    if action.spec.capability != Capability::ComponentForensics {
         return Err(ActionRenderError::Capability);
     }
     if request.script.is_empty() || request.script.len() > 16 * 1024 {
@@ -3517,7 +3533,7 @@ mod tests {
     fn admission_uses_operation_prerequisites_instead_of_lab_ready() {
         let (mut lab, mut action) = typed_bootstrap();
 
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "mint-lnd".into(),
             script: "bitcoin-cli -help".into(),
@@ -3692,7 +3708,7 @@ mod tests {
             })
         ));
 
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain-b".into(),
             script: "bitcoin-cli -help".into(),
@@ -3735,7 +3751,7 @@ mod tests {
             component: "mint-lnd".into(),
         });
         assert!(evaluate_action_admission(&action, &lab).is_ok());
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "mint-lnd".into(),
             target_component: "payer-lnd".into(),
             script: "lncli --help".into(),
@@ -3971,8 +3987,8 @@ mod tests {
             .image
             .clone();
         let script = "bitcoin-cli --help; printf '%s' '$NOT_EXPANDED_BY_RENDERER'";
-        action.spec.capability = Capability::ComponentExec;
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain".into(),
             script: script.into(),
@@ -4005,7 +4021,7 @@ mod tests {
                 .map(|claim| claim.claim_name.as_str()),
             Some("data-chain-0")
         );
-        assert_eq!(action_result_container(&action.spec.action), "exec");
+        assert_eq!(action_result_container(&action.spec.action), "forensics");
         let pod_labels = job
             .spec
             .as_ref()
@@ -4025,8 +4041,8 @@ mod tests {
     #[test]
     fn native_exec_can_target_a_distinct_bitcoin_component() {
         let (lab, mut action) = typed_bootstrap();
-        action.spec.capability = Capability::ComponentExec;
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain-b".into(),
             script: "bitcoin-cli getblockchaininfo".into(),
@@ -4082,8 +4098,8 @@ mod tests {
     #[test]
     fn native_exec_mounts_are_compiled_from_the_executor_plan() {
         let (lab, mut action) = typed_bootstrap();
-        action.spec.capability = Capability::ComponentExec;
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "mint".into(),
             target_component: "chain-b".into(),
             script: "cdk-mintd --help".into(),

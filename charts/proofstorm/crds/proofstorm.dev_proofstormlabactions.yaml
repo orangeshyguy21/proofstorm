@@ -31,6 +31,7 @@ spec:
                     - node_start
                     - node_stop
                     - node_restart
+                    - component_restart
                     - bootstrap_liquidity
                     - peer_connect
                     - peer_disconnect
@@ -50,7 +51,8 @@ spec:
                     - wallet_round_trip
                     - conservation_oracle
                     - reachability_oracle
-                    - native_exec
+                    - component_forensics
+                    - component_exec_live
                     - component_logs
                     - authentication_conformance
                     - authentication_protected_spend
@@ -227,6 +229,7 @@ spec:
                 - node.add
                 - node.remove
                 - node.control
+                - component.control
                 - peer.connect
                 - peer.disconnect
                 - wallet.create
@@ -244,7 +247,8 @@ spec:
                 - network.partition
                 - network.heal
                 - component.logs
-                - component.exec
+                - component.exec_live
+                - component.forensics
                 - authentication.test
                 - traffic.capture
                 - oracle.list

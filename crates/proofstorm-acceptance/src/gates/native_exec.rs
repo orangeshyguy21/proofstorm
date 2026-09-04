@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect};
 
-/// Native exec is a separate, secret-bearing authority, so its principal is
-/// granted `component.exec` and nothing from the typed runtime surface.
+/// Live exec is a separate, secret-bearing authority, so its principal is
+/// granted `component.exec_live` and nothing from the typed runtime surface.
 const CAPABILITIES: &[&str] = &[
     "catalog.read",
     "lab.read",
@@ -26,15 +26,14 @@ const CAPABILITIES: &[&str] = &[
     "experiment.close",
     "lease.acquire",
     "lease.release",
-    "component.exec",
+    "component.exec_live",
     "component.logs",
     "artifact.read",
 ];
 
 const BITCOIN_RPC: &str = concat!(
-    "bitcoin-cli -regtest -rpcconnect=\"$BITCOIN_RPC_HOST\" ",
-    "-rpcport=\"$BITCOIN_RPC_PORT\" ",
-    "-rpcuser=\"$BITCOIN_RPC_USER\" -rpcpassword=\"$BITCOIN_RPC_PASSWORD\" ",
+    "bitcoin-cli -regtest -rpcconnect=127.0.0.1 -rpcport=18443 ",
+    "-rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only ",
     "-rpcwait -rpcwaittimeout=20 getblockchaininfo"
 );
 
@@ -63,7 +62,7 @@ fn commands() -> Vec<(
         ),
         (
             "bitcoin-rpc-chain-b",
-            "chain",
+            "chain-b",
             "chain-b",
             BITCOIN_RPC,
             vec!["\"chain\"", "\"regtest\""],
@@ -104,11 +103,11 @@ fn lab_document() -> Value {
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Native Exec Mint"}}
         ],
         "links": [
-            {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
-            {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}}
+            {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "network": "regtest"},
+            {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "lightning", "method": "bolt11", "unit": "sat"}
         ],
         "policy": {
-            "allow": ["component.exec"],
+            "allow": ["component.exec_live"],
             "limits": {"max_components": 8, "max_links": 16, "max_config_bytes": 16384}
         }
     })
@@ -125,9 +124,9 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session(&workspace, "experiment-agent", CAPABILITIES)?;
 
     let tools = client.request("tools/list", json!({}))?;
-    let advertised = expect::array(&tools, "/tools")?
-        .iter()
-        .any(|tool| tool.get("name").and_then(Value::as_str) == Some("proofstorm_component_exec"));
+    let advertised = expect::array(&tools, "/tools")?.iter().any(|tool| {
+        tool.get("name").and_then(Value::as_str) == Some("proofstorm_component_exec_live")
+    });
     if !advertised {
         bail!("component exec was not advertised for an authorized principal: {tools}");
     }
@@ -201,13 +200,12 @@ pub fn run(context: &GateContext) -> Result<()> {
             "lease_id": lease,
             "operation_id": operation,
             "component": component,
-            "target_component": target,
             "script": script,
             "timeout_seconds": 30,
             "idempotency_key": format!("{operation}-native-exec")
         });
-        let accepted = client.call("proofstorm_component_exec", request.clone())?;
-        let replayed = client.call("proofstorm_component_exec", request)?;
+        let accepted = client.call("proofstorm_component_exec_live", request.clone())?;
+        let replayed = client.call("proofstorm_component_exec_live", request)?;
         if expect::string(&replayed, "/resource_name")?
             != expect::string(&accepted, "/resource_name")?
             || expect::integer(&replayed, "/sequence")? != expect::integer(&accepted, "/sequence")?
@@ -229,12 +227,19 @@ pub fn run(context: &GateContext) -> Result<()> {
         let content = finished
             .pointer("/artifact/content")
             .ok_or_else(|| anyhow::anyhow!("operation {operation} has no artifact content"))?;
-        let output = content
-            .get("combined_output")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let output = format!(
+            "{}{}",
+            content
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            content
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        );
         if expect::string(content, "/component")? != component
-            || expect::string(content, "/target_component")? != target
+            || expect::string(content, "/execution_context")? != "live_component"
             || expect::integer(content, "/exit_code")? != 0
         {
             bail!("native exec returned invalid identity or exit status: {finished}");
@@ -247,25 +252,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
         expect::within_bytes(content, 32 * 1024, "native artifact")?;
 
-        // A refused connection inside an exec is indistinguishable from a
-        // missing listener unless the artifact says whether the target's
-        // Service had ready endpoints. Serving components here are ready; a
-        // wallet publishes no Service at all and must say so instead.
-        let total = expect::integer(content, "/target_endpoints")?;
-        let ready = expect::integer(content, "/target_ready_endpoints")?;
-        let diagnostic = content.get("target_diagnostic").and_then(Value::as_str);
-        if total > 0 {
-            serving_targets += 1;
-            if ready < 1 || diagnostic.is_some() {
-                bail!("a ready target must report ready endpoints and no diagnostic: {content}");
-            }
-        } else if diagnostic != Some("no_service_endpoints") {
-            bail!("a target that publishes no Service must say so: {content}");
-        }
+        serving_targets += usize::from(component == target);
 
         records.push((
             expect::string(&finished, "/operation_id")?.to_string(),
             expect::string(&accepted, "/resource_name")?.to_string(),
+            expect::string(content, "/pod")?.to_string(),
+            component.to_string(),
         ));
     }
 
@@ -314,7 +307,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // Operator-side conformance: Proofstorm, not the MCP caller, fixed the
     // image, identity, token policy and network labels.
-    for (_, resource) in &records {
+    for (_, resource, pod_name, expected_component) in &records {
         let action = context.kubectl.get_json(&[
             "get",
             "proofstormlabaction.proofstorm.dev",
@@ -323,25 +316,20 @@ pub fn run(context: &GateContext) -> Result<()> {
             CONTROL_NAMESPACE,
         ])?;
         let component = expect::string(&action, "/spec/action/parameters/component")?;
-        let job = context
+        let pod = context
             .kubectl
-            .get_json(&["get", "job", resource, "-n", &namespace])?;
-        let template = job
-            .pointer("/spec/template")
-            .ok_or_else(|| anyhow::anyhow!("job {resource} has no pod template"))?;
-        let image = expect::string(template, "/spec/containers/0/image")?;
-        let automount = template.pointer("/spec/automountServiceAccountToken");
-        let labels = expect::object(template, "/metadata/labels")?;
+            .get_json(&["get", "pod", pod_name, "-n", &namespace])?;
+        let image = expect::string(&pod, "/spec/containers/0/image")?;
+        let automount = pod.pointer("/spec/automountServiceAccountToken");
+        let labels = expect::object(&pod, "/metadata/labels")?;
         if image != locks[component]
             || automount != Some(&Value::Bool(false))
             || labels
-                .get("proofstorm.dev/network-identity")
+                .get("proofstorm.dev/component")
                 .and_then(Value::as_str)
-                != Some(component)
-            || labels.contains_key("proofstorm.dev/component")
-            || labels.contains_key("proofstorm.dev/operation")
+                != Some(expected_component.as_str())
         {
-            bail!("controller did not preserve the native exec isolation contract: {template}");
+            bail!("controller did not execute in the selected live component: {pod}");
         }
     }
 
@@ -382,7 +370,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
     // The log read is evidence like any execution, so it is exported too.
-    let mut operation_ids: Vec<&str> = records.iter().map(|(id, _)| id.as_str()).collect();
+    let mut operation_ids: Vec<&str> = records.iter().map(|(id, _, _, _)| id.as_str()).collect();
     operation_ids.push(logs_operation.as_str());
     let evidence = client.call(
         "proofstorm_artifact_export",

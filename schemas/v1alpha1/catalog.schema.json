@@ -105,6 +105,13 @@
         "release_channel": {
           "$ref": "#/$defs/ReleaseChannel"
         },
+        "runtime_endpoints": {
+          "description": "Runtime operations implemented by the installed driver, independently\nfrom protocol support advertised by the component itself.",
+          "items": {
+            "$ref": "#/$defs/CatalogRuntimeEndpoint"
+          },
+          "type": "array"
+        },
         "source_digest": {
           "type": "string"
         },
@@ -132,6 +139,7 @@
         "features",
         "compatible_dependencies",
         "support_matrix",
+        "runtime_endpoints",
         "image",
         "source_digest",
         "allowed_control"
@@ -201,6 +209,37 @@
         "method",
         "unit",
         "backend"
+      ],
+      "type": "object"
+    },
+    "CatalogRuntimeEndpoint": {
+      "additionalProperties": false,
+      "description": "A logical runtime endpoint exposed by one catalog component.\n\nEndpoint and control identifiers intentionally remain open strings. New\nadapters can therefore extend the runtime contract without growing the MCP\ntool schema. `component` names the component's primary endpoint; embedded\nbackends use their catalog binding identifier (for example `ldk-node`).",
+      "properties": {
+        "controls": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "controls"
       ],
       "type": "object"
     },

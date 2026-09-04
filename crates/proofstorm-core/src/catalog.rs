@@ -963,10 +963,28 @@ fn runtime_endpoint(
     controls: &[&str],
     limitations: &[&str],
 ) -> CatalogRuntimeEndpoint {
+    let mut controls = controls
+        .iter()
+        .map(|control| (*control).to_owned())
+        .collect::<BTreeSet<_>>();
+    // These controls operate against the primary workload itself and are
+    // intentionally implementation-agnostic. New component implementations
+    // inherit them without growing a new MCP surface.
+    if id == "component" {
+        controls.extend(
+            [
+                "component_exec_live",
+                "component_forensics",
+                "component_restart",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
+    }
     CatalogRuntimeEndpoint {
         id: id.into(),
         kind: kind.into(),
-        controls: controls.iter().map(|control| (*control).into()).collect(),
+        controls,
         limitations: limitations
             .iter()
             .map(|limitation| (*limitation).into())
@@ -993,7 +1011,9 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "node_restart",
                 "reachability_oracle",
             ],
-            &[],
+            &[
+                "live bitcoin-cli requires -regtest -rpcconnect=127.0.0.1 -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only",
+            ],
         )],
         "lnd" => vec![runtime_endpoint(
             "component",
@@ -1008,7 +1028,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "reachability_oracle",
                 "wallet_fund",
             ],
-            &[],
+            &["live lncli uses --network=regtest --lnddir=/home/lnd/.lnd"],
         )],
         "cln" => vec![runtime_endpoint(
             "component",
@@ -1021,7 +1041,10 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "peer_connect",
                 "reachability_oracle",
             ],
-            &["liquidity_bootstrap and wallet_fund currently require an LND endpoint"],
+            &[
+                "liquidity_bootstrap and wallet_fund currently require an LND endpoint",
+                "live lightning-cli uses --network=regtest --lightning-dir=/home/cln/.lightning",
+            ],
         )],
         "cdk" | "nutshell" => vec![runtime_endpoint(
             "component",
@@ -1085,7 +1108,9 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "wallet_invoice",
                 "wallet_pay",
             ],
-            &[],
+            &[
+                "live Nutshell CLI entrypoint is HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -- --help; prefer typed wallet controls when available",
+            ],
         )],
         "keycloak" => vec![runtime_endpoint(
             "component",

@@ -182,6 +182,7 @@ spec:
                           - node.add
                           - node.remove
                           - node.control
+                          - component.control
                           - peer.connect
                           - peer.disconnect
                           - wallet.create
@@ -199,7 +200,8 @@ spec:
                           - network.partition
                           - network.heal
                           - component.logs
-                          - component.exec
+                          - component.exec_live
+                          - component.forensics
                           - authentication.test
                           - traffic.capture
                           - oracle.list

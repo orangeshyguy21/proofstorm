@@ -22,8 +22,8 @@ Rules shared by all three profiles:
   acceptance gates restart the controller.
 - "Internet" means two different things. Host web access is a profile choice
   above. Network access from inside lab pods is a lab property and stays
-  default-deny except for cluster DNS; `proofstorm_component_exec` runs
-  in-cluster and cannot reach the internet under any profile.
+  default-deny except for cluster DNS; both native component execution modes
+  run in-cluster and cannot reach the internet under any profile.
 - `PROOFSTORM_DB` and `PROOFSTORM_WORKSPACE` are relative to the repository
   root. Use a fresh database path per run when runs must not share state.
 

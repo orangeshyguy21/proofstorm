@@ -106,6 +106,7 @@ pub enum LabAction {
     NodeStart(NodeControlAction),
     NodeStop(NodeControlAction),
     NodeRestart(NodeControlAction),
+    ComponentRestart(NodeControlAction),
     BootstrapLiquidity(BootstrapLiquidityAction),
     PeerConnect(PeerConnectAction),
     PeerDisconnect(PeerDisconnectAction),
@@ -125,7 +126,8 @@ pub enum LabAction {
     WalletRoundTrip(WalletRoundTripAction),
     ConservationOracle(ConservationOracleAction),
     ReachabilityOracle(ReachabilityOracleAction),
-    NativeExec(NativeExecAction),
+    ComponentForensics(ComponentForensicsAction),
+    ComponentExecLive(ComponentExecLiveAction),
     ComponentLogs(ComponentLogsAction),
     AuthenticationConformance(AuthenticationConformanceAction),
     AuthenticationProtectedSpend(AuthenticationProtectedSpendAction),
@@ -151,6 +153,7 @@ enum LabActionKindSchema {
     NodeStart,
     NodeStop,
     NodeRestart,
+    ComponentRestart,
     BootstrapLiquidity,
     PeerConnect,
     PeerDisconnect,
@@ -170,7 +173,8 @@ enum LabActionKindSchema {
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,
-    NativeExec,
+    ComponentForensics,
+    ComponentExecLive,
     ComponentLogs,
     AuthenticationConformance,
     AuthenticationProtectedSpend,
@@ -371,11 +375,22 @@ pub enum AuthenticationSessionFailureStage {
 /// credentials, volumes, service account, and pod security.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct NativeExecAction {
+pub struct ComponentForensicsAction {
     pub component: String,
     /// Component whose service metadata is exposed to the native command.
     /// Defaults to the execution component at the MCP boundary.
     pub target_component: String,
+    pub script: String,
+    pub timeout_seconds: u32,
+}
+
+/// Execute a bounded shell program inside the selected running component
+/// container. Unlike `ComponentForensicsAction`, this shares the component's real
+/// network namespace, process-visible filesystem, user, and Unix sockets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentExecLiveAction {
+    pub component: String,
     pub script: String,
     pub timeout_seconds: u32,
 }
