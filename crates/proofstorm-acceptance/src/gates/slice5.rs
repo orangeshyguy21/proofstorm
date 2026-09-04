@@ -643,6 +643,18 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("wallet-fund artifact is invalid: {funded}");
     }
 
+    client.call(
+        "proofstorm_wallet_balance",
+        scoped(
+            "wallet-balance-before-round-trip",
+            json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-balance-before-round-trip-slice5"}),
+        ),
+    )?;
+    let baseline = lab::wait_operation(&mut client, "wallet-balance-before-round-trip", 120)?;
+    if expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
+        bail!("wallet baseline is invalid: {baseline}");
+    }
+
     let accepted_wallet = submit_idempotent(
         &mut client,
         "proofstorm_wallet_round_trip",
@@ -662,7 +674,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     if expect::boolean(wallet_result, "/inflation")? {
         bail!("round-trip artifact is invalid: {round_trip}");
     }
-    let balance_after_swap = expect::integer(wallet_result, "/balance_after_swap_sat")?;
+    expect::integer(wallet_result, "/balance_after_swap_sat")?;
     let wallet_jobs = kubectl.get_json(&[
         "get",
         "jobs",
@@ -680,7 +692,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "proofstorm_conservation_oracle",
         scoped(
             "lost-conservation",
-            json!({"wallet": "wallet", "mint": "mint", "expected_sat": balance_after_swap, "tolerance_sat": 0, "idempotency_key": "lost-conservation-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-round-trip", "treatment_operation_id": "round-trip", "idempotency_key": "lost-conservation-slice5"}),
         ),
     )?;
     let lost_resource = expect::string(&accepted_lost, "/resource_name")?.to_string();
@@ -740,7 +752,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "proofstorm_conservation_oracle",
         scoped(
             "cancelled-conservation",
-            json!({"wallet": "wallet", "mint": "mint", "expected_sat": balance_after_swap, "tolerance_sat": 0, "idempotency_key": "cancelled-conservation-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-round-trip", "treatment_operation_id": "round-trip", "idempotency_key": "cancelled-conservation-slice5"}),
         ),
     )?;
     let cancelled_resource = expect::string(&accepted_cancelled, "/resource_name")?.to_string();
@@ -782,7 +794,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "proofstorm_conservation_oracle",
         scoped(
             "conservation",
-            json!({"wallet": "wallet", "mint": "mint", "expected_sat": balance_after_swap, "tolerance_sat": 0, "idempotency_key": "conservation-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-round-trip", "treatment_operation_id": "round-trip", "idempotency_key": "conservation-slice5"}),
         ),
         "oracle",
     )?;

@@ -35,6 +35,7 @@ spec:
                     - peer_connect
                     - peer_disconnect
                     - channel_open
+                    - channel_policy_set
                     - channel_close
                     - channel_force_close
                     - channel_rebalance
@@ -67,6 +68,14 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      baseFeeMsat:
+                        format: uint64
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
+                      baselineOperationId:
+                        nullable: true
+                        type: string
                       chain:
                         nullable: true
                         type: string
@@ -83,6 +92,11 @@ spec:
                         type: string
                       expectedSat:
                         format: uint64
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
+                      feeRatePpm:
+                        format: uint32
                         minimum: 0.0
                         nullable: true
                         type: integer
@@ -179,6 +193,9 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      treatmentOperationId:
+                        nullable: true
+                        type: string
                       wallet:
                         nullable: true
                         type: string

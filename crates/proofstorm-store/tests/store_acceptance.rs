@@ -390,7 +390,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "acquire-operations-lease",
         )
         .expect("lease");
-    for index in 0..4 {
+    for index in 0..8 {
         let operation = store
             .create_operation(
                 "alpha",
@@ -416,7 +416,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             .iter()
             .map(|action| action.sequence)
             .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4]
+        vec![1, 2, 3, 4, 5, 6, 7, 8]
     );
     assert!(matches!(
         store.create_operation(
@@ -425,13 +425,13 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "operations-instance",
             "operations-experiment",
             "operations-lease",
-            "operation-five",
+            "operation-nine",
             OperationKind::BootstrapLiquidity,
-            &serde_json::json!({"index": 5}),
-            "create-operation-five",
+            &serde_json::json!({"index": 9}),
+            "create-operation-nine",
             Capability::WalletFund,
         ),
-        Err(StoreError::OperationLimit { maximum: 4, .. })
+        Err(StoreError::OperationLimit { maximum: 8, .. })
     ));
     let completed = store
         .record_operation_result(
@@ -449,7 +449,15 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             .iter()
             .map(|operation| operation.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["operation-1", "operation-2", "operation-3"],
+        vec![
+            "operation-1",
+            "operation-2",
+            "operation-3",
+            "operation-4",
+            "operation-5",
+            "operation-6",
+            "operation-7"
+        ],
         "a terminal result leaves the ledger's active set"
     );
     assert!(

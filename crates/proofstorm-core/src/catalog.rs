@@ -122,6 +122,22 @@ pub struct CatalogDependencySupport {
     pub versions: BTreeSet<String>,
 }
 
+/// A logical runtime endpoint exposed by one catalog component.
+///
+/// Endpoint and control identifiers intentionally remain open strings. New
+/// adapters can therefore extend the runtime contract without growing the MCP
+/// tool schema. `component` names the component's primary endpoint; embedded
+/// backends use their catalog binding identifier (for example `ldk-node`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogRuntimeEndpoint {
+    pub id: String,
+    pub kind: String,
+    pub controls: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogEntry {
@@ -140,6 +156,9 @@ pub struct CatalogEntry {
     pub features: BTreeSet<CatalogFeature>,
     pub compatible_dependencies: Vec<CatalogDependencySupport>,
     pub support_matrix: CatalogSupportMatrix,
+    /// Runtime operations implemented by the installed driver, independently
+    /// from protocol support advertised by the component itself.
+    pub runtime_endpoints: Vec<CatalogRuntimeEndpoint>,
     pub image: String,
     pub source_digest: String,
     pub allowed_control: Vec<ControlClass>,
@@ -635,6 +654,7 @@ fn implementation_support(
 }
 
 fn validate_support_matrix(entry: &CatalogEntry, entries: &[CatalogEntry]) -> Result<(), String> {
+    validate_runtime_endpoints(entry)?;
     let required_features = entry
         .support_matrix
         .storage
@@ -720,6 +740,43 @@ fn validate_support_matrix(entry: &CatalogEntry, entries: &[CatalogEntry]) -> Re
                     entry.id, entry.version, wallet.implementation
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_runtime_endpoints(entry: &CatalogEntry) -> Result<(), String> {
+    let mut endpoint_ids = BTreeSet::new();
+    for endpoint in &entry.runtime_endpoints {
+        if endpoint.id.trim().is_empty() || endpoint.kind.trim().is_empty() {
+            return Err(format!(
+                "catalog_runtime_endpoint_invalid: implementation {:?} version {:?} has an empty endpoint id or kind",
+                entry.id, entry.version
+            ));
+        }
+        if !endpoint_ids.insert(endpoint.id.as_str()) {
+            return Err(format!(
+                "catalog_runtime_endpoint_duplicate: implementation {:?} version {:?} repeats endpoint {:?}",
+                entry.id, entry.version, endpoint.id
+            ));
+        }
+        if endpoint
+            .controls
+            .iter()
+            .any(|control| control.trim().is_empty())
+        {
+            return Err(format!(
+                "catalog_runtime_control_invalid: implementation {:?} version {:?} endpoint {:?} has an empty control identifier",
+                entry.id, entry.version, endpoint.id
+            ));
+        }
+    }
+    for binding in &entry.support_matrix.embedded_payment_bindings {
+        if !endpoint_ids.contains(binding.backend.as_str()) {
+            return Err(format!(
+                "catalog_embedded_runtime_endpoint_missing: implementation {:?} version {:?} embeds backend {:?} without runtime endpoint metadata",
+                entry.id, entry.version, binding.backend
+            ));
         }
     }
     Ok(())
@@ -871,6 +928,7 @@ fn catalog_entry(
         .config_schema(id)
         .expect("catalog entry backend schema is available");
     let config_schema_digest = crate::digest_json(&config_schema);
+    let runtime_endpoints = catalog_runtime_endpoints(id);
     CatalogEntry {
         id: id.into(),
         kind,
@@ -886,9 +944,169 @@ fn catalog_entry(
         features,
         compatible_dependencies,
         support_matrix,
+        runtime_endpoints: runtime_endpoints.clone(),
         image: image.into(),
-        source_digest: crate::digest_json(&(id, version, adapter_version, config_version)),
+        source_digest: crate::digest_json(&(
+            id,
+            version,
+            adapter_version,
+            config_version,
+            &runtime_endpoints,
+        )),
         allowed_control,
+    }
+}
+
+fn runtime_endpoint(
+    id: &str,
+    kind: &str,
+    controls: &[&str],
+    limitations: &[&str],
+) -> CatalogRuntimeEndpoint {
+    CatalogRuntimeEndpoint {
+        id: id.into(),
+        kind: kind.into(),
+        controls: controls.iter().map(|control| (*control).into()).collect(),
+        limitations: limitations
+            .iter()
+            .map(|limitation| (*limitation).into())
+            .collect(),
+    }
+}
+
+/// Installed driver registry. Protocol support and runtime controllability are
+/// deliberately separate: an image can implement Lightning while its current
+/// Proofstorm driver does not yet expose peer/channel controls.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the runtime registry explicitly declares each installed driver's complete control surface"
+)]
+fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint> {
+    const OBSERVE: &[&str] = &["component_logs", "reachability_oracle"];
+    match implementation {
+        "bitcoin-core" => vec![runtime_endpoint(
+            "component",
+            "bitcoin",
+            &[
+                "chain_mine",
+                "component_logs",
+                "node_restart",
+                "reachability_oracle",
+            ],
+            &[],
+        )],
+        "lnd" => vec![runtime_endpoint(
+            "component",
+            "lightning",
+            &[
+                "channel_open",
+                "channel_policy_set",
+                "component_logs",
+                "liquidity_bootstrap",
+                "node_restart",
+                "peer_connect",
+                "reachability_oracle",
+                "wallet_fund",
+            ],
+            &[],
+        )],
+        "cln" => vec![runtime_endpoint(
+            "component",
+            "lightning",
+            &[
+                "channel_open",
+                "channel_policy_set",
+                "component_logs",
+                "node_restart",
+                "peer_connect",
+                "reachability_oracle",
+            ],
+            &["liquidity_bootstrap and wallet_fund currently require an LND endpoint"],
+        )],
+        "cdk" | "nutshell" => vec![runtime_endpoint(
+            "component",
+            "mint",
+            &[
+                "component_logs",
+                "conservation_oracle",
+                "reachability_oracle",
+                "wallet_balance",
+                "wallet_fund",
+                "wallet_initialize",
+                "wallet_invoice",
+                "wallet_pay",
+            ],
+            &[],
+        )],
+        "cdk-ldk" => vec![
+            runtime_endpoint(
+                "component",
+                "mint",
+                &[
+                    "component_logs",
+                    "conservation_oracle",
+                    "reachability_oracle",
+                    "wallet_balance",
+                    "wallet_initialize",
+                    "wallet_invoice",
+                    "wallet_pay",
+                ],
+                &[
+                    "wallet_fund is unavailable because the installed embedded-LDK driver cannot provision an inbound Lightning route",
+                ],
+            ),
+            runtime_endpoint(
+                "ldk-node",
+                "lightning",
+                &[],
+                &[
+                    "the embedded LDK backend supports payments but its installed driver does not yet expose peer or channel controls",
+                ],
+            ),
+        ],
+        "cdk-bdk" => vec![
+            runtime_endpoint("component", "mint", OBSERVE, &[]),
+            runtime_endpoint(
+                "bdk",
+                "onchain",
+                &[],
+                &["the embedded BDK backend has no direct runtime controls"],
+            ),
+        ],
+        "nutshell-wallet" => vec![runtime_endpoint(
+            "component",
+            "wallet",
+            &[
+                "component_logs",
+                "conservation_oracle",
+                "wallet_balance",
+                "wallet_fund",
+                "wallet_initialize",
+                "wallet_invoice",
+                "wallet_pay",
+            ],
+            &[],
+        )],
+        "keycloak" => vec![runtime_endpoint(
+            "component",
+            "identity_provider",
+            &[
+                "authentication_conformance",
+                "authentication_protected_spend",
+                "authentication_replay",
+                "component_logs",
+            ],
+            &[],
+        )],
+        "redis" | "postgresql" | "attacker-workspace" => {
+            vec![runtime_endpoint("component", "service", OBSERVE, &[])]
+        }
+        _ => vec![runtime_endpoint(
+            "component",
+            "component",
+            OBSERVE,
+            &["no specialized runtime driver controls are registered"],
+        )],
     }
 }
 

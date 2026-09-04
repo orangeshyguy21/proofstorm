@@ -22,7 +22,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
-const MAX_ACTIVE_OPERATIONS: u32 = 4;
+/// Per-instance admission bound for non-terminal runtime actions. Eight allows
+/// one useful agent batch (for example policies, payer funding, and invoices
+/// for a bidirectional treatment) without permitting unbounded fan-out.
+pub const MAX_ACTIVE_OPERATIONS: u32 = 8;
 const MAX_ARTIFACT_BYTES: usize = 32 * 1024;
 
 struct PaymentClaimInput<'a> {

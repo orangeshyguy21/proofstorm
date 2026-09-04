@@ -114,7 +114,6 @@
       "properties": {
         "config": {
           "additionalProperties": true,
-          "default": {},
           "type": "object"
         },
         "config_version": {
@@ -146,7 +145,8 @@
         "kind",
         "implementation",
         "config_version",
-        "control"
+        "control",
+        "config"
       ],
       "type": "object"
     },
@@ -499,14 +499,12 @@
           "type": "string"
         },
         "components": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/ComponentSpec"
           },
           "type": "array"
         },
         "links": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/LinkSpec"
           },
@@ -529,7 +527,9 @@
       },
       "required": [
         "api_version",
-        "name"
+        "name",
+        "components",
+        "links"
       ],
       "type": "object"
     },
@@ -688,6 +688,7 @@
         "peer_connect",
         "peer_disconnect",
         "channel_open",
+        "channel_policy_set",
         "channel_close",
         "channel_force_close",
         "channel_rebalance",

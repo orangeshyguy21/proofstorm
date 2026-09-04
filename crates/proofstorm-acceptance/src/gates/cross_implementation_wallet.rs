@@ -254,6 +254,20 @@ pub fn run(context: &GateContext) -> Result<()> {
             bail!("{implementation} wallet funding failed: {funded}");
         }
 
+        let baseline_id = format!("{prefix}-balance-before-round-trip");
+        client.call(
+            "proofstorm_wallet_balance",
+            merge(json!({"operation_id": baseline_id, "idempotency_key": format!("{prefix}-balance-before-round-trip")})),
+        )?;
+        let baseline = lab::wait_operation(
+            &mut client,
+            &format!("{prefix}-balance-before-round-trip"),
+            160,
+        )?;
+        if expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
+            bail!("{implementation} wallet baseline is invalid: {baseline}");
+        }
+
         client.call(
             "proofstorm_wallet_round_trip",
             merge(json!({"operation_id": format!("{prefix}-round-trip"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": format!("{prefix}-round-trip")})),
@@ -270,8 +284,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "proofstorm_conservation_oracle",
             merge(json!({
                 "operation_id": format!("{prefix}-conservation"),
-                "expected_sat": expect::integer(round_content, "/balance_after_swap_sat")?,
-                "tolerance_sat": 0,
+                "baseline_operation_id": format!("{prefix}-balance-before-round-trip"),
+                "treatment_operation_id": format!("{prefix}-round-trip"),
                 "idempotency_key": format!("{prefix}-conservation")
             })),
         )?;

@@ -31,8 +31,9 @@ pub use backend::{
 pub use catalog::{
     AuthenticationMode, CatalogDependencySupport, CatalogEntry, CatalogFeature,
     CatalogImplementationSupport, CatalogPaymentBindingSupport, CatalogResponse,
-    CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel, StorageBackend, SupportLifecycle,
-    default_catalog, validate_catalog_component, validate_component_config,
+    CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
+    StorageBackend, SupportLifecycle, default_catalog, validate_catalog_component,
+    validate_component_config,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

@@ -31,12 +31,10 @@ spec:
                   api_version:
                     type: string
                   components:
-                    default: []
                     items:
                       properties:
                         config:
                           additionalProperties: true
-                          default: {}
                           type: object
                         config_version:
                           description: Version of the implementation adapter's configuration contract.
@@ -69,6 +67,7 @@ spec:
                           nullable: true
                           type: string
                       required:
+                      - config
                       - config_version
                       - control
                       - id
@@ -77,7 +76,6 @@ spec:
                       type: object
                     type: array
                   links:
-                    default: []
                     items:
                       properties:
                         binding:
@@ -240,6 +238,8 @@ spec:
                     type: object
                 required:
                 - api_version
+                - components
+                - links
                 - name
                 type: object
               lock:

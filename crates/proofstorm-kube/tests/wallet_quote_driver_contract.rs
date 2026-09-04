@@ -1,5 +1,6 @@
 use std::{fs, path::Path, process::Command};
 
+use proofstorm_core::wallet_quote_observations_from_artifact;
 use rusqlite::Connection;
 use serde_json::Value;
 
@@ -110,6 +111,51 @@ fn invoice_and_melt_observations_are_exact_and_sanitized() {
 }
 
 #[test]
+fn melt_fee_comes_from_the_authoritative_mint_database() {
+    let Some(python) = python() else {
+        return;
+    };
+    let wallet = tempfile::tempdir().expect("wallet directory");
+    let wallet_connection = wallet_fixture(wallet.path());
+    wallet_connection
+        .execute(
+            "UPDATE bolt11_melt_quotes SET state = 'PAID', fee_paid = 93 WHERE quote = ?1",
+            [MELT_QUOTE],
+        )
+        .expect("legacy wallet-local fee value");
+
+    let mint = tempfile::tempdir().expect("mint directory");
+    let mint_connection =
+        Connection::open(mint.path().join("mint.sqlite3")).expect("authoritative mint database");
+    mint_connection
+        .execute_batch(&format!(
+            "CREATE TABLE melt_quotes (
+               quote TEXT, state TEXT, amount INTEGER,
+               fee_reserve INTEGER, fee_paid INTEGER
+             );
+             INSERT INTO melt_quotes VALUES ('{MELT_QUOTE}', 'PAID', 100, 2, 1);"
+        ))
+        .expect("authoritative melt quote");
+
+    let (success, melt) = run_driver(
+        python,
+        wallet.path(),
+        &[
+            ("PROOFSTORM_QUOTE_DRIVER_MODE", "observe-melt"),
+            ("PROOFSTORM_INVOICE", "lnbcrt-private-material"),
+            ("PROOFSTORM_MELT_BEFORE_IDS", "[]"),
+            (
+                "PROOFSTORM_MINT_DB_DIR",
+                mint.path().to_str().expect("mint path"),
+            ),
+        ],
+    );
+    assert!(success, "melt driver failed: {melt}");
+    assert_eq!(melt["fee_paid_sat"], 1);
+    assert_ne!(melt["fee_paid_sat"], 93);
+}
+
+#[test]
 fn already_issued_claim_is_idempotent_without_invoking_the_cli() {
     let Some(python) = python() else {
         return;
@@ -169,6 +215,10 @@ fn melt_correlation_rejects_ambiguous_new_rows() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the end-to-end fixture keeps payment, exact fee evidence, and explicit claim recovery in one lifecycle"
+)]
 fn paid_but_unclaimed_melt_is_recoverable_with_explicit_claim() {
     let Some(python) = python() else {
         return;
@@ -185,7 +235,14 @@ fn paid_but_unclaimed_melt_is_recoverable_with_explicit_claim() {
             "CREATE TABLE bolt11_melt_quotes (
            quote TEXT, state TEXT, amount INTEGER, fee_reserve INTEGER,
            fee_paid INTEGER, request TEXT, created_time INTEGER
-         );",
+         );
+         CREATE TABLE keysets (
+           id TEXT, mint_url TEXT, input_fee_ppk INTEGER
+         );
+         CREATE TABLE proofs_used (
+           id TEXT, melt_id TEXT
+         );
+         INSERT INTO keysets VALUES ('keyset-a', 'http://payer-mint:3338', 100);",
         )
         .expect("payer quote schema");
 
@@ -204,7 +261,9 @@ def cli():
     command = args[args.index('-y') + 1]
     connection = sqlite3.connect(db)
     if command == 'pay':
-        connection.execute("INSERT INTO bolt11_melt_quotes VALUES (?, 'PAID', 100, 2, 1, ?, 3)", ('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', args[-1]))
+        quote = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        connection.execute("INSERT INTO bolt11_melt_quotes VALUES (?, 'PAID', 100, 2, 1, ?, 3)", (quote, args[-1]))
+        connection.execute("INSERT INTO proofs_used VALUES ('keyset-a', ?)", (quote,))
         connection.commit()
     elif command == 'invoice' and os.environ.get('PROOFSTORM_FAKE_CLAIM_FAILURE') != '1':
         quote = args[args.index('--id') + 1]
@@ -244,6 +303,20 @@ def cli():
     );
     assert_eq!(artifact["quote_observations"][0]["state"], "PAID");
     assert_eq!(artifact["quote_observations"][1]["state"], "UNPAID");
+    assert_eq!(artifact["payer_balance_sat"], 100);
+    assert_eq!(artifact["input_fee_sat"], 1);
+    assert_eq!(artifact["input_proof_count"], 1);
+    assert!(
+        artifact["quote_observations"][0]
+            .get("input_fee_sat")
+            .is_none()
+    );
+    assert!(
+        artifact["quote_observations"][0]
+            .get("input_proof_count")
+            .is_none()
+    );
+    assert!(wallet_quote_observations_from_artifact(&artifact).is_ok());
     assert_eq!(artifact["code"], "payment_paid_claim_unverified");
     assert!(!artifact.to_string().contains("lnbcrt"));
 

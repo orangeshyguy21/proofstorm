@@ -110,6 +110,7 @@ pub enum LabAction {
     PeerConnect(PeerConnectAction),
     PeerDisconnect(PeerDisconnectAction),
     ChannelOpen(ChannelOpenAction),
+    ChannelPolicySet(ChannelPolicySetAction),
     ChannelClose(ChannelCloseAction),
     ChannelForceClose(ChannelCloseAction),
     ChannelRebalance(ChannelRebalanceAction),
@@ -154,6 +155,7 @@ enum LabActionKindSchema {
     PeerConnect,
     PeerDisconnect,
     ChannelOpen,
+    ChannelPolicySet,
     ChannelClose,
     ChannelForceClose,
     ChannelRebalance,
@@ -191,6 +193,8 @@ struct LabActionParametersSchema {
     to_lightning: Option<String>,
     lightning: Option<String>,
     channel_id: Option<String>,
+    base_fee_msat: Option<u64>,
+    fee_rate_ppm: Option<u32>,
     outgoing_channel_id: Option<String>,
     incoming_channel_id: Option<String>,
     max_fee_sat: Option<u64>,
@@ -209,6 +213,8 @@ struct LabActionParametersSchema {
     amount_sat: Option<u64>,
     timeout_seconds: Option<u32>,
     expected_sat: Option<u64>,
+    baseline_operation_id: Option<String>,
+    treatment_operation_id: Option<String>,
     tolerance_sat: Option<u64>,
     service: Option<String>,
     attempts: Option<u32>,
@@ -411,6 +417,15 @@ pub struct ChannelOpenAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelPolicySetAction {
+    pub from_lightning: String,
+    pub to_lightning: String,
+    pub base_fee_msat: u64,
+    pub fee_rate_ppm: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelCloseAction {
     pub chain: String,
     pub from_lightning: String,
@@ -511,6 +526,8 @@ pub struct WalletRoundTripAction {
 pub struct ConservationOracleAction {
     pub wallet: String,
     pub mint: String,
+    pub baseline_operation_id: String,
+    pub treatment_operation_id: String,
     pub expected_sat: u64,
     pub tolerance_sat: u64,
 }

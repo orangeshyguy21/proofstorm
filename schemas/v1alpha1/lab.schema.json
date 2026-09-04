@@ -72,7 +72,6 @@
       "properties": {
         "config": {
           "additionalProperties": true,
-          "default": {},
           "type": "object"
         },
         "config_version": {
@@ -104,7 +103,8 @@
         "kind",
         "implementation",
         "config_version",
-        "control"
+        "control",
+        "config"
       ],
       "type": "object"
     },
@@ -285,14 +285,12 @@
       "type": "string"
     },
     "components": {
-      "default": [],
       "items": {
         "$ref": "#/$defs/ComponentSpec"
       },
       "type": "array"
     },
     "links": {
-      "default": [],
       "items": {
         "$ref": "#/$defs/LinkSpec"
       },
@@ -315,7 +313,9 @@
   },
   "required": [
     "api_version",
-    "name"
+    "name",
+    "components",
+    "links"
   ],
   "title": "LabSpec",
   "type": "object"

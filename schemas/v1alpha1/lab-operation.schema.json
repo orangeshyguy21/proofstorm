@@ -86,6 +86,7 @@
         "peer_connect",
         "peer_disconnect",
         "channel_open",
+        "channel_policy_set",
         "channel_close",
         "channel_force_close",
         "channel_rebalance",

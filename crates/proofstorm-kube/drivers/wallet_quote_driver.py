@@ -245,6 +245,61 @@ def melt_row():
         time.sleep(retry_seconds)
 
 
+def authoritative_melt_row(wallet_row):
+    """Replace Nutshell 0.20 wallet-local fee accounting with mint facts.
+
+    That wallet release stores `amount + response_fee - change` in its local
+    `fee_paid` column. The mint's `melt_quotes` row is the authoritative source
+    for the actual Lightning fee and is mounted read-only by wallet-pay jobs.
+    """
+    quote, wallet_state, wallet_amount, wallet_reserve, wallet_fee = wallet_row
+    mint_db_dir = os.environ.get("PROOFSTORM_MINT_DB_DIR")
+    if not mint_db_dir:
+        return wallet_row
+    paths = sorted(
+        glob.glob(
+            os.path.join(mint_db_dir, "**", "mint.sqlite3"),
+            recursive=True,
+        )
+    )
+    if not paths:
+        # Non-SQLite mint storage has no local authoritative row. Never expose
+        # the known wallet-local compatibility value as an actual network fee.
+        return quote, wallet_state, wallet_amount, wallet_reserve, None
+    timeout_seconds = bounded_seconds("PROOFSTORM_DB_TIMEOUT_SECONDS", 10, 1, 30)
+    retry_seconds = bounded_seconds("PROOFSTORM_DB_RETRY_SECONDS", 0.2, 0.05, 2)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        busy = False
+        for path in paths:
+            connection = None
+            try:
+                connection = connect_read_only(path, timeout_seconds)
+                row = connection.execute(
+                    "SELECT quote, state, amount, fee_reserve, fee_paid "
+                    "FROM melt_quotes WHERE quote = ? LIMIT 1",
+                    (quote,),
+                ).fetchone()
+                if row is not None:
+                    if row[0] != quote:
+                        raise DriverFailure("mint_melt_quote_identity_mismatch")
+                    return row
+            except sqlite3.OperationalError as error:
+                message = str(error).lower()
+                if any(fragment in message for fragment in BUSY_ERRORS):
+                    busy = True
+                elif "no such table" not in message and "no such column" not in message:
+                    raise DriverFailure("mint_database_read_failed") from error
+            finally:
+                if connection is not None:
+                    connection.close()
+        if time.monotonic() >= deadline:
+            if busy:
+                raise DriverFailure("mint_database_busy")
+            raise DriverFailure("mint_melt_quote_missing")
+        time.sleep(retry_seconds)
+
+
 def observe_invoice():
     row = receive_row(invoice_quote_id_from_file())
     if row["state"].upper() != "UNPAID":
@@ -271,7 +326,7 @@ def observe_receive():
 
 
 def observe_melt():
-    quote, state, amount, fee_reserve, fee_paid = melt_row()
+    quote, state, amount, fee_reserve, fee_paid = authoritative_melt_row(melt_row())
     artifact = {
         "role": "payment_melt",
         "direction": "pay",
@@ -387,7 +442,79 @@ def wallet_balance(home, wallet, mint_url):
     return int(matches[-1])
 
 
+def melt_input_fee(quote, state, mint_url):
+    """Derive the exact NUT-02 input fee from the proofs selected for a melt.
+
+    Nutshell preserves the melt quote ID when it moves paid inputs into
+    `proofs_used`. Each proof's keyset records its fee in parts per thousand,
+    and Nutshell charges ceil(sum(input_fee_ppk) / 1000). This is independent
+    evidence; it is never inferred from the observed balance difference.
+    """
+    _, paths = wallet_databases()
+    timeout_seconds = bounded_seconds("PROOFSTORM_DB_TIMEOUT_SECONDS", 10, 1, 30)
+    retry_seconds = bounded_seconds("PROOFSTORM_DB_RETRY_SECONDS", 0.2, 0.05, 2)
+    deadline = time.monotonic() + timeout_seconds
+    query = (
+        "SELECT COUNT(*), "
+        "COALESCE(SUM(COALESCE((SELECT MAX(k.input_fee_ppk) FROM keysets k "
+        "WHERE k.id = p.id AND lower(rtrim(k.mint_url, '/')) = "
+        "lower(rtrim(?, '/'))), 0)), 0), "
+        "COALESCE(SUM(CASE WHEN (SELECT MAX(k.input_fee_ppk) FROM keysets k "
+        "WHERE k.id = p.id AND lower(rtrim(k.mint_url, '/')) = "
+        "lower(rtrim(?, '/'))) IS NULL THEN 1 ELSE 0 END), 0) "
+        "FROM proofs_used p WHERE p.melt_id = ?"
+    )
+    while True:
+        matches = []
+        busy = False
+        saw_schema = False
+        for path in paths:
+            connection = None
+            try:
+                connection = connect_read_only(path, timeout_seconds)
+                row = connection.execute(
+                    query, (mint_url, mint_url, quote)
+                ).fetchone()
+                saw_schema = True
+                if row is not None and int(row[0]) > 0:
+                    matches.append(tuple(int(value) for value in row))
+            except sqlite3.OperationalError as error:
+                message = str(error).lower()
+                if any(fragment in message for fragment in BUSY_ERRORS):
+                    busy = True
+                elif "no such table" not in message and "no such column" not in message:
+                    raise DriverFailure("wallet_database_read_failed") from error
+            except (sqlite3.Error, TypeError, ValueError) as error:
+                raise DriverFailure("wallet_database_read_failed") from error
+            finally:
+                if connection is not None:
+                    connection.close()
+        if not busy:
+            if len(matches) > 1:
+                raise DriverFailure("melt_input_proofs_ambiguous")
+            if str(state).upper() == "PAID" and len(matches) == 1:
+                proof_count, fee_ppk, missing_keysets = matches[0]
+                if missing_keysets:
+                    raise DriverFailure("melt_input_keyset_missing")
+                if proof_count > 10_000 or fee_ppk < 0 or fee_ppk > 100_000_000:
+                    raise DriverFailure("melt_input_fee_out_of_bounds")
+                return (fee_ppk + 999) // 1000, proof_count
+            if str(state).upper() != "PAID":
+                if matches:
+                    raise DriverFailure("unpaid_melt_spent_proofs_present")
+                if saw_schema:
+                    return 0, 0
+        if time.monotonic() >= deadline:
+            if busy:
+                raise DriverFailure("wallet_database_busy")
+            if not saw_schema:
+                raise DriverFailure("wallet_schema_mismatch")
+            raise DriverFailure("melt_input_proofs_missing")
+        time.sleep(retry_seconds)
+
+
 def pay_and_claim():
+    payer_home = required("HOME")
     payer_wallet = required("PROOFSTORM_WALLET")
     payer_mint = required("PROOFSTORM_MINT")
     payer_mint_url = required("PROOFSTORM_EXPECTED_MINT_URL")
@@ -445,7 +572,10 @@ def pay_and_claim():
         pay_exit_code = 124
     os.environ["PROOFSTORM_INVOICE"] = invoice
     os.environ["PROOFSTORM_MELT_BEFORE_IDS"] = json.dumps(sorted(before_ids))
-    quote, state, amount, fee_reserve, fee_paid = melt_row()
+    quote, state, amount, fee_reserve, fee_paid = authoritative_melt_row(melt_row())
+    input_fee_sat, input_proof_count = melt_input_fee(
+        quote, state, payer_mint_url
+    )
     melt = {
         "role": "payment_melt",
         "direction": "pay",
@@ -502,6 +632,11 @@ def pay_and_claim():
         "melt_quote_id": quote,
         "pay_exit_code": pay_exit_code,
         "claim_exit_code": claim_exit_code,
+        "payer_balance_sat": wallet_balance(
+            payer_home, payer_wallet, payer_mint_url
+        ),
+        "input_fee_sat": input_fee_sat,
+        "input_proof_count": input_proof_count,
         "recipient_balance_sat": wallet_balance(
             recipient_home, recipient_wallet, recipient_mint_url
         ),

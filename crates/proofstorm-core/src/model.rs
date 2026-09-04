@@ -148,7 +148,6 @@ pub struct ComponentSpec {
     /// Version of the implementation adapter's configuration contract.
     pub config_version: String,
     pub control: ControlClass,
-    #[serde(default)]
     pub config: BTreeMap<String, Value>,
 }
 
@@ -321,9 +320,7 @@ pub struct LabPolicy {
 pub struct LabSpec {
     pub api_version: String,
     pub name: String,
-    #[serde(default)]
     pub components: Vec<ComponentSpec>,
-    #[serde(default)]
     pub links: Vec<LinkSpec>,
     #[serde(default)]
     pub policy: LabPolicy,
@@ -333,4 +330,75 @@ pub struct LabSpec {
 #[serde(deny_unknown_fields)]
 pub struct ValidateLabRequest {
     pub lab: LabSpec,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{ComponentSpec, LabSpec};
+
+    #[test]
+    fn component_config_must_be_explicit() {
+        let missing = json!({
+            "id": "chain",
+            "kind": "bitcoin",
+            "implementation": "bitcoin-core",
+            "config_version": "bitcoin-core/30/v1",
+            "control": "laboratory"
+        });
+        let error = serde_json::from_value::<ComponentSpec>(missing)
+            .expect_err("an omitted component config must not silently become empty");
+        assert!(error.to_string().contains("missing field `config`"));
+
+        let explicit = json!({
+            "id": "chain",
+            "kind": "bitcoin",
+            "implementation": "bitcoin-core",
+            "config_version": "bitcoin-core/30/v1",
+            "control": "laboratory",
+            "config": {}
+        });
+        serde_json::from_value::<ComponentSpec>(explicit)
+            .expect("an explicitly empty component config is valid input");
+    }
+
+    #[test]
+    fn lab_topology_collections_must_be_explicit() {
+        for (field, document) in [
+            (
+                "components",
+                json!({
+                    "api_version": "proofstorm/v1alpha1",
+                    "name": "missing-components",
+                    "links": []
+                }),
+            ),
+            (
+                "links",
+                json!({
+                    "api_version": "proofstorm/v1alpha1",
+                    "name": "missing-links",
+                    "components": []
+                }),
+            ),
+        ] {
+            let error = serde_json::from_value::<LabSpec>(document)
+                .expect_err("an omitted topology collection must not silently become empty");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("missing field `{field}`")),
+                "unexpected error for {field}: {error}"
+            );
+        }
+
+        serde_json::from_value::<LabSpec>(json!({
+            "api_version": "proofstorm/v1alpha1",
+            "name": "explicitly-empty",
+            "components": [],
+            "links": []
+        }))
+        .expect("explicitly empty topology collections are valid input");
+    }
 }

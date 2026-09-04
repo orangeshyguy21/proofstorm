@@ -287,6 +287,21 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
+        "proofstorm_wallet_balance",
+        with(
+            with(
+                common("nutshell-cln-balance-before-round-trip"),
+                wallet.clone(),
+            ),
+            json!({"idempotency_key": "balance-before-round-trip-nutshell-cln"}),
+        ),
+    )?;
+    let baseline = lab::wait_succeeded(&mut client, "nutshell-cln-balance-before-round-trip")?;
+    if expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
+        bail!("Nutshell CLN wallet baseline is invalid: {baseline}");
+    }
+
+    client.call(
         "proofstorm_wallet_round_trip",
         with(
             with(common("nutshell-cln-round-trip"), wallet.clone()),
@@ -306,8 +321,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         with(
             with(common("nutshell-cln-conservation"), wallet),
             json!({
-                "expected_sat": expect::integer(round_content, "/balance_after_swap_sat")?,
-                "tolerance_sat": 0,
+                "baseline_operation_id": "nutshell-cln-balance-before-round-trip",
+                "treatment_operation_id": "nutshell-cln-round-trip",
                 "idempotency_key": "conservation-nutshell-cln"
             }),
         ),

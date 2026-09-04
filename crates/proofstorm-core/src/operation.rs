@@ -12,6 +12,7 @@ pub enum OperationKind {
     PeerConnect,
     PeerDisconnect,
     ChannelOpen,
+    ChannelPolicySet,
     ChannelClose,
     ChannelForceClose,
     ChannelRebalance,
