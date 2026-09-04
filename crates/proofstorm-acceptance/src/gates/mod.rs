@@ -16,6 +16,7 @@ pub mod nutshell_cln;
 pub mod nutshell_mint;
 pub mod nutshell_oidc;
 pub mod nutshell_postgres;
+pub mod quote_composition;
 pub mod slice2;
 pub mod slice4;
 pub mod slice5;
@@ -38,6 +39,7 @@ pub const NAMES: &[&str] = &[
     "slice2",
     "slice5",
     "failed-melt",
+    "quote-composition",
     "nutshell-oidc",
 ];
 
@@ -60,6 +62,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "slice2" => slice2::run(context),
         "slice5" => slice5::run(context),
         "failed-melt" => failed_melt::run(context),
+        "quote-composition" => quote_composition::run(context),
         "nutshell-oidc" => nutshell_oidc::run(context),
         other => bail!(
             "unknown gate {other}; available gates: {}",

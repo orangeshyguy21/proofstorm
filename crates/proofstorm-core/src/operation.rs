@@ -24,6 +24,7 @@ pub enum OperationKind {
     WalletFund,
     WalletInvoice,
     WalletPay,
+    WalletQuoteClaim,
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,

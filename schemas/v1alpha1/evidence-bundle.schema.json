@@ -700,6 +700,7 @@
         "wallet_fund",
         "wallet_invoice",
         "wallet_pay",
+        "wallet_quote_claim",
         "wallet_round_trip",
         "conservation_oracle",
         "reachability_oracle",

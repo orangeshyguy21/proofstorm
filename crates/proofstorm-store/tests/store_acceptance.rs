@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use proofstorm_core::{
     API_VERSION, Capability, ComponentKind, ComponentSpec, ControlClass, DraftMutation,
     LOCK_API_VERSION, LabPolicy, LabSpec, OperationKind, OperationPhase, WalletQuoteDirection,
-    WalletQuoteObservationInput, WalletQuoteObservationRole, WalletQuotePhase,
+    WalletQuoteObservationInput, WalletQuoteObservationRole,
 };
 use proofstorm_store::{Store, StoreError, Workspace};
 
@@ -244,7 +244,7 @@ fn publication_keeps_requested_draft_and_persists_effective_configuration() {
 fn revisions_and_grants_survive_reopen() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join("proofstorm.sqlite3");
-    let (digest, instance, quote) = {
+    let (digest, instance) = {
         let store = Store::open(&path).expect("store");
         seed(&store);
         for capability in [
@@ -298,23 +298,7 @@ fn revisions_and_grants_survive_reopen() {
                 "acquire-durable-lease",
             )
             .expect("lease");
-        let quote = store
-            .create_wallet_quote(
-                "alpha",
-                "designer",
-                "durable-instance",
-                "durable-experiment",
-                "durable-lease",
-                "durable-quote",
-                "wallet",
-                "mint",
-                WalletQuoteDirection::Receive,
-                100,
-                300,
-                "create-durable-quote",
-            )
-            .expect("quote");
-        (revision.digest, instance, quote)
+        (revision.digest, instance)
     };
     let reopened = Store::open(&path).expect("reopen");
     assert!(
@@ -335,12 +319,6 @@ fn revisions_and_grants_survive_reopen() {
             .instance("alpha", "designer", "durable-instance")
             .expect("instance"),
         instance
-    );
-    assert_eq!(
-        reopened
-            .wallet_quote("alpha", "designer", "durable-quote")
-            .expect("durable quote"),
-        quote
     );
 }
 
@@ -412,164 +390,6 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "acquire-operations-lease",
         )
         .expect("lease");
-    let quote = store
-        .create_wallet_quote(
-            "alpha",
-            "designer",
-            "operations-instance",
-            "operations-experiment",
-            "operations-lease",
-            "receive-quote",
-            "wallet",
-            "mint",
-            WalletQuoteDirection::Receive,
-            1_000,
-            300,
-            "create-receive-quote",
-        )
-        .expect("quote");
-    assert_eq!(quote.phase, WalletQuotePhase::Requested);
-    assert_eq!(
-        store
-            .create_wallet_quote(
-                "alpha",
-                "designer",
-                "operations-instance",
-                "operations-experiment",
-                "operations-lease",
-                "receive-quote",
-                "wallet",
-                "mint",
-                WalletQuoteDirection::Receive,
-                1_000,
-                300,
-                "create-receive-quote",
-            )
-            .expect("idempotent quote"),
-        quote
-    );
-    let public_quote = serde_json::to_value(&quote).expect("serialize quote");
-    for forbidden in ["invoice", "adapter_quote", "payment_request", "secret"] {
-        assert!(
-            !public_quote
-                .as_object()
-                .expect("quote object")
-                .contains_key(forbidden)
-        );
-    }
-    let ready = store
-        .transition_wallet_quote(
-            "alpha",
-            "receive-quote",
-            WalletQuotePhase::Requested,
-            WalletQuotePhase::Ready,
-            Some("invoice-operation"),
-            None,
-        )
-        .expect("ready quote");
-    assert_eq!(ready.operation_id.as_deref(), Some("invoice-operation"));
-    store
-        .transition_wallet_quote(
-            "alpha",
-            "receive-quote",
-            WalletQuotePhase::Ready,
-            WalletQuotePhase::Pending,
-            Some("invoice-operation"),
-            None,
-        )
-        .expect("pending quote");
-    store
-        .transition_wallet_quote(
-            "alpha",
-            "receive-quote",
-            WalletQuotePhase::Pending,
-            WalletQuotePhase::Paid,
-            Some("invoice-operation"),
-            None,
-        )
-        .expect("paid quote");
-    let settled = store
-        .transition_wallet_quote(
-            "alpha",
-            "receive-quote",
-            WalletQuotePhase::Paid,
-            WalletQuotePhase::Settled,
-            Some("invoice-operation"),
-            None,
-        )
-        .expect("settled quote");
-    assert!(settled.settled_at_unix.is_some());
-    assert!(matches!(
-        store.transition_wallet_quote(
-            "alpha",
-            "receive-quote",
-            WalletQuotePhase::Settled,
-            WalletQuotePhase::Ready,
-            Some("invoice-operation"),
-            None,
-        ),
-        Err(StoreError::InvalidQuoteTransition { .. })
-    ));
-    assert_eq!(
-        store
-            .wallet_quote("alpha", "designer", "receive-quote")
-            .expect("read quote")
-            .phase,
-        WalletQuotePhase::Settled
-    );
-    assert_eq!(
-        store
-            .wallet_quotes("alpha", "designer", "operations-experiment", None, 10)
-            .expect("list quotes")
-            .len(),
-        1
-    );
-    assert!(matches!(
-        store.wallet_quote("alpha", "reader", "receive-quote"),
-        Err(StoreError::QuoteOwnerMismatch { .. })
-    ));
-    store
-        .create_wallet_quote(
-            "alpha",
-            "designer",
-            "operations-instance",
-            "operations-experiment",
-            "operations-lease",
-            "recovery-quote",
-            "wallet",
-            "mint",
-            WalletQuoteDirection::Receive,
-            100,
-            300,
-            "create-recovery-quote",
-        )
-        .expect("recovery quote");
-    let inconclusive = store
-        .transition_wallet_quote(
-            "alpha",
-            "recovery-quote",
-            WalletQuotePhase::Requested,
-            WalletQuotePhase::Inconclusive,
-            Some("recovery-invoice"),
-            Some("terminal_artifact_missing"),
-        )
-        .expect("quarantine ambiguous quote");
-    assert_eq!(
-        inconclusive.terminal_code.as_deref(),
-        Some("terminal_artifact_missing")
-    );
-    let recovered = store
-        .transition_wallet_quote(
-            "alpha",
-            "recovery-quote",
-            WalletQuotePhase::Inconclusive,
-            WalletQuotePhase::Settled,
-            Some("recovery-invoice"),
-            None,
-        )
-        .expect("authoritative settlement repairs ambiguous quote");
-    assert!(recovered.settled_at_unix.is_some());
-    assert!(recovered.terminal_code.is_none());
     for index in 0..4 {
         let operation = store
             .create_operation(
@@ -749,7 +569,7 @@ fn quote_observation_store() -> Store {
 fn quote_operation(store: &Store, id: &str, kind: OperationKind, key: &str) {
     let capability = match kind {
         OperationKind::WalletInvoice => Capability::WalletFund,
-        OperationKind::WalletPay => Capability::WalletControl,
+        OperationKind::WalletPay | OperationKind::WalletQuoteClaim => Capability::WalletControl,
         _ => panic!("quote fixture received a non-quote operation"),
     };
     store
@@ -861,7 +681,7 @@ fn quote_observations_are_atomic_immutable_and_latest_by_sequence() {
     quote_operation(
         &store,
         "claim-observation",
-        OperationKind::WalletInvoice,
+        OperationKind::WalletQuoteClaim,
         "create-claim-observation",
     );
     let issued = WalletQuoteObservationInput {
@@ -892,6 +712,20 @@ fn quote_observations_are_atomic_immutable_and_latest_by_sequence() {
         .expect("latest observation");
     assert_eq!(latest.state, "ISSUED");
     assert!(latest.observation_sequence > first.observation_sequence);
+    let snapshot = store
+        .wallet_quote_observation_max_sequence("alpha", "designer", "quote-observation-experiment")
+        .expect("observation snapshot");
+    let listed = store
+        .wallet_quote_observations(
+            "alpha",
+            "designer",
+            "quote-observation-experiment",
+            0,
+            snapshot,
+            10,
+        )
+        .expect("latest observations");
+    assert_eq!(listed, vec![latest]);
 }
 
 #[test]
@@ -937,84 +771,98 @@ fn invalid_observation_cannot_terminalize_its_operation() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "atomic identity rollback and concurrent single-flight admission are one payment-claim contract"
+)]
 fn payment_claims_are_idempotent_and_single_flight() {
     let store = quote_observation_store();
-    quote_operation(
-        &store,
-        "payment-one",
-        OperationKind::WalletPay,
-        "create-payment-one",
-    );
-    quote_operation(
-        &store,
-        "payment-two",
-        OperationKind::WalletPay,
-        "create-payment-two",
-    );
-    let first = store
-        .record_wallet_payment_claim(
+    let admit = |store: &Store, operation: &str, quote: &str| {
+        store.create_wallet_pay_operation(
             "alpha",
             "designer",
-            "payment-one",
+            "quote-observation-instance",
+            "quote-observation-experiment",
+            "quote-observation-lease",
+            operation,
+            &serde_json::json!({"mint_quote_id": quote}),
+            &format!("create-{operation}"),
             "recipient-wallet",
             "recipient-mint",
-            "01234567-89ab-cdef-0123-456789abcdef",
+            quote,
             "payer-wallet",
             "payer-mint",
         )
-        .expect("first payment claim");
+    };
+    let first = admit(
+        &store,
+        "payment-one",
+        "01234567-89ab-cdef-0123-456789abcdef",
+    )
+    .expect("first atomic payment admission");
     assert_eq!(
-        store
-            .record_wallet_payment_claim(
-                "alpha",
-                "designer",
-                "payment-one",
-                "recipient-wallet",
-                "recipient-mint",
-                "01234567-89ab-cdef-0123-456789abcdef",
-                "payer-wallet",
-                "payer-mint",
-            )
-            .expect("idempotent payment claim"),
+        admit(
+            &store,
+            "payment-one",
+            "01234567-89ab-cdef-0123-456789abcdef"
+        )
+        .expect("idempotent payment admission"),
         first
     );
     assert!(matches!(
-        store.record_wallet_payment_claim(
-            "alpha",
-            "designer",
-            "payment-two",
-            "recipient-wallet",
-            "recipient-mint",
-            "01234567-89ab-cdef-0123-456789abcdef",
-            "payer-wallet",
-            "payer-mint",
-        ),
+        admit(&store, "payment-two", "01234567-89ab-cdef-0123-456789abcdef"),
         Err(StoreError::QuotePaymentAlreadyClaimed { operation, .. })
             if operation == "payment-one"
     ));
-
+    assert!(matches!(
+        store.operation("alpha", "designer", "payment-two"),
+        Err(StoreError::NotFound { .. })
+    ));
     quote_operation(
         &store,
-        "payment-three",
-        OperationKind::WalletPay,
-        "create-payment-three",
+        "identity-conflict",
+        OperationKind::WalletInvoice,
+        "seed-identity-conflict",
     );
-    quote_operation(
+    assert!(matches!(
+        admit(
+            &store,
+            "identity-conflict",
+            "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        ),
+        Err(StoreError::Conflict { .. })
+    ));
+    admit(
         &store,
-        "payment-four",
-        OperationKind::WalletPay,
-        "create-payment-four",
-    );
+        "payment-five",
+        "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    )
+    .expect("conflicting operation identity did not retain a payment claim");
+    for operation in ["payment-one", "identity-conflict", "payment-five"] {
+        store
+            .record_operation_result(
+                "alpha",
+                operation,
+                OperationPhase::Succeeded,
+                serde_json::json!({"fixture": true}),
+            )
+            .expect("finish setup operation");
+    }
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let handles = ["payment-three", "payment-four"].map(|operation| {
         let store = store.clone();
         let barrier = barrier.clone();
         std::thread::spawn(move || {
             barrier.wait();
-            store.record_wallet_payment_claim(
+            store.create_wallet_pay_operation(
                 "alpha",
                 "designer",
+                "quote-observation-instance",
+                "quote-observation-experiment",
+                "quote-observation-lease",
                 operation,
+                &serde_json::json!({"mint_quote_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}),
+                &format!("create-{operation}"),
                 "recipient-wallet",
                 "recipient-mint",
                 "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -1024,13 +872,18 @@ fn payment_claims_are_idempotent_and_single_flight() {
         })
     });
     let results = handles.map(|handle| handle.join().expect("payment claim thread"));
-    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
     assert_eq!(
         results
             .iter()
             .filter(|result| matches!(result, Err(StoreError::QuotePaymentAlreadyClaimed { .. })))
             .count(),
-        1
+        1,
+        "{results:?}"
     );
 }
 

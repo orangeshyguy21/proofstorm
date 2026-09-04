@@ -14,9 +14,10 @@ use proofstorm_core::{
     LinkSpec, MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
     NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature, OperationArtifact,
     OperationKind, OperationPhase, PublishedRevision, ReleaseChannel, SupportLifecycle,
-    TeardownReceipt as CoreTeardownReceipt, ValidateLabRequest, ValidationReport, WalletQuote,
-    WalletQuoteDirection, WalletQuotePhase, default_catalog, digest_json,
-    network_policy_fault_backend, validate_lab,
+    TeardownReceipt as CoreTeardownReceipt, ValidateLabRequest, ValidationReport,
+    WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
+    WalletQuoteObservationRole, default_catalog, digest_json, network_policy_fault_backend,
+    validate_lab, wallet_quote_observations_from_artifact,
 };
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionPhase, AuthenticationConformanceAction,
@@ -26,7 +27,8 @@ use proofstorm_kube::{
     NetworkPartitionAction, NodeControlAction, PeerConnectAction, PeerDisconnectAction,
     ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec, ProofstormLabSpec,
     ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
-    WalletInvoiceAction, WalletPayAction, WalletRoundTripAction, component_ports,
+    WalletInvoiceAction, WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction,
+    component_ports,
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
@@ -660,7 +662,6 @@ pub struct WalletInvoiceRequest {
     pub experiment_id: String,
     pub lease_id: String,
     pub operation_id: String,
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
     pub amount_sat: u64,
@@ -680,10 +681,31 @@ pub struct WalletPayRequest {
     pub experiment_id: String,
     pub lease_id: String,
     pub operation_id: String,
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
+    pub recipient_wallet: String,
+    pub recipient_mint: String,
+    pub mint_quote_id: String,
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WalletQuoteClaimRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub wallet: String,
+    pub mint: String,
+    pub mint_quote_id: String,
+    #[serde(default = "default_claim_timeout_seconds")]
+    pub timeout_seconds: u32,
+    pub idempotency_key: String,
+}
+
+const fn default_claim_timeout_seconds() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -969,7 +991,17 @@ const fn default_evidence_section_limit() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WalletQuoteRequest {
+    pub instance_id: String,
+    pub wallet: String,
+    pub mint: String,
+    pub direction: WalletQuoteDirection,
     pub quote_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WalletQuoteStatusResponse {
+    pub last_observation: WalletQuoteObservation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -977,7 +1009,7 @@ pub struct WalletQuoteRequest {
 pub struct WalletQuoteListRequest {
     pub experiment_id: String,
     #[serde(default)]
-    pub after_quote_id: Option<String>,
+    pub cursor: Option<String>,
     #[serde(default = "default_quote_list_limit")]
     #[schemars(range(min = 1, max = 100))]
     pub limit: u32,
@@ -986,9 +1018,9 @@ pub struct WalletQuoteListRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WalletQuoteListResponse {
-    pub quotes: Vec<WalletQuote>,
+    pub last_observations: Vec<WalletQuoteObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_after_quote_id: Option<String>,
+    pub next_cursor: Option<String>,
 }
 
 const fn default_quote_list_limit() -> u32 {
@@ -1879,8 +1911,7 @@ impl ProofstormMcp {
                 .runtime()?
                 .request_action_cancellation(&operation, &token)
                 .await;
-            let finalized = self
-                .store
+            self.store
                 .record_operation_result(
                     &self.workspace,
                     &operation.id,
@@ -1891,7 +1922,6 @@ impl ProofstormMcp {
                     }),
                 )
                 .map_err(store_error)?;
-            self.sync_wallet_quote_operation(&finalized)?;
         }
         Ok(())
     }
@@ -2977,60 +3007,11 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        let quote_key = format!(
-            "quote-{}",
-            &proofstorm_core::digest_json(&(
-                &self.workspace,
-                &self.principal,
-                &request.quote_id,
-                &request.idempotency_key,
-            ))[7..26]
-        );
-        let quote = match self.store.create_wallet_quote(
-            &self.workspace,
-            &self.principal,
-            &request.instance_id,
-            &request.experiment_id,
-            &request.lease_id,
-            &request.quote_id,
-            &request.wallet,
-            &request.mint,
-            WalletQuoteDirection::Receive,
-            request.amount_sat,
-            request.timeout_seconds,
-            &quote_key,
-        ) {
-            Ok(quote) if quote.phase == WalletQuotePhase::Requested => quote,
-            Ok(_) => {
-                let failed = self
-                    .store
-                    .record_operation_result(
-                        &self.workspace,
-                        &operation.id,
-                        OperationPhase::Failed,
-                        serde_json::json!({"code": "quote_not_requestable"}),
-                    )
-                    .map_err(store_error)?;
-                return Ok(Json(failed));
-            }
-            Err(error) => {
-                self.store
-                    .record_operation_result(
-                        &self.workspace,
-                        &operation.id,
-                        OperationPhase::Failed,
-                        serde_json::json!({"code": "quote_admission_failed"}),
-                    )
-                    .map_err(store_error)?;
-                return Err(store_error(error));
-            }
-        };
         let action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
             LabAction::WalletInvoice(WalletInvoiceAction {
-                quote_id: request.quote_id.clone(),
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 amount_sat: request.amount_sat,
@@ -3038,16 +3019,6 @@ impl ProofstormMcp {
             }),
         );
         self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .transition_wallet_quote(
-                &self.workspace,
-                &quote.id,
-                WalletQuotePhase::Requested,
-                WalletQuotePhase::Ready,
-                Some(&operation.id),
-                None,
-            )
-            .map_err(store_error)?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
             .map(Json)
@@ -3062,49 +3033,11 @@ impl ProofstormMcp {
         Parameters(request): Parameters<WalletPayRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize_all(&[Capability::WalletControl, Capability::ArtifactRead])?;
-        let quote = self
-            .store
-            .wallet_quote(&self.workspace, &self.principal, &request.quote_id)
-            .map_err(store_error)?;
-        if quote.direction != WalletQuoteDirection::Receive
-            || quote.instance_id != request.instance_id
-            || quote.experiment_id != request.experiment_id
-            || quote.lease_id != request.lease_id
-        {
-            return Err(invalid_operation(
-                "quote must be a receive quote in the same instance, experiment, and lease",
-            ));
-        }
-        if quote.phase != WalletQuotePhase::Ready {
-            match self
-                .store
-                .operation(&self.workspace, &self.principal, &request.operation_id)
-            {
-                Ok(existing)
-                    if existing.kind == OperationKind::WalletPay
-                        && existing.request["quote_id"] == request.quote_id
-                        && existing.request["wallet"] == request.wallet
-                        && existing.request["mint"] == request.mint =>
-                {
-                    return Ok(Json(existing));
-                }
-                Ok(_) => {
-                    return Err(invalid_operation(
-                        "operation identity does not match the existing quote payment",
-                    ));
-                }
-                Err(StoreError::NotFound { .. }) => {
-                    return Err(invalid_operation("quote is not ready for payment"));
-                }
-                Err(error) => return Err(store_error(error)),
-            }
-        }
-        if quote.wallet_id == request.wallet {
+        if request.recipient_wallet == request.wallet {
             return Err(invalid_operation(
                 "payer and recipient wallets must be distinct",
             ));
         }
-        validate_wallet_amount(quote.amount_sat)?;
         let (instance, revision) = self
             .store
             .operation_context(
@@ -3115,14 +3048,88 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
-        component_image_any(&revision, &quote.wallet_id, ComponentKind::Wallet)?;
+        component_image_any(&revision, &request.recipient_wallet, ComponentKind::Wallet)?;
+        component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        component_image_any(&revision, &request.recipient_mint, ComponentKind::Mint)?;
+        let mut request_json = serde_json::to_value(&request).map_err(|error| {
+            ErrorData::internal_error(
+                error.to_string(),
+                Some(serde_json::json!({"code": "serialization_failed"})),
+            )
+        })?;
+        if let Some(object) = request_json.as_object_mut() {
+            object.remove("idempotency_key");
+        }
+        let operation = self
+            .store
+            .create_wallet_pay_operation(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                &request.experiment_id,
+                &request.lease_id,
+                &request.operation_id,
+                &request_json,
+                &request.idempotency_key,
+                &request.recipient_wallet,
+                &request.recipient_mint,
+                &request.mint_quote_id,
+                &request.wallet,
+                &request.mint,
+            )
+            .map_err(store_error)?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::WalletPay(WalletPayAction {
+                wallet: request.wallet.clone(),
+                mint: request.mint.clone(),
+                recipient_wallet: request.recipient_wallet.clone(),
+                recipient_mint: request.recipient_mint.clone(),
+                mint_quote_id: request.mint_quote_id.clone(),
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Refresh and claim an exact recipient mint quote without attempting payment"
+    )]
+    async fn proofstorm_wallet_quote_claim(
+        &self,
+        Parameters(request): Parameters<WalletQuoteClaimRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::WalletControl)?;
+        if !(1..=120).contains(&request.timeout_seconds) {
+            return Err(invalid_operation(
+                "timeout_seconds must be between 1 and 120",
+            ));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::WalletControl,
+            )
+            .map_err(store_error)?;
+        component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
             &request.lease_id,
             &request.operation_id,
-            OperationKind::WalletPay,
+            OperationKind::WalletQuoteClaim,
             &request,
             &request.idempotency_key,
             Capability::WalletControl,
@@ -3130,26 +3137,15 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        self.store
-            .transition_wallet_quote(
-                &self.workspace,
-                &quote.id,
-                WalletQuotePhase::Ready,
-                WalletQuotePhase::Pending,
-                None,
-                None,
-            )
-            .map_err(store_error)?;
         let action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletPay(WalletPayAction {
-                quote_id: request.quote_id.clone(),
+            LabAction::WalletQuoteClaim(WalletQuoteClaimAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
-                recipient_wallet: quote.wallet_id,
-                amount_sat: quote.amount_sat,
+                mint_quote_id: request.mint_quote_id.clone(),
+                timeout_seconds: request.timeout_seconds,
             }),
         );
         self.runtime()?.apply_action(&instance, &action).await?;
@@ -3358,7 +3354,6 @@ impl ProofstormMcp {
             .operation(&self.workspace, &self.principal, &request.operation_id)
             .map_err(store_error)?;
         if operation.artifact.is_some() {
-            self.sync_wallet_quote_operation(&operation)?;
             return Ok(Json(operation));
         }
         self.store
@@ -3373,11 +3368,23 @@ impl ProofstormMcp {
         let Some((phase, artifact)) = terminal else {
             return Ok(Json(operation));
         };
+        let observations = wallet_quote_observations_from_artifact(&artifact).map_err(|_| {
+            coded_invalid_request(
+                "invalid_wallet_quote_observation",
+                "terminal artifact contains an invalid wallet quote observation",
+            )
+        })?;
+        validate_operation_quote_observations(&operation, &observations)?;
         let completed = self
             .store
-            .record_operation_result(&self.workspace, &operation.id, phase, artifact)
+            .record_operation_result_with_quote_observations(
+                &self.workspace,
+                &operation.id,
+                phase,
+                artifact,
+                &observations,
+            )
             .map_err(store_error)?;
-        self.sync_wallet_quote_operation(&completed)?;
         Ok(Json(completed))
     }
 
@@ -3449,7 +3456,6 @@ impl ProofstormMcp {
                 missing_action_artifact(&operation),
             )
             .map_err(store_error)?;
-        self.sync_wallet_quote_operation(&finalized)?;
         Ok(Json(finalized))
     }
 
@@ -3623,66 +3629,73 @@ impl ProofstormMcp {
         .map(Json)
     }
 
-    #[tool(description = "Read a sanitized durable wallet quote lifecycle by Proofstorm ID")]
+    #[tool(
+        description = "Read the latest stored observation of an exact adapter-native wallet quote; this is historical data, not live wallet state"
+    )]
     async fn proofstorm_wallet_quote_status(
         &self,
         Parameters(request): Parameters<WalletQuoteRequest>,
-    ) -> Result<Json<WalletQuote>, ErrorData> {
+    ) -> Result<Json<WalletQuoteStatusResponse>, ErrorData> {
         self.authorize(Capability::ArtifactRead)?;
-        let quote = self
-            .store
-            .wallet_quote(&self.workspace, &self.principal, &request.quote_id)
-            .map_err(store_error)?;
-        if !quote.phase.is_terminal()
-            && let Some(operation_id) = quote.operation_id.as_deref()
-        {
-            let operation = self
-                .store
-                .operation(&self.workspace, &self.principal, operation_id)
-                .map_err(store_error)?;
-            if operation.artifact.is_some() {
-                self.sync_wallet_quote_operation(&operation)?;
-            } else if self.kubernetes.is_some() {
-                self.proofstorm_operation_status(Parameters(OperationRequest {
-                    operation_id: operation_id.to_owned(),
-                }))
-                .await?;
-            }
-            return self
-                .store
-                .wallet_quote(&self.workspace, &self.principal, &request.quote_id)
-                .map(Json)
-                .map_err(store_error);
-        }
-        Ok(Json(quote))
+        self.store
+            .wallet_quote_observation(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                &request.wallet,
+                &request.mint,
+                request.direction,
+                &request.quote_id,
+            )
+            .map(|last_observation| Json(WalletQuoteStatusResponse { last_observation }))
+            .map_err(store_error)
     }
 
-    #[tool(description = "List sanitized wallet quote lifecycles for an experiment")]
+    #[tool(
+        description = "List the latest stored observation per adapter-native wallet quote in an experiment; results are historical, not live wallet state"
+    )]
     fn proofstorm_wallet_quote_list(
         &self,
         Parameters(request): Parameters<WalletQuoteListRequest>,
     ) -> Result<Json<WalletQuoteListResponse>, ErrorData> {
         self.authorize(Capability::ExperimentRead)?;
-        let quotes = self
+        let (snapshot_sequence, after_sequence) = match request.cursor.as_deref() {
+            Some(cursor) => decode_quote_cursor(cursor, &request.experiment_id)?,
+            None => (
+                self.store
+                    .wallet_quote_observation_max_sequence(
+                        &self.workspace,
+                        &self.principal,
+                        &request.experiment_id,
+                    )
+                    .map_err(store_error)?,
+                0,
+            ),
+        };
+        let observations = self
             .store
-            .wallet_quotes(
+            .wallet_quote_observations(
                 &self.workspace,
                 &self.principal,
                 &request.experiment_id,
-                request.after_quote_id.as_deref(),
+                after_sequence,
+                snapshot_sequence,
                 request.limit,
             )
             .map_err(store_error)?;
         let source_has_more =
-            if quotes.len() == usize::try_from(request.limit).unwrap_or(usize::MAX) {
-                let after = quotes.last().map(|quote| quote.id.as_str());
+            if observations.len() == usize::try_from(request.limit).unwrap_or(usize::MAX) {
+                let after = observations
+                    .last()
+                    .map_or(after_sequence, |item| item.observation_sequence);
                 !self
                     .store
-                    .wallet_quotes(
+                    .wallet_quote_observations(
                         &self.workspace,
                         &self.principal,
                         &request.experiment_id,
                         after,
+                        snapshot_sequence,
                         1,
                     )
                     .map_err(store_error)?
@@ -3690,12 +3703,18 @@ impl ProofstormMcp {
             } else {
                 false
             };
-        let mut end = quotes.len();
+        let mut end = observations.len();
         loop {
-            let has_more = source_has_more || end < quotes.len();
+            let has_more = source_has_more || end < observations.len();
             let response = WalletQuoteListResponse {
-                quotes: quotes[..end].to_vec(),
-                next_after_quote_id: (has_more && end > 0).then(|| quotes[end - 1].id.clone()),
+                last_observations: observations[..end].to_vec(),
+                next_cursor: (has_more && end > 0).then(|| {
+                    encode_quote_cursor(
+                        &request.experiment_id,
+                        snapshot_sequence,
+                        observations[end - 1].observation_sequence,
+                    )
+                }),
             };
             if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
                 return Ok(Json(response));
@@ -3743,6 +3762,54 @@ impl CatalogEntryDetail {
     }
 }
 
+fn validate_operation_quote_observations(
+    operation: &LabOperation,
+    observations: &[WalletQuoteObservationInput],
+) -> Result<(), ErrorData> {
+    let field = |name: &str| {
+        operation
+            .request
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+    };
+    let valid = observations
+        .iter()
+        .all(|observation| match (operation.kind, observation.role) {
+            (OperationKind::WalletInvoice, WalletQuoteObservationRole::InvoiceReceive) => {
+                field("wallet") == Some(&observation.wallet_id)
+                    && field("mint") == Some(&observation.mint_id)
+                    && operation
+                        .request
+                        .get("amount_sat")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(observation.amount_sat)
+            }
+            (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentMelt) => {
+                field("wallet") == Some(&observation.wallet_id)
+                    && field("mint") == Some(&observation.mint_id)
+            }
+            (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentReceive) => {
+                field("recipient_wallet") == Some(&observation.wallet_id)
+                    && field("recipient_mint") == Some(&observation.mint_id)
+                    && field("mint_quote_id") == Some(&observation.quote_id)
+            }
+            (OperationKind::WalletQuoteClaim, WalletQuoteObservationRole::ClaimReceive) => {
+                field("wallet") == Some(&observation.wallet_id)
+                    && field("mint") == Some(&observation.mint_id)
+                    && field("mint_quote_id") == Some(&observation.quote_id)
+            }
+            _ => false,
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(coded_invalid_request(
+            "wallet_quote_observation_identity_mismatch",
+            "terminal wallet quote observations do not match the admitted typed operation",
+        ))
+    }
+}
+
 fn compact_draft_mutation(draft: Draft, changed_paths: Vec<String>) -> DraftMutationResult {
     DraftMutationResult {
         draft_id: draft.id,
@@ -3786,6 +3853,50 @@ fn evidence_resource_uri(request: &ArtifactExportRequest, digest: &str) -> Strin
         u8::from(request.include_oracle_artifacts),
         artifact_ids.join(",")
     )
+}
+
+fn encode_quote_cursor(experiment_id: &str, snapshot: u64, sequence: u64) -> String {
+    let digest = digest_json(&(experiment_id, snapshot, sequence));
+    format!("{snapshot}.{sequence}.{}", &digest[7..23])
+}
+
+fn decode_quote_cursor(cursor: &str, experiment_id: &str) -> Result<(u64, u64), ErrorData> {
+    let mut parts = cursor.split('.');
+    let snapshot = parts
+        .next()
+        .and_then(|part| part.parse::<u64>().ok())
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "invalid_wallet_quote_cursor",
+                "wallet quote cursor is invalid",
+            )
+        })?;
+    let sequence = parts
+        .next()
+        .and_then(|part| part.parse::<u64>().ok())
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "invalid_wallet_quote_cursor",
+                "wallet quote cursor is invalid",
+            )
+        })?;
+    let supplied_digest = parts
+        .next()
+        .filter(|_| parts.next().is_none())
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "invalid_wallet_quote_cursor",
+                "wallet quote cursor is invalid",
+            )
+        })?;
+    let expected = encode_quote_cursor(experiment_id, snapshot, sequence);
+    if expected.rsplit_once('.').map(|(_, digest)| digest) != Some(supplied_digest) {
+        return Err(coded_invalid_request(
+            "invalid_wallet_quote_cursor",
+            "wallet quote cursor does not belong to this experiment",
+        ));
+    }
+    Ok((snapshot, sequence))
 }
 
 fn parse_evidence_resource_uri(uri: &str) -> Result<(ArtifactExportRequest, String), ErrorData> {
@@ -4340,6 +4451,10 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             &[Capability::WalletControl, Capability::ArtifactRead],
         ),
         (
+            "proofstorm_wallet_quote_claim",
+            &[Capability::WalletControl],
+        ),
+        (
             "proofstorm_wallet_round_trip",
             &[
                 Capability::WalletCreate,
@@ -4371,70 +4486,6 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             &[Capability::ExperimentRead],
         ),
     ]
-}
-
-fn wallet_quote_recovery_outcome<'a>(
-    kind: OperationKind,
-    operation_phase: OperationPhase,
-    quote_phase: WalletQuotePhase,
-    artifact_code: &'a str,
-    artifact_phase: Option<&str>,
-) -> Option<(WalletQuotePhase, Option<&'a str>)> {
-    if quote_phase.is_terminal()
-        || matches!(
-            operation_phase,
-            OperationPhase::Pending | OperationPhase::Running
-        )
-    {
-        return None;
-    }
-    match (kind, operation_phase) {
-        (OperationKind::WalletInvoice, OperationPhase::Succeeded) => {
-            Some((WalletQuotePhase::Settled, None))
-        }
-        (OperationKind::WalletPay, OperationPhase::Succeeded) => {
-            // A finished pay job is an observation, not a settlement claim.
-            // The artifact phase comes from the wallet's melt-quote ledger.
-            let (next, code) = match artifact_phase {
-                Some("paid") => (WalletQuotePhase::Paid, None),
-                Some("unpaid") => (WalletQuotePhase::Failed, Some("melt_unpaid")),
-                Some("pending") => (WalletQuotePhase::Inconclusive, Some("melt_pending")),
-                _ => (
-                    WalletQuotePhase::Inconclusive,
-                    Some("settlement_unverified"),
-                ),
-            };
-            quote_phase.can_transition_to(next).then_some((next, code))
-        }
-        (_, OperationPhase::Cancelled)
-            if matches!(
-                quote_phase,
-                WalletQuotePhase::Requested | WalletQuotePhase::Ready
-            ) =>
-        {
-            Some((WalletQuotePhase::Cancelled, Some("action_cancelled")))
-        }
-        (_, OperationPhase::Cancelled) => Some((
-            WalletQuotePhase::Inconclusive,
-            Some("payment_state_inconclusive"),
-        )),
-        (_, OperationPhase::Failed)
-            if matches!(
-                quote_phase,
-                WalletQuotePhase::Pending | WalletQuotePhase::Paid | WalletQuotePhase::Inconclusive
-            ) || matches!(
-                artifact_code,
-                "action_job_lost" | "terminal_artifact_missing"
-            ) =>
-        {
-            Some((WalletQuotePhase::Inconclusive, Some(artifact_code)))
-        }
-        (_, OperationPhase::Failed) if artifact_code == "action_deadline_exceeded" => {
-            Some((WalletQuotePhase::Expired, Some("action_deadline_exceeded")))
-        }
-        (_, OperationPhase::Failed) => Some((WalletQuotePhase::Failed, Some(artifact_code))),
-        _ => None,
-    }
 }
 
 impl ProofstormMcp {
@@ -4580,67 +4631,6 @@ impl ProofstormMcp {
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
             .map(Json)
             .map_err(store_error)
-    }
-
-    fn sync_wallet_quote_operation(&self, operation: &LabOperation) -> Result<(), ErrorData> {
-        if !matches!(
-            operation.kind,
-            OperationKind::WalletInvoice | OperationKind::WalletPay
-        ) || matches!(
-            operation.phase,
-            OperationPhase::Pending | OperationPhase::Running
-        ) {
-            return Ok(());
-        }
-        let Some(quote_id) = operation.request["quote_id"].as_str() else {
-            return Err(ErrorData::internal_error(
-                "wallet quote operation has no quote identity",
-                Some(serde_json::json!({"code": "quote_identity_missing"})),
-            ));
-        };
-        let artifact_code = operation
-            .artifact
-            .as_ref()
-            .and_then(|artifact| artifact.content["code"].as_str())
-            .unwrap_or("action_failed");
-        let artifact_phase = operation
-            .artifact
-            .as_ref()
-            .and_then(|artifact| artifact.content["phase"].as_str());
-        for _ in 0..3 {
-            let quote = self
-                .store
-                .wallet_quote(&self.workspace, &self.principal, quote_id)
-                .map_err(store_error)?;
-            if quote.phase.is_terminal() {
-                return Ok(());
-            }
-            let Some((next, terminal_code)) = wallet_quote_recovery_outcome(
-                operation.kind,
-                operation.phase,
-                quote.phase,
-                artifact_code,
-                artifact_phase,
-            ) else {
-                return Ok(());
-            };
-            match self.store.transition_wallet_quote(
-                &self.workspace,
-                quote_id,
-                quote.phase,
-                next,
-                None,
-                terminal_code,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(StoreError::StaleQuote { .. }) => {}
-                Err(error) => return Err(store_error(error)),
-            }
-        }
-        Err(coded_invalid_request(
-            "stale_quote",
-            "wallet quote changed repeatedly while synchronizing action status",
-        ))
     }
 
     #[allow(
@@ -5879,7 +5869,13 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 65);
+        assert_eq!(service.tool_names().len(), 66);
+        assert!(
+            service
+                .tool_names()
+                .contains(&"proofstorm_wallet_quote_claim".to_owned()),
+            "recipient quote claiming is a first-class recovery operation"
+        );
         assert!(
             service
                 .tool_names()
@@ -6629,6 +6625,11 @@ mod tests {
                 .contains(&"proofstorm_wallet_invoice".to_owned())
         );
         assert!(
+            complete
+                .tool_names()
+                .contains(&"proofstorm_wallet_quote_claim".to_owned())
+        );
+        assert!(
             !complete
                 .tool_names()
                 .contains(&"proofstorm_wallet_pay".to_owned())
@@ -6650,6 +6651,10 @@ mod tests {
         );
         let Err(missing_quote) = status
             .proofstorm_wallet_quote_status(Parameters(WalletQuoteRequest {
+                instance_id: "missing-instance".into(),
+                wallet: "missing-wallet".into(),
+                mint: "missing-mint".into(),
+                direction: WalletQuoteDirection::Receive,
                 quote_id: "missing-quote".into(),
             }))
             .await
@@ -6676,242 +6681,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "the restart acceptance scenario keeps durable setup and reconciliation evidence together"
-    )]
-    async fn quote_status_repairs_ambiguous_state_from_durable_settlement_after_restart() {
-        let store = seeded_store();
-        for capability in [
-            Capability::ExperimentCreate,
-            Capability::LeaseAcquire,
-            Capability::WalletFund,
-            Capability::ArtifactRead,
-        ] {
-            store
-                .grant("alpha", "designer", capability)
-                .expect("recovery grant");
-        }
-        store
-            .create_draft(
-                "alpha",
-                "designer",
-                "recovery",
-                &lab("recovery"),
-                "create-recovery",
-            )
-            .expect("draft");
-        let revision = store
-            .publish("alpha", "designer", "recovery", 1, "publish-recovery")
-            .expect("revision");
-        store
-            .materialize(
-                "alpha",
-                "designer",
-                "recovery-instance",
-                &revision.digest,
-                "materialize-recovery",
-            )
-            .expect("instance");
-        store
-            .create_experiment(
-                "alpha",
-                "designer",
-                "recovery-experiment",
-                "recovery-instance",
-                "create-recovery-experiment",
-            )
-            .expect("experiment");
-        store
-            .acquire_lease(
-                "alpha",
-                "designer",
-                "recovery-experiment",
-                "recovery-lease",
-                300,
-                1,
-                "acquire-recovery-lease",
-            )
-            .expect("lease");
-        store
-            .create_wallet_quote(
-                "alpha",
-                "designer",
-                "recovery-instance",
-                "recovery-experiment",
-                "recovery-lease",
-                "recovery-quote",
-                "receiver-wallet",
-                "mint",
-                WalletQuoteDirection::Receive,
-                100,
-                300,
-                "create-recovery-quote",
-            )
-            .expect("quote");
-        let operation = store
-            .create_operation(
-                "alpha",
-                "designer",
-                "recovery-instance",
-                "recovery-experiment",
-                "recovery-lease",
-                "recovery-invoice",
-                OperationKind::WalletInvoice,
-                &serde_json::json!({"quote_id": "recovery-quote"}),
-                "create-recovery-invoice",
-                Capability::WalletFund,
-            )
-            .expect("operation");
-        store
-            .transition_wallet_quote(
-                "alpha",
-                "recovery-quote",
-                WalletQuotePhase::Requested,
-                WalletQuotePhase::Inconclusive,
-                Some(&operation.id),
-                Some("terminal_artifact_missing"),
-            )
-            .expect("ambiguous quote");
-        store
-            .record_operation_result(
-                "alpha",
-                &operation.id,
-                OperationPhase::Succeeded,
-                serde_json::json!({"phase": "settled", "amount_sat": 100}),
-            )
-            .expect("durable settlement artifact");
-
-        let restarted = ProofstormMcp::new(store, "alpha", "designer").expect("restart session");
-        let quote = restarted
-            .proofstorm_wallet_quote_status(Parameters(WalletQuoteRequest {
-                quote_id: "recovery-quote".into(),
-            }))
-            .await
-            .expect("reconciled quote")
-            .0;
-        assert_eq!(quote.phase, WalletQuotePhase::Settled);
-        assert!(quote.settled_at_unix.is_some());
-        assert!(quote.terminal_code.is_none());
-    }
-
     #[test]
-    fn wallet_quote_recovery_is_conservative_and_reconcilable() {
+    fn wallet_quote_cursor_is_snapshot_and_experiment_bound() {
+        let cursor = encode_quote_cursor("experiment-one", 42, 17);
         assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletInvoice,
-                OperationPhase::Failed,
-                WalletQuotePhase::Ready,
-                "action_deadline_exceeded",
-                None,
-            ),
-            Some((WalletQuotePhase::Expired, Some("action_deadline_exceeded")))
+            decode_quote_cursor(&cursor, "experiment-one").expect("valid cursor"),
+            (42, 17)
         );
+        let error = decode_quote_cursor(&cursor, "experiment-two")
+            .expect_err("cursor cannot cross experiments");
         assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletInvoice,
-                OperationPhase::Cancelled,
-                WalletQuotePhase::Ready,
-                "action_cancelled",
-                None,
-            ),
-            Some((WalletQuotePhase::Cancelled, Some("action_cancelled")))
-        );
-        for code in ["action_job_lost", "terminal_artifact_missing"] {
-            assert_eq!(
-                wallet_quote_recovery_outcome(
-                    OperationKind::WalletPay,
-                    OperationPhase::Failed,
-                    WalletQuotePhase::Pending,
-                    code,
-                    None,
-                ),
-                Some((WalletQuotePhase::Inconclusive, Some(code)))
-            );
-        }
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletInvoice,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Inconclusive,
-                "action_failed",
-                None,
-            ),
-            Some((WalletQuotePhase::Settled, None))
-        );
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Inconclusive,
-                "action_failed",
-                Some("paid"),
-            ),
-            Some((WalletQuotePhase::Paid, None))
-        );
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Failed,
-                WalletQuotePhase::Pending,
-                "action_deadline_exceeded",
-                None,
-            ),
-            Some((
-                WalletQuotePhase::Inconclusive,
-                Some("action_deadline_exceeded")
-            ))
-        );
-    }
-
-    #[test]
-    fn wallet_pay_settlement_phase_drives_the_quote_outcome() {
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Pending,
-                "action_failed",
-                Some("unpaid"),
-            ),
-            Some((WalletQuotePhase::Failed, Some("melt_unpaid"))),
-            "a rolled-back melt never promotes the receive quote"
-        );
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Pending,
-                "action_failed",
-                Some("pending"),
-            ),
-            Some((WalletQuotePhase::Inconclusive, Some("melt_pending")))
-        );
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Pending,
-                "action_failed",
-                None,
-            ),
-            Some((
-                WalletQuotePhase::Inconclusive,
-                Some("settlement_unverified")
-            )),
-            "an artifact without a ledger-derived phase is not a settlement"
-        );
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Inconclusive,
-                "action_failed",
-                Some("unpaid"),
-            ),
-            None,
-            "an ambiguous quote is never downgraded to failed by a later unpaid observation"
+            error.data.expect("structured cursor error")["code"],
+            "invalid_wallet_quote_cursor"
         );
     }
 }

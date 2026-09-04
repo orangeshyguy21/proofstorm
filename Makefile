@@ -33,7 +33,7 @@ PLATFORM_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64
 GATES := slice2 slice4 slice5 native-exec cross-lab-scheduler \
 	cross-implementation-wallet nutshell-mint nutshell-cln nutshell-postgres \
 	cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres \
-	failed-melt
+	failed-melt quote-composition
 # Excluded from `make e2e`: fails on a known upstream Nutshell defect.
 EXPECTED_FAIL_GATES := nutshell-oidc
 

@@ -65,9 +65,9 @@ def quote_id(name):
     return value
 
 
-def wallet_databases():
-    wallet = required("PROOFSTORM_WALLET")
-    wallet_dir = os.path.join(required("HOME"), ".cashu", wallet)
+def wallet_databases(home=None, wallet=None):
+    wallet = wallet or required("PROOFSTORM_WALLET")
+    wallet_dir = os.path.join(home or required("HOME"), ".cashu", wallet)
     paths = sorted(glob.glob(os.path.join(wallet_dir, "*.sqlite3")))
     if not paths:
         raise DriverFailure("wallet_database_missing")
@@ -82,8 +82,8 @@ def connect_read_only(path, timeout_seconds):
     )
 
 
-def query_with_retry(query, parameters, missing_reason):
-    _, paths = wallet_databases()
+def query_with_retry(query, parameters, missing_reason, home=None, wallet=None):
+    _, paths = wallet_databases(home, wallet)
     timeout_seconds = bounded_seconds("PROOFSTORM_DB_TIMEOUT_SECONDS", 10, 1, 30)
     retry_seconds = bounded_seconds("PROOFSTORM_DB_RETRY_SECONDS", 0.2, 0.05, 2)
     deadline = time.monotonic() + timeout_seconds
@@ -122,17 +122,19 @@ def normalized_mint(value):
     return value.rstrip("/").lower()
 
 
-def receive_row(target_quote_id):
+def receive_row(target_quote_id, home=None, wallet=None, expected_mint=None):
     row = query_with_retry(
         "SELECT quote, mint, state, amount, created_time, paid_time, expiry, request "
         "FROM bolt11_mint_quotes WHERE quote = ? LIMIT 1",
         (target_quote_id,),
         "mint_quote_missing",
+        home,
+        wallet,
     )
     quote, mint, state, amount, created_time, paid_time, expiry, request = row
     if quote != target_quote_id:
         raise DriverFailure("mint_quote_identity_mismatch")
-    expected_mint = os.environ.get("PROOFSTORM_EXPECTED_MINT_URL")
+    expected_mint = expected_mint or os.environ.get("PROOFSTORM_EXPECTED_MINT_URL")
     if expected_mint and normalized_mint(mint) != normalized_mint(expected_mint):
         raise DriverFailure("mint_quote_mint_mismatch")
     try:
@@ -154,21 +156,20 @@ def receive_row(target_quote_id):
     }
 
 
-def receive_artifact(row, role, extra=None):
+def receive_artifact(row, role, wallet=None, mint=None, extra=None):
     artifact = {
         "role": role,
         "direction": "receive",
         "quote_id": row["quote_id"],
-        "wallet": required("PROOFSTORM_WALLET"),
-        "mint": required("PROOFSTORM_MINT"),
+        "wallet_id": wallet or required("PROOFSTORM_WALLET"),
+        "mint_id": mint or required("PROOFSTORM_MINT"),
         "state": row["state"],
         "amount_sat": row["amount_sat"],
-        "request_present": True,
     }
     for source, target in [
-        ("created_time", "wallet_created_time"),
-        ("paid_time", "wallet_paid_time"),
-        ("expiry", "wallet_expiry"),
+        ("created_time", "wallet_created_at_unix"),
+        ("paid_time", "wallet_paid_at_unix"),
+        ("expiry", "wallet_expires_at_unix"),
     ]:
         if row[source] is not None:
             artifact[target] = row[source]
@@ -246,9 +247,12 @@ def melt_row():
 
 def observe_invoice():
     row = receive_row(invoice_quote_id_from_file())
+    if row["state"].upper() != "UNPAID":
+        raise DriverFailure("mint_quote_initial_state_unexpected")
+    observation = receive_artifact(row, "invoice_receive")
     sys.stdout.write(
         json.dumps(
-            receive_artifact(row, "invoice_receive"),
+            {"mint_quote_id": row["quote_id"], "quote_observations": [observation]},
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -272,8 +276,8 @@ def observe_melt():
         "role": "payment_melt",
         "direction": "pay",
         "quote_id": quote,
-        "wallet": required("PROOFSTORM_WALLET"),
-        "mint": required("PROOFSTORM_MINT"),
+        "wallet_id": required("PROOFSTORM_WALLET"),
+        "mint_id": required("PROOFSTORM_MINT"),
         "state": str(state),
         "amount_sat": int(amount),
         "fee_reserve_sat": int(fee_reserve),
@@ -282,9 +286,9 @@ def observe_melt():
     sys.stdout.write(json.dumps(artifact, separators=(",", ":"), sort_keys=True))
 
 
-def cashu_command(*arguments):
-    mint_url = required("PROOFSTORM_EXPECTED_MINT_URL")
-    wallet = required("PROOFSTORM_WALLET")
+def cashu_command(*arguments, mint_url=None, wallet=None):
+    mint_url = mint_url or required("PROOFSTORM_EXPECTED_MINT_URL")
+    wallet = wallet or required("PROOFSTORM_WALLET")
     return [
         sys.executable,
         "-c",
@@ -305,11 +309,9 @@ def claim_receive():
     target_quote_id = quote_id("PROOFSTORM_MINT_QUOTE_ID")
     before = receive_row(target_quote_id)
     if before["state"] == "ISSUED":
-        result = receive_artifact(
-            before,
-            "claim_receive",
-            {"claim_exit_code": 0, "already_issued": True},
-        )
+        result = receive_artifact(before, "claim_receive")
+        claim_exit_code = 0
+        already_issued = True
     else:
         timeout_seconds = bounded_seconds("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", 30, 1, 120)
         try:
@@ -331,12 +333,187 @@ def claim_receive():
         except subprocess.TimeoutExpired:
             claim_exit_code = 124
         after = receive_row(target_quote_id)
-        result = receive_artifact(
-            after,
-            "claim_receive",
-            {"claim_exit_code": claim_exit_code, "already_issued": False},
+        result = receive_artifact(after, "claim_receive")
+        already_issued = False
+    artifact = {
+        "mint_quote_id": target_quote_id,
+        "claim_exit_code": claim_exit_code,
+        "already_issued": already_issued,
+        "quote_observations": [result],
+    }
+    if result["state"].upper() not in ("UNPAID", "PAID", "ISSUED"):
+        artifact["code"] = "unsupported_wallet_quote_state"
+    sys.stdout.write(
+        json.dumps(
+            artifact,
+            separators=(",", ":"),
+            sort_keys=True,
         )
-    sys.stdout.write(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    )
+
+
+def melt_ids():
+    _, paths = wallet_databases()
+    values = set()
+    for path in paths:
+        connection = None
+        try:
+            connection = connect_read_only(path, 1)
+            values.update(row[0] for row in connection.execute("SELECT quote FROM bolt11_melt_quotes"))
+        except sqlite3.OperationalError as error:
+            if "no such table" not in str(error).lower():
+                raise DriverFailure("wallet_database_read_failed") from error
+        finally:
+            if connection is not None:
+                connection.close()
+    return values
+
+
+def wallet_balance(home, wallet, mint_url):
+    environment = os.environ.copy()
+    environment["HOME"] = home
+    completed = subprocess.run(
+        cashu_command("balance", mint_url=mint_url, wallet=wallet),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+        check=False,
+        env=environment,
+    )
+    matches = re.findall(rb"Balance:\s*([0-9]+)", completed.stdout)
+    if completed.returncode != 0 or not matches:
+        raise DriverFailure("wallet_balance_unavailable")
+    return int(matches[-1])
+
+
+def pay_and_claim():
+    payer_wallet = required("PROOFSTORM_WALLET")
+    payer_mint = required("PROOFSTORM_MINT")
+    payer_mint_url = required("PROOFSTORM_EXPECTED_MINT_URL")
+    recipient_home = required("PROOFSTORM_RECIPIENT_HOME")
+    recipient_wallet = required("PROOFSTORM_RECIPIENT_WALLET")
+    recipient_mint = required("PROOFSTORM_RECIPIENT_MINT")
+    recipient_mint_url = required("PROOFSTORM_RECIPIENT_MINT_URL")
+    target_quote_id = quote_id("PROOFSTORM_MINT_QUOTE_ID")
+    receive = receive_row(
+        target_quote_id,
+        recipient_home,
+        recipient_wallet,
+        recipient_mint_url,
+    )
+    if receive["state"].upper() != "UNPAID":
+        code = (
+            "mint_quote_not_payable"
+            if receive["state"].upper() in ("PAID", "ISSUED")
+            else "unsupported_wallet_quote_state"
+        )
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "code": code,
+                    "mint_quote_id": target_quote_id,
+                    "quote_observations": [
+                        receive_artifact(
+                            receive,
+                            "payment_receive",
+                            recipient_wallet,
+                            recipient_mint,
+                        )
+                    ],
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        return
+    invoice = receive["_request"]
+    before_ids = melt_ids()
+    timeout_seconds = bounded_seconds("PROOFSTORM_PAY_TIMEOUT_SECONDS", 120, 1, 180)
+    try:
+        completed = subprocess.run(
+            cashu_command("pay", invoice, mint_url=payer_mint_url, wallet=payer_wallet),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+            check=False,
+            env=os.environ.copy(),
+        )
+        pay_exit_code = completed.returncode
+    except subprocess.TimeoutExpired:
+        pay_exit_code = 124
+    os.environ["PROOFSTORM_INVOICE"] = invoice
+    os.environ["PROOFSTORM_MELT_BEFORE_IDS"] = json.dumps(sorted(before_ids))
+    quote, state, amount, fee_reserve, fee_paid = melt_row()
+    melt = {
+        "role": "payment_melt",
+        "direction": "pay",
+        "quote_id": quote,
+        "wallet_id": payer_wallet,
+        "mint_id": payer_mint,
+        "state": str(state),
+        "amount_sat": int(amount),
+        "fee_reserve_sat": int(fee_reserve),
+        "fee_paid_sat": None if fee_paid is None else int(fee_paid),
+    }
+    observations = [melt]
+    claim_exit_code = None
+    if str(state).upper() == "PAID":
+        claim_environment = os.environ.copy()
+        claim_environment["HOME"] = recipient_home
+        claim_timeout = bounded_seconds("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", 30, 1, 120)
+        try:
+            claimed = subprocess.run(
+                cashu_command(
+                    "invoice",
+                    str(receive["amount_sat"]),
+                    "--id",
+                    target_quote_id,
+                    mint_url=recipient_mint_url,
+                    wallet=recipient_wallet,
+                ),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=claim_timeout,
+                check=False,
+                env=claim_environment,
+            )
+            claim_exit_code = claimed.returncode
+        except subprocess.TimeoutExpired:
+            claim_exit_code = 124
+    receive = receive_row(
+        target_quote_id,
+        recipient_home,
+        recipient_wallet,
+        recipient_mint_url,
+    )
+    observations.append(
+        receive_artifact(
+            receive,
+            "payment_receive",
+            recipient_wallet,
+            recipient_mint,
+        )
+    )
+    artifact = {
+        "mint_quote_id": target_quote_id,
+        "melt_quote_id": quote,
+        "pay_exit_code": pay_exit_code,
+        "claim_exit_code": claim_exit_code,
+        "recipient_balance_sat": wallet_balance(
+            recipient_home, recipient_wallet, recipient_mint_url
+        ),
+        "quote_observations": observations,
+    }
+    if str(state).upper() == "PAID" and receive["state"].upper() != "ISSUED":
+        artifact["code"] = "payment_paid_claim_unverified"
+    elif str(state).upper() not in ("UNPAID", "PENDING", "PAID"):
+        artifact["code"] = "unsupported_wallet_quote_state"
+    elif receive["state"].upper() not in ("UNPAID", "PAID", "ISSUED"):
+        artifact["code"] = "unsupported_wallet_quote_state"
+    sys.stdout.write(json.dumps(artifact, separators=(",", ":"), sort_keys=True))
 
 
 def main():
@@ -349,6 +526,8 @@ def main():
         observe_melt()
     elif mode == "claim-receive":
         claim_receive()
+    elif mode == "pay-and-claim":
+        pay_and_claim()
     else:
         raise DriverFailure("quote_driver_mode_invalid")
 

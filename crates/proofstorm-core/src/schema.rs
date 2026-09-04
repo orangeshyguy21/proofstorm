@@ -5,7 +5,7 @@ use crate::{
     Capability, CatalogResponse, ComponentBackendContract, ComponentPlanContract,
     ConfigurationCoverageManifest, EvidenceBundle, Experiment, ExperimentLease, LabOperation,
     LabSpec, NetworkFaultBackend, OperationArtifact, PublishedRevision, ResolvedLock,
-    ValidationReport, WalletQuote,
+    ValidationReport, WalletQuoteObservation,
 };
 
 #[must_use]
@@ -76,7 +76,8 @@ pub fn schema_documents() -> Vec<(&'static str, Value)> {
         ),
         (
             "wallet-quote.schema.json",
-            serde_json::to_value(schema_for!(WalletQuote)).expect("wallet quote schema serializes"),
+            serde_json::to_value(schema_for!(WalletQuoteObservation))
+                .expect("wallet quote observation schema serializes"),
         ),
         (
             "experiment.schema.json",

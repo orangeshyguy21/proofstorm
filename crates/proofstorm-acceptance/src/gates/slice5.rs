@@ -504,7 +504,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     client.call(
         "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 900, "max_actions": 47, "idempotency_key": "acquire-slice5-lease"}),
+        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 900, "max_actions": 46, "idempotency_key": "acquire-slice5-lease"}),
     )?;
     client.call_refused(
         "proofstorm_lab_close",
@@ -824,89 +824,33 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("receiver wallet did not initialize empty: {receiver_initialized}");
     }
 
-    client.call(
-        "proofstorm_wallet_invoice",
-        scoped(
-            "cancelled-wallet-invoice",
-            json!({"quote_id": "cancelled-receiver-quote", "wallet": "receiver-wallet", "mint": "mint", "amount_sat": 50, "timeout_seconds": 300, "idempotency_key": "cancelled-wallet-invoice-slice5"}),
-        ),
-    )?;
-    let invoice_path = "/wallet/.proofstorm/quotes/cancelled-receiver-quote/invoice.log";
-    let mut materialized = false;
-    for _ in 0..120 {
-        let (ok, _, _) = kubectl.try_run(&[
-            "exec",
-            "-n",
-            &namespace,
-            "deployment/receiver-wallet",
-            "--",
-            "test",
-            "-s",
-            invoice_path,
-        ])?;
-        if ok {
-            materialized = true;
-            break;
-        }
-        sleep(Duration::from_millis(250));
-    }
-    if !materialized {
-        bail!("cancelled invoice never materialized its private payment request");
-    }
-    client.call(
-        "proofstorm_action_cancel",
-        json!({"operation_id": "cancelled-wallet-invoice", "idempotency_key": "cancel-wallet-invoice-slice5"}),
-    )?;
-    lab::wait_operation_phase(&mut client, "cancelled-wallet-invoice", "cancelled", 120)?;
-    let cancelled_quote = client.call(
-        "proofstorm_wallet_quote_status",
-        json!({"quote_id": "cancelled-receiver-quote"}),
-    )?;
-    if expect::string(&cancelled_quote, "/phase")? != "cancelled"
-        || cancelled_quote.get("terminal_code").and_then(Value::as_str) != Some("action_cancelled")
-    {
-        bail!("pre-payment invoice cancellation was not final: {cancelled_quote}");
-    }
-    let mut removed = false;
-    for _ in 0..120 {
-        let (ok, _, _) = kubectl.try_run(&[
-            "exec",
-            "-n",
-            &namespace,
-            "deployment/receiver-wallet",
-            "--",
-            "test",
-            "!",
-            "-e",
-            invoice_path,
-        ])?;
-        if ok {
-            removed = true;
-            break;
-        }
-        sleep(Duration::from_millis(250));
-    }
-    if !removed {
-        bail!("cancelled invoice left private payment material on the wallet volume");
-    }
-
     submit_idempotent(
         &mut client,
         "proofstorm_wallet_invoice",
         scoped(
             "wallet-invoice",
-            json!({"quote_id": "receiver-quote", "wallet": "receiver-wallet", "mint": "mint", "amount_sat": 100, "timeout_seconds": 300, "idempotency_key": "wallet-invoice-slice5"}),
+            json!({"wallet": "receiver-wallet", "mint": "mint", "amount_sat": 100, "timeout_seconds": 300, "idempotency_key": "wallet-invoice-slice5"}),
         ),
         "invoice",
     )?;
+    let invoice = lab::wait_operation(&mut client, "wallet-invoice", 120)?;
+    let invoice_content = lab::artifact_content(&invoice)?.clone();
+    let mint_quote_id = expect::string(&invoice_content, "/mint_quote_id")?.to_string();
+    if expect::string(&invoice_content, "/quote_observations/0/role")? != "invoice_receive"
+        || expect::string(&invoice_content, "/quote_observations/0/direction")? != "receive"
+        || expect::string(&invoice_content, "/quote_observations/0/state")? != "UNPAID"
+        || expect::integer(&invoice_content, "/quote_observations/0/amount_sat")? != 100
+    {
+        bail!("non-blocking wallet invoice artifact is invalid: {invoice}");
+    }
     let quote = client.call(
         "proofstorm_wallet_quote_status",
-        json!({"quote_id": "receiver-quote"}),
+        json!({"instance_id": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
-    if expect::string(&quote, "/phase")? != "ready"
-        || expect::integer(&quote, "/amount_sat")? != 100
+    if expect::string(&quote, "/last_observation/state")? != "UNPAID"
+        || expect::integer(&quote, "/last_observation/amount_sat")? != 100
     {
-        bail!("receive quote was not ready and sanitized: {quote}");
+        bail!("initial receive observation was not stored: {quote}");
     }
 
     submit_idempotent(
@@ -914,37 +858,43 @@ pub fn run(context: &GateContext) -> Result<()> {
         "proofstorm_wallet_pay",
         scoped(
             "wallet-pay",
-            json!({"quote_id": "receiver-quote", "wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-pay-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "recipient_wallet": "receiver-wallet", "recipient_mint": "mint", "mint_quote_id": mint_quote_id, "idempotency_key": "wallet-pay-slice5"}),
         ),
         "pay",
     )?;
     let paid = lab::wait_operation(&mut client, "wallet-pay", 120)?;
     let paid_content = lab::artifact_content(&paid)?.clone();
-    if expect::string(&paid_content, "/phase")? != "paid"
-        || expect::integer(&paid_content, "/amount_sat")? != 100
+    if expect::string(&paid_content, "/quote_observations/0/role")? != "payment_melt"
+        || expect::string(&paid_content, "/quote_observations/0/state")? != "PAID"
+        || expect::string(&paid_content, "/quote_observations/1/role")? != "payment_receive"
+        || expect::string(&paid_content, "/quote_observations/1/state")? != "ISSUED"
+        || expect::integer(&paid_content, "/recipient_balance_sat")? != 100
     {
         bail!("wallet pay artifact is invalid: {paid}");
     }
-    let settled_invoice = lab::wait_operation(&mut client, "wallet-invoice", 120)?;
-    let invoice_content = lab::artifact_content(&settled_invoice)?.clone();
-    if expect::string(&invoice_content, "/phase")? != "settled"
-        || expect::integer(&invoice_content, "/balance_sat")? != 100
-    {
-        bail!("wallet invoice artifact is invalid: {settled_invoice}");
-    }
     let quote = client.call(
         "proofstorm_wallet_quote_status",
-        json!({"quote_id": "receiver-quote"}),
+        json!({"instance_id": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
-    if expect::string(&quote, "/phase")? != "settled" || quote.get("settled_at_unix").is_none() {
-        bail!("receive quote did not settle: {quote}");
+    if expect::string(&quote, "/last_observation/state")? != "ISSUED" {
+        bail!("receive quote was not observed as issued: {quote}");
     }
     let quote_list = client.call(
         "proofstorm_wallet_quote_list",
         json!({"experiment_id": EXPERIMENT, "limit": 10}),
     )?;
-    if expect::array(&quote_list, "/quotes")? != &vec![cancelled_quote.clone(), quote.clone()] {
-        bail!("quote list is not canonical: {quote_list}");
+    let listed = expect::array(&quote_list, "/last_observations")?;
+    if listed.len() != 2
+        || !listed.iter().any(|observation| {
+            observation.get("direction").and_then(Value::as_str) == Some("pay")
+                && observation.get("state").and_then(Value::as_str) == Some("PAID")
+        })
+        || !listed.iter().any(|observation| {
+            observation.get("direction").and_then(Value::as_str) == Some("receive")
+                && observation.get("state").and_then(Value::as_str) == Some("ISSUED")
+        })
+    {
+        bail!("quote observation list is not canonical: {quote_list}");
     }
     let serialized_flow = serde_json::to_string(
         &json!({"quote": quote, "pay": paid_content, "invoice": invoice_content}),
@@ -1634,18 +1584,19 @@ pub fn run(context: &GateContext) -> Result<()> {
         .iter()
         .map(|action| expect::integer(action, "/sequence"))
         .collect::<Result<_>>()?;
-    if sequences != (1..=47).collect::<Vec<u64>>() {
+    if sequences != (1..=46).collect::<Vec<u64>>() {
         bail!("action journal is not canonical and ordered: {sequences:?}");
     }
-    for (index, action) in journal.iter().enumerate() {
+    for action in journal {
         let phase = expect::string(action, "/phase")?;
-        let wanted = match index {
-            7 => "failed",
-            8 | 11 => "cancelled",
+        let operation = expect::string(action, "/id")?;
+        let wanted = match operation {
+            "lost-conservation" => "failed",
+            "cancelled-conservation" => "cancelled",
             _ => "succeeded",
         };
         if phase != wanted {
-            bail!("failure, cancellation, and success states are not ordered at {index}: {action}");
+            bail!("operation {operation} has phase {phase}, expected {wanted}: {action}");
         }
     }
 
@@ -1681,7 +1632,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         || expect::string(&evidence, "/content/api_version")? != "proofstorm/evidence/v1alpha1"
         || expect::string(&evidence, "/content/instance/revision_digest")? != revision_digest
         || expect::string(&evidence, "/content/instance/lock_digest")? != lock_digest
-        || evidence_sequences != (1..=47).collect::<Vec<u64>>()
+        || evidence_sequences != (1..=46).collect::<Vec<u64>>()
     {
         bail!("evidence bundle identity or journal is invalid: {evidence}");
     }

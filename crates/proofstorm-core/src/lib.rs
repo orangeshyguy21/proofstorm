@@ -65,8 +65,8 @@ pub use publication::{
     resolve_lock,
 };
 pub use quote::{
-    WalletQuote, WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
-    WalletQuoteObservationRole, WalletQuotePhase, wallet_quote_observations_from_artifact,
+    WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
+    WalletQuoteObservationRole, wallet_quote_observations_from_artifact,
 };
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, validate_lab};

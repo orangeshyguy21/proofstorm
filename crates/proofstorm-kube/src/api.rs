@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kube::CustomResource;
 use proofstorm_core::{Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -120,6 +120,7 @@ pub enum LabAction {
     WalletFund(WalletFundAction),
     WalletInvoice(WalletInvoiceAction),
     WalletPay(WalletPayAction),
+    WalletQuoteClaim(WalletQuoteClaimAction),
     WalletRoundTrip(WalletRoundTripAction),
     ConservationOracle(ConservationOracleAction),
     ReachabilityOracle(ReachabilityOracleAction),
@@ -163,6 +164,7 @@ enum LabActionKindSchema {
     WalletFund,
     WalletInvoice,
     WalletPay,
+    WalletQuoteClaim,
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,
@@ -197,11 +199,13 @@ struct LabActionParametersSchema {
     partition_operation_id: Option<String>,
     wallet: Option<String>,
     recipient_wallet: Option<String>,
+    recipient_mint: Option<String>,
     mint: Option<String>,
     identity_provider: Option<String>,
     session_secret: Option<String>,
     source_operation_id: Option<String>,
     quote_id: Option<String>,
+    mint_quote_id: Option<String>,
     amount_sat: Option<u64>,
     timeout_seconds: Option<u32>,
     expected_sat: Option<u64>,
@@ -467,7 +471,6 @@ pub struct WalletFundAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WalletInvoiceAction {
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
     pub amount_sat: u64,
@@ -477,11 +480,20 @@ pub struct WalletInvoiceAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WalletPayAction {
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
     pub recipient_wallet: String,
-    pub amount_sat: u64,
+    pub recipient_mint: String,
+    pub mint_quote_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletQuoteClaimAction {
+    pub wallet: String,
+    pub mint: String,
+    pub mint_quote_id: String,
+    pub timeout_seconds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -525,6 +537,13 @@ pub enum ActionPhase {
     Cancelled,
 }
 
+fn preserved_object_schema(_: &mut SchemaGenerator) -> Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+    })
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormLabActionStatus {
@@ -538,7 +557,9 @@ pub struct ProofstormLabActionStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_unix: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preserved_object_schema")]
     pub artifact: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preserved_object_schema")]
     pub error: Option<BTreeMap<String, Value>>,
 }

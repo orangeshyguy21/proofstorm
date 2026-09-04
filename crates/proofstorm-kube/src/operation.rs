@@ -14,8 +14,8 @@ use crate::{
     ChannelRebalanceAction, ConservationOracleAction, LabAction, NativeExecAction,
     PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
     ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
-    WalletInvoiceAction, WalletPayAction, WalletRoundTripAction, component_ports,
-    instance_namespace,
+    WalletInvoiceAction, WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction,
+    component_ports, instance_namespace,
 };
 
 const REACHABILITY_PROBE_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
@@ -151,14 +151,11 @@ pub struct WalletFundJobSpec<'a> {
     pub amount_sat: u64,
 }
 
-/// Settlement oracle shipped into the pinned Nutshell wallet image by the
-/// wallet pay job. See `drivers/wallet_pay_settlement.py`.
-const WALLET_PAY_SETTLEMENT_DRIVER: &str = include_str!("../drivers/wallet_pay_settlement.py");
+const WALLET_QUOTE_DRIVER: &str = include_str!("../drivers/wallet_quote_driver.py");
 
 pub struct WalletInvoiceJobSpec<'a> {
     pub resource_name: &'a str,
     pub instance_key: &'a str,
-    pub quote_id: &'a str,
     pub wallet: &'a str,
     pub mint: &'a str,
     pub wallet_image: &'a str,
@@ -169,12 +166,22 @@ pub struct WalletInvoiceJobSpec<'a> {
 pub struct WalletPayJobSpec<'a> {
     pub resource_name: &'a str,
     pub instance_key: &'a str,
-    pub quote_id: &'a str,
     pub wallet: &'a str,
     pub mint: &'a str,
     pub recipient_wallet: &'a str,
+    pub recipient_mint: &'a str,
+    pub mint_quote_id: &'a str,
     pub wallet_image: &'a str,
-    pub amount_sat: u64,
+}
+
+pub struct WalletQuoteClaimJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub wallet: &'a str,
+    pub mint: &'a str,
+    pub mint_quote_id: &'a str,
+    pub wallet_image: &'a str,
+    pub timeout_seconds: u32,
 }
 
 pub struct AuthenticationConformanceJobSpec<'a> {
@@ -541,6 +548,11 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
             (&request.recipient_wallet, Operation::WalletPayment),
+            (&request.recipient_mint, Operation::WalletPayment),
+        ],
+        LabAction::WalletQuoteClaim(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
         ],
         LabAction::WalletRoundTrip(request) => vec![
             (&request.wallet, Operation::WalletPayment),
@@ -590,6 +602,7 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::WalletFund(_)
         | LabAction::WalletInvoice(_)
         | LabAction::WalletPay(_)
+        | LabAction::WalletQuoteClaim(_)
         | LabAction::WalletRoundTrip(_) => "wallet",
         LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
         LabAction::NativeExec(_) => "exec",
@@ -642,6 +655,9 @@ pub fn render_lab_action_job(
         LabAction::WalletFund(request) => render_wallet_fund_action(action, lab, request)?,
         LabAction::WalletInvoice(request) => render_wallet_invoice_action(action, lab, request)?,
         LabAction::WalletPay(request) => render_wallet_pay_action(action, lab, request)?,
+        LabAction::WalletQuoteClaim(request) => {
+            render_wallet_quote_claim_action(action, lab, request)?
+        }
         LabAction::WalletRoundTrip(request) => render_wallet_action(action, lab, request)?,
         LabAction::ConservationOracle(request) => render_oracle_action(action, lab, request)?,
         LabAction::ReachabilityOracle(request) => {
@@ -1067,38 +1083,10 @@ fn native_exec_target_environment(
 /// Returns an error when the original action is invalid for its immutable lab
 /// or the fixed cleanup resource contract cannot be rendered.
 pub fn render_lab_action_cleanup_job(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    _action: &ProofstormLabAction,
+    _lab: &ProofstormLab,
 ) -> Result<Option<Job>, ActionRenderError> {
-    let LabAction::WalletInvoice(request) = &action.spec.action else {
-        return Ok(None);
-    };
-    render_lab_action_job(action, lab)?;
-    let resource_name = format!("{}-cleanup", action.name_any());
-    let namespace = instance_namespace(&action.spec.instance_key);
-    let invoice_file = format!(
-        "/wallet/.proofstorm/quotes/{}/invoice.log",
-        request.quote_id
-    );
-    let script = format!(
-        "set -eu; rm -f '{invoice_file}'; test ! -e '{invoice_file}'; printf '%s' '{{\"cleaned\":true}}' >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(&action.spec.instance_key),
-        "containers": [container("cleanup", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &script, &[mount("wallet", "/wallet", false)])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{}-data", request.wallet)}}]
-    });
-    let mut cleanup = job(
-        &resource_name,
-        &namespace,
-        &action.spec.instance_key,
-        "wallet-invoice-cleanup",
-        60,
-        &pod,
-    )?;
-    mark_controller_owned(&mut cleanup, &action.name_any());
-    Ok(Some(cleanup))
+    Ok(None)
 }
 
 fn render_peer_connect_action(
@@ -1370,7 +1358,6 @@ fn render_wallet_invoice_action(
         return Err(ActionRenderError::Capability);
     }
     validate_wallet_amount(request.amount_sat)?;
-    validate_quote_id(&request.quote_id)?;
     if !(30..=600).contains(&request.timeout_seconds) {
         return Err(ActionRenderError::Bounds(
             "timeout_seconds must be in 30..=600",
@@ -1381,7 +1368,6 @@ fn render_wallet_invoice_action(
     render_wallet_invoice_job(&WalletInvoiceJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
-        quote_id: &request.quote_id,
         wallet: &request.wallet,
         mint: &request.mint,
         wallet_image,
@@ -1399,8 +1385,7 @@ fn render_wallet_pay_action(
     if action.spec.capability != Capability::WalletControl {
         return Err(ActionRenderError::Capability);
     }
-    validate_wallet_amount(request.amount_sat)?;
-    validate_quote_id(&request.quote_id)?;
+    validate_quote_id(&request.mint_quote_id)?;
     if request.wallet == request.recipient_wallet {
         return Err(ActionRenderError::Bounds(
             "payer and recipient wallets must differ",
@@ -1409,15 +1394,44 @@ fn render_wallet_pay_action(
     let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
     nutshell_wallet_image(lab, &request.recipient_wallet)?;
     locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    locked_component(lab, &request.recipient_mint, ComponentKind::Mint)?;
     render_wallet_pay_job(&WalletPayJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
-        quote_id: &request.quote_id,
         wallet: &request.wallet,
         mint: &request.mint,
         recipient_wallet: &request.recipient_wallet,
+        recipient_mint: &request.recipient_mint,
+        mint_quote_id: &request.mint_quote_id,
         wallet_image,
-        amount_sat: request.amount_sat,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_quote_claim_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletQuoteClaimAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletControl {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_quote_id(&request.mint_quote_id)?;
+    if !(1..=120).contains(&request.timeout_seconds) {
+        return Err(ActionRenderError::Bounds(
+            "timeout_seconds must be in 1..=120",
+        ));
+    }
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    render_wallet_quote_claim_job(&WalletQuoteClaimJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        mint_quote_id: &request.mint_quote_id,
+        wallet_image,
+        timeout_seconds: request.timeout_seconds,
     })
     .map_err(ActionRenderError::from)
 }
@@ -2816,8 +2830,8 @@ pub fn render_wallet_fund_job(spec: &WalletFundJobSpec<'_>) -> Result<Job, serde
     )
 }
 
-/// Create and settle a receive quote while keeping its payment request in the
-/// recipient wallet's private persistent volume.
+/// Create a receive quote and expose only its adapter-native id and sanitized
+/// initial observation.
 ///
 /// # Errors
 ///
@@ -2828,7 +2842,6 @@ pub fn render_wallet_invoice_job(
     let WalletInvoiceJobSpec {
         resource_name,
         instance_key,
-        quote_id,
         wallet,
         mint,
         wallet_image,
@@ -2836,14 +2849,14 @@ pub fn render_wallet_invoice_job(
         timeout_seconds,
     } = *spec;
     let namespace = instance_namespace(instance_key);
-    let deadline_seconds = timeout_seconds.saturating_add(60);
+    let deadline_seconds = timeout_seconds.saturating_add(30);
     let script = format!(
-        "set -eu; umask 077; cd /app; quote_dir=/wallet/.proofstorm/quotes/{quote_id}; invoice_file=\"$quote_dir/invoice.log\"; mkdir -p \"$quote_dir\"; cleanup() {{ rm -f \"$invoice_file\"; }}; trap cleanup EXIT; trap 'exit 143' HUP INT TERM; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} >\"$invoice_file\" 2>&1; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"quote_id\":\"{quote_id}\",\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"direction\":\"receive\",\"phase\":\"settled\",\"amount_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+        "set -eu; umask 077; cd /app; output=$(mktemp /tmp/proofstorm-invoice.XXXXXX); cleanup() {{ rm -f \"$output\"; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} --no-check >\"$output\" 2>&1; PROOFSTORM_INVOICE_OUTPUT_PATH=\"$output\" python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")])],
+        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "observe-invoice"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338"))])],
         "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
     });
     job(
@@ -2865,33 +2878,31 @@ pub fn render_wallet_pay_job(spec: &WalletPayJobSpec<'_>) -> Result<Job, serde_j
     let WalletPayJobSpec {
         resource_name,
         instance_key,
-        quote_id,
         wallet,
         mint,
         recipient_wallet,
+        recipient_mint,
+        mint_quote_id,
         wallet_image,
-        amount_sat,
     } = *spec;
     let namespace = instance_namespace(instance_key);
-    // The CLI exit code is not a settlement oracle: `cashu pay` prints and
-    // returns normally when the mint rolls a failed melt back to UNPAID. The
-    // embedded driver reads the wallet's melt-quote ledger and the balance
-    // delta instead and decides the artifact phase from those.
-    let script = format!(
-        "set -eu; cd /app; invoice_file=/recipient/.proofstorm/quotes/{quote_id}/invoice.log; until invoice=$(grep -o 'lnbcrt[0-9a-z]*' \"$invoice_file\" 2>/dev/null | head -1) && test -n \"$invoice\"; do sleep 1; done; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; read_balance() {{ cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1; }}; before=$(read_balance); test -n \"$before\"; set +e; cashu pay \"$invoice\" >/tmp/pay.log 2>&1; pay_rc=$?; set -e; after=$(read_balance); test -n \"$after\"; PROOFSTORM_INVOICE=\"$invoice\" PROOFSTORM_PAY_RC=\"$pay_rc\" PROOFSTORM_BALANCE_BEFORE=\"$before\" PROOFSTORM_BALANCE_AFTER=\"$after\" python3 -c \"$PROOFSTORM_SETTLEMENT_DRIVER\" >/dev/termination-log"
-    );
-    let amount = amount_sat.to_string();
+    let script = "set -eu; cd /app; python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log";
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false), mount("recipient", "/recipient", true)], vec![
+        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false), mount("recipient", "/recipient", false)], vec![
             ("HOME", "/wallet"),
             ("PYTHONUNBUFFERED", "1"),
-            ("PROOFSTORM_QUOTE_ID", quote_id),
+            ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER),
+            ("PROOFSTORM_QUOTE_DRIVER_MODE", "pay-and-claim"),
             ("PROOFSTORM_WALLET", wallet),
+            ("PROOFSTORM_MINT", mint),
+            ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")),
+            ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id),
+            ("PROOFSTORM_RECIPIENT_HOME", "/recipient"),
             ("PROOFSTORM_RECIPIENT_WALLET", recipient_wallet),
-            ("PROOFSTORM_AMOUNT_SAT", amount.as_str()),
-            ("PROOFSTORM_SETTLEMENT_DRIVER", WALLET_PAY_SETTLEMENT_DRIVER),
+            ("PROOFSTORM_RECIPIENT_MINT", recipient_mint),
+            ("PROOFSTORM_RECIPIENT_MINT_URL", &format!("http://{recipient_mint}:3338")),
         ])],
         "volumes": [
             {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
@@ -2904,6 +2915,38 @@ pub fn render_wallet_pay_job(spec: &WalletPayJobSpec<'_>) -> Result<Job, serde_j
         instance_key,
         "wallet-pay",
         180,
+        &pod,
+    )
+}
+
+/// Claim an exact recipient-side mint quote without attempting payment.
+pub fn render_wallet_quote_claim_job(
+    spec: &WalletQuoteClaimJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let WalletQuoteClaimJobSpec {
+        resource_name,
+        instance_key,
+        wallet,
+        mint,
+        mint_quote_id,
+        wallet_image,
+        timeout_seconds,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let script = "set -eu; cd /app; python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log";
+    let timeout = timeout_seconds.to_string();
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "claim-receive"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id), ("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", timeout.as_str())])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-quote-claim",
+        i64::from(timeout_seconds.saturating_add(30)),
         &pod,
     )
 }
@@ -3664,16 +3707,16 @@ mod tests {
     }
 
     #[test]
-    fn wallet_pay_job_derives_settlement_from_the_wallet_ledger() {
+    fn wallet_pay_job_uses_exact_private_quote_and_claim_driver() {
         let job = render_wallet_pay_job(&WalletPayJobSpec {
             resource_name: "op-pay",
             instance_key: "i0123456789012345678",
-            quote_id: "quote-1",
             wallet: "wallet-b",
             mint: "mint",
             recipient_wallet: "wallet-a",
+            recipient_mint: "mint",
+            mint_quote_id: "quote-1",
             wallet_image: "nutshell",
-            amount_sat: 1_000,
         })
         .expect("pay job");
         let pod = job.spec.expect("spec").template.spec.expect("pod");
@@ -3688,27 +3731,23 @@ mod tests {
             !script.contains("\"phase\":\"paid\""),
             "the pay script must not assert settlement itself"
         );
-        assert!(script.contains("set +e; cashu pay"));
-        assert!(script.contains("PROOFSTORM_PAY_RC=\"$pay_rc\""));
-        assert!(script.contains("PROOFSTORM_BALANCE_BEFORE=\"$before\""));
-        assert!(
-            script.contains("python3 -c \"$PROOFSTORM_SETTLEMENT_DRIVER\" >/dev/termination-log")
-        );
+        assert!(script.contains("python3 -c \"$PROOFSTORM_QUOTE_DRIVER\""));
         #[cfg(unix)]
         assert_shell_syntax(script);
         let env = container.env.as_ref().expect("env");
         let driver = env
             .iter()
-            .find(|variable| variable.name == "PROOFSTORM_SETTLEMENT_DRIVER")
+            .find(|variable| variable.name == "PROOFSTORM_QUOTE_DRIVER")
             .and_then(|variable| variable.value.as_deref())
             .expect("settlement driver shipped by environment");
         assert!(driver.contains("bolt11_melt_quotes"));
         assert!(driver.contains("melt_quote_missing"));
         for (name, value) in [
-            ("PROOFSTORM_QUOTE_ID", "quote-1"),
+            ("PROOFSTORM_MINT_QUOTE_ID", "quote-1"),
             ("PROOFSTORM_WALLET", "wallet-b"),
             ("PROOFSTORM_RECIPIENT_WALLET", "wallet-a"),
-            ("PROOFSTORM_AMOUNT_SAT", "1000"),
+            ("PROOFSTORM_RECIPIENT_MINT", "mint"),
+            ("PROOFSTORM_QUOTE_DRIVER_MODE", "pay-and-claim"),
         ] {
             assert_eq!(
                 env.iter()
@@ -4347,7 +4386,6 @@ mod tests {
         let (lab, mut invoice_action) = typed_bootstrap();
         invoice_action.spec.capability = Capability::WalletFund;
         invoice_action.spec.action = LabAction::WalletInvoice(WalletInvoiceAction {
-            quote_id: "quote-one".into(),
             wallet: "wallet".into(),
             mint: "mint".into(),
             amount_sat: 100,
@@ -4355,7 +4393,7 @@ mod tests {
         });
         let invoice = render_lab_action_job(&invoice_action, &lab).expect("invoice job");
         let invoice_spec = invoice.spec.expect("invoice spec");
-        assert_eq!(invoice_spec.active_deadline_seconds, Some(360));
+        assert_eq!(invoice_spec.active_deadline_seconds, Some(330));
         let invoice_pod = invoice_spec.template.spec.expect("invoice pod");
         let invoice_script = invoice_pod.containers[0]
             .command
@@ -4363,26 +4401,15 @@ mod tests {
             .expect("invoice command")
             .last()
             .expect("invoice script");
-        assert!(invoice_script.contains("/wallet/.proofstorm/quotes/quote-one"));
-        assert!(invoice_script.contains("cashu invoice 100"));
+        assert!(invoice_script.contains("mktemp /tmp/proofstorm-invoice"));
+        assert!(invoice_script.contains("cashu invoice 100 --no-check"));
         assert!(invoice_script.contains("trap cleanup EXIT"));
-        assert!(invoice_script.contains("trap 'exit 143' HUP INT TERM"));
         assert!(!invoice_script.contains("lnbcrt1"));
-        let cleanup = render_lab_action_cleanup_job(&invoice_action, &lab)
-            .expect("cleanup render")
-            .expect("invoice cleanup");
-        let cleanup_spec = cleanup.spec.expect("cleanup spec");
-        assert_eq!(cleanup_spec.active_deadline_seconds, Some(60));
-        let cleanup_pod = cleanup_spec.template.spec.expect("cleanup pod");
-        assert!(!cleanup_pod.automount_service_account_token.unwrap_or(true));
-        let cleanup_script = cleanup_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("cleanup command")
-            .last()
-            .expect("cleanup script");
-        assert!(cleanup_script.contains("rm -f"));
-        assert!(cleanup_script.contains("quote-one/invoice.log"));
+        assert!(
+            render_lab_action_cleanup_job(&invoice_action, &lab)
+                .expect("cleanup render")
+                .is_none()
+        );
 
         let mut pay_lab = lab;
         let mut receiver = pay_lab
@@ -4408,11 +4435,11 @@ mod tests {
         let mut pay_action = invoice_action;
         pay_action.spec.capability = Capability::WalletControl;
         pay_action.spec.action = LabAction::WalletPay(WalletPayAction {
-            quote_id: "quote-one".into(),
             wallet: "wallet".into(),
             mint: "mint".into(),
             recipient_wallet: "receiver-wallet".into(),
-            amount_sat: 100,
+            recipient_mint: "mint".into(),
+            mint_quote_id: "quote-one".into(),
         });
         let pay = render_lab_action_job(&pay_action, &pay_lab).expect("pay job");
         let pod = pay.spec.expect("pay spec").template.spec.expect("pay pod");
@@ -4423,7 +4450,7 @@ mod tests {
             .iter()
             .find(|mount| mount.name == "recipient")
             .expect("recipient mount");
-        assert_eq!(recipient_mount.read_only, Some(true));
+        assert_eq!(recipient_mount.read_only, Some(false));
 
         let LabAction::WalletPay(request) = &mut pay_action.spec.action else {
             panic!("pay action");

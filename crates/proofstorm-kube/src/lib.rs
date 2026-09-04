@@ -33,7 +33,8 @@ pub use api::{
     NodeControlAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
     ProofstormLabActionSpec, ProofstormLabActionStatus, ProofstormLabSpec, ProofstormLabStatus,
     ReachabilityOracleAction, TeardownReceipt, WalletBalanceAction, WalletFundAction,
-    WalletInitializeAction, WalletInvoiceAction, WalletPayAction, WalletRoundTripAction,
+    WalletInitializeAction, WalletInvoiceAction, WalletPayAction, WalletQuoteClaimAction,
+    WalletRoundTripAction,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,

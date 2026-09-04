@@ -45,6 +45,7 @@ spec:
                     - wallet_fund
                     - wallet_invoice
                     - wallet_pay
+                    - wallet_quote_claim
                     - wallet_round_trip
                     - conservation_oracle
                     - reachability_oracle
@@ -116,6 +117,9 @@ spec:
                       mintLightning:
                         nullable: true
                         type: string
+                      mintQuoteId:
+                        nullable: true
+                        type: string
                       outgoingChannelId:
                         nullable: true
                         type: string
@@ -131,6 +135,9 @@ spec:
                         nullable: true
                         type: integer
                       quoteId:
+                        nullable: true
+                        type: string
+                      recipientMint:
                         nullable: true
                         type: string
                       recipientWallet:
@@ -272,17 +279,15 @@ spec:
             nullable: true
             properties:
               artifact:
-                additionalProperties: true
-                nullable: true
                 type: object
+                x-kubernetes-preserve-unknown-fields: true
               completedAtUnix:
                 format: int64
                 nullable: true
                 type: integer
               error:
-                additionalProperties: true
-                nullable: true
                 type: object
+                x-kubernetes-preserve-unknown-fields: true
               jobName:
                 nullable: true
                 type: string

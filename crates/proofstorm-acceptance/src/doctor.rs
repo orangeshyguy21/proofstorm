@@ -50,6 +50,7 @@ const REQUIRED_TOOLS: &[&str] = &[
     "proofstorm_wallet_pay",
     "proofstorm_wallet_quote_list",
     "proofstorm_wallet_quote_status",
+    "proofstorm_wallet_quote_claim",
 ];
 
 /// Spawn the configured server and assert it still advertises every required tool.

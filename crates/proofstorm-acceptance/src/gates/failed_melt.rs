@@ -25,8 +25,6 @@ const INSTANCE: &str = "failed-melt-instance";
 const EXPERIMENT: &str = "failed-melt-experiment";
 const LEASE: &str = "failed-melt-lease";
 const DRAFT: &str = "failed-melt";
-const QUOTE: &str = "failed-melt-quote";
-
 const FUNDED_SAT: u64 = 2_000;
 const INVOICE_SAT: u64 = 1_000;
 
@@ -164,18 +162,31 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
+        "proofstorm_wallet_balance",
+        json!({
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "operation_id": "failed-melt-balance-before", "wallet": "payer-wallet", "mint": "payer-mint",
+            "idempotency_key": "balance-before-failed-melt"
+        }),
+    )?;
+    let balance_before = lab::wait_operation(&mut client, "failed-melt-balance-before", 160)?;
+    let before = expect::integer(lab::artifact_content(&balance_before)?, "/balance_sat")?;
+
+    client.call(
         "proofstorm_wallet_invoice",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
-            "operation_id": "failed-melt-invoice", "quote_id": QUOTE,
+            "operation_id": "failed-melt-invoice",
             "wallet": "recipient-wallet", "mint": "recipient-mint",
             "amount_sat": INVOICE_SAT, "timeout_seconds": 300,
             "idempotency_key": "invoice-failed-melt"
         }),
     )?;
-    let quote = client.call("proofstorm_wallet_quote_status", json!({"quote_id": QUOTE}))?;
-    if expect::string(&quote, "/phase")? != "ready" {
-        bail!("receive quote was not ready to pay: {quote}");
+    let invoice = lab::wait_operation(&mut client, "failed-melt-invoice", 160)?;
+    let invoice_content = lab::artifact_content(&invoice)?;
+    let mint_quote_id = expect::string(invoice_content, "/mint_quote_id")?.to_string();
+    if expect::string(invoice_content, "/quote_observations/0/state")? != "UNPAID" {
+        bail!("receive quote did not begin unpaid: {invoice}");
     }
 
     // The melt cannot settle: the invoice was issued by a node with no
@@ -185,8 +196,9 @@ pub fn run(context: &GateContext) -> Result<()> {
         "proofstorm_wallet_pay",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
-            "operation_id": "failed-melt-pay", "quote_id": QUOTE,
+            "operation_id": "failed-melt-pay", "mint_quote_id": mint_quote_id,
             "wallet": "payer-wallet", "mint": "payer-mint",
+            "recipient_wallet": "recipient-wallet", "recipient_mint": "recipient-mint",
             "idempotency_key": "pay-failed-melt"
         }),
     )?;
@@ -196,39 +208,44 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
     let content = lab::artifact_content(&paid)?.clone();
 
-    if expect::string(&content, "/phase")? != "unpaid" {
-        bail!("a melt that never settled was not reported as unpaid: {content}");
+    if content.get("phase").is_some() {
+        bail!("wallet-native observation was polluted with a Proofstorm phase: {content}");
     }
-    if expect::string(&content, "/melt_quote_state")? != "UNPAID" {
-        bail!("the artifact phase disagrees with the wallet ledger: {content}");
+    if expect::string(&content, "/quote_observations/0/role")? != "payment_melt"
+        || expect::string(&content, "/quote_observations/0/direction")? != "pay"
+        || expect::string(&content, "/quote_observations/0/state")? != "UNPAID"
+        || expect::string(&content, "/quote_observations/1/role")? != "payment_receive"
+        || expect::string(&content, "/quote_observations/1/direction")? != "receive"
+        || expect::string(&content, "/quote_observations/1/state")? != "UNPAID"
+    {
+        bail!("failed melt did not preserve distinct native observations: {content}");
     }
-    let before = expect::integer(&content, "/balance_before_sat")?;
-    let after = expect::integer(&content, "/balance_after_sat")?;
+
+    client.call(
+        "proofstorm_wallet_balance",
+        json!({
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "operation_id": "failed-melt-balance-after", "wallet": "payer-wallet", "mint": "payer-mint",
+            "idempotency_key": "balance-after-failed-melt"
+        }),
+    )?;
+    let balance_after = lab::wait_operation(&mut client, "failed-melt-balance-after", 160)?;
+    let after = expect::integer(lab::artifact_content(&balance_after)?, "/balance_sat")?;
     if before != FUNDED_SAT || after != FUNDED_SAT {
         bail!("a failed melt moved value: before={before} after={after} in {content}");
     }
 
     // The recipient's quote must never be promoted by a payment that did not
     // happen. This is the specific corruption the gate exists to prevent.
-    let quote = client.call("proofstorm_wallet_quote_status", json!({"quote_id": QUOTE}))?;
-    let phase = expect::string(&quote, "/phase")?;
-    if phase == "paid" || phase == "settled" {
-        bail!("an unsettled melt promoted the receive quote to {phase}: {quote}");
-    }
-    if phase != "failed"
-        || quote.get("terminal_code").and_then(Value::as_str) != Some("melt_unpaid")
-    {
-        bail!("the receive quote did not record the melt failure: {quote}");
-    }
-
-    // The invoice operation waits for a settlement that will never arrive, so
-    // it is cancelled rather than left to its deadline. Every action must be
-    // terminal before evidence can be exported.
-    client.call(
-        "proofstorm_action_cancel",
-        json!({"operation_id": "failed-melt-invoice", "idempotency_key": "cancel-failed-melt-invoice"}),
+    let quote = client.call(
+        "proofstorm_wallet_quote_status",
+        json!({"instance_id": INSTANCE, "wallet": "recipient-wallet", "mint": "recipient-mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
-    lab::wait_operation_phase(&mut client, "failed-melt-invoice", "cancelled", 200)?;
+    if quote.get("phase").is_some()
+        || expect::string(&quote, "/last_observation/state")? != "UNPAID"
+    {
+        bail!("an unsettled melt promoted or reinterpreted the receive quote: {quote}");
+    }
 
     client.call(
         "proofstorm_lease_release",
@@ -256,7 +273,9 @@ pub fn run(context: &GateContext) -> Result<()> {
         .first()
         .ok_or_else(|| anyhow::anyhow!("evidence carries no pay artifact"))?
         .clone();
-    if expect::string(&exported, "/artifact/content/phase")? != "unpaid" {
+    if expect::string(&exported, "/artifact/content/quote_observations/0/state")? != "UNPAID"
+        || exported.pointer("/artifact/content/phase").is_some()
+    {
         bail!("the exported evidence disagrees with the observation: {exported}");
     }
 

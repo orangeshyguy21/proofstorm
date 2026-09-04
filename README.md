@@ -518,33 +518,22 @@ fund are bounded state-changing actions under separate capabilities. MCP never
 receives a mnemonic, proof database, mint quote, Lightning invoice, or adapter
 command.
 
-Proofstorm now owns an adapter-neutral durable wallet quote contract. A quote
-is a scoped handle containing wallet and mint IDs, receive/pay direction,
-bounded satoshi amount, expiry, and a monotonic
-`requested → ready → pending → paid → settled` lifecycle with explicit failed,
-expired, inconclusive, and cancelled outcomes. `Inconclusive` quarantines an
-ambiguous payment without authorizing replay; a later durable payer receipt or
-authoritative recipient settlement may repair it to paid or settled. Adapter quote IDs and payment
-requests have no public field and remain inside the controller adapter. Quotes persist
-across MCP restarts, are bound to the experiment lease and principal, and are
-inspectable through capability-filtered `proofstorm_wallet_quote_status` and
-`proofstorm_wallet_quote_list` tools. Quote-list pages use an object envelope
-with an explicit next-quote cursor so MCP clients never receive top-level array
-structured content.
+Nutshell's wallet database is authoritative for receive and melt quote facts.
+Proofstorm stores immutable, attributed observations of those adapter records;
+it does not maintain a second quote phase machine. Receive and pay observations
+use their distinct adapter-native mint and melt quote IDs. The
+capability-filtered `proofstorm_wallet_quote_status` and
+`proofstorm_wallet_quote_list` tools explicitly return the latest stored
+observation rather than live mint state. List pages use a digest-bound cursor.
 
-`proofstorm_wallet_invoice` and `proofstorm_wallet_pay` now execute that
-contract for the pinned Nutshell adapter. A controller-owned recipient Job
-writes its BOLT11 request only into a mode-restricted directory on the private
-recipient wallet volume and waits for settlement. A distinct payer-wallet Job
-receives that volume read-only, pays the private request, and reports only the
-quote ID, logical wallet IDs, bounded amount, phase, and sanitized balance. The
-quote progresses from ready through pending/paid to settled as the two durable
-actions complete. Lost or ambiguous payment receipts use the quarantined
-`inconclusive` phase instead of claiming failure or replaying payment. Quote
-status reconciles the linked durable invoice action after MCP restart. Invoice
-cancellation is not published until a bounded controller-owned cleanup Job has
-proven the private payment request absent from the wallet volume; cleanup
-failure is explicit and fails closed.
+`proofstorm_wallet_invoice` returns after creating the receive quote, exposing
+only its mint quote ID and sanitized `UNPAID` observation. Its BOLT11 request is
+captured in a mode-0600 pod-local temporary file and removed on exit.
+`proofstorm_wallet_pay` privately reads the exact recipient row, atomically
+reserves that mint quote against duplicate payment operations, correlates the
+new payer melt row, and claims the recipient quote after a paid melt. A paid
+but unverified claim is never replayed; `proofstorm_wallet_quote_claim` is the
+bounded, idempotent recovery path and also supports externally paid invoices.
 
 ## Legacy Compose harness
 
