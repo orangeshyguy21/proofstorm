@@ -1,98 +1,52 @@
-use std::{
-    io::{BufRead, BufReader, Write},
-    process::{Command, Stdio},
-};
+use std::path::Path;
 
+use proofstorm_acceptance::{McpClient, json as expect};
 use serde_json::{Value, json};
 
-fn exchange(stdin: &mut impl Write, stdout: &mut impl BufRead, message: &Value) -> Value {
-    writeln!(stdin, "{message}").expect("write MCP frame");
-    stdin.flush().expect("flush MCP frame");
-    let mut line = String::new();
-    stdout.read_line(&mut line).expect("read MCP frame");
-    serde_json::from_str(&line).expect("parse MCP frame")
+fn binary() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_proofstorm-mcp"))
 }
 
-fn assert_resource_contract(stdin: &mut impl Write, stdout: &mut impl BufRead) {
-    let templates = exchange(
-        stdin,
-        stdout,
-        &json!({"jsonrpc": "2.0", "id": 20, "method": "resources/templates/list", "params": {}}),
-    );
-    assert_eq!(
-        templates["result"]["resourceTemplates"][0]["uriTemplate"],
-        "proofstorm://evidence/{experiment_id}/{digest}{?oracles,artifacts}"
-    );
-    let missing_resource = exchange(
-        stdin,
-        stdout,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 21,
-            "method": "resources/read",
-            "params": {"uri": "proofstorm://unknown"}
-        }),
-    );
-    assert_eq!(
-        missing_resource["error"]["message"],
-        "unknown Proofstorm resource URI"
-    );
+fn assert_resource_contract(client: &mut McpClient) {
+    let templates = client
+        .request("resources/templates/list", json!({}))
+        .expect("list resource templates");
+    expect::equals(
+        &templates,
+        "/resourceTemplates/0/uriTemplate",
+        &Value::from("proofstorm://evidence/{experiment_id}/{digest}{?oracles,artifacts}"),
+    )
+    .expect("evidence resource template");
+
+    let missing_resource = client
+        .request_error("resources/read", json!({"uri": "proofstorm://unknown"}))
+        .expect("unknown resource must be refused");
+    expect::equals(
+        &missing_resource,
+        "/message",
+        &Value::from("unknown Proofstorm resource URI"),
+    )
+    .expect("unknown resource message");
 }
 
 #[test]
 fn stdio_server_advertises_exact_slice_one_tools() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_proofstorm-mcp"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn proofstorm-mcp");
-    let mut stdin = child.stdin.take().expect("child stdin");
-    let mut stdout = BufReader::new(child.stdout.take().expect("child stdout"));
+    let mut client = McpClient::spawn_bare(binary(), "proofstorm-test").expect("spawn");
 
-    let initialized = exchange(
-        &mut stdin,
-        &mut stdout,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {"name": "proofstorm-test", "version": "0.1.0"}
-            }
-        }),
-    );
-    assert_eq!(initialized["id"], 1);
-    assert!(initialized.get("result").is_some(), "{initialized}");
-    assert_eq!(
-        initialized["result"]["serverInfo"]["name"],
-        "proofstorm-mcp"
-    );
-    assert!(
-        initialized["result"]["capabilities"]["resources"].is_object(),
-        "{initialized}"
-    );
-
-    writeln!(
-        stdin,
-        "{}",
-        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    let initialized = client.initialize_result().clone();
+    expect::equals(
+        &initialized,
+        "/serverInfo/name",
+        &Value::from("proofstorm-mcp"),
     )
-    .expect("write initialized notification");
-    stdin.flush().expect("flush initialized notification");
+    .expect("server name");
+    expect::object(&initialized, "/capabilities/resources").expect("resource capability");
 
-    let listed = exchange(
-        &mut stdin,
-        &mut stdout,
-        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
-    );
-    let names = listed["result"]["tools"]
-        .as_array()
+    let listed = client.request("tools/list", json!({})).expect("list tools");
+    let names = expect::array(&listed, "/tools")
         .expect("tool array")
         .iter()
-        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .map(|tool| expect::string(tool, "/name").expect("tool name"))
         .collect::<Vec<_>>();
     assert_eq!(
         names,
@@ -105,140 +59,61 @@ fn stdio_server_advertises_exact_slice_one_tools() {
         ]
     );
 
-    assert_resource_contract(&mut stdin, &mut stdout);
+    assert_resource_contract(&mut client);
 
-    let catalog = exchange(
-        &mut stdin,
-        &mut stdout,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "proofstorm_catalog_list", "arguments": {}}
-        }),
-    );
+    let catalog = client
+        .call_response("proofstorm_catalog_list", json!({}))
+        .expect("list catalog");
+    let structured = catalog
+        .pointer("/result/structuredContent")
+        .expect("structured content");
     assert_eq!(
-        catalog["result"]["structuredContent"]["items"]
-            .as_array()
-            .map(Vec::len),
-        Some(12)
+        expect::array(structured, "/items")
+            .expect("catalog items")
+            .len(),
+        12
     );
-    assert!(
-        serde_json::to_vec(&catalog["result"]["structuredContent"])
-            .expect("serialize catalog result")
-            .len()
-            < 8 * 1024
-    );
-    assert!(
-        serde_json::to_vec(&catalog)
-            .expect("serialize wire result")
-            .len()
-            < 20 * 1024
-    );
-
-    child.kill().expect("stop proofstorm-mcp");
-    child.wait().expect("reap proofstorm-mcp");
+    expect::within_bytes(structured, 8 * 1024, "catalog structured content")
+        .expect("catalog fits the agent budget");
+    expect::within_bytes(&catalog, 20 * 1024, "catalog wire response")
+        .expect("catalog wire response fits");
 }
 
 #[test]
 fn oversized_stdio_frame_fails_closed() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_proofstorm-mcp"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn proofstorm-mcp");
-    let mut stdin = child.stdin.take().expect("child stdin");
-    let mut stdout = BufReader::new(child.stdout.take().expect("child stdout"));
+    let mut client = McpClient::spawn_bare(binary(), "proofstorm-test").expect("spawn");
 
-    let initialized = exchange(
-        &mut stdin,
-        &mut stdout,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {"name": "proofstorm-test", "version": "0.1.0"}
-            }
-        }),
-    );
-    assert!(initialized.get("result").is_some(), "{initialized}");
-
-    writeln!(
-        stdin,
-        "{}",
-        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-    )
-    .expect("write initialized notification");
-    stdin
-        .write_all(&vec![b'x'; 1024 * 1024 + 1])
+    client
+        .send_raw(&vec![b'x'; 1024 * 1024 + 1])
         .expect("write oversized frame");
-    stdin.write_all(b"\n").expect("terminate oversized frame");
-    stdin.flush().expect("flush oversized frame");
+    client
+        .expect_transport_closed()
+        .expect("oversized frame must close the transport without a response");
 
-    let mut response = String::new();
-    assert_eq!(
-        stdout.read_line(&mut response).expect("read transport EOF"),
-        0,
-        "oversized frame must close the transport without a response"
-    );
-    drop(stdin);
-    assert!(child.wait().expect("reap proofstorm-mcp").success());
+    assert!(client.wait().expect("reap proofstorm-mcp").success());
 }
 
 #[test]
 fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
     let directory = tempfile::tempdir().expect("tempdir");
     let database = directory.path().join("proofstorm.sqlite3");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_proofstorm-mcp"))
-        .env("PROOFSTORM_DB", database)
-        .env("PROOFSTORM_WORKSPACE", "alpha")
-        .env("PROOFSTORM_PRINCIPAL", "reader")
-        .env("PROOFSTORM_CAPABILITIES", "lab.read")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn configured proofstorm-mcp");
-    let mut stdin = child.stdin.take().expect("child stdin");
-    let mut stdout = BufReader::new(child.stdout.take().expect("child stdout"));
-
-    let initialized = exchange(
-        &mut stdin,
-        &mut stdout,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {"name": "proofstorm-policy-test", "version": "0.1.0"}
-            }
-        }),
-    );
-    assert!(initialized.get("result").is_some(), "{initialized}");
-    writeln!(
-        stdin,
-        "{}",
-        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    let mut client = McpClient::spawn(
+        binary(),
+        "proofstorm-policy-test",
+        &[
+            ("PROOFSTORM_DB", database.as_os_str()),
+            ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
+            ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
+            ("PROOFSTORM_CAPABILITIES", "lab.read".as_ref()),
+        ],
     )
-    .expect("write initialized notification");
-    stdin.flush().expect("flush initialized notification");
+    .expect("spawn configured proofstorm-mcp");
 
-    let listed = exchange(
-        &mut stdin,
-        &mut stdout,
-        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
-    );
-    let names = listed["result"]["tools"]
-        .as_array()
+    let listed = client.request("tools/list", json!({})).expect("list tools");
+    let names = expect::array(&listed, "/tools")
         .expect("tool array")
         .iter()
-        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .map(|tool| expect::string(tool, "/name").expect("tool name"))
         .collect::<Vec<_>>();
     assert_eq!(
         names,
@@ -249,18 +124,8 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         ]
     );
 
-    let refused = exchange(
-        &mut stdin,
-        &mut stdout,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "proofstorm_lab_create", "arguments": {}}
-        }),
-    );
-    assert_eq!(refused["error"]["message"], "tool not found", "{refused}");
-
-    child.kill().expect("stop proofstorm-mcp");
-    child.wait().expect("reap proofstorm-mcp");
+    let refused = client
+        .call_error("proofstorm_lab_create", json!({}))
+        .expect("lab create must be refused");
+    expect::equals(&refused, "/message", &Value::from("tool not found")).expect("refusal message");
 }

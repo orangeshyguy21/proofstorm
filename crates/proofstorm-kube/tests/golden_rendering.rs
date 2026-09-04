@@ -335,7 +335,7 @@ fn cdk_bdk_backend_lab() -> (LabSpec, &'static str) {
 
 fn render_backend(backend_id: &str) -> Value {
     let (lab, component_id) = backend_lab(backend_id);
-    let lock = resolve_lock(&lab, &default_catalog()).expect("backend lock");
+    let lock = resolve_lock(&lab, default_catalog()).expect("backend lock");
     let plans =
         compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &lab, &lock).expect("backend plans");
     let plan = plans
@@ -575,7 +575,7 @@ fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
             database_link("mint", "database"),
         ],
     );
-    let lock = resolve_lock(&spec, &default_catalog()).expect("PostgreSQL lab lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("PostgreSQL lab lock");
     let rendered =
         render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("PostgreSQL lab render");
     let secret = rendered
@@ -669,7 +669,7 @@ fn nutshell_postgres_binding_keeps_database_and_mint_secrets_out_of_public_confi
             database_link("mint", "database"),
         ],
     );
-    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell PostgreSQL lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell PostgreSQL lock");
     let rendered = render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock)
         .expect("Nutshell PostgreSQL render");
     let public_config = rendered
@@ -762,7 +762,7 @@ fn nutshell_oidc_auth_projects_exact_upstream_contract_and_persistent_auth_ledge
             lightning_link("mint", "lightning"),
         ],
     );
-    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell OIDC lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell OIDC lock");
     let rendered =
         render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell OIDC render");
     let public_config = rendered
@@ -847,7 +847,7 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
             authentication_link("mint", "identity"),
         ],
     );
-    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell Keycloak lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell Keycloak lock");
     let rendered =
         render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Keycloak render");
     let mint_config = rendered
@@ -1006,7 +1006,7 @@ fn nutshell_redis_binding_is_private_typed_and_independent_of_primary_storage() 
             cache_link("mint", "cache"),
         ],
     );
-    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell Redis lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell Redis lock");
     let rendered =
         render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Redis render");
     let public_config = rendered
@@ -1119,7 +1119,7 @@ fn every_registered_backend_matches_its_golden_contract() {
 #[test]
 fn full_baseline_lab_matches_its_golden_contract() {
     let spec = full_baseline_lab();
-    let lock = resolve_lock(&spec, &default_catalog()).expect("full baseline lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("full baseline lock");
     let rendered = render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("full render");
     for workload in &rendered.stateful_sets {
         let one = RenderedComponent {
@@ -1225,7 +1225,7 @@ fn full_baseline_lab_matches_its_golden_contract() {
 #[test]
 fn cdk_cln_lab_matches_its_golden_contract() {
     let spec = cdk_cln_lab();
-    let lock = resolve_lock(&spec, &default_catalog()).expect("CDK+CLN lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("CDK+CLN lock");
     let rendered =
         render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("CDK+CLN full render");
     assert_golden(
@@ -1248,7 +1248,7 @@ fn cdk_cln_lab_matches_its_golden_contract() {
 #[test]
 fn nutshell_cln_lab_uses_restricted_runtime_rune_contract() {
     let spec = nutshell_cln_lab();
-    let lock = resolve_lock(&spec, &default_catalog()).expect("Nutshell+CLN lock");
+    let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell+CLN lock");
     let rendered =
         render_lab(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell+CLN full render");
     let mint_config = rendered

@@ -41,6 +41,7 @@
         "network.heal",
         "component.logs",
         "component.exec",
+        "authentication.test",
         "traffic.capture",
         "oracle.list",
         "oracle.run",
@@ -113,7 +114,6 @@
       "properties": {
         "config": {
           "additionalProperties": true,
-          "default": {},
           "type": "object"
         },
         "config_version": {
@@ -145,7 +145,8 @@
         "kind",
         "implementation",
         "config_version",
-        "control"
+        "control",
+        "config"
       ],
       "type": "object"
     },
@@ -498,14 +499,12 @@
           "type": "string"
         },
         "components": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/ComponentSpec"
           },
           "type": "array"
         },
         "links": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/LinkSpec"
           },
@@ -528,7 +527,9 @@
       },
       "required": [
         "api_version",
-        "name"
+        "name",
+        "components",
+        "links"
       ],
       "type": "object"
     },
@@ -687,6 +688,7 @@
         "peer_connect",
         "peer_disconnect",
         "channel_open",
+        "channel_policy_set",
         "channel_close",
         "channel_force_close",
         "channel_rebalance",
@@ -699,10 +701,15 @@
         "wallet_fund",
         "wallet_invoice",
         "wallet_pay",
+        "wallet_quote_claim",
         "wallet_round_trip",
         "conservation_oracle",
         "reachability_oracle",
-        "native_exec"
+        "native_exec",
+        "component_logs",
+        "authentication_conformance",
+        "authentication_protected_spend",
+        "authentication_replay"
       ],
       "type": "string"
     },

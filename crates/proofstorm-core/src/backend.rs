@@ -72,6 +72,7 @@ pub enum OperationClass {
     NetworkHeal,
     PeerChannelMutation,
     WalletPayment,
+    Authentication,
 }
 
 #[derive(
@@ -1373,13 +1374,23 @@ impl StorageRequirementTemplate {
 #[must_use]
 /// Return the built-in, internally validated backend registry.
 ///
+/// The built-in backend contracts, built once per process.
+///
+/// Every reconcile, action admission and catalog request needs this registry.
+/// Rebuilding it meant reconstructing ~215 lines of contract structs and
+/// revalidating each one on paths that run every few seconds.
+///
 /// # Panics
 ///
 /// Panics when a built-in backend violates a configuration-contract invariant.
 /// This is a programmer error covered by the backend contract tests.
-pub fn default_backend_registry() -> BackendContractRegistry {
-    BackendContractRegistry::try_new(default_backend_contracts())
-        .expect("built-in backend configuration contracts are valid")
+pub fn default_backend_registry() -> &'static BackendContractRegistry {
+    static REGISTRY: std::sync::LazyLock<BackendContractRegistry> =
+        std::sync::LazyLock::new(|| {
+            BackendContractRegistry::try_new(default_backend_contracts())
+                .expect("built-in backend configuration contracts are valid")
+        });
+    &REGISTRY
 }
 
 fn validate_backend_config_contract(contract: &ComponentBackendContract) -> Result<(), String> {
@@ -3162,6 +3173,10 @@ fn default_operation_admission() -> Vec<OperationAdmissionContract> {
             Operation::WalletPayment,
             BTreeSet::from([Requirement::Dependencies, Requirement::Protocol]),
         ),
+        admission(
+            Operation::Authentication,
+            BTreeSet::from([Requirement::Dependencies, Requirement::Protocol]),
+        ),
     ]
 }
 
@@ -3618,7 +3633,7 @@ mod tests {
             links: vec![],
             policy: crate::LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &crate::default_catalog()).expect("resolve current lock");
+        let lock = resolve_lock(&lab, crate::default_catalog()).expect("resolve current lock");
         assert_eq!(lock.api_version, LOCK_API_VERSION);
         let entry = lock.entries[0].clone();
         let expected = entry.rollout_digest.clone();
@@ -3654,7 +3669,7 @@ mod tests {
             links: vec![],
             policy: crate::LabPolicy::default(),
         };
-        let mut lock = resolve_lock(&lab, &crate::default_catalog()).expect("resolve current lock");
+        let mut lock = resolve_lock(&lab, crate::default_catalog()).expect("resolve current lock");
         lock.entries[0].config_version = "cdk-mintd/0.17/v1".into();
 
         let error = default_backend_registry()
@@ -3760,7 +3775,7 @@ mod tests {
             links: vec![link.clone()],
             policy: crate::LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &crate::default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, crate::default_catalog()).expect("lock");
         let error = default_backend_registry()
             .compile_contract(&ComponentPlanInput {
                 instance_key: "instance-key".into(),
@@ -3815,7 +3830,7 @@ mod tests {
             links: vec![],
             policy: crate::LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &crate::default_catalog()).expect("resolve lock");
+        let lock = resolve_lock(&lab, crate::default_catalog()).expect("resolve lock");
         let compile = |component: ComponentSpec| {
             let entry = lock
                 .entries

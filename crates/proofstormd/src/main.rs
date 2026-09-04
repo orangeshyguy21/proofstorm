@@ -29,7 +29,9 @@ use kube::{
 use proofstorm_core::{BackendContractRegistry, default_backend_registry};
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
-    BACKEND_ID_ANNOTATION, ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
+    AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
+    AuthenticationReplayResult, AuthenticationSessionFailureStage, BACKEND_ID_ANNOTATION,
+    COMPONENT_LABEL, ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
     INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION,
     LIFECYCLE_STATE_ANNOTATION, LabAction, LabPhase, MAX_PROTOCOL_PROBES_PER_LAB,
     PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION, PROTOCOL_PROBER_NAME, ProofstormLab,
@@ -166,6 +168,9 @@ async fn reconcile_action(
     ) {
         return reconcile_network_fault(action.as_ref(), &lab, &context).await;
     }
+    if matches!(action.spec.action, LabAction::ComponentLogs(_)) {
+        return reconcile_component_logs(action.as_ref(), &lab, &context).await;
+    }
     let job = match render_lab_action_job(action.as_ref(), &lab) {
         Ok(job) => job,
         Err(error) => {
@@ -270,7 +275,18 @@ async fn reconcile_action(
         }
     } else {
         let artifact = if matches!(action.spec.action, LabAction::NativeExec(_)) {
-            native_exec_artifact(&pod_api, action.as_ref(), &pods.items).await?
+            let endpoint_slices =
+                Api::<EndpointSlice>::namespaced(context.client.clone(), &instance_namespace);
+            native_exec_artifact(&pod_api, &endpoint_slices, action.as_ref(), &pods.items).await?
+        } else if matches!(action.spec.action, LabAction::AuthenticationConformance(_)) {
+            authentication_conformance_artifact(action.as_ref(), &pods.items)
+        } else if matches!(
+            action.spec.action,
+            LabAction::AuthenticationProtectedSpend(_)
+        ) {
+            authentication_protected_spend_artifact(action.as_ref(), &pods.items, &context).await?
+        } else if matches!(action.spec.action, LabAction::AuthenticationReplay(_)) {
+            authentication_replay_artifact(action.as_ref(), &pods.items)
         } else {
             pods.items
                 .iter()
@@ -304,6 +320,142 @@ async fn reconcile_action(
     };
     patch_action_status(action.as_ref(), &context, status).await?;
     Ok(Action::await_change())
+}
+
+/// Read one component's container log and journal it as the action artifact.
+///
+/// Lab workloads hold no Kubernetes credentials by design, so no Job can read
+/// another Pod's log. The controller already holds that authority for native
+/// execution and uses it here, which also keeps the log readable while the
+/// component is unready or stopped.
+async fn reconcile_component_logs(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    context: &Context,
+) -> Result<Action, Error> {
+    if action.spec.capability != proofstorm_core::Capability::ComponentLogs {
+        return patch_invalid_action(action, context, "component logs require component.logs")
+            .await;
+    }
+    let LabAction::ComponentLogs(request) = &action.spec.action else {
+        return Err(Error::ControllerInvariant("expected component logs action"));
+    };
+    let plans = compile_component_plans(
+        &lab.spec.instance_key,
+        &lab.spec.revision_digest,
+        &lab.spec.lab,
+        &lab.spec.lock,
+    )?;
+    if !plans
+        .iter()
+        .any(|plan| plan.component_id == request.component)
+    {
+        return patch_invalid_action(action, context, "component is not in the immutable lab")
+            .await;
+    }
+
+    let pods = Api::<Pod>::namespaced(
+        context.client.clone(),
+        &instance_namespace(&action.spec.instance_key),
+    );
+    let matching = pods
+        .list(&ListParams::default().labels(&format!(
+            "{COMPONENT_LABEL}={},{INSTANCE_LABEL}={}",
+            request.component, lab.spec.instance_key
+        )))
+        .await?;
+    // A rollout can leave more than one Pod; the newest is the live one.
+    let newest = matching.items.into_iter().max_by(|left, right| {
+        left.creation_timestamp()
+            .cmp(&right.creation_timestamp())
+            .then_with(|| left.name_any().cmp(&right.name_any()))
+    });
+    let artifact =
+        component_log_artifact(&pods, &request.component, request.tail_lines, newest).await?;
+
+    let observed = now_unix();
+    patch_action_status(
+        action,
+        context,
+        ProofstormLabActionStatus {
+            phase: ActionPhase::Succeeded,
+            observed_generation: action.metadata.generation,
+            started_at_unix: Some(observed),
+            completed_at_unix: Some(observed),
+            artifact: Some(artifact),
+            ..ProofstormLabActionStatus::default()
+        },
+    )
+    .await?;
+    Ok(Action::await_change())
+}
+
+/// The journaled body of a component log read, including the pod state that
+/// explains an empty or short log.
+async fn component_log_artifact(
+    pods: &Api<Pod>,
+    component: &str,
+    tail_lines: u32,
+    pod: Option<Pod>,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>, kube::Error> {
+    const LOG_LIMIT_BYTES: i64 = 20 * 1024;
+
+    let Some(pod) = pod else {
+        return Ok(status_object(serde_json::json!({
+            "component": component,
+            "pod": serde_json::Value::Null,
+            "log": "",
+            "log_truncated": false,
+            "diagnostic": "no_pod",
+            "diagnostic_message":
+                "the component currently has no Pod, so it has no log to read",
+        })));
+    };
+    let pod_name = pod.name_any();
+    let status = pod.status.clone().unwrap_or_default();
+    let container_status = status
+        .container_statuses
+        .as_ref()
+        .and_then(|statuses| statuses.first());
+    let container = container_status
+        .map(|status| status.name.clone())
+        .or_else(|| {
+            pod.spec.as_ref().and_then(|spec| {
+                spec.containers
+                    .first()
+                    .map(|container| container.name.clone())
+            })
+        });
+    let log = match pods
+        .logs(
+            &pod_name,
+            &LogParams {
+                container: container.clone(),
+                tail_lines: Some(i64::from(tail_lines)),
+                limit_bytes: Some(LOG_LIMIT_BYTES),
+                ..LogParams::default()
+            },
+        )
+        .await
+    {
+        Ok(log) => log,
+        // A Pod that has not started its container yet has no readable log,
+        // which is an observation about the component, not a controller fault.
+        Err(kube::Error::Api(error)) if error.code == 400 || error.code == 404 => String::new(),
+        Err(error) => return Err(error),
+    };
+    let truncated = log.len() >= usize::try_from(LOG_LIMIT_BYTES).unwrap_or(usize::MAX);
+    Ok(status_object(serde_json::json!({
+        "component": component,
+        "pod": pod_name,
+        "container": container,
+        "pod_phase": status.phase,
+        "container_ready": container_status.map(|status| status.ready),
+        "restart_count": container_status.map(|status| status.restart_count),
+        "tail_lines": tail_lines,
+        "log": log,
+        "log_truncated": truncated,
+    })))
 }
 
 #[allow(
@@ -1053,7 +1205,7 @@ async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Erro
     let backend_registry = default_backend_registry();
     let mut candidate_counts = BTreeMap::<String, usize>::new();
     for lab in &labs.items {
-        if protocol_probe_candidate(lab, &backend_registry) {
+        if protocol_probe_candidate(lab, backend_registry) {
             *candidate_counts
                 .entry(lab.spec.instance_key.clone())
                 .or_default() += 1;
@@ -1068,7 +1220,7 @@ async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Erro
             .active_instance_keys
             .contains(&lab.spec.instance_key);
         if !active
-            && (protocol_probe_candidate(lab, &backend_registry)
+            && (protocol_probe_candidate(lab, backend_registry)
                 || lab
                     .annotations()
                     .contains_key(PROTOCOL_PROBER_LEASE_ANNOTATION))
@@ -2153,8 +2305,312 @@ fn termination_message(pod: &Pod, target: &str) -> Option<String> {
         .clone()
 }
 
+fn authentication_conformance_artifact(
+    action: &ProofstormLabAction,
+    pods: &[Pod],
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let LabAction::AuthenticationConformance(request) = &action.spec.action else {
+        return None;
+    };
+    let message = pods
+        .iter()
+        .find_map(|pod| termination_message(pod, "authentication"))?;
+    validate_authentication_conformance_result(request, &message)
+}
+
+fn validate_authentication_conformance_result(
+    request: &proofstorm_kube::AuthenticationConformanceAction,
+    message: &str,
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let result = serde_json::from_str::<AuthenticationConformanceResult>(message).ok()?;
+    if result.contract != "proofstorm/authentication-conformance/v1"
+        || result.mint != request.mint
+        || result.identity_provider != request.identity_provider
+        || (result.conformant
+            && (!result.advertised_nut21
+                || !result.advertised_nut22
+                || !result.invalid_oidc_password_rejected
+                || !result.missing_cat_rejected
+                || result.invalid_cat_code != Some(80_002)
+                || !result.missing_bat_rejected
+                || result.invalid_bat_code != Some(81_002)
+                || !result.oidc_login
+                || !result.claims_match
+                || !result.mint_accepted_cat
+                || !result.bat_issued
+                || !result.bat_dleq
+                || result.bat_max_code != Some(81_003)
+                || result.rate_limit_code != Some(81_004)
+                || result.failure_stage.is_some()
+                || result.failure_status.is_some()
+                || result.failure_protocol_code.is_some()))
+        || (!result.conformant && result.failure_stage.is_none())
+    {
+        return None;
+    }
+    Some(status_object(
+        serde_json::to_value(result).expect("typed authentication result serializes"),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateAuthenticationProtectedSpendResult {
+    contract: String,
+    mint: String,
+    identity_provider: String,
+    bat_count: u32,
+    bat_dleq: bool,
+    protected_request: bool,
+    conformant: bool,
+    failure_stage: Option<AuthenticationSessionFailureStage>,
+    failure_status: Option<u16>,
+    failure_protocol_code: Option<u32>,
+    spent_bat: Option<String>,
+}
+
+async fn authentication_protected_spend_artifact(
+    action: &ProofstormLabAction,
+    pods: &[Pod],
+    context: &Context,
+) -> Result<Option<std::collections::BTreeMap<String, serde_json::Value>>, Error> {
+    if !matches!(
+        action.spec.action,
+        LabAction::AuthenticationProtectedSpend(_)
+    ) {
+        return Ok(None);
+    }
+    let Some(message) = pods
+        .iter()
+        .find_map(|pod| termination_message(pod, "authentication"))
+    else {
+        return Ok(None);
+    };
+    let Some((public, spent_bat)) =
+        validate_authentication_protected_spend_result(action, &message)
+    else {
+        return Ok(None);
+    };
+    if let Some(spent_bat) = spent_bat {
+        persist_authentication_session(action, &spent_bat, context).await?;
+    }
+    Ok(Some(status_object(
+        serde_json::to_value(public).expect("typed protected-spend result serializes"),
+    )))
+}
+
+fn validate_authentication_protected_spend_result(
+    action: &ProofstormLabAction,
+    message: &str,
+) -> Option<(AuthenticationProtectedSpendResult, Option<String>)> {
+    let LabAction::AuthenticationProtectedSpend(request) = &action.spec.action else {
+        return None;
+    };
+    let result = serde_json::from_str::<PrivateAuthenticationProtectedSpendResult>(message).ok()?;
+    if result.contract != "proofstorm/authentication-protected-spend-private/v1"
+        || result.mint != request.mint
+        || result.identity_provider != request.identity_provider
+    {
+        return None;
+    }
+
+    let (session_operation_id, spent_bat) = if result.conformant {
+        let spent_bat = result.spent_bat.as_deref()?;
+        if result.bat_count != 3
+            || !result.bat_dleq
+            || !result.protected_request
+            || result.failure_stage.is_some()
+            || result.failure_status.is_some()
+            || result.failure_protocol_code.is_some()
+            || !spent_bat.starts_with("authA")
+            || spent_bat.len() > 4_096
+        {
+            return None;
+        }
+        (
+            Some(action.spec.operation_id.clone()),
+            Some(spent_bat.to_owned()),
+        )
+    } else {
+        if result.failure_stage.is_none() || result.spent_bat.is_some() {
+            return None;
+        }
+        (None, None)
+    };
+    let public = AuthenticationProtectedSpendResult {
+        contract: "proofstorm/authentication-protected-spend/v1".to_owned(),
+        mint: result.mint,
+        identity_provider: result.identity_provider,
+        bat_count: result.bat_count,
+        bat_dleq: result.bat_dleq,
+        protected_request: result.protected_request,
+        session_operation_id,
+        conformant: result.conformant,
+        failure_stage: result.failure_stage,
+        failure_status: result.failure_status,
+        failure_protocol_code: result.failure_protocol_code,
+    };
+    Some((public, spent_bat))
+}
+
+async fn persist_authentication_session(
+    action: &ProofstormLabAction,
+    spent_bat: &str,
+    context: &Context,
+) -> Result<(), Error> {
+    let namespace = instance_namespace(&action.spec.instance_key);
+    let name = format!("{}-auth-session", action.name_any());
+    let secrets = Api::<Secret>::namespaced(context.client.clone(), &namespace);
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        let matches = existing
+            .data
+            .as_ref()
+            .and_then(|data| data.get("SPENT_BAT"))
+            .is_some_and(|value| value.0 == spent_bat.as_bytes());
+        if matches {
+            return Ok(());
+        }
+        return Err(Error::SecretContract(format!(
+            "authentication session Secret {name:?} does not match its source operation"
+        )));
+    }
+    let secret = serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/instance": action.spec.instance_key,
+                "proofstorm.dev/authentication-session": "true"
+            },
+            "annotations": {
+                "proofstorm.dev/source-operation": action.spec.operation_id
+            }
+        },
+        "immutable": true,
+        "type": "Opaque",
+        "stringData": {"SPENT_BAT": spent_bat}
+    });
+    secrets
+        .patch(
+            &name,
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(secret),
+        )
+        .await?;
+    Ok(())
+}
+
+fn authentication_replay_artifact(
+    action: &ProofstormLabAction,
+    pods: &[Pod],
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let LabAction::AuthenticationReplay(request) = &action.spec.action else {
+        return None;
+    };
+    let message = pods
+        .iter()
+        .find_map(|pod| termination_message(pod, "authentication"))?;
+    validate_authentication_replay_result(request, &message)
+}
+
+fn validate_authentication_replay_result(
+    request: &proofstorm_kube::AuthenticationReplayAction,
+    message: &str,
+) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let result = serde_json::from_str::<AuthenticationReplayResult>(message).ok()?;
+    if result.contract != "proofstorm/authentication-replay/v1"
+        || result.mint != request.mint
+        || result.identity_provider != request.identity_provider
+        || result.source_operation_id != request.source_operation_id
+        || (result.conformant
+            && (result.spent_bat_replay_code != Some(81_002)
+                || result.fresh_bat_count != 3
+                || !result.fresh_bat_dleq
+                || !result.protected_request
+                || result.failure_stage.is_some()
+                || result.failure_status.is_some()
+                || result.failure_protocol_code.is_some()))
+        || (!result.conformant && result.failure_stage.is_none())
+    {
+        return None;
+    }
+    Some(status_object(
+        serde_json::to_value(result).expect("typed authentication replay result serializes"),
+    ))
+}
+
+/// Ready and total endpoint addresses across one Service's `EndpointSlice` set.
+///
+/// A `ready` condition that is absent means unknown, which the `EndpointSlice`
+/// contract tells consumers to read as ready; only an explicit `false` is
+/// not-ready.
+fn endpoint_readiness(slices: &[EndpointSlice]) -> (usize, usize) {
+    let mut ready = 0;
+    let mut total = 0;
+    for slice in slices {
+        for endpoint in &slice.endpoints {
+            let addresses = endpoint.addresses.len();
+            total += addresses;
+            if endpoint
+                .conditions
+                .as_ref()
+                .and_then(|conditions| conditions.ready)
+                != Some(false)
+            {
+                ready += addresses;
+            }
+        }
+    }
+    (ready, total)
+}
+
+/// Why a target could not be reached, when its endpoints say so.
+///
+/// Zero of zero and zero of some are different facts. A component that
+/// publishes no Service endpoints serves nothing over the network by design; a
+/// component whose endpoints all exist but are unready refuses connections
+/// until it becomes ready, which is a state the caller can wait out.
+const fn target_endpoint_diagnostic(
+    ready: usize,
+    total: usize,
+) -> Option<(&'static str, &'static str)> {
+    match (ready, total) {
+        (0, 0) => Some((
+            "no_service_endpoints",
+            "the target component publishes no Service endpoints, so it cannot be reached over the network at all; a wallet, for example, is driven through its own CLI and data volume rather than a served port",
+        )),
+        (0, _) => Some((
+            "no_ready_endpoints",
+            "the target component's Service had endpoints but none ready, so connections to it are refused rather than timing out; this is a readiness state, not a missing listener or a blocked network policy",
+        )),
+        _ => None,
+    }
+}
+
+/// Native execution reaches its target through that component's Service. While
+/// the component is not Ready the Service has no ready endpoints and every
+/// connection to it is refused immediately, which is indistinguishable inside
+/// the pod from nothing listening. Recording the endpoint counts alongside the
+/// output makes that difference legible without a second investigation.
+async fn native_exec_target_readiness(
+    endpoint_slices: &Api<EndpointSlice>,
+    target_component: &str,
+) -> Result<(usize, usize), kube::Error> {
+    let slices = endpoint_slices
+        .list(
+            &ListParams::default()
+                .labels(&format!("kubernetes.io/service-name={target_component}")),
+        )
+        .await?;
+    Ok(endpoint_readiness(&slices.items))
+}
+
 async fn native_exec_artifact(
     pods: &Api<Pod>,
+    endpoint_slices: &Api<EndpointSlice>,
     action: &ProofstormLabAction,
     observed: &[Pod],
 ) -> Result<Option<std::collections::BTreeMap<String, serde_json::Value>>, kube::Error> {
@@ -2187,14 +2643,27 @@ async fn native_exec_artifact(
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(-1);
 
+    let (ready_endpoints, total_endpoints) =
+        native_exec_target_readiness(endpoint_slices, &request.target_component).await?;
+
     loop {
-        let artifact = status_object(serde_json::json!({
+        let mut artifact = status_object(serde_json::json!({
             "component": request.component,
             "target_component": request.target_component,
             "exit_code": exit_code,
             "combined_output": output,
             "output_truncated": truncated,
+            "target_ready_endpoints": ready_endpoints,
+            "target_endpoints": total_endpoints,
         }));
+        if let Some((code, message)) = target_endpoint_diagnostic(ready_endpoints, total_endpoints)
+        {
+            artifact.insert("target_diagnostic".to_owned(), serde_json::json!(code));
+            artifact.insert(
+                "target_diagnostic_message".to_owned(),
+                serde_json::json!(message),
+            );
+        }
         if serde_json::to_vec(&artifact)
             .map_or(true, |encoded| encoded.len() <= ARTIFACT_TARGET_BYTES)
         {
@@ -2228,6 +2697,19 @@ fn container_failure(pod: &Pod) -> Option<serde_json::Value> {
                     "exit_code": terminated.exit_code,
                     "reason": terminated.reason,
                 });
+                // With FallbackToLogsOnError a script that did not write its own
+                // structured diagnostic leaves the native error here. Surfacing a
+                // bounded tail turns an opaque container_failed into the reason
+                // the command actually gave.
+                if let Some(tail) = terminated
+                    .message
+                    .as_deref()
+                    .filter(|message| serde_json::from_str::<serde_json::Value>(message).is_err())
+                    .map(native_error_tail)
+                    .filter(|tail| !tail.is_empty())
+                {
+                    failure["native_error_tail"] = serde_json::json!(tail);
+                }
                 if let Some(diagnostic) = terminated
                     .message
                     .as_deref()
@@ -2253,6 +2735,37 @@ fn container_failure(pod: &Pod) -> Option<serde_json::Value> {
             })
         })
         .max_by_key(container_failure_priority)
+}
+
+/// Last lines of a native error, bounded for the journal. Kubernetes already
+/// caps a termination message, and an action artifact is small, so this keeps
+/// the end of the output where the error itself is.
+fn native_error_tail(message: &str) -> String {
+    const MAX_LINES: usize = 20;
+    const MAX_BYTES: usize = 2 * 1024;
+    let lines = message
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let mut tail = lines
+        .iter()
+        .rev()
+        .take(MAX_LINES)
+        .rev()
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if tail.len() > MAX_BYTES {
+        let boundary = tail
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= tail.len() - MAX_BYTES)
+            .last()
+            .unwrap_or(0);
+        tail = tail.split_off(boundary);
+    }
+    tail
 }
 
 fn container_failure_priority(failure: &serde_json::Value) -> u8 {
@@ -2286,6 +2799,271 @@ fn status_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authentication_request() -> proofstorm_kube::AuthenticationConformanceAction {
+        proofstorm_kube::AuthenticationConformanceAction {
+            mint: "mint".into(),
+            identity_provider: "identity".into(),
+        }
+    }
+
+    fn authentication_result(conformant: bool) -> serde_json::Value {
+        serde_json::json!({
+            "contract": "proofstorm/authentication-conformance/v1",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "advertised_nut21": true,
+            "advertised_nut22": true,
+            "invalid_oidc_password_rejected": true,
+            "missing_cat_rejected": true,
+            "invalid_cat_code": 80002,
+            "missing_bat_rejected": true,
+            "invalid_bat_code": 81002,
+            "oidc_login": true,
+            "claims_match": true,
+            "mint_accepted_cat": true,
+            "bat_issued": conformant,
+            "bat_dleq": conformant,
+            "bat_max_code": 81003,
+            "rate_limit_code": if conformant { Some(81004) } else { None },
+            "conformant": conformant,
+            "failure_stage": if conformant { None } else { Some("bat_issuance") },
+            "failure_status": if conformant { None } else { Some(400) },
+            "failure_protocol_code": null
+        })
+    }
+
+    fn protected_spend_action() -> ProofstormLabAction {
+        ProofstormLabAction::new(
+            "op-auth-spend-resource",
+            proofstorm_kube::ProofstormLabActionSpec {
+                lab_name: "lab-auth".into(),
+                workspace_id: "workspace".into(),
+                instance_id: "instance".into(),
+                instance_key: "i0123456789012345678".into(),
+                experiment_id: "experiment".into(),
+                lease_id: "lease".into(),
+                principal_id: "principal".into(),
+                sequence: 1,
+                operation_id: "auth-spend".into(),
+                request_digest: "sha256:request".into(),
+                capability: proofstorm_core::Capability::AuthenticationTest,
+                accepted_at_unix: 1,
+                action: LabAction::AuthenticationProtectedSpend(
+                    proofstorm_kube::AuthenticationProtectedSpendAction {
+                        mint: "mint".into(),
+                        identity_provider: "identity".into(),
+                    },
+                ),
+            },
+        )
+    }
+
+    #[test]
+    fn authentication_artifact_accepts_only_the_secret_free_typed_shape() {
+        let request = authentication_request();
+        let valid = authentication_result(true);
+        assert!(validate_authentication_conformance_result(&request, &valid.to_string()).is_some());
+
+        let finding = authentication_result(false);
+        assert!(
+            validate_authentication_conformance_result(&request, &finding.to_string()).is_some()
+        );
+
+        let mut leaked = finding;
+        leaked["password"] = serde_json::json!("sentinel-secret");
+        assert!(
+            validate_authentication_conformance_result(&request, &leaked.to_string()).is_none(),
+            "unknown fields, including leaked credentials, fail closed"
+        );
+
+        let mut wrong_identity = authentication_result(false);
+        wrong_identity["identity_provider"] = serde_json::json!("other");
+        assert!(
+            validate_authentication_conformance_result(&request, &wrong_identity.to_string())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn protected_spend_and_replay_strip_or_reject_bearer_material() {
+        let action = protected_spend_action();
+        let private = serde_json::json!({
+            "contract": "proofstorm/authentication-protected-spend-private/v1",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "bat_count": 3,
+            "bat_dleq": true,
+            "protected_request": true,
+            "conformant": true,
+            "failure_stage": null,
+            "failure_status": null,
+            "failure_protocol_code": null,
+            "spent_bat": "authAprivate-bearer"
+        });
+        let (public, token) =
+            validate_authentication_protected_spend_result(&action, &private.to_string())
+                .expect("valid private protected-spend result");
+        assert_eq!(token.as_deref(), Some("authAprivate-bearer"));
+        let public = serde_json::to_string(&public).expect("public result");
+        assert!(!public.contains("private-bearer"));
+        assert!(!public.contains("spent_bat"));
+
+        let mut leaked = private;
+        leaked["password"] = serde_json::json!("sentinel-secret");
+        assert!(
+            validate_authentication_protected_spend_result(&action, &leaked.to_string()).is_none()
+        );
+
+        let replay_request = proofstorm_kube::AuthenticationReplayAction {
+            mint: "mint".into(),
+            identity_provider: "identity".into(),
+            session_secret: "op-auth-spend-resource-auth-session".into(),
+            source_operation_id: "auth-spend".into(),
+        };
+        let replay = serde_json::json!({
+            "contract": "proofstorm/authentication-replay/v1",
+            "mint": "mint",
+            "identity_provider": "identity",
+            "source_operation_id": "auth-spend",
+            "spent_bat_replay_code": 81002,
+            "fresh_bat_count": 3,
+            "fresh_bat_dleq": true,
+            "protected_request": true,
+            "conformant": true,
+            "failure_stage": null,
+            "failure_status": null,
+            "failure_protocol_code": null
+        });
+        assert!(
+            validate_authentication_replay_result(&replay_request, &replay.to_string()).is_some()
+        );
+        let mut leaked_replay = replay;
+        leaked_replay["spent_bat"] = serde_json::json!("authAprivate-bearer");
+        assert!(
+            validate_authentication_replay_result(&replay_request, &leaked_replay.to_string())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_error_tail_keeps_the_end_of_the_output_within_bounds() {
+        assert_eq!(native_error_tail(""), "");
+        assert_eq!(
+            native_error_tail("only line\n"),
+            "only line",
+            "a single line survives whole"
+        );
+        let many = (1..=40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tail = native_error_tail(&many);
+        assert!(
+            tail.starts_with("line 21") && tail.ends_with("line 40"),
+            "the last twenty lines are kept in order: {tail}"
+        );
+        let noisy = format!("blank lines are dropped\n\n\n{}", "x".repeat(9_000));
+        let bounded = native_error_tail(&noisy);
+        assert!(bounded.len() <= 2 * 1024, "bounded to the artifact budget");
+        assert!(bounded.is_char_boundary(0));
+    }
+
+    #[test]
+    fn a_failed_container_reports_the_native_error_it_logged() {
+        let pod: Pod = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": "op-boot-abc", "namespace": "instance"},
+            "status": {
+                "initContainerStatuses": [{
+                    "image": "lnd:test",
+                    "imageID": "lnd@test",
+                    "name": "channel-open",
+                    "ready": false,
+                    "restartCount": 0,
+                    "state": {"terminated": {
+                        "exitCode": 1,
+                        "message": "[lncli] rpc error: code = Unknown desc = not enough witness outputs to create funding transaction, need 0.06003043 BTC only have 0.06000000 BTC",
+                        "reason": "Error"
+                    }}
+                }]
+            }
+        }))
+        .expect("pod");
+        let failure = container_failure(&pod).expect("failure");
+        assert_eq!(failure["code"], "container_failed");
+        assert!(
+            failure["native_error_tail"]
+                .as_str()
+                .expect("native error tail")
+                .contains("not enough witness outputs"),
+            "an opaque container failure carries the reason the command gave"
+        );
+    }
+
+    #[test]
+    fn endpoint_readiness_counts_addresses_and_reads_unknown_as_ready() {
+        let slice = |value: serde_json::Value| -> EndpointSlice {
+            serde_json::from_value(value).expect("endpoint slice")
+        };
+        assert_eq!(
+            endpoint_readiness(&[]),
+            (0, 0),
+            "no slices means no endpoint"
+        );
+        let not_ready = slice(serde_json::json!({
+            "apiVersion": "discovery.k8s.io/v1",
+            "kind": "EndpointSlice",
+            "metadata": {"name": "mint-lnd-abc", "namespace": "instance"},
+            "addressType": "IPv4",
+            "endpoints": [{"addresses": ["10.0.0.2"], "conditions": {"ready": false}}]
+        }));
+        assert_eq!(
+            endpoint_readiness(std::slice::from_ref(&not_ready)),
+            (0, 1),
+            "an unready component leaves its Service with no ready endpoint"
+        );
+        let mixed = slice(serde_json::json!({
+            "apiVersion": "discovery.k8s.io/v1",
+            "kind": "EndpointSlice",
+            "metadata": {"name": "mint-lnd-def", "namespace": "instance"},
+            "addressType": "IPv4",
+            "endpoints": [
+                {"addresses": ["10.0.0.3"], "conditions": {"ready": true}},
+                {"addresses": ["10.0.0.4"]},
+                {"addresses": ["10.0.0.5"], "conditions": {"ready": false}}
+            ]
+        }));
+        assert_eq!(
+            endpoint_readiness(&[not_ready, mixed]),
+            (2, 4),
+            "an unknown ready condition counts as ready and slices aggregate"
+        );
+    }
+
+    #[test]
+    fn exec_target_diagnostics_separate_serving_from_unready() {
+        for (ready, total, expected) in [
+            (0_usize, 0_usize, Some("no_service_endpoints")),
+            (0, 1, Some("no_ready_endpoints")),
+            (0, 3, Some("no_ready_endpoints")),
+            (1, 1, None),
+            (2, 4, None),
+        ] {
+            assert_eq!(
+                target_endpoint_diagnostic(ready, total).map(|(code, _)| code),
+                expected,
+                "ready {ready} of {total}"
+            );
+        }
+        let (_, message) =
+            target_endpoint_diagnostic(0, 1).expect("an unready target is diagnosed");
+        assert!(
+            message.contains("refused rather than timing out"),
+            "the message must name the symptom the caller actually sees"
+        );
+    }
 
     #[test]
     fn instance_keys_are_bounded_dns_labels() {

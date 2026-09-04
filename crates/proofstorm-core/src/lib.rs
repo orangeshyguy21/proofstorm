@@ -31,8 +31,9 @@ pub use backend::{
 pub use catalog::{
     AuthenticationMode, CatalogDependencySupport, CatalogEntry, CatalogFeature,
     CatalogImplementationSupport, CatalogPaymentBindingSupport, CatalogResponse,
-    CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel, StorageBackend, SupportLifecycle,
-    default_catalog, validate_catalog_component, validate_component_config,
+    CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
+    StorageBackend, SupportLifecycle, default_catalog, validate_catalog_component,
+    validate_component_config,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,
@@ -64,6 +65,9 @@ pub use publication::{
     ROLLOUT_DIGEST_VERSION, ResolvedLock, digest_json, publication_digest, resolve_effective_lab,
     resolve_lock,
 };
-pub use quote::{WalletQuote, WalletQuoteDirection, WalletQuotePhase};
+pub use quote::{
+    WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
+    WalletQuoteObservationRole, wallet_quote_observations_from_artifact,
+};
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, validate_lab};

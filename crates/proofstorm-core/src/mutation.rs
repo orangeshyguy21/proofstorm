@@ -165,7 +165,7 @@ mod tests {
             apply_draft_mutation(
                 &mut lab,
                 &DraftMutation::AddComponent { component: item },
-                &catalog,
+                catalog,
             )
             .expect("component mutation");
         }
@@ -186,7 +186,7 @@ mod tests {
             apply_draft_mutation(
                 &mut lab,
                 &DraftMutation::AddComponent { component: invalid },
-                &catalog,
+                catalog,
             )
             .expect_err("kind mismatch")
             .contains("does not match catalog kind")
@@ -214,7 +214,7 @@ mod tests {
             apply_draft_mutation(
                 &mut lab,
                 &DraftMutation::AddComponent { component: item },
-                &catalog,
+                catalog,
             )
             .expect("component mutation");
         }
@@ -230,7 +230,7 @@ mod tests {
         apply_draft_mutation(
             &mut lab,
             &DraftMutation::AddLink { link: link.clone() },
-            &catalog,
+            catalog,
         )
         .expect("typed link");
         assert!(
@@ -239,7 +239,7 @@ mod tests {
                 &DraftMutation::RemoveComponent {
                     component_id: "chain".into(),
                 },
-                &catalog,
+                catalog,
             )
             .expect_err("linked removal")
             .contains("remove them first")
@@ -255,7 +255,7 @@ mod tests {
             }),
         };
         assert!(
-            apply_draft_mutation(&mut lab, &DraftMutation::AddLink { link: wrong }, &catalog,)
+            apply_draft_mutation(&mut lab, &DraftMutation::AddLink { link: wrong }, catalog,)
                 .expect_err("wrong link kinds")
                 .contains("incompatible_link_kinds")
         );

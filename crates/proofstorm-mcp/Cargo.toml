@@ -22,6 +22,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]
+proofstorm-acceptance = { path = "../proofstorm-acceptance" }
 tempfile = "3.20"
 
 [lints]

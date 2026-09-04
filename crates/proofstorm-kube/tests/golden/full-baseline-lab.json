@@ -132,6 +132,7 @@
                   ]
                 }
               },
+              "terminationMessagePolicy": "FallbackToLogsOnError",
               "volumeMounts": [
                 {
                   "mountPath": "/home/bitcoin/.bitcoin",
@@ -421,6 +422,13 @@
             "dependencies",
             "protocol"
           ]
+        },
+        {
+          "operation": "authentication",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
         }
       ],
       "relevant_links": [],
@@ -573,6 +581,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -742,6 +757,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -930,6 +952,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -1127,6 +1156,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -1382,6 +1418,13 @@
             "dependencies",
             "protocol"
           ]
+        },
+        {
+          "operation": "authentication",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
         }
       ],
       "protocol_probe": {
@@ -1539,6 +1582,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"

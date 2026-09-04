@@ -8,33 +8,24 @@
       ],
       "type": "string"
     },
-    "WalletQuotePhase": {
-      "description": "Adapter-neutral quote progress. Adapter quote IDs and payment requests are\ndeliberately absent from the public contract.",
+    "WalletQuoteObservationRole": {
+      "description": "The role of one wallet-native quote observation in the operation that\nproduced it. Roles make retry deduplication explicit without inventing a\nsecond quote lifecycle.",
       "enum": [
-        "requested",
-        "ready",
-        "pending",
-        "paid",
-        "settled",
-        "expired",
-        "failed",
-        "inconclusive",
-        "cancelled"
+        "invoice_receive",
+        "payment_melt",
+        "payment_receive",
+        "claim_receive"
       ],
       "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "A durable Proofstorm-owned handle for an adapter-private Cashu quote.",
+  "description": "An immutable, attributed observation of one adapter-native wallet quote.\nThis is a historical observation, not live wallet state.",
   "properties": {
     "amount_sat": {
       "format": "uint64",
       "minimum": 0,
-      "type": "integer"
-    },
-    "created_at_unix": {
-      "format": "int64",
       "type": "integer"
     },
     "direction": {
@@ -43,15 +34,21 @@
     "experiment_id": {
       "type": "string"
     },
-    "expires_at_unix": {
-      "format": "int64",
+    "fee_paid_sat": {
+      "format": "uint64",
+      "minimum": 0,
       "type": [
         "integer",
         "null"
       ]
     },
-    "id": {
-      "type": "string"
+    "fee_reserve_sat": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "instance_id": {
       "type": "string"
@@ -62,57 +59,75 @@
     "mint_id": {
       "type": "string"
     },
-    "operation_id": {
-      "type": [
-        "string",
-        "null"
-      ]
+    "observation_sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
     },
-    "phase": {
-      "$ref": "#/$defs/WalletQuotePhase"
+    "observed_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "observed_by_operation": {
+      "type": "string"
     },
     "principal_id": {
       "type": "string"
     },
-    "settled_at_unix": {
+    "quote_id": {
+      "type": "string"
+    },
+    "role": {
+      "$ref": "#/$defs/WalletQuoteObservationRole"
+    },
+    "state": {
+      "type": "string"
+    },
+    "wallet_created_at_unix": {
       "format": "int64",
       "type": [
         "integer",
         "null"
       ]
     },
-    "terminal_code": {
+    "wallet_expires_at_unix": {
+      "format": "int64",
       "type": [
-        "string",
+        "integer",
         "null"
       ]
     },
-    "updated_at_unix": {
-      "format": "int64",
-      "type": "integer"
-    },
     "wallet_id": {
       "type": "string"
+    },
+    "wallet_paid_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "workspace_id": {
       "type": "string"
     }
   },
   "required": [
-    "id",
+    "observation_sequence",
     "workspace_id",
     "instance_id",
     "experiment_id",
     "lease_id",
     "principal_id",
+    "observed_by_operation",
+    "role",
     "wallet_id",
     "mint_id",
     "direction",
+    "quote_id",
     "amount_sat",
-    "phase",
-    "created_at_unix",
-    "updated_at_unix"
+    "state",
+    "observed_at_unix"
   ],
-  "title": "WalletQuote",
+  "title": "WalletQuoteObservation",
   "type": "object"
 }

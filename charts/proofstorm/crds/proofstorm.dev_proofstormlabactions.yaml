@@ -35,6 +35,7 @@ spec:
                     - peer_connect
                     - peer_disconnect
                     - channel_open
+                    - channel_policy_set
                     - channel_close
                     - channel_force_close
                     - channel_rebalance
@@ -45,10 +46,15 @@ spec:
                     - wallet_fund
                     - wallet_invoice
                     - wallet_pay
+                    - wallet_quote_claim
                     - wallet_round_trip
                     - conservation_oracle
                     - reachability_oracle
                     - native_exec
+                    - component_logs
+                    - authentication_conformance
+                    - authentication_protected_spend
+                    - authentication_replay
                     type: string
                   parameters:
                     properties:
@@ -62,6 +68,14 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      baseFeeMsat:
+                        format: uint64
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
+                      baselineOperationId:
+                        nullable: true
+                        type: string
                       chain:
                         nullable: true
                         type: string
@@ -81,6 +95,11 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      feeRatePpm:
+                        format: uint32
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
                       fromComponent:
                         nullable: true
                         type: string
@@ -92,6 +111,9 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      identityProvider:
+                        nullable: true
+                        type: string
                       incomingChannelId:
                         nullable: true
                         type: string
@@ -107,6 +129,9 @@ spec:
                         nullable: true
                         type: string
                       mintLightning:
+                        nullable: true
+                        type: string
+                      mintQuoteId:
                         nullable: true
                         type: string
                       outgoingChannelId:
@@ -126,6 +151,9 @@ spec:
                       quoteId:
                         nullable: true
                         type: string
+                      recipientMint:
+                        nullable: true
+                        type: string
                       recipientWallet:
                         nullable: true
                         type: string
@@ -135,6 +163,17 @@ spec:
                       service:
                         nullable: true
                         type: string
+                      sessionSecret:
+                        nullable: true
+                        type: string
+                      sourceOperationId:
+                        nullable: true
+                        type: string
+                      tailLines:
+                        format: uint32
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
                       targetComponent:
                         nullable: true
                         type: string
@@ -154,6 +193,9 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      treatmentOperationId:
+                        nullable: true
+                        type: string
                       wallet:
                         nullable: true
                         type: string
@@ -203,6 +245,7 @@ spec:
                 - network.heal
                 - component.logs
                 - component.exec
+                - authentication.test
                 - traffic.capture
                 - oracle.list
                 - oracle.run
@@ -253,17 +296,15 @@ spec:
             nullable: true
             properties:
               artifact:
-                additionalProperties: true
-                nullable: true
                 type: object
+                x-kubernetes-preserve-unknown-fields: true
               completedAtUnix:
                 format: int64
                 nullable: true
                 type: integer
               error:
-                additionalProperties: true
-                nullable: true
                 type: object
+                x-kubernetes-preserve-unknown-fields: true
               jobName:
                 nullable: true
                 type: string

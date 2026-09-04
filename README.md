@@ -1,19 +1,21 @@
 # proofstorm
 
-> **Architecture transition:** Proofstorm is becoming an MCP-native,
-> Kubernetes-backed protocol laboratory. The Rust v1alpha1 contracts and MCP
-> read path live under `crates/`; the Compose harness documented below remains
-> available while the new vertical slices are built.
+Proofstorm is an MCP-native, Kubernetes-backed protocol laboratory for
+Bitcoin, Lightning, Cashu mints, wallets, adversarial clients, and network
+faults. Everything host-side is Rust, and `make` is the only entrypoint you
+need. The legacy Docker Compose harness is quarantined in
+[`docs/compose-harness.md`](docs/compose-harness.md).
 
 ## Agent quick start
 
-Prerequisites are Docker, Rust 1.88, `curl`, and `tar`. The setup command
+Prerequisites are Docker, Rust 1.88, `make`, `curl`, and `tar`. Nothing else:
+there is no Python or shell script to install. The setup target
 downloads checksum-verified pinned k3d, Helm, and kubectl binaries into the
 gitignored `.tools/` directory, creates the local cluster, installs the Helm
 chart, builds the release MCP binary, and runs the doctor:
 
 ```bash
-tools/proofstorm-cluster setup
+make setup
 ```
 
 Run the doctor again at any time to verify pinned tool versions, Docker and
@@ -21,7 +23,7 @@ cluster access, controller availability, and a real capability-filtered MCP
 stdio handshake:
 
 ```bash
-tools/proofstorm-cluster doctor
+make doctor
 ```
 
 The checked-in configuration follows the current stable
@@ -29,26 +31,34 @@ The checked-in configuration follows the current stable
 OpenCode installed, start a project session without changing personal config:
 
 ```bash
-OPENCODE_CONFIG=examples/opencode.json opencode .
+OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 ```
+
+That profile denies every host tool so all control flows through Proofstorm.
+Two wider profiles, `research.json` and `contributor.json`, live alongside it;
+[`examples/opencode/README.md`](examples/opencode/README.md) explains when to
+use each.
 
 Use the complete agent request in
 [`examples/opencode-conversation.md`](examples/opencode-conversation.md), then
 remove the local cluster when finished:
 
 ```bash
-tools/proofstorm-cluster down
+make down
 ```
 
 The MCP configuration is operator-owned. Its principal and capability set are
 not agent inputs, and the agent never receives kubeconfig. A principal granted
 `component.exec` can inspect component-local credentials from inside that lab,
 so that capability must be treated as secret-bearing authority.
+`authentication.test` is narrower: it permits a fixed controller-rendered
+authentication conformance action to consume disposable test-user credentials
+inside the lab, while MCP returns only its typed, secret-free result.
 
 Run the hermetic Slice 1 suite:
 
 ```bash
-cargo test --workspace --all-targets
+make test
 ```
 
 Start the stdio MCP server:
@@ -112,9 +122,9 @@ Slice 2 introduces the Kubernetes security spine. Its pinned tool versions are
 in `tools/versions.env`; the local lifecycle is:
 
 ```bash
-tools/proofstorm-cluster setup
-tools/proofstorm-cluster doctor
-tools/proofstorm-cluster down
+make setup
+make doctor
+make down
 ```
 
 The controller reconciles content-locked Bitcoin Core, LND, Core Lightning,
@@ -123,9 +133,9 @@ instance namespaces. The live Slice
 4 acceptance path is:
 
 ```bash
-tools/proofstorm-cluster setup
-bash tests/kubernetes/slice4-e2e.sh
-tools/proofstorm-cluster down
+make setup
+make e2e-slice4
+make down
 ```
 
 That test drives create, publish, materialize, readiness, sanitized status, and
@@ -140,15 +150,23 @@ account token, no service-link environment injection, zero retries, a ten-
 minute TTL, and a 32 KiB persisted artifact ceiling. Run the live path with:
 
 ```bash
-tools/proofstorm-cluster setup
-bash tests/kubernetes/slice5-e2e.sh
-tools/proofstorm-cluster down
+make setup
+make e2e-slice5
+make down
 ```
 
 Proofstorm also exposes `proofstorm_component_exec` under the separate,
 high-authority `component.exec` capability. It runs an unrestricted
 non-interactive shell program in the selected component's exact digest-pinned
-image with its canonical lab-local state mounted. `component` selects that
+image with its canonical lab-local state mounted. The program runs in a fresh
+short-lived Pod rather than inside the component's running container, so it
+shares the component's image and data but not its process space: `localhost` is
+not the component, and tools like `ps` cannot see the component's processes.
+Reach the component over the network using the injected endpoint variables. A
+component that is not ready has no Service endpoints, and connections to it are
+refused immediately rather than timing out, so the exec artifact reports the
+target's ready endpoint count to keep that case distinguishable from a missing
+listener or a blocked network policy. `component` selects that
 execution context; optional `target_component` selects which lab component's
 service metadata is exposed and defaults to the execution component. This lets
 one pinned Bitcoin CLI deliberately query any Bitcoin node in a multi-node lab.
@@ -166,9 +184,9 @@ surfaces matter.
 Run the live native-protocol acceptance gate with:
 
 ```bash
-tools/proofstorm-cluster setup
-bash tests/kubernetes/native-exec-e2e.sh
-tools/proofstorm-cluster down
+make setup
+make e2e-native-exec
+make down
 ```
 
 The gate uses a unique workspace and instance identity per invocation. It runs
@@ -370,7 +388,7 @@ has its own LDK-backed contract. Exercise the complete MCP materialization and
 live binary/configuration check with:
 
 ```sh
-bash tests/kubernetes/cdk-cln-e2e.sh
+make e2e-cdk-cln
 ```
 
 CDK 0.18.0 also has a distinct embedded-LDK runtime. It links the mint directly
@@ -381,7 +399,7 @@ a real CLN peer, connects it to embedded LDK, requests an actual 100-sat `lno`
 offer through the mint API, and verifies teardown:
 
 ```sh
-bash tests/kubernetes/cdk-ldk-e2e.sh
+make e2e-cdk-ldk
 ```
 
 The distinct CDK-BDK runtime uses CDK 0.18.0's standard image, where BDK is a
@@ -394,7 +412,7 @@ selected quotes, checks the authored minimum-deposit boundary, restarts the mint
 to prove persistence, and verifies teardown:
 
 ```sh
-bash tests/kubernetes/cdk-bdk-stress-e2e.sh
+make e2e-cdk-bdk-stress
 ```
 
 CDK 0.18 makes the database, rather than a startup TOML, authoritative for mint
@@ -456,18 +474,26 @@ advertised until matching dependency and secret contracts exist. The current
 live acceptance gates are:
 
 ```sh
-bash tests/kubernetes/nutshell-mint-e2e.sh
-bash tests/kubernetes/nutshell-cln-e2e.sh
-bash tests/kubernetes/nutshell-postgres-e2e.sh
-bash tests/kubernetes/cross-implementation-wallet-e2e.sh
-bash tests/kubernetes/nutshell-oidc-e2e.sh
+make e2e-nutshell-mint
+make e2e-nutshell-cln
+make e2e-nutshell-postgres
+make e2e-cross-implementation-wallet
+make e2e-nutshell-oidc
 ```
 
-The OIDC conformance gate obtains a real Keycloak access token with Nutshell's native
-`WalletAuth`, checks signed issuer/client/subject claims, exercises the NUT-21
-and NUT-22 missing/invalid and policy failures, then proceeds to native BAT
-issuance. Against upstream 0.20.3 it currently reproduces the auth-ledger
-schema failure and therefore does not satisfy the restart/replay exit gate.
+The OIDC conformance gate now drives authentication through three typed
+`authentication.test` actions. Fixed in-lab Jobs consume the generated
+test-user credential through Kubernetes Secret references, obtain a real
+Keycloak access token with Nutshell's native `WalletAuth`, check the
+issuer/client/subject/lifetime claims, exercise the NUT-21 and NUT-22
+missing/invalid and policy failures, mint DLEQ-backed BATs, and spend one
+against a protected endpoint. The controller retains that spent BAT in an
+immutable, instance-scoped Secret identified to MCP only by its source
+operation; after a mint restart, the replay action requires spent-token
+rejection and proves a fresh BAT still works. Neither credentials nor bearer
+tokens cross the MCP boundary. Against upstream 0.20.3 the typed baseline
+currently reproduces the auth-ledger schema failure and therefore cannot yet
+reach the protected-spend and restart/replay exit gates.
 
 CDK is not claimed as an authenticated Nutshell client by this gate. CDK clients
 through 0.18.0 complete OIDC login and refresh against the generated Keycloak
@@ -492,225 +518,25 @@ fund are bounded state-changing actions under separate capabilities. MCP never
 receives a mnemonic, proof database, mint quote, Lightning invoice, or adapter
 command.
 
-Proofstorm now owns an adapter-neutral durable wallet quote contract. A quote
-is a scoped handle containing wallet and mint IDs, receive/pay direction,
-bounded satoshi amount, expiry, and a monotonic
-`requested → ready → pending → paid → settled` lifecycle with explicit failed,
-expired, inconclusive, and cancelled outcomes. `Inconclusive` quarantines an
-ambiguous payment without authorizing replay; a later durable payer receipt or
-authoritative recipient settlement may repair it to paid or settled. Adapter quote IDs and payment
-requests have no public field and remain inside the controller adapter. Quotes persist
-across MCP restarts, are bound to the experiment lease and principal, and are
-inspectable through capability-filtered `proofstorm_wallet_quote_status` and
-`proofstorm_wallet_quote_list` tools. Quote-list pages use an object envelope
-with an explicit next-quote cursor so MCP clients never receive top-level array
-structured content.
+Nutshell's wallet database is authoritative for receive and melt quote facts.
+Proofstorm stores immutable, attributed observations of those adapter records;
+it does not maintain a second quote phase machine. Receive and pay observations
+use their distinct adapter-native mint and melt quote IDs. The
+capability-filtered `proofstorm_wallet_quote_status` and
+`proofstorm_wallet_quote_list` tools explicitly return the latest stored
+observation rather than live mint state. List pages use a digest-bound cursor.
 
-`proofstorm_wallet_invoice` and `proofstorm_wallet_pay` now execute that
-contract for the pinned Nutshell adapter. A controller-owned recipient Job
-writes its BOLT11 request only into a mode-restricted directory on the private
-recipient wallet volume and waits for settlement. A distinct payer-wallet Job
-receives that volume read-only, pays the private request, and reports only the
-quote ID, logical wallet IDs, bounded amount, phase, and sanitized balance. The
-quote progresses from ready through pending/paid to settled as the two durable
-actions complete. Lost or ambiguous payment receipts use the quarantined
-`inconclusive` phase instead of claiming failure or replaying payment. Quote
-status reconciles the linked durable invoice action after MCP restart. Invoice
-cancellation is not published until a bounded controller-owned cleanup Job has
-proven the private payment request absent from the wallet volume; cleanup
-failure is explicit and fails closed.
+`proofstorm_wallet_invoice` returns after creating the receive quote, exposing
+only its mint quote ID and sanitized `UNPAID` observation. Its BOLT11 request is
+captured in a mode-0600 pod-local temporary file and removed on exit.
+`proofstorm_wallet_pay` privately reads the exact recipient row, atomically
+reserves that mint quote against duplicate payment operations, correlates the
+new payer melt row, and claims the recipient quote after a paid melt. A paid
+but unverified claim is never replayed; `proofstorm_wallet_quote_claim` is the
+bounded, idempotent recovery path and also supports externally paid invoices.
 
-Wallet-population runner for Cashu.
+## Legacy Compose harness
 
-Spins up **one mint** and **N independent CLI wallets** in Docker, funds them
-(FakeWallet), and drives scripted CLI operations from the host. V3 adds a
-value-conservation check after each smoke run.
-
-Not a Bitcoin network simulator. Not an operator e2e suite (see Orchard).
-
-## Requirements
-
-- Docker Engine (running daemon), with either the Compose V2 plugin
-  (`docker compose`) or standalone `docker-compose` v1.29+
-- `make`, `bash`, `curl`
-- Network access on first run — images/binaries are pulled from public
-  registries (Docker Hub `cashubtc/mintd`, `cashubtc/nutshell`; crates.io for
-  `cdk-cli`). No local sibling repos are needed; the project is self-contained.
-
-> **First run is slow for cdk.** `make up` with the default cdk wallet
-> **compiles `cdk-cli` from source (~15 min)**. It is cached afterwards.
-> The nutshell wallet (`WALLET_IMPL=nutshell`) only pulls an image and is fast.
-
-## Quick start (cdk-cli)
-
-```bash
-git clone <this-repo> && cd proofstorm
-cp .env.example .env   # optional; defaults work without it
-make up                # mint + wallet-1..N (default N=3); first cdk build ~15 min
-make smoke             # fund + self-swap + balances + conservation check
-make balances
-make check             # conservation only (stack must be up)
-make down              # tear down + wipe volumes
-```
-
-Wallet state lives in Docker named volumes, not in the cloned folder, so
-`make down` wipes it cleanly. `.env` and `.proofstorm-active` are gitignored.
-
-## Visualizing the population
-
-proofstorm is CLI + containers, but `make watch` gives a live terminal
-dashboard of every wallet balance, the population total, and conservation
-status (bars scale to `FUND_AMOUNT`):
-
-```bash
-make watch       # live, refreshes every WATCH_INTERVAL secs (ctrl-c to exit)
-make snapshot    # render once and exit
-```
-
-Run `make watch` in one terminal and `make smoke` in another to see balances
-move in real time. Heavier options:
-
-- **Orchard** (in this repo) — point its `MINT_URL` at `http://localhost:3338`
-  for a web dashboard of the _mint_ side (keysets, balance sheet, analytics).
-- **Grafana/Prometheus** — `cdk-mintd` exposes Prometheus metrics; scrape for
-  mint-side charts.
-
-## Nutshell wallet (V2)
-
-Use the nutshell `cashu` CLI instead of `cdk-cli`. Either set it in `.env`:
-
-```bash
-WALLET_IMPL=nutshell
-```
-
-Or pass it on the command line for `make up` only:
-
-```bash
-make down                      # if a stack is already running
-WALLET_IMPL=nutshell make up   # builds + records the active impl
-make smoke                     # auto-uses nutshell — no prefix needed
-make watch                     # same
-```
-
-`make up` records the resolved `WALLET_IMPL`/`N_WALLETS` in
-`.proofstorm-active`. All driving commands (`fund`, `balances`, `smoke`,
-`check`, `watch`) read that file, so you **only** pass `WALLET_IMPL` to `make up`
-— never to the driving commands. If you pass a mismatched impl it warns and uses
-the running stack. To switch impl: `make down` then `make up` with the new one.
-
-Each wallet container stores state under `/root/.cashu` (nutshell) or
-`/root/.cdk` (cdk) with wallet names `wallet-1` .. `wallet-N`.
-
-## Adversarial regtest harness (Phase 6)
-
-The FakeWallet stack above is the wallet-population runner. The **adversarial
-harness** is a separate regtest stack where an attacker tries to make a mint
-mis-issue value ("steal funds") or stop serving honest clients ("DoS"). Full
-threat model, topology, and the attack/oracle catalog are in
-[`SPEC.md`](SPEC.md); the runnable scenarios live in
-[`scenarios/`](scenarios/README.md).
-
-Topology: one `bitcoind` (regtest), two LND nodes with a channel between them,
-`cdk-mintd` on one node and Nutshell on the other, plus an `adversary`
-container. Both mints share one chain and their LN nodes are channel peers, so
-you get both **cross-implementation** attacks (a melt at the CDK mint pays an
-invoice on Nutshell's node; a cdk-cli wallet attacks the Nutshell mint) and
-**parallel comparison** (run the same attack against `MINT=cdk` then
-`MINT=nutshell`).
-
-```bash
-make regtest-build   # first run (or after docker/adversary changes); builds cdk-cli
-make regtest-up      # bitcoind + lnd-a + lnd-b + cdk-mintd + nutshell + adversary
-make regtest-fund    # mine chain, fund LND, open channel, start block-miner
-make attack                    # all built scenarios vs the CDK mint
-make attack MINT=nutshell      # vs the Nutshell mint
-make regtest-down              # tear down + wipe volumes
-```
-
-> **First run is slow.** `make regtest-build` compiles `cdk-cli` into the
-> `adversary` image (~15 min, cached after). `make regtest-up` deliberately
-> does not rebuild it, so ordinary restarts are fast. LND/bitcoind/mint images
-> are pulled from public registries.
-
-An attack exits `0` when the mint upholds its oracle (rejects the attack and
-stays live) and non-zero when an oracle is violated. This is not covered by
-CDK's or Nutshell's own suites, which test double-spend/concurrency **in
-process** against an in-memory ledger — proofstorm attacks the **deployed mint
-over HTTP** with independent, racing clients and a real LN backend (SPEC §1).
-
-## Configuration
-
-| Variable                      | Default  | Meaning                                                      |
-| ----------------------------- | -------- | ------------------------------------------------------------ |
-| `N_WALLETS`                   | `3`      | Population size (1–10)                                       |
-| `FUND_AMOUNT`                 | `100`    | Sats minted per wallet                                       |
-| `SWAP_AMOUNT`                 | `1`      | Sats used in self-swap during smoke                          |
-| `WALLET_IMPL`                 | `cdk`    | `cdk` or `nutshell`                                          |
-| `MINT_IMPL`                   | `cdk`    | Mint implementation (cdk only today)                         |
-| `CDK_MINTD_VERSION`           | `0.18.0` | `cashubtc/mintd` tag                                         |
-| `CDK_CLI_VERSION`             | `0.18.0` | `cdk-cli` in wallet image                                    |
-| `NUTSHELL_VERSION`            | `0.20.3` | `cashubtc/nutshell` in wallet image                          |
-| `MINT_HOST_PORT`              | `3338`   | Host port for mint HTTP                                      |
-| `CONSERVATION_EXPECTED`       | _(auto)_ | Override expected total (`N * FUND_AMOUNT`)                  |
-| `CONSERVATION_TOLERANCE`      | `0`      | Allowed delta in fund/population check                       |
-| `CONSERVATION_SWAP_TOLERANCE` | _(auto)_ | Max sat loss after self-swap (`0` cdk, `N_WALLETS` nutshell) |
-
-## Layout
-
-```
-compose.yml              FakeWallet mint + wallet-1..wallet-10
-compose.regtest.yml      Phase 6: bitcoind + 2 LND + cdk-mintd + nutshell + adversary
-SPEC.md                  adversarial threat model + attack/oracle catalog
-docker/mint/             mintd.toml (FakeWallet) + mintd.regtest.toml (LND backend)
-docker/wallet/           cdk-cli and nutshell wallet images
-docker/adversary/        adversary image (cdk-cli + curl/jq)
-regtest/                 versions.env, env, block-miner + fund-topology scripts
-scripts/                 host drivers (docker exec into wallets)
-scripts/lib/wallet.sh    wallet CLI abstraction (cdk + nutshell)
-scripts/check-conservation.sh   V3 value-conservation assertion
-scripts/run-attack.sh    Phase 6 attack runner
-scenarios/               adversarial scenarios + lib/attack.sh helpers
-```
-
-## Legacy Compose roadmap
-
-| Phase  | Status | Deliverable                                  |
-| ------ | ------ | -------------------------------------------- |
-| 0      | done   | mint only, `make up` / `make down`           |
-| 1 (V0) | done   | one wallet, fund + balance                   |
-| 2 (V1) | done   | N wallets, smoke path                        |
-| 3 (V2) | done   | nutshell wallet CLI as `WALLET_IMPL`         |
-| 4 (V3) | done   | value-conservation check after smoke         |
-| 5      | next   | wallet-to-wallet token handoff               |
-| 6      | in progress | adversarial regtest harness — see [`SPEC.md`](SPEC.md) |
-
-The Kubernetes control-plane roadmap supersedes that historical table. CDK and
-Nutshell exact-version configuration coverage is complete. Nutshell's catalog,
-typed configuration, LND/SQLite and secret-backed PostgreSQL materialization,
-generated key handling, golden contract, restart persistence, and live
-acceptance clients are in tree and passing on k3d. The same pinned Nutshell
-wallet workflow also passes against CDK and Redis-backed Nutshell side by side.
-Redis support and OIDC environment wiring are complete. The exact 0.20.3
-authentication projection and typed in-lab Keycloak dependency pass, while the
-native NUT-22 gate is blocked by the reproduced upstream auth-ledger schema
-defect. CDK-to-Nutshell authenticated-client conformance follows that fix;
-additional payment backends
-and management RPC remain intentionally unsupported until their typed
-dependency, authority, and secret contracts are implemented.
-
-| Kubernetes Nutshell increment | Status | Exit gate |
-| ----------------------------- | ------ | --------- |
-| LND/CLN, SQLite/PostgreSQL, Redis | done | Exact-version golden, restart, and cross-implementation gates pass |
-| OIDC settings and auth-ledger wiring | done | Typed schema, exact 0.20.3 environment projection, PVC-backed auth persistence |
-| In-lab Keycloak dependency | done | Digest-pinned provider, generated credentials, topology-derived discovery URL |
-| NUT-21/NUT-22 live acceptance | blocked upstream | Nutshell 0.20.3 must mint and persist a BAT without a schema rewrite, then pass replay and restart recovery |
-| CDK authenticated-client interoperability | blocked upstream | Current CDK parses Nutshell auth keys, retains auth settings, and spends a BAT against the protected API |
-| Additional payment backends | queued | Exact backend and secret contracts selected and verified |
-| Management RPC | queued | Separate mTLS authority and bounded management capabilities |
-
-## Notes
-
-- Mint uses **FakeWallet**: wallet mint commands auto-settle; no LN node.
-- Each wallet has its own volume and keys (`/root/.cdk` or `/root/.cashu`).
-- Host scripts are the control plane; containers stay alive with `sleep infinity`.
-- Conservation: after fund, `sum == N * FUND_AMOUNT`; after self-swap, no inflation and swap cost within tolerance (nutshell may burn ~1 sat/wallet on receive).
+The original Docker Compose wallet-population runner and the regtest
+adversarial harness moved to [`docs/compose-harness.md`](docs/compose-harness.md).
+Its targets run through `make compose-<target>`.

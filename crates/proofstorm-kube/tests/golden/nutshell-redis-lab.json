@@ -118,6 +118,13 @@
             "dependencies",
             "protocol"
           ]
+        },
+        {
+          "operation": "authentication",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
         }
       ],
       "protocol_probe": {
@@ -276,6 +283,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -445,6 +459,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -630,6 +651,13 @@
         },
         {
           "operation": "wallet_payment",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
+        },
+        {
+          "operation": "authentication",
           "prerequisites": [
             "dependencies",
             "protocol"
@@ -912,6 +940,13 @@
             "dependencies",
             "protocol"
           ]
+        },
+        {
+          "operation": "authentication",
+          "prerequisites": [
+            "dependencies",
+            "protocol"
+          ]
         }
       ],
       "protocol_probe": {
@@ -981,7 +1016,7 @@
         "data": {
           "CASHU_DIR": "/app/data",
           "LIGHTNING_FEE_PERCENT": "1",
-          "LIGHTNING_RESERVE_FEE_MIN": "2",
+          "LIGHTNING_RESERVE_FEE_MIN": "2000",
           "MELT_QUOTE_TTL": "120",
           "MINT_AUTH_DATABASE": "/app/data",
           "MINT_AUTH_MAX_BLIND_TOKENS": "100",

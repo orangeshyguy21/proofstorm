@@ -136,6 +136,13 @@
           "dependencies",
           "protocol"
         ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
       }
     ],
     "protocol_probe": {

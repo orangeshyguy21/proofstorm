@@ -363,15 +363,15 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let first = resolve_lock(&lab, &default_catalog()).expect("resolve lock");
+        let first = resolve_lock(&lab, default_catalog()).expect("resolve lock");
         lab.components.reverse();
-        let second = resolve_lock(&lab, &default_catalog()).expect("resolve lock");
+        let second = resolve_lock(&lab, default_catalog()).expect("resolve lock");
         assert_eq!(first, second);
 
         lab.components[0]
             .config
             .insert("txindex".into(), serde_json::json!(false));
-        let configured = resolve_lock(&lab, &default_catalog()).expect("resolve configured lock");
+        let configured = resolve_lock(&lab, default_catalog()).expect("resolve configured lock");
         assert_ne!(first.digest, configured.digest);
     }
 
@@ -379,11 +379,11 @@ mod tests {
     fn payment_binding_tuple_must_be_supported_by_the_exact_mint_version() {
         resolve_lock(
             &payment_lab(crate::PaymentMethod::Bolt11, "sat"),
-            &default_catalog(),
+            default_catalog(),
         )
         .expect("supported payment tuple");
 
-        let mut false_cross_product_catalog = default_catalog();
+        let mut false_cross_product_catalog = default_catalog().clone();
         let cdk = false_cross_product_catalog
             .entries
             .iter_mut()
@@ -402,7 +402,7 @@ mod tests {
 
         let unit_error = resolve_lock(
             &payment_lab(crate::PaymentMethod::Bolt11, "msat"),
-            &default_catalog(),
+            default_catalog(),
         )
         .expect_err("unsupported unit must refuse publication");
         assert!(unit_error.contains("unit \"msat\""));
@@ -447,12 +447,12 @@ mod tests {
             }],
             policy: LabPolicy::default(),
         };
-        resolve_lock(&lab, &default_catalog()).expect("Nutshell Redis cache binding");
+        resolve_lock(&lab, default_catalog()).expect("Nutshell Redis cache binding");
 
         lab.links[0].binding = Some(DependencyBinding::Database {
             role: DatabaseRole::Primary,
         });
-        let error = resolve_lock(&lab, &default_catalog()).expect_err("Redis cannot be primary");
+        let error = resolve_lock(&lab, default_catalog()).expect_err("Redis cannot be primary");
         assert!(error.contains("does not support database role Primary"));
 
         lab.components[1] = component(
@@ -464,7 +464,7 @@ mod tests {
         lab.links[0].binding = Some(DependencyBinding::Database {
             role: DatabaseRole::Cache,
         });
-        let error = resolve_lock(&lab, &default_catalog()).expect_err("PostgreSQL cannot be cache");
+        let error = resolve_lock(&lab, default_catalog()).expect_err("PostgreSQL cannot be cache");
         assert!(error.contains("does not support database role Cache"));
     }
 
@@ -487,7 +487,7 @@ mod tests {
         };
         let catalog = default_catalog();
         let effective_omitted =
-            resolve_effective_lab(&omitted, &catalog).expect("resolve omitted defaults");
+            resolve_effective_lab(&omitted, catalog).expect("resolve omitted defaults");
         omitted.components[0]
             .config
             .insert("txindex".into(), serde_json::json!(true));
@@ -495,11 +495,11 @@ mod tests {
             .config
             .insert("fallback_fee".into(), serde_json::json!(0.0002));
         let effective_explicit =
-            resolve_effective_lab(&omitted, &catalog).expect("resolve explicit defaults");
+            resolve_effective_lab(&omitted, catalog).expect("resolve explicit defaults");
         assert_eq!(effective_omitted, effective_explicit);
         assert_eq!(
-            resolve_lock(&effective_omitted, &catalog).expect("lock omitted"),
-            resolve_lock(&effective_explicit, &catalog).expect("lock explicit")
+            resolve_lock(&effective_omitted, catalog).expect("lock omitted"),
+            resolve_lock(&effective_explicit, catalog).expect("lock explicit")
         );
     }
 
@@ -507,7 +507,7 @@ mod tests {
     fn every_cdk_policy_field_is_locked_as_rollout_affecting_input() {
         let lab = payment_lab(crate::PaymentMethod::Bolt11, "sat");
         let catalog = default_catalog();
-        let baseline = resolve_lock(&lab, &catalog).expect("baseline CDK lock");
+        let baseline = resolve_lock(&lab, catalog).expect("baseline CDK lock");
         let baseline_mint = baseline
             .entries
             .iter()
@@ -554,7 +554,7 @@ mod tests {
         for (field, value) in cases {
             let mut configured = lab.clone();
             configured.components[0].config.insert(field.into(), value);
-            let lock = resolve_lock(&configured, &catalog)
+            let lock = resolve_lock(&configured, catalog)
                 .unwrap_or_else(|error| panic!("field {field:?} must publish: {error}"));
             let mint = lock
                 .entries
@@ -603,7 +603,7 @@ mod tests {
             policy: LabPolicy::default(),
         };
         let catalog = default_catalog();
-        let first = resolve_lock(&lab, &catalog).expect("first lock");
+        let first = resolve_lock(&lab, catalog).expect("first lock");
         let first_alice = first
             .entries
             .iter()
@@ -616,11 +616,11 @@ mod tests {
             .expect("chain lock");
 
         lab.name = "non-rendering-metadata".into();
-        let renamed = resolve_lock(&lab, &catalog).expect("renamed lock");
+        let renamed = resolve_lock(&lab, catalog).expect("renamed lock");
         assert_eq!(first, renamed);
 
         lab.links[0].to = "chain-b".into();
-        let relinked = resolve_lock(&lab, &catalog).expect("relinked lock");
+        let relinked = resolve_lock(&lab, catalog).expect("relinked lock");
         let relinked_alice = relinked
             .entries
             .iter()
@@ -679,9 +679,9 @@ mod tests {
             policy: LabPolicy::default(),
         };
         let catalog = default_catalog();
-        let baseline = resolve_lock(&lab(first_config), &catalog).expect("baseline lock");
+        let baseline = resolve_lock(&lab(first_config), catalog).expect("baseline lock");
         let reordered =
-            resolve_lock(&lab(reversed_config.clone()), &catalog).expect("reordered config lock");
+            resolve_lock(&lab(reversed_config.clone()), catalog).expect("reordered config lock");
         assert_eq!(baseline, reordered);
 
         let mut adapter_catalog = catalog.clone();
@@ -697,7 +697,7 @@ mod tests {
             changed_adapter.entries[0].effective_config_digest
         );
 
-        let mut image_catalog = catalog;
+        let mut image_catalog = catalog.clone();
         image_catalog.entries[0].image =
             format!("example.invalid/bitcoin@sha256:{}", "1".repeat(64));
         let changed_image =
@@ -729,7 +729,7 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("strict lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("strict lock");
         assert_eq!(lock.api_version, LOCK_API_VERSION);
         assert!(
             lock.entries[0]
@@ -763,16 +763,16 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let error = resolve_lock(&lab, &default_catalog()).expect_err("unsupported config");
+        let error = resolve_lock(&lab, default_catalog()).expect_err("unsupported config");
         assert!(error.contains("configuration version"));
 
         lab.components[0].config_version = "bitcoin-core/30/v1".into();
-        resolve_lock(&lab, &default_catalog()).expect("supported config");
+        resolve_lock(&lab, default_catalog()).expect("supported config");
     }
 
     #[test]
     fn omitted_versions_resolve_only_to_one_preferred_exact_entry() {
-        let mut catalog = default_catalog();
+        let mut catalog = default_catalog().clone();
         let mut older = catalog
             .entries
             .iter()
@@ -834,7 +834,7 @@ mod tests {
             links: vec![],
             policy: LabPolicy::default(),
         };
-        let lock = resolve_lock(&lab, &default_catalog()).expect("lock");
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let entry = &lock.entries[0];
         assert_eq!(entry.version, "30.0");
         assert_eq!(entry.config_version, "bitcoin-core/30/v1");

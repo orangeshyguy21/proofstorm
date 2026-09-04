@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kube::CustomResource;
 use proofstorm_core::{Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -110,6 +110,7 @@ pub enum LabAction {
     PeerConnect(PeerConnectAction),
     PeerDisconnect(PeerDisconnectAction),
     ChannelOpen(ChannelOpenAction),
+    ChannelPolicySet(ChannelPolicySetAction),
     ChannelClose(ChannelCloseAction),
     ChannelForceClose(ChannelCloseAction),
     ChannelRebalance(ChannelRebalanceAction),
@@ -120,10 +121,15 @@ pub enum LabAction {
     WalletFund(WalletFundAction),
     WalletInvoice(WalletInvoiceAction),
     WalletPay(WalletPayAction),
+    WalletQuoteClaim(WalletQuoteClaimAction),
     WalletRoundTrip(WalletRoundTripAction),
     ConservationOracle(ConservationOracleAction),
     ReachabilityOracle(ReachabilityOracleAction),
     NativeExec(NativeExecAction),
+    ComponentLogs(ComponentLogsAction),
+    AuthenticationConformance(AuthenticationConformanceAction),
+    AuthenticationProtectedSpend(AuthenticationProtectedSpendAction),
+    AuthenticationReplay(AuthenticationReplayAction),
 }
 
 // Kubernetes structural schemas cannot merge the different `kind` constants
@@ -149,6 +155,7 @@ enum LabActionKindSchema {
     PeerConnect,
     PeerDisconnect,
     ChannelOpen,
+    ChannelPolicySet,
     ChannelClose,
     ChannelForceClose,
     ChannelRebalance,
@@ -159,10 +166,15 @@ enum LabActionKindSchema {
     WalletFund,
     WalletInvoice,
     WalletPay,
+    WalletQuoteClaim,
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,
     NativeExec,
+    ComponentLogs,
+    AuthenticationConformance,
+    AuthenticationProtectedSpend,
+    AuthenticationReplay,
 }
 
 #[derive(JsonSchema)]
@@ -181,6 +193,8 @@ struct LabActionParametersSchema {
     to_lightning: Option<String>,
     lightning: Option<String>,
     channel_id: Option<String>,
+    base_fee_msat: Option<u64>,
+    fee_rate_ppm: Option<u32>,
     outgoing_channel_id: Option<String>,
     incoming_channel_id: Option<String>,
     max_fee_sat: Option<u64>,
@@ -189,21 +203,166 @@ struct LabActionParametersSchema {
     partition_operation_id: Option<String>,
     wallet: Option<String>,
     recipient_wallet: Option<String>,
+    recipient_mint: Option<String>,
     mint: Option<String>,
+    identity_provider: Option<String>,
+    session_secret: Option<String>,
+    source_operation_id: Option<String>,
     quote_id: Option<String>,
+    mint_quote_id: Option<String>,
     amount_sat: Option<u64>,
     timeout_seconds: Option<u32>,
     expected_sat: Option<u64>,
+    baseline_operation_id: Option<String>,
+    treatment_operation_id: Option<String>,
     tolerance_sat: Option<u64>,
     service: Option<String>,
     attempts: Option<u32>,
     script: Option<String>,
+    tail_lines: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NodeControlAction {
     pub component: String,
+}
+
+/// A bounded read of one component's own container log.
+///
+/// The controller fulfills this directly rather than rendering a Job: lab
+/// workloads deliberately carry no Kubernetes credentials, and the log must
+/// stay readable when the component is unready, crash-looping, or stopped,
+/// which is exactly when it is worth reading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentLogsAction {
+    pub component: String,
+    pub tail_lines: u32,
+}
+
+/// Run the fixed positive and negative OIDC/CAT/BAT baseline without exposing
+/// the disposable identity credential or issued bearer material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationConformanceAction {
+    pub mint: String,
+    pub identity_provider: String,
+}
+
+/// Mint and spend a BAT while retaining the spent token inside the lab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationProtectedSpendAction {
+    pub mint: String,
+    pub identity_provider: String,
+}
+
+/// Replay a previously spent BAT after a restart, then prove fresh BAT use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationReplayAction {
+    pub mint: String,
+    pub identity_provider: String,
+    /// Controller-derived Secret for the source operation's opaque session.
+    pub session_secret: String,
+    pub source_operation_id: String,
+}
+
+/// Secret-free result emitted by the fixed authentication conformance driver.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the wire contract records independent conformance observations, not interchangeable state"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationConformanceResult {
+    pub contract: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub advertised_nut21: bool,
+    pub advertised_nut22: bool,
+    pub invalid_oidc_password_rejected: bool,
+    pub missing_cat_rejected: bool,
+    pub invalid_cat_code: Option<u32>,
+    pub missing_bat_rejected: bool,
+    pub invalid_bat_code: Option<u32>,
+    pub oidc_login: bool,
+    pub claims_match: bool,
+    pub mint_accepted_cat: bool,
+    pub bat_issued: bool,
+    pub bat_dleq: bool,
+    pub bat_max_code: Option<u32>,
+    pub rate_limit_code: Option<u32>,
+    pub conformant: bool,
+    pub failure_stage: Option<AuthenticationConformanceFailureStage>,
+    pub failure_status: Option<u16>,
+    pub failure_protocol_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationConformanceFailureStage {
+    MintInfo,
+    AuthAdvertisement,
+    AuthPolicy,
+    OidcDiscovery,
+    InvalidOidcPassword,
+    MissingCat,
+    InvalidCat,
+    MissingBat,
+    InvalidBat,
+    OidcLogin,
+    OidcClaims,
+    BatMaximum,
+    BatIssuance,
+    BatSignature,
+    CatRateLimit,
+}
+
+/// Secret-free result of minting and spending a valid BAT.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationProtectedSpendResult {
+    pub contract: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub bat_count: u32,
+    pub bat_dleq: bool,
+    pub protected_request: bool,
+    pub session_operation_id: Option<String>,
+    pub conformant: bool,
+    pub failure_stage: Option<AuthenticationSessionFailureStage>,
+    pub failure_status: Option<u16>,
+    pub failure_protocol_code: Option<u32>,
+}
+
+/// Secret-free replay and fresh-authentication result after a mint restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationReplayResult {
+    pub contract: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub source_operation_id: String,
+    pub spent_bat_replay_code: Option<u32>,
+    pub fresh_bat_count: u32,
+    pub fresh_bat_dleq: bool,
+    pub protected_request: bool,
+    pub conformant: bool,
+    pub failure_stage: Option<AuthenticationSessionFailureStage>,
+    pub failure_status: Option<u16>,
+    pub failure_protocol_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationSessionFailureStage {
+    OidcLogin,
+    BatIssuance,
+    BatSignature,
+    ProtectedRequest,
+    SpentBatReplay,
 }
 
 /// An unrestricted shell program executed in a component's locked image.
@@ -254,6 +413,15 @@ pub struct ChannelOpenAction {
     pub to_lightning: String,
     pub channel_sat: u64,
     pub push_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelPolicySetAction {
+    pub from_lightning: String,
+    pub to_lightning: String,
+    pub base_fee_msat: u64,
+    pub fee_rate_ppm: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -318,7 +486,6 @@ pub struct WalletFundAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WalletInvoiceAction {
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
     pub amount_sat: u64,
@@ -328,11 +495,20 @@ pub struct WalletInvoiceAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WalletPayAction {
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
     pub recipient_wallet: String,
-    pub amount_sat: u64,
+    pub recipient_mint: String,
+    pub mint_quote_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletQuoteClaimAction {
+    pub wallet: String,
+    pub mint: String,
+    pub mint_quote_id: String,
+    pub timeout_seconds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -350,6 +526,8 @@ pub struct WalletRoundTripAction {
 pub struct ConservationOracleAction {
     pub wallet: String,
     pub mint: String,
+    pub baseline_operation_id: String,
+    pub treatment_operation_id: String,
     pub expected_sat: u64,
     pub tolerance_sat: u64,
 }
@@ -376,6 +554,13 @@ pub enum ActionPhase {
     Cancelled,
 }
 
+fn preserved_object_schema(_: &mut SchemaGenerator) -> Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+    })
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormLabActionStatus {
@@ -389,7 +574,9 @@ pub struct ProofstormLabActionStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_unix: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preserved_object_schema")]
     pub artifact: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preserved_object_schema")]
     pub error: Option<BTreeMap<String, Value>>,
 }

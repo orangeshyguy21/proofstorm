@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/proofstorm-acceptance",
     "crates/proofstorm-core",
     "crates/proofstorm-kube",
     "crates/proofstorm-mcp",

@@ -118,6 +118,13 @@
           "dependencies",
           "protocol"
         ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
       }
     ],
     "relevant_links": [],

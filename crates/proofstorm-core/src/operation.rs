@@ -12,6 +12,7 @@ pub enum OperationKind {
     PeerConnect,
     PeerDisconnect,
     ChannelOpen,
+    ChannelPolicySet,
     ChannelClose,
     ChannelForceClose,
     ChannelRebalance,
@@ -24,10 +25,15 @@ pub enum OperationKind {
     WalletFund,
     WalletInvoice,
     WalletPay,
+    WalletQuoteClaim,
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,
     NativeExec,
+    ComponentLogs,
+    AuthenticationConformance,
+    AuthenticationProtectedSpend,
+    AuthenticationReplay,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

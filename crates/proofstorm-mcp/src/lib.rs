@@ -6,26 +6,30 @@ use kube::{
     api::{DeleteParams, Patch, PatchParams},
 };
 use proofstorm_core::{
-    Capability, CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogSupportMatrix,
-    ComponentKind, ComponentSpec, ComponentStatus, ControlClass, DraftMutation,
-    EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent,
-    EvidenceInstance, Experiment, ExperimentLease, ExperimentPhase, InstancePhase, InventoryEntry,
-    LabInstance, LabInstanceStatus, LabOperation, LabSpec, LinkKind, LinkSpec,
-    MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
-    NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature, OperationArtifact,
-    OperationKind, OperationPhase, PublishedRevision, ReleaseChannel, SupportLifecycle,
-    TeardownReceipt as CoreTeardownReceipt, ValidateLabRequest, ValidationReport, WalletQuote,
-    WalletQuoteDirection, WalletQuotePhase, default_catalog, digest_json,
-    network_policy_fault_backend, validate_lab,
+    API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, CatalogDependencySupport,
+    CatalogEntry, CatalogFeature, CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix,
+    ComponentKind, ComponentSpec, ComponentStatus, ControlClass, DatabaseRole, DependencyBinding,
+    DraftMutation, EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle,
+    EvidenceBundleContent, EvidenceInstance, Experiment, ExperimentLease, ExperimentPhase,
+    InstancePhase, InventoryEntry, LabInstance, LabInstanceStatus, LabOperation, LabPolicy,
+    LabSpec, LinkKind, LinkSpec, MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS,
+    MAX_NETWORK_LOSS_BASIS_POINTS, NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature,
+    OperationArtifact, OperationKind, OperationPhase, PaymentMethod, PublishedRevision,
+    ReleaseChannel, SupportLifecycle, TeardownReceipt as CoreTeardownReceipt, ValidationIssue,
+    WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
+    WalletQuoteObservationRole, default_catalog, digest_json, network_policy_fault_backend,
+    validate_lab, wallet_quote_observations_from_artifact,
 };
 use proofstorm_kube::{
-    ACTION_CANCEL_ANNOTATION, ActionPhase, BootstrapLiquidityAction, ChannelCloseAction,
-    ChannelOpenAction, ChannelRebalanceAction, ConservationOracleAction, LabAction, LabPhase,
-    NativeExecAction, NetworkHealAction, NetworkPartitionAction, NodeControlAction,
-    PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
-    ProofstormLabActionSpec, ProofstormLabSpec, ReachabilityOracleAction, WalletBalanceAction,
-    WalletFundAction, WalletInitializeAction, WalletInvoiceAction, WalletPayAction,
-    WalletRoundTripAction, component_ports,
+    ACTION_CANCEL_ANNOTATION, ActionPhase, AuthenticationConformanceAction,
+    AuthenticationProtectedSpendAction, AuthenticationReplayAction, BootstrapLiquidityAction,
+    ChannelCloseAction, ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction,
+    ComponentLogsAction, LabAction, LabPhase, NativeExecAction, NetworkHealAction,
+    NetworkPartitionAction, NodeControlAction, PeerConnectAction, PeerDisconnectAction,
+    ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec, ProofstormLabSpec,
+    ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
+    WalletInvoiceAction, WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction,
+    component_ports,
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
@@ -46,8 +50,198 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct CreateDraftRequest {
     pub draft_id: String,
-    pub lab: LabSpec,
+    #[serde(deserialize_with = "deserialize_authored_lab")]
+    pub lab: AuthoredLabSpec,
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LabRecipe {
+    NutshellLndClnRoutingFees,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateLabRecipeRequest {
+    pub draft_id: String,
+    pub idempotency_key: String,
+    pub recipe: LabRecipe,
+    /// Human-readable lab name. Defaults to `draft_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Catalog-backed component role for a generic lab plan. Kind, adapter
+/// contract, and preferred version are resolved by Proofstorm.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabPlanComponentInput {
+    pub id: String,
+    /// Catalog implementation ID, for example bitcoin-core, lnd, cln,
+    /// nutshell, cdk-ldk, or nutshell-wallet. This remains an open string so
+    /// newly registered implementations require no MCP schema change.
+    pub implementation: String,
+    /// Omit to select the catalog's preferred supported version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Omit to use the implementation's safe role default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<ControlClass>,
+    /// Agent-authorable configuration overrides. Backend defaults and
+    /// topology-derived settings are resolved during publication.
+    #[serde(default)]
+    pub config: BTreeMap<String, serde_json::Value>,
+}
+
+/// Generic topology edge. Dependency bindings are inferred from the selected
+/// catalog entries whenever there is one compatible choice.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LabPlanConnectionInput {
+    BitcoinPeer {
+        id: String,
+        node_a: String,
+        node_b: String,
+    },
+    LightningPeer {
+        id: String,
+        node_a: String,
+        node_b: String,
+    },
+    ChainBackend {
+        id: String,
+        /// The Lightning or other chain-dependent component.
+        component: String,
+        /// The Bitcoin implementation serving this component.
+        chain: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network: Option<BitcoinNetwork>,
+    },
+    PaymentBackend {
+        id: String,
+        /// The mint whose invoices and payments use the backend.
+        mint: String,
+        /// The Lightning node serving the mint.
+        lightning: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        method: Option<PaymentMethod>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    DatabaseBackend {
+        id: String,
+        /// The component storing data in the database.
+        component: String,
+        /// The database implementation serving the component.
+        database: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<DatabaseRole>,
+    },
+    AuthenticationBackend {
+        id: String,
+        /// The component protected by authentication.
+        component: String,
+        /// The identity provider serving the component.
+        identity_provider: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol: Option<AuthenticationProtocol>,
+    },
+    NetworkPath {
+        id: String,
+        source: String,
+        target: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabPlanRequest {
+    pub plan_id: String,
+    pub components: Vec<LabPlanComponentInput>,
+    pub connections: Vec<LabPlanConnectionInput>,
+    /// Required. Runtime controls the experiment will need, grouped by
+    /// component and logical endpoint. Use an empty array only for a plan-only
+    /// request with no intended runtime work. Proofstorm checks these before
+    /// storage so an unavailable driver cannot become a live-lab failure.
+    pub runtime_requirements: Vec<LabPlanRuntimeRequirement>,
+    #[serde(default)]
+    pub policy: LabPolicy,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabPlanRuntimeRequirement {
+    pub component: String,
+    /// Defaults to the component's primary `component` endpoint. Embedded
+    /// endpoint IDs are discovered from `catalog_entry_read`.
+    #[serde(default = "default_runtime_endpoint")]
+    pub endpoint: String,
+    /// Open control identifiers such as `channel_open`, `wallet_pay`,
+    /// `node_restart`, or `authentication_replay`.
+    pub controls: BTreeSet<String>,
+}
+
+fn default_runtime_endpoint() -> String {
+    "component".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabPlanResolvedComponent {
+    pub id: String,
+    pub kind: ComponentKind,
+    pub implementation: String,
+    pub version: String,
+    pub config_version: String,
+    pub control: ControlClass,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabPlanResolvedRuntimeEndpoint {
+    pub component: String,
+    pub endpoint: String,
+    pub kind: String,
+    pub controls: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabPlanReceipt {
+    pub plan_id: String,
+    pub plan_digest: String,
+    pub version: u64,
+    pub components: Vec<LabPlanResolvedComponent>,
+    pub runtime_endpoints: Vec<LabPlanResolvedRuntimeEndpoint>,
+    pub connections: Vec<LinkSpec>,
+    pub validation: LabValidationResult,
+    pub next_tool: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabApplyRequest {
+    pub plan_id: String,
+    pub expected_plan_digest: String,
+    pub instance_id: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabApplyReceipt {
+    pub plan_id: String,
+    pub plan_digest: String,
+    pub revision_digest: String,
+    pub lock_digest: String,
+    pub instance_id: String,
+    pub phase: InstancePhase,
+    pub component_count: u32,
+    pub next_tool: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -132,6 +326,10 @@ pub struct CatalogEntrySummary {
     pub protocol_action_adapter_version: Option<String>,
     pub config_version: String,
     pub config_schema_digest: String,
+    /// Controls accepted by publication for this exact component release.
+    pub allowed_control: Vec<ControlClass>,
+    /// Safe default control for ordinary lab authoring.
+    pub recommended_control: ControlClass,
     pub release_channel: ReleaseChannel,
     pub support_lifecycle: SupportLifecycle,
 }
@@ -164,9 +362,18 @@ pub struct CatalogEntryDetail {
     pub features: BTreeSet<CatalogFeature>,
     pub compatible_dependencies: Vec<CatalogDependencySupport>,
     pub support_matrix: CatalogSupportMatrix,
+    pub runtime_endpoints: Vec<CatalogRuntimeEndpoint>,
     pub image: String,
     pub source_digest: String,
     pub allowed_control: Vec<ControlClass>,
+    /// Safe default control for ordinary lab authoring.
+    pub recommended_control: ControlClass,
+    /// Names of all agent-authorable configuration properties. An empty
+    /// configuration is valid when `required_config_fields` is empty.
+    pub authorable_config_fields: Vec<String>,
+    pub required_config_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config_defaults: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -188,7 +395,8 @@ pub struct CatalogConfigSchemaResponse {
 pub struct EditDraftRequest {
     pub draft_id: String,
     pub expected_version: u64,
-    pub lab: LabSpec,
+    #[serde(deserialize_with = "deserialize_authored_lab")]
+    pub lab: AuthoredLabSpec,
     pub idempotency_key: String,
 }
 
@@ -199,8 +407,21 @@ pub struct DraftMutationResult {
     pub version: u64,
     pub component_count: u32,
     pub link_count: u32,
+    pub structure: String,
+    pub topology_digest: String,
     pub valid: bool,
+    pub warnings: Vec<String>,
     pub changed_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabValidationResult {
+    pub valid: bool,
+    pub issues: Vec<ValidationIssue>,
+    pub component_ids: Vec<String>,
+    pub link_ids: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -221,12 +442,202 @@ pub struct RemoveComponentRequest {
     pub idempotency_key: String,
 }
 
+/// A link authored through MCP. Backend binding fields are flattened into each
+/// kind-specific wire variant so a client cannot silently lose the entire
+/// nested binding object. Proofstorm constructs the canonical persisted
+/// `DependencyBinding`; peer and network-path variants admit no binding fields.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AddLinkInput {
+    BitcoinPeer {
+        id: String,
+        from: String,
+        to: String,
+    },
+    LightningPeer {
+        id: String,
+        from: String,
+        to: String,
+    },
+    ChainBackend {
+        id: String,
+        from: String,
+        to: String,
+        network: BitcoinNetwork,
+    },
+    PaymentBackend {
+        id: String,
+        from: String,
+        to: String,
+        method: PaymentMethod,
+        unit: String,
+    },
+    DatabaseBackend {
+        id: String,
+        from: String,
+        to: String,
+        role: DatabaseRole,
+    },
+    AuthenticationBackend {
+        id: String,
+        from: String,
+        to: String,
+        protocol: AuthenticationProtocol,
+    },
+    NetworkPath {
+        id: String,
+        from: String,
+        to: String,
+    },
+}
+
+impl TryFrom<AddLinkInput> for LinkSpec {
+    type Error = String;
+
+    fn try_from(input: AddLinkInput) -> Result<Self, Self::Error> {
+        let link = match input {
+            AddLinkInput::BitcoinPeer { id, from, to } => Self {
+                id,
+                kind: LinkKind::BitcoinPeer,
+                from,
+                to,
+                binding: None,
+            },
+            AddLinkInput::LightningPeer { id, from, to } => Self {
+                id,
+                kind: LinkKind::LightningPeer,
+                from,
+                to,
+                binding: None,
+            },
+            AddLinkInput::ChainBackend {
+                id,
+                from,
+                to,
+                network,
+            } => Self {
+                id,
+                kind: LinkKind::ChainBackend,
+                from,
+                to,
+                binding: Some(DependencyBinding::Chain { network }),
+            },
+            AddLinkInput::PaymentBackend {
+                id,
+                from,
+                to,
+                method,
+                unit,
+            } => Self {
+                id,
+                kind: LinkKind::PaymentBackend,
+                from,
+                to,
+                binding: Some(DependencyBinding::Payment { method, unit }),
+            },
+            AddLinkInput::DatabaseBackend { id, from, to, role } => Self {
+                id,
+                kind: LinkKind::DatabaseBackend,
+                from,
+                to,
+                binding: Some(DependencyBinding::Database { role }),
+            },
+            AddLinkInput::AuthenticationBackend {
+                id,
+                from,
+                to,
+                protocol,
+            } => Self {
+                id,
+                kind: LinkKind::AuthenticationBackend,
+                from,
+                to,
+                binding: Some(DependencyBinding::Authentication { protocol }),
+            },
+            AddLinkInput::NetworkPath { id, from, to } => Self {
+                id,
+                kind: LinkKind::NetworkPath,
+                from,
+                to,
+                binding: None,
+            },
+        };
+        Ok(link)
+    }
+}
+
+/// Complete lab input accepted at the MCP boundary. Unlike the persisted core
+/// model, backend-link variants require their binding fields as flat scalars.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredLabSpec {
+    pub api_version: String,
+    pub name: String,
+    pub components: Vec<ComponentSpec>,
+    pub links: Vec<AddLinkInput>,
+    /// Optional capability restrictions. Omit this field for the safe default
+    /// policy unless the experiment deliberately needs a narrower envelope.
+    #[serde(default)]
+    pub policy: LabPolicy,
+}
+
+/// Accept the canonical JSON object and the common MCP-client failure mode where
+/// that object is encoded one extra time as a JSON string. Parsing still lands
+/// in the same strict `AuthoredLabSpec` contract, including unknown-field and
+/// required-field checks; malformed or incomplete strings remain fail-closed.
+fn deserialize_authored_lab<'de, D>(deserializer: D) -> Result<AuthoredLabSpec, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(encoded) => {
+            serde_json::from_str(&encoded).map_err(serde::de::Error::custom)
+        }
+        value => serde_json::from_value(value).map_err(serde::de::Error::custom),
+    }
+}
+
+impl TryFrom<AuthoredLabSpec> for LabSpec {
+    type Error = String;
+
+    fn try_from(input: AuthoredLabSpec) -> Result<Self, Self::Error> {
+        Ok(Self {
+            api_version: input.api_version,
+            name: input.name,
+            components: input.components,
+            links: input
+                .links
+                .into_iter()
+                .map(LinkSpec::try_from)
+                .collect::<Result<Vec<_>, _>>()?,
+            policy: input.policy,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ValidateLabRequest {
+    #[serde(deserialize_with = "deserialize_authored_lab")]
+    pub lab: AuthoredLabSpec,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MutateLinkRequest {
     pub draft_id: String,
     pub expected_version: u64,
-    pub link: LinkSpec,
+    pub link: AddLinkInput,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveLinkRequest {
+    pub draft_id: String,
+    pub expected_version: u64,
+    pub link_id: String,
     pub idempotency_key: String,
 }
 
@@ -298,6 +709,9 @@ pub struct LabStatusSummary {
     pub total_components: u32,
     pub inventory_count: u32,
     pub inventory_digest: String,
+    /// Meaning of `ready` and the required next runtime action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_guidance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teardown_receipt: Option<CoreTeardownReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -369,6 +783,9 @@ pub struct LabWaitResult {
     pub timed_out: bool,
     pub ready_components: u32,
     pub total_components: u32,
+    /// Meaning of `ready` and the required next runtime action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_guidance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teardown_receipt: Option<CoreTeardownReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -398,12 +815,87 @@ pub struct OperationWaitResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct OperationWaitManyRequest {
+    /// Unique operation IDs to await together. Start independent operations
+    /// first, then prefer this over repeated single-operation waits.
+    #[schemars(length(min = 1, max = 8))]
+    pub operation_ids: Vec<String>,
+    /// Shared server-side wait bound in 1..=120 seconds.
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OperationWaitManyResult {
+    /// Results preserve the request order.
+    pub operations: Vec<OperationWaitResult>,
+    pub all_terminal: bool,
+    pub timed_out: bool,
+    /// True only when optional artifact bodies were removed to keep the batch
+    /// response within the agent response budget. Use `operation_wait` for any
+    /// one omitted body.
+    pub artifact_bodies_omitted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NodeControlRequest {
     pub instance_id: String,
     pub experiment_id: String,
     pub lease_id: String,
     pub operation_id: String,
     pub component: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentLogsRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub component: String,
+    /// Lines to read from the end of the component's current container log,
+    /// between 1 and 2000. The artifact is additionally byte-bounded.
+    pub tail_lines: u32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationConformanceRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationProtectedSpendRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationReplayRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub mint: String,
+    pub identity_provider: String,
+    pub source_operation_id: String,
     pub idempotency_key: String,
 }
 
@@ -443,6 +935,138 @@ pub struct BootstrapLiquidityRequest {
     pub idempotency_key: String,
 }
 
+/// Runtime identifiers for a server-owned lab recipe. Recipe-specific
+/// component identities and safe liquidity values are deliberately not
+/// caller-controlled.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabRecipeSetupRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub recipe: LabRecipe,
+    pub idempotency_key: String,
+}
+
+/// One auditable, server-orchestrated payment matrix for a built-in recipe.
+/// All component roles, wallet roles, amounts, and below/above-reserve fee
+/// levels are recipe-owned so they cannot be accidentally omitted or crossed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabRecipeFeeMatrixRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    /// Stable correlation ID for the 26 journaled child operations. Proofstorm
+    /// derives bounded internal operation IDs from it. Replaying the same
+    /// matrix ID and idempotency key is idempotent.
+    pub matrix_id: String,
+    pub recipe: LabRecipe,
+    pub idempotency_key: String,
+}
+
+const ROUTING_FEE_RECIPE_FUNDING_SAT: u64 = 10_000_000;
+const ROUTING_FEE_RECIPE_CHANNEL_SAT: u64 = 2_000_000;
+const ROUTING_FEE_RECIPE_CLN_PUSH_SAT: u64 = 1_000_000;
+const ROUTING_FEE_RECIPE_WALLET_FUNDING_SAT: u64 = 50_000;
+const ROUTING_FEE_RECIPE_PAYMENT_SAT: u64 = 5_000;
+const ROUTING_FEE_RECIPE_LOW_BASE_FEE_SAT: u64 = 1;
+const ROUTING_FEE_RECIPE_LOW_FEE_RATE_PPM: u32 = 100;
+const ROUTING_FEE_RECIPE_HIGH_BASE_FEE_SAT: u64 = 100;
+const ROUTING_FEE_RECIPE_HIGH_FEE_RATE_PPM: u32 = 100_000;
+
+#[derive(Clone, Copy)]
+struct RecipePaymentDirection {
+    id: &'static str,
+    label: &'static str,
+    payer_wallet: &'static str,
+    payer_mint: &'static str,
+    recipient_wallet: &'static str,
+    recipient_mint: &'static str,
+    oracle_endpoint: &'static str,
+}
+
+const ROUTING_FEE_RECIPE_PAYMENT_DIRECTIONS: [RecipePaymentDirection; 2] = [
+    RecipePaymentDirection {
+        id: "lnd-to-cln",
+        label: "lnd_to_cln",
+        payer_wallet: "payer-lnd",
+        payer_mint: "mint-lnd",
+        recipient_wallet: "recipient-cln",
+        recipient_mint: "mint-cln",
+        oracle_endpoint: "lnd",
+    },
+    RecipePaymentDirection {
+        id: "cln-to-lnd",
+        label: "cln_to_lnd",
+        payer_wallet: "payer-cln",
+        payer_mint: "mint-cln",
+        recipient_wallet: "recipient-lnd",
+        recipient_mint: "mint-lnd",
+        oracle_endpoint: "cln",
+    },
+];
+
+fn recipe_fee_matrix_operation_prefix(request: &LabRecipeFeeMatrixRequest) -> String {
+    let digest = digest_json(&(
+        request.instance_id.as_str(),
+        request.experiment_id.as_str(),
+        request.lease_id.as_str(),
+        request.matrix_id.as_str(),
+        request.recipe,
+    ));
+    let hex = digest
+        .strip_prefix("sha256:")
+        .expect("digest_json always returns a sha256-prefixed digest");
+    format!("matrix-{}", &hex[..16])
+}
+
+fn recipe_bootstrap_request(request: LabRecipeSetupRequest) -> BootstrapLiquidityRequest {
+    match request.recipe {
+        LabRecipe::NutshellLndClnRoutingFees => BootstrapLiquidityRequest {
+            instance_id: request.instance_id,
+            experiment_id: request.experiment_id,
+            lease_id: request.lease_id,
+            operation_id: request.operation_id,
+            chain: "bitcoin-core".into(),
+            mint_lightning: "lnd-backend".into(),
+            payer_lightning: "lnd-router".into(),
+            funding_sat: ROUTING_FEE_RECIPE_FUNDING_SAT,
+            channel_sat: ROUTING_FEE_RECIPE_CHANNEL_SAT,
+            push_sat: 0,
+            idempotency_key: request.idempotency_key,
+        },
+    }
+}
+
+fn recipe_route_channel_request(request: LabRecipeSetupRequest) -> ChannelOpenRequest {
+    match request.recipe {
+        LabRecipe::NutshellLndClnRoutingFees => ChannelOpenRequest {
+            instance_id: request.instance_id,
+            experiment_id: request.experiment_id,
+            lease_id: request.lease_id,
+            operation_id: request.operation_id,
+            chain: "bitcoin-core".into(),
+            from_lightning: "lnd-router".into(),
+            to_lightning: "cln-backend".into(),
+            channel_sat: ROUTING_FEE_RECIPE_CHANNEL_SAT,
+            push_sat: ROUTING_FEE_RECIPE_CLN_PUSH_SAT,
+            idempotency_key: request.idempotency_key,
+        },
+    }
+}
+
+/// Projection of the canonical journal request used by later admission
+/// checks. The journal deliberately omits transport-only idempotency keys.
+#[derive(Debug, Clone, Deserialize)]
+struct StoredBootstrapFunding {
+    mint_lightning: String,
+    payer_lightning: String,
+    funding_sat: u64,
+    channel_sat: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PeerConnectRequest {
@@ -479,6 +1103,26 @@ pub struct ChannelOpenRequest {
     pub to_lightning: String,
     pub channel_sat: u64,
     pub push_sat: u64,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelPolicySetRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    /// Lightning node whose outgoing policy is updated.
+    pub from_lightning: String,
+    /// Peer that identifies the channel or channels to update.
+    pub to_lightning: String,
+    /// Base routing fee in satoshis. Proofstorm converts this to the
+    /// milli-satoshi unit required by Lightning implementations.
+    #[schemars(range(min = 0, max = 100_000))]
+    pub base_fee_sat: u64,
+    #[schemars(range(min = 0, max = 1_000_000))]
+    pub fee_rate_ppm: u32,
     pub idempotency_key: String,
 }
 
@@ -608,7 +1252,6 @@ pub struct WalletInvoiceRequest {
     pub experiment_id: String,
     pub lease_id: String,
     pub operation_id: String,
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
     pub amount_sat: u64,
@@ -628,10 +1271,31 @@ pub struct WalletPayRequest {
     pub experiment_id: String,
     pub lease_id: String,
     pub operation_id: String,
-    pub quote_id: String,
     pub wallet: String,
     pub mint: String,
+    pub recipient_wallet: String,
+    pub recipient_mint: String,
+    pub mint_quote_id: String,
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WalletQuoteClaimRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub wallet: String,
+    pub mint: String,
+    pub mint_quote_id: String,
+    #[serde(default = "default_claim_timeout_seconds")]
+    pub timeout_seconds: u32,
+    pub idempotency_key: String,
+}
+
+const fn default_claim_timeout_seconds() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -658,8 +1322,11 @@ pub struct ConservationOracleRequest {
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
-    pub expected_sat: u64,
-    pub tolerance_sat: u64,
+    /// Earlier successful `wallet_balance` operation captured before treatment.
+    pub baseline_operation_id: String,
+    /// Successful `wallet_pay` operation after the baseline. A round trip mints
+    /// external value first and is not a valid balance-invariance treatment.
+    pub treatment_operation_id: String,
     pub idempotency_key: String,
 }
 
@@ -828,11 +1495,15 @@ pub struct ArtifactExportRequest {
     /// Include full artifact bodies for conservation and reachability oracles.
     #[serde(default = "default_true")]
     pub include_oracle_artifacts: bool,
-    /// Additional operation IDs whose already-sanitized artifacts should be included.
+    /// Optional full bodies for at most 16 additional operations. Do not enumerate
+    /// the experiment: every action and artifact descriptor is always in the journal.
     #[serde(default)]
+    #[schemars(length(max = 16))]
     pub artifact_operation_ids: Vec<String>,
-    /// Explicitly embed the complete bulk evidence document. The default returns only its manifest.
+    /// Compatibility-only bulk response switch. Agent discovery intentionally
+    /// omits this field; full content is available at the returned resource URI.
     #[serde(default)]
+    #[schemars(skip)]
     pub include_content: bool,
 }
 
@@ -848,6 +1519,11 @@ pub struct EvidenceExportResponse {
     pub lock_digest: String,
     pub journal_count: u32,
     pub artifact_count: u32,
+    /// Always true: every experiment action and its artifact descriptor is in the journal.
+    pub journal_complete: bool,
+    /// Artifact bodies are optional enrichments; their count need not equal `journal_count`.
+    pub artifact_bodies_optional: bool,
+    pub guidance: String,
     /// Stable MCP resource URI for reading the complete deterministic bundle.
     pub resource_uri: String,
     pub content_included: bool,
@@ -917,7 +1593,17 @@ const fn default_evidence_section_limit() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WalletQuoteRequest {
+    pub instance_id: String,
+    pub wallet: String,
+    pub mint: String,
+    pub direction: WalletQuoteDirection,
     pub quote_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WalletQuoteStatusResponse {
+    pub last_observation: WalletQuoteObservation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -925,7 +1611,7 @@ pub struct WalletQuoteRequest {
 pub struct WalletQuoteListRequest {
     pub experiment_id: String,
     #[serde(default)]
-    pub after_quote_id: Option<String>,
+    pub cursor: Option<String>,
     #[serde(default = "default_quote_list_limit")]
     #[schemars(range(min = 1, max = 100))]
     pub limit: u32,
@@ -934,9 +1620,9 @@ pub struct WalletQuoteListRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WalletQuoteListResponse {
-    pub quotes: Vec<WalletQuote>,
+    pub last_observations: Vec<WalletQuoteObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_after_quote_id: Option<String>,
+    pub next_cursor: Option<String>,
 }
 
 const fn default_quote_list_limit() -> u32 {
@@ -961,6 +1647,9 @@ const MAX_AGENT_RESPONSE_BYTES: usize = 32 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofstormToolset {
     All,
+    /// One compact, cross-phase surface for an agent that must design, run,
+    /// evidence, and tear down an experiment without restarting its session.
+    Experiment,
     Design,
     Runtime,
     Evidence,
@@ -972,11 +1661,12 @@ impl std::str::FromStr for ProofstormToolset {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "all" => Ok(Self::All),
+            "experiment" => Ok(Self::Experiment),
             "design" => Ok(Self::Design),
             "runtime" => Ok(Self::Runtime),
             "evidence" => Ok(Self::Evidence),
             _ => Err(format!(
-                "invalid PROOFSTORM_TOOLSET {value:?}; expected all, design, runtime, or evidence"
+                "invalid PROOFSTORM_TOOLSET {value:?}; expected all, experiment, design, runtime, or evidence"
             )),
         }
     }
@@ -986,6 +1676,7 @@ impl ProofstormToolset {
     fn includes(self, tool: &str) -> bool {
         match self {
             Self::All => true,
+            Self::Experiment => experiment_tool(tool),
             Self::Design => matches!(
                 tool,
                 "proofstorm_workspace_read"
@@ -1008,7 +1699,9 @@ impl ProofstormToolset {
             ),
             Self::Runtime => !matches!(
                 tool,
-                "proofstorm_lab_create"
+                "proofstorm_lab_plan"
+                    | "proofstorm_lab_apply"
+                    | "proofstorm_lab_create"
                     | "proofstorm_lab_edit"
                     | "proofstorm_component_add"
                     | "proofstorm_component_update"
@@ -1037,6 +1730,7 @@ impl ProofstormToolset {
                     | "proofstorm_lease_read"
                     | "proofstorm_operation_status"
                     | "proofstorm_operation_wait"
+                    | "proofstorm_operation_wait_many"
                     | "proofstorm_action_list"
                     | "proofstorm_artifact_export"
                     | "proofstorm_evidence_section_read"
@@ -1046,6 +1740,53 @@ impl ProofstormToolset {
             ),
         }
     }
+}
+
+fn experiment_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        // Stable generic one-session control plane. Catalog and scenario
+        // growth must not require new MCP tools.
+        "proofstorm_workspace_read"
+            | "proofstorm_catalog_list"
+            | "proofstorm_catalog_entry_read"
+            | "proofstorm_lab_plan"
+            | "proofstorm_lab_apply"
+            | "proofstorm_lab_status"
+            | "proofstorm_lab_component_status_list"
+            | "proofstorm_lab_wait"
+            | "proofstorm_lab_close"
+            | "proofstorm_experiment_create"
+            | "proofstorm_experiment_read"
+            | "proofstorm_experiment_close"
+            | "proofstorm_lease_acquire"
+            | "proofstorm_lease_read"
+            | "proofstorm_lease_release"
+            | "proofstorm_node_restart"
+            | "proofstorm_component_logs"
+            | "proofstorm_liquidity_bootstrap"
+            | "proofstorm_peer_connect"
+            | "proofstorm_channel_open"
+            | "proofstorm_channel_policy_set"
+            | "proofstorm_network_partition"
+            | "proofstorm_network_heal"
+            | "proofstorm_wallet_initialize"
+            | "proofstorm_wallet_balance"
+            | "proofstorm_wallet_fund"
+            | "proofstorm_wallet_invoice"
+            | "proofstorm_wallet_pay"
+            | "proofstorm_conservation_oracle"
+            | "proofstorm_reachability_oracle"
+            | "proofstorm_authentication_conformance"
+            | "proofstorm_authentication_protected_spend"
+            | "proofstorm_authentication_replay"
+            | "proofstorm_operation_status"
+            | "proofstorm_operation_wait_many"
+            | "proofstorm_action_cancel"
+            | "proofstorm_action_list"
+            | "proofstorm_artifact_export"
+            | "proofstorm_evidence_section_read"
+    )
 }
 
 #[derive(Clone)]
@@ -1105,6 +1846,10 @@ impl ProofstormMcp {
         let principal = principal.into();
         let capabilities = store.capabilities(&workspace, &principal)?;
         let mut tool_router = Self::tool_router();
+        // Whole-document replacement is retained in the store for non-agent
+        // callers, but is intentionally absent from MCP. Stable-ID component
+        // and link mutations are the safe agent editing contract.
+        tool_router.disable_route("proofstorm_lab_edit");
         for (tool, required) in tool_capabilities() {
             if !required
                 .iter()
@@ -1182,9 +1927,15 @@ impl ProofstormMcp {
     ) -> Result<EvidenceBundle, ErrorData> {
         self.authorize_all(&[Capability::ExperimentRead, Capability::ArtifactRead])?;
         if request.artifact_operation_ids.len() > MAX_EXPLICIT_EVIDENCE_ARTIFACTS {
-            return Err(evidence_error(
-                "evidence_artifact_limit",
-                "at most 16 explicit artifact operation IDs may be requested",
+            return Err(ErrorData::invalid_request(
+                "at most 16 optional artifact bodies may be selected; do not enumerate the journal because every action and artifact descriptor is already included",
+                Some(serde_json::json!({
+                    "code": "evidence_artifact_limit",
+                    "maximum": MAX_EXPLICIT_EVIDENCE_ARTIFACTS,
+                    "requested": request.artifact_operation_ids.len(),
+                    "journal_complete_without_explicit_ids": true,
+                    "recovery": "leave artifact_operation_ids empty, or select at most 16 specific bodies",
+                })),
             ));
         }
         let explicit = request
@@ -1193,7 +1944,7 @@ impl ProofstormMcp {
             .cloned()
             .collect::<BTreeSet<_>>();
         if explicit.len() != request.artifact_operation_ids.len() {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_artifact_duplicate",
                 "artifact operation IDs must be unique",
             ));
@@ -1203,7 +1954,7 @@ impl ProofstormMcp {
             .experiment(&self.workspace, &self.principal, &request.experiment_id)
             .map_err(store_error)?;
         if experiment.phase != ExperimentPhase::Closed {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_experiment_active",
                 "evidence export requires a closed experiment",
             ));
@@ -1241,7 +1992,7 @@ impl ProofstormMcp {
                 .map_err(store_error)?
                 .is_empty()
             {
-                return Err(evidence_error(
+                return Err(coded_invalid_request(
                     "evidence_action_limit",
                     "experiment has more than 100 actions and cannot be exported as one bundle",
                 ));
@@ -1253,7 +2004,7 @@ impl ProofstormMcp {
                 OperationPhase::Pending | OperationPhase::Running
             )
         }) {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_journal_incomplete",
                 "all experiment actions must be terminal before evidence export",
             ));
@@ -1263,9 +2014,9 @@ impl ProofstormMcp {
             .map(|action| action.id.as_str())
             .collect::<BTreeSet<_>>();
         if let Some(unknown) = explicit.iter().find(|id| !known_ids.contains(id.as_str())) {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_artifact_unknown",
-                &format!("operation {unknown:?} is not in the experiment journal"),
+                format!("operation {unknown:?} is not in the experiment journal"),
             ));
         }
         let selected = actions
@@ -1280,7 +2031,7 @@ impl ProofstormMcp {
             })
             .collect::<Vec<_>>();
         if selected.len() > MAX_EVIDENCE_ARTIFACTS {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_artifact_limit",
                 "at most 32 artifact bodies may be included in one evidence bundle",
             ));
@@ -1288,9 +2039,9 @@ impl ProofstormMcp {
         let mut artifacts = Vec::with_capacity(selected.len());
         for action in selected {
             let artifact = action.artifact.clone().ok_or_else(|| {
-                evidence_error(
+                coded_invalid_request(
                     "evidence_artifact_missing",
-                    &format!("operation {:?} has no terminal artifact", action.id),
+                    format!("operation {:?} has no terminal artifact", action.id),
                 )
             })?;
             artifacts.push(EvidenceArtifact {
@@ -1315,7 +2066,7 @@ impl ProofstormMcp {
         };
         let bundle = EvidenceBundle::from_content(content);
         if bundle.byte_length as usize > MAX_EVIDENCE_BUNDLE_BYTES {
-            return Err(evidence_error(
+            return Err(coded_invalid_request(
                 "evidence_bundle_too_large",
                 "evidence bundle content exceeds 512 KiB",
             ));
@@ -1342,7 +2093,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "List a bounded filtered page of compact installed component identities. Use catalog_entry_read and catalog_config_schema_read for exact details"
+        description = "List compact installed component identities, exact versions, config versions, and valid controls. Read exact entry details only for components you select; read a config schema only for constraints on a non-default field"
     )]
     fn proofstorm_catalog_list(
         &self,
@@ -1353,7 +2104,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Read exact installed metadata, compatibility, immutable image, features, and support for one component version without its configuration schema"
+        description = "Read exact authoring metadata for one selected component version: compatibility, immutable image, controls, authorable and required config fields, and safe defaults. Read its config schema only for constraints on a non-default field"
     )]
     fn proofstorm_catalog_entry_read(
         &self,
@@ -1389,18 +2140,173 @@ impl ProofstormMcp {
         Ok(Json(network_policy_fault_backend()))
     }
 
-    #[tool(description = "Create a versioned lab draft and return a compact mutation receipt")]
+    #[tool(
+        description = "Plan any supported lab topology from catalog implementation IDs and role connections. Read catalog_entry details for selected implementations and declare every intended runtime control in runtime_requirements; Proofstorm rejects unavailable driver controls before storing or materializing. It selects preferred versions, infers component kinds, configuration contracts, and typed dependency bindings. Adding implementations or controls does not add MCP tools. Next call lab_apply with the returned digest"
+    )]
+    fn proofstorm_lab_plan(
+        &self,
+        Parameters(request): Parameters<LabPlanRequest>,
+    ) -> Result<Json<LabPlanReceipt>, ErrorData> {
+        self.authorize(Capability::LabCreate)?;
+        self.authorize(Capability::CatalogRead)?;
+        let lab = compile_lab_plan(&request)?;
+        let validation = lab_validation_result(&lab);
+        if !validation.valid {
+            return Err(ErrorData::invalid_request(
+                format!(
+                    "lab plan failed publication preflight; no plan was stored: {}",
+                    validation_issue_summary(&validation.issues)
+                ),
+                Some(serde_json::json!({
+                    "code": "lab_plan_invalid",
+                    "validation": validation,
+                })),
+            ));
+        }
+        let plan_digest = digest_json(&lab);
+        let components = resolved_plan_components(&lab);
+        let runtime_endpoints = resolved_plan_runtime_endpoints(&lab)?;
+        let connections = lab.links.clone();
+        self.store
+            .create_draft(
+                &self.workspace,
+                &self.principal,
+                &request.plan_id,
+                &lab,
+                &request.idempotency_key,
+            )
+            .map_err(store_error)
+            .and_then(|draft| {
+                bounded_agent_response(LabPlanReceipt {
+                    plan_id: draft.id,
+                    plan_digest,
+                    version: draft.version,
+                    components,
+                    runtime_endpoints,
+                    connections,
+                    validation,
+                    next_tool: "proofstorm_lab_apply".into(),
+                })
+            })
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Atomically publish and materialize the exact validated lab plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. Replay the same request after interruption; both internal stages are idempotent. Then wait for ready"
+    )]
+    async fn proofstorm_lab_apply(
+        &self,
+        Parameters(request): Parameters<LabApplyRequest>,
+    ) -> Result<Json<LabApplyReceipt>, ErrorData> {
+        let draft = self
+            .store
+            .read_draft(&self.workspace, &self.principal, &request.plan_id)
+            .map_err(store_error)?;
+        let plan_digest = digest_json(&draft.lab);
+        if plan_digest != request.expected_plan_digest {
+            return Err(ErrorData::invalid_request(
+                "stored lab plan does not match expected_plan_digest; nothing was applied",
+                Some(serde_json::json!({
+                    "code": "lab_plan_digest_mismatch",
+                    "plan_id": request.plan_id,
+                    "expected_plan_digest": request.expected_plan_digest,
+                    "actual_plan_digest": plan_digest,
+                    "recovery": "read or recreate the plan and apply the returned digest",
+                })),
+            ));
+        }
+        let revision = self
+            .store
+            .publish(
+                &self.workspace,
+                &self.principal,
+                &request.plan_id,
+                draft.version,
+                &format!("{}:publish", request.idempotency_key),
+            )
+            .map_err(store_error)?;
+        let component_count = u32::try_from(revision.lab.components.len()).unwrap_or(u32::MAX);
+        let revision_digest = revision.digest.clone();
+        let lock_digest = revision.lock.digest.clone();
+        let status = self
+            .proofstorm_lab_materialize(Parameters(MaterializeLabRequest {
+                instance_id: request.instance_id.clone(),
+                revision_digest: revision.digest,
+                idempotency_key: format!("{}:materialize", request.idempotency_key),
+            }))
+            .await?
+            .0;
+        Ok(Json(LabApplyReceipt {
+            plan_id: request.plan_id,
+            plan_digest,
+            revision_digest,
+            lock_digest,
+            instance_id: status.instance.id,
+            phase: status.phase,
+            component_count,
+            next_tool: "proofstorm_lab_wait".into(),
+        }))
+    }
+
+    #[tool(
+        description = "Create a publication-ready versioned lab draft and return a compact receipt. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Invalid catalog configuration is rejected before any draft is written"
+    )]
     fn proofstorm_lab_create(
         &self,
         Parameters(request): Parameters<CreateDraftRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::LabCreate)?;
+        let lab = LabSpec::try_from(request.lab)
+            .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
+        let validation = lab_validation_result(&lab);
+        if !validation.valid {
+            return Err(ErrorData::invalid_request(
+                "lab failed publication preflight; no draft was created",
+                Some(serde_json::json!({
+                    "code": "lab_validation_failed",
+                    "validation": validation,
+                    "next_tool": "proofstorm_lab_validate"
+                })),
+            ));
+        }
         self.store
             .create_draft(
                 &self.workspace,
                 &self.principal,
                 &request.draft_id,
-                &request.lab,
+                &lab,
+                &request.idempotency_key,
+            )
+            .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Create a validated lab draft from a server-owned recipe; no catalog lookup, manual topology JSON, or separate validation call is needed. nutshell_lnd_cln_routing_fees creates bitcoin-core, lnd-backend, lnd-router, cln-backend, mint-lnd, mint-cln, payer-lnd, recipient-lnd, payer-cln, and recipient-cln with exact preferred versions and typed backend bindings. Initialize all four wallets, fund only payer-lnd and payer-cln, and create invoices only on the opposite recipient so both directions can run concurrently without cross-crediting baselines. Next call proofstorm_lab_publish"
+    )]
+    fn proofstorm_lab_recipe_create(
+        &self,
+        Parameters(request): Parameters<CreateLabRecipeRequest>,
+    ) -> Result<Json<DraftMutationResult>, ErrorData> {
+        self.authorize(Capability::LabCreate)?;
+        let name = request.name.unwrap_or_else(|| request.draft_id.clone());
+        let lab = lab_from_recipe(request.recipe, name)?;
+        let validation = lab_validation_result(&lab);
+        if !validation.valid {
+            return Err(ErrorData::internal_error(
+                "built-in lab recipe failed publication preflight",
+                Some(serde_json::json!({
+                    "code": "lab_recipe_invalid",
+                    "validation": validation,
+                })),
+            ));
+        }
+        self.store
+            .create_draft(
+                &self.workspace,
+                &self.principal,
+                &request.draft_id,
+                &lab,
                 &request.idempotency_key,
             )
             .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
@@ -1427,13 +2333,15 @@ impl ProofstormMcp {
         Parameters(request): Parameters<EditDraftRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::LabEdit)?;
+        let lab = LabSpec::try_from(request.lab)
+            .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
         self.store
             .edit_draft(
                 &self.workspace,
                 &self.principal,
                 &request.draft_id,
                 request.expected_version,
-                &request.lab,
+                &lab,
                 &request.idempotency_key,
             )
             .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
@@ -1513,41 +2421,55 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Add a uniquely named typed binding between two draft components; the link id is the stable binding identity"
+        description = "Add a uniquely named typed link. Backend qualifiers are required flat fields selected by kind: chain_backend uses network; payment_backend uses method and unit; database_backend uses role; authentication_backend uses protocol. Never send a nested binding object"
     )]
     fn proofstorm_link_add(
         &self,
         Parameters(request): Parameters<MutateLinkRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::TopologyMutate)?;
-        let changed_path = format!("/links/{}", request.link.id);
+        let link =
+            LinkSpec::try_from(request.link).map_err(|message| invalid_operation(&message))?;
+        let changed_path = format!("/links/{}", link.id);
         self.store
             .mutate_draft(
                 &self.workspace,
                 &self.principal,
                 &request.draft_id,
                 request.expected_version,
-                &DraftMutation::AddLink { link: request.link },
+                &DraftMutation::AddLink { link },
                 &request.idempotency_key,
             )
             .map(|draft| Json(compact_draft_mutation(draft, vec![changed_path])))
             .map_err(store_error)
     }
 
-    #[tool(description = "Remove one exact named typed binding from a lab draft")]
+    #[tool(description = "Remove one link from a lab draft by its stable link_id")]
     fn proofstorm_link_remove(
         &self,
-        Parameters(request): Parameters<MutateLinkRequest>,
+        Parameters(request): Parameters<RemoveLinkRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::TopologyMutate)?;
-        let changed_path = format!("/links/{}", request.link.id);
+        let draft = self
+            .store
+            .read_draft(&self.workspace, &self.principal, &request.draft_id)
+            .map_err(store_error)?;
+        let link = draft
+            .lab
+            .links
+            .into_iter()
+            .find(|link| link.id == request.link_id)
+            .ok_or_else(|| {
+                invalid_operation(&format!("link {:?} does not exist", request.link_id))
+            })?;
+        let changed_path = format!("/links/{}", link.id);
         self.store
             .mutate_draft(
                 &self.workspace,
                 &self.principal,
                 &request.draft_id,
                 request.expected_version,
-                &DraftMutation::RemoveLink { link: request.link },
+                &DraftMutation::RemoveLink { link },
                 &request.idempotency_key,
             )
             .map(|draft| Json(compact_draft_mutation(draft, vec![changed_path])))
@@ -1572,13 +2494,17 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Validate a complete Proofstorm v1alpha1 lab without changing state")]
+    #[tool(
+        description = "Validate structural, catalog, configuration, and publication contracts for a complete Proofstorm v1alpha1 lab. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Resolve every returned warning before creating the draft"
+    )]
     fn proofstorm_lab_validate(
         &self,
         Parameters(request): Parameters<ValidateLabRequest>,
-    ) -> Result<Json<ValidationReport>, ErrorData> {
+    ) -> Result<Json<LabValidationResult>, ErrorData> {
         self.authorize(Capability::LabValidate)?;
-        Ok(Json(validate_lab(&request.lab)))
+        let lab = LabSpec::try_from(request.lab)
+            .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
+        Ok(Json(lab_validation_result(&lab)))
     }
 
     #[tool(description = "Compare two lab drafts in the selected workspace")]
@@ -1699,9 +2625,9 @@ impl ProofstormMcp {
                 return Ok(Json(response));
             }
             if end <= start + 1 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "status_response_too_large",
                     "one component status exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "status_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -1748,9 +2674,9 @@ impl ProofstormMcp {
                 return Ok(Json(response));
             }
             if end <= start + 1 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "status_response_too_large",
                     "one inventory entry exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "status_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -1768,8 +2694,34 @@ impl ProofstormMcp {
         let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
         let mut backoff = std::time::Duration::from_millis(250);
+        let mut last_status = None;
         loop {
-            let status = self.full_lab_status(&request.instance_id).await?;
+            let status = match tokio::time::timeout_at(
+                deadline,
+                self.full_lab_status(&request.instance_id),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    return last_status.map_or_else(
+                        || {
+                            Err(coded_invalid_request(
+                                "lab_wait_deadline_exceeded",
+                                "the runtime status backend did not answer before the requested lab wait deadline",
+                            ))
+                        },
+                        |status| {
+                            Ok(Json(compact_lab_wait(
+                                status,
+                                request.target_phase,
+                                false,
+                                true,
+                            )))
+                        },
+                    );
+                }
+            };
             let reached = status.phase == request.target_phase;
             if reached || lab_wait_terminal(status.phase) {
                 return Ok(Json(compact_lab_wait(
@@ -1779,6 +2731,7 @@ impl ProofstormMcp {
                     false,
                 )));
             }
+            last_status = Some(status.clone());
             let now = tokio::time::Instant::now();
             if now >= deadline {
                 return Ok(Json(compact_lab_wait(
@@ -1793,17 +2746,62 @@ impl ProofstormMcp {
         }
     }
 
-    #[tool(description = "Close a lab instance and begin verified Kubernetes teardown")]
+    #[tool(
+        description = "Begin verified Kubernetes teardown and return a compact closing receipt. Then call lab_wait with target_phase=closed; success includes teardown_receipt.verified_absent=true"
+    )]
     async fn proofstorm_lab_close(
         &self,
         Parameters(request): Parameters<InstanceRequest>,
-    ) -> Result<Json<LabInstanceStatus>, ErrorData> {
+    ) -> Result<Json<LabWaitResult>, ErrorData> {
         self.authorize(Capability::LabClose)?;
         let instance = self
             .store
             .instance_for_close(&self.workspace, &self.principal, &request.instance_id)
             .map_err(store_error)?;
-        self.runtime()?.close(instance).await.map(Json)
+        self.finalize_active_operations(&instance.id).await?;
+        let status = self.runtime()?.close(instance).await?;
+        let reached = status.phase == InstancePhase::Closed;
+        Ok(Json(compact_lab_wait(
+            status,
+            InstancePhase::Closed,
+            reached,
+            false,
+        )))
+    }
+
+    /// Closing a lab deletes every runtime action resource, so the journal
+    /// must reach a terminal phase for each non-terminal operation first.
+    /// Cancellation is requested best-effort; the ledger outcome is recorded
+    /// regardless, because the lab will not produce one afterwards.
+    async fn finalize_active_operations(&self, instance_id: &str) -> Result<(), ErrorData> {
+        let active = self
+            .store
+            .active_operations(&self.workspace, instance_id)
+            .map_err(store_error)?;
+        for operation in active {
+            let token = proofstorm_core::digest_json(&(
+                &self.workspace,
+                &self.principal,
+                &operation.id,
+                "lab_close",
+            ));
+            let _ = self
+                .runtime()?
+                .request_action_cancellation(&operation, &token)
+                .await;
+            self.store
+                .record_operation_result(
+                    &self.workspace,
+                    &operation.id,
+                    OperationPhase::Cancelled,
+                    serde_json::json!({
+                        "code": "lab_closed",
+                        "message": "the lab instance was closed before the operation reached a terminal phase",
+                    }),
+                )
+                .map_err(store_error)?;
+        }
+        Ok(())
     }
 
     #[tool(description = "Create a durable experiment bound to one lab instance")]
@@ -1836,12 +2834,26 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Close an unleased experiment")]
-    fn proofstorm_experiment_close(
+    #[tool(
+        description = "Close an unleased experiment after its actions are terminal. Proofstorm first reconciles completed runtime actions into the journal; if any are still active, wait for the returned operation IDs. Finalization order: operation waits, lease_release, experiment_close, artifact_export"
+    )]
+    async fn proofstorm_experiment_close(
         &self,
         Parameters(request): Parameters<CloseExperimentRequest>,
     ) -> Result<Json<Experiment>, ErrorData> {
         self.authorize(Capability::ExperimentClose)?;
+        let active = self
+            .reconcile_experiment_operations(&request.experiment_id)
+            .await?;
+        if !active.is_empty() {
+            return Err(coded_invalid_request(
+                "experiment_actions_active",
+                format!(
+                    "wait for these operations before closing the experiment: {}",
+                    active.join(", ")
+                ),
+            ));
+        }
         self.store
             .close_experiment(
                 &self.workspace,
@@ -1851,6 +2863,52 @@ impl ProofstormMcp {
             )
             .map(Json)
             .map_err(store_error)
+    }
+
+    /// Fold any runtime actions that have already finished into the durable
+    /// journal before experiment finalization. An agent should not need to
+    /// rediscover a completed action merely because it omitted a status read.
+    async fn reconcile_experiment_operations(
+        &self,
+        experiment_id: &str,
+    ) -> Result<Vec<String>, ErrorData> {
+        let mut after_sequence = 0;
+        let mut active = Vec::new();
+        loop {
+            let actions = self
+                .store
+                .actions(
+                    &self.workspace,
+                    &self.principal,
+                    experiment_id,
+                    after_sequence,
+                    100,
+                )
+                .map_err(store_error)?;
+            if actions.is_empty() {
+                break;
+            }
+            after_sequence = actions
+                .last()
+                .map_or(after_sequence, |action| action.sequence);
+            for operation in actions.iter().filter(|operation| {
+                matches!(
+                    operation.phase,
+                    OperationPhase::Pending | OperationPhase::Running
+                )
+            }) {
+                let terminal = self.runtime()?.action_status(operation).await?;
+                if let Some((phase, artifact)) = terminal {
+                    self.record_runtime_terminal_result(operation, phase, artifact)?;
+                } else {
+                    active.push(operation.id.clone());
+                }
+            }
+            if actions.len() < 100 {
+                break;
+            }
+        }
+        Ok(active)
     }
 
     #[tool(
@@ -1876,12 +2934,12 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         let status = self.runtime()?.status(instance).await?;
         if status.phase != InstancePhase::Ready {
-            return Err(ErrorData::invalid_request(
+            return Err(coded_invalid_request(
+                "instance_not_ready",
                 format!(
                     "lab instance {:?} is not ready for a lease",
                     experiment.instance_id
                 ),
-                Some(serde_json::json!({"code": "instance_not_ready"})),
             ));
         }
         self.store
@@ -1910,7 +2968,9 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Release an experiment lease owned by the current principal")]
+    #[tool(
+        description = "Release an experiment lease owned by the current principal. At finalization, first wait for submitted operations, then call lease_release, experiment_close, and artifact_export in that order"
+    )]
     fn proofstorm_lease_release(
         &self,
         Parameters(request): Parameters<ReleaseLeaseRequest>,
@@ -1957,7 +3017,233 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Run an unrestricted non-interactive shell program in a lab component's exact pinned image, with its component-local data and native CLI available. target_component optionally selects a distinct lab service and defaults to component; Proofstorm exposes generic PROOFSTORM_TARGET_* metadata plus native endpoint variables such as BITCOIN_RPC_HOST and BITCOIN_RPC_PORT without interpreting the command. The workload has no Kubernetes token, host access, or cross-lab credentials; combined output and exit code are journaled as a bounded experiment artifact"
+        description = "Read a bounded tail of one lab component's own container log, journaled as an experiment artifact. This reads the component's running container, unlike component_exec which starts a separate pod, and it keeps working while the component is unready, crash-looping, or stopped, which is when a native error is usually only visible in its log. The artifact also reports the pod phase, container readiness, and restart count"
+    )]
+    async fn proofstorm_component_logs(
+        &self,
+        Parameters(request): Parameters<ComponentLogsRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ComponentLogs)?;
+        if !(1..=2_000).contains(&request.tail_lines) {
+            return Err(invalid_operation("tail_lines must be in 1..=2000"));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ComponentLogs,
+            )
+            .map_err(store_error)?;
+        let component = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == request.component)
+            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+        component_image_any(&revision, &request.component, component.kind)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::ComponentLogs,
+            &request,
+            &request.idempotency_key,
+            Capability::ComponentLogs,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::ComponentLogs(ComponentLogsAction {
+                component: request.component,
+                tail_lines: request.tail_lines,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Run the fixed Nutshell and Keycloak OIDC/CAT/BAT baseline using the controller-generated disposable test identity. Credentials and issued bearer material remain inside the bounded Job; the terminal artifact contains only typed conformance observations"
+    )]
+    async fn proofstorm_authentication_conformance(
+        &self,
+        Parameters(request): Parameters<AuthenticationConformanceRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::AuthenticationTest)?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::AuthenticationTest,
+            )
+            .map_err(store_error)?;
+        validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::AuthenticationConformance,
+            &request,
+            &request.idempotency_key,
+            Capability::AuthenticationTest,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::AuthenticationConformance(AuthenticationConformanceAction {
+                mint: request.mint,
+                identity_provider: request.identity_provider,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Mint valid BATs with the disposable test identity, spend one against a protected mint endpoint, and retain the spent bearer token as an opaque in-lab session. MCP returns only typed conformance observations and the source operation identity"
+    )]
+    async fn proofstorm_authentication_protected_spend(
+        &self,
+        Parameters(request): Parameters<AuthenticationProtectedSpendRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::AuthenticationTest)?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::AuthenticationTest,
+            )
+            .map_err(store_error)?;
+        validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::AuthenticationProtectedSpend,
+            &request,
+            &request.idempotency_key,
+            Capability::AuthenticationTest,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::AuthenticationProtectedSpend(AuthenticationProtectedSpendAction {
+                mint: request.mint,
+                identity_provider: request.identity_provider,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "After a mint restart, replay a BAT retained by a successful protected-spend operation, require spent-token rejection, then mint and spend a fresh BAT. Test credentials and bearer tokens remain inside fixed Proofstorm jobs"
+    )]
+    async fn proofstorm_authentication_replay(
+        &self,
+        Parameters(request): Parameters<AuthenticationReplayRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize_all(&[Capability::AuthenticationTest, Capability::ArtifactRead])?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::AuthenticationTest,
+            )
+            .map_err(store_error)?;
+        validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
+        let source = self
+            .store
+            .operation(
+                &self.workspace,
+                &self.principal,
+                &request.source_operation_id,
+            )
+            .map_err(store_error)?;
+        let source_valid = source.instance_id == request.instance_id
+            && source.experiment_id == request.experiment_id
+            && source.lease_id == request.lease_id
+            && source.principal_id == self.principal
+            && source.kind == OperationKind::AuthenticationProtectedSpend
+            && source.phase == OperationPhase::Succeeded
+            && source.artifact.as_ref().is_some_and(|artifact| {
+                artifact.content["contract"] == "proofstorm/authentication-protected-spend/v1"
+                    && artifact.content["conformant"] == true
+                    && artifact.content["session_operation_id"] == source.id
+                    && artifact.content["mint"] == request.mint
+                    && artifact.content["identity_provider"] == request.identity_provider
+            });
+        if !source_valid {
+            return Err(invalid_operation(
+                "source operation must be a successful protected spend in the same instance, experiment, lease, principal, mint, and identity provider",
+            ));
+        }
+        let session_secret = format!("{}-auth-session", source.resource_name);
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::AuthenticationReplay,
+            &request,
+            &request.idempotency_key,
+            Capability::AuthenticationTest,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let resource = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::AuthenticationReplay(AuthenticationReplayAction {
+                mint: request.mint,
+                identity_provider: request.identity_provider,
+                session_secret,
+                source_operation_id: request.source_operation_id,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &resource).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Last-resort shell execution in a fresh pod using a component's pinned image, volumes, and CLI. Prefer typed actions and component_logs. This is not the running component: localhost is wrong; use supplied PROOFSTORM_TARGET_* or native endpoint variables. The bounded artifact reports output, exit code, and target endpoint readiness"
     )]
     async fn proofstorm_component_exec(
         &self,
@@ -2033,7 +3319,292 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Fund two LND nodes and open a bounded payer-to-mint channel")]
+    #[tool(
+        description = "First runtime action for a lab made by proofstorm_lab_recipe_create. Proofstorm supplies the recipe's exact Bitcoin/LND component IDs and safe funding/channel amounts. Await success, then call proofstorm_lab_recipe_route_channel_open; do not call generic liquidity or channel tools for this recipe"
+    )]
+    async fn proofstorm_lab_recipe_bootstrap(
+        &self,
+        Parameters(request): Parameters<LabRecipeSetupRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.proofstorm_liquidity_bootstrap(Parameters(recipe_bootstrap_request(request)))
+            .await
+    }
+
+    #[tool(
+        description = "Second runtime action for a lab made by proofstorm_lab_recipe_create. After recipe bootstrap succeeds, Proofstorm opens the remaining router-to-CLN channel with server-owned IDs, safe capacity, and balanced directional liquidity. Await success, then call proofstorm_lab_recipe_fee_matrix_run once"
+    )]
+    async fn proofstorm_lab_recipe_route_channel_open(
+        &self,
+        Parameters(request): Parameters<LabRecipeSetupRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.proofstorm_channel_open(Parameters(recipe_route_channel_request(request)))
+            .await
+    }
+
+    #[tool(
+        description = "Run the complete auditable payment matrix for a ready nutshell_lnd_cln_routing_fees recipe after both recipe setup operations succeed. Proofstorm initializes the four role wallets, funds only the two payers, applies known below- and above-reserve routing policies, pays in both directions, and runs four exact conservation oracles. All 26 child actions remain individually journaled. The call returns a compact scientific summary; replay the same matrix_id after interruption"
+    )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the recipe matrix keeps one auditable, dependency-ordered experiment together"
+    )]
+    async fn proofstorm_lab_recipe_fee_matrix_run(
+        &self,
+        Parameters(request): Parameters<LabRecipeFeeMatrixRequest>,
+    ) -> Result<Json<serde_json::Value>, ErrorData> {
+        match request.recipe {
+            LabRecipe::NutshellLndClnRoutingFees => {}
+        }
+        let operation_prefix = recipe_fee_matrix_operation_prefix(&request);
+        let operation_id = |suffix: &str| format!("{operation_prefix}-{suffix}");
+        let idempotency_key = |suffix: &str| format!("{}:{suffix}", request.idempotency_key);
+        let common_wait = |operation_ids: Vec<String>| OperationWaitManyRequest {
+            operation_ids,
+            timeout_seconds: 120,
+        };
+
+        for (suffix, wallet, mint) in [
+            ("init-payer-lnd", "payer-lnd", "mint-lnd"),
+            ("init-recipient-lnd", "recipient-lnd", "mint-lnd"),
+            ("init-payer-cln", "payer-cln", "mint-cln"),
+            ("init-recipient-cln", "recipient-cln", "mint-cln"),
+        ] {
+            self.proofstorm_wallet_initialize(Parameters(WalletInitializeRequest {
+                instance_id: request.instance_id.clone(),
+                experiment_id: request.experiment_id.clone(),
+                lease_id: request.lease_id.clone(),
+                operation_id: operation_id(suffix),
+                wallet: wallet.into(),
+                mint: mint.into(),
+                idempotency_key: idempotency_key(suffix),
+            }))
+            .await?;
+        }
+        let initialized = self
+            .proofstorm_operation_wait_many(Parameters(common_wait(vec![
+                operation_id("init-payer-lnd"),
+                operation_id("init-recipient-lnd"),
+                operation_id("init-payer-cln"),
+                operation_id("init-recipient-cln"),
+            ])))
+            .await?
+            .0;
+        require_matrix_stage(&initialized, "wallet initialization", 4)?;
+
+        for (suffix, wallet, mint) in [
+            ("fund-payer-lnd", "payer-lnd", "mint-lnd"),
+            ("fund-payer-cln", "payer-cln", "mint-cln"),
+        ] {
+            self.proofstorm_wallet_fund(Parameters(WalletFundRequest {
+                instance_id: request.instance_id.clone(),
+                experiment_id: request.experiment_id.clone(),
+                lease_id: request.lease_id.clone(),
+                operation_id: operation_id(suffix),
+                wallet: wallet.into(),
+                mint: mint.into(),
+                payer_lightning: "lnd-router".into(),
+                amount_sat: ROUTING_FEE_RECIPE_WALLET_FUNDING_SAT,
+                idempotency_key: idempotency_key(suffix),
+            }))
+            .await?;
+        }
+        let funded = self
+            .proofstorm_operation_wait_many(Parameters(common_wait(vec![
+                operation_id("fund-payer-lnd"),
+                operation_id("fund-payer-cln"),
+            ])))
+            .await?
+            .0;
+        require_matrix_stage(&funded, "payer funding", 2)?;
+
+        let mut cases = Vec::with_capacity(4);
+        for (treatment, treatment_id, base_fee_sat, fee_rate_ppm) in [
+            (
+                "below_reserve",
+                "below-reserve",
+                ROUTING_FEE_RECIPE_LOW_BASE_FEE_SAT,
+                ROUTING_FEE_RECIPE_LOW_FEE_RATE_PPM,
+            ),
+            (
+                "above_reserve",
+                "above-reserve",
+                ROUTING_FEE_RECIPE_HIGH_BASE_FEE_SAT,
+                ROUTING_FEE_RECIPE_HIGH_FEE_RATE_PPM,
+            ),
+        ] {
+            for (endpoint, to_lightning) in [("cln", "cln-backend"), ("lnd", "lnd-backend")] {
+                let suffix = format!("policy-{treatment_id}-{endpoint}");
+                self.proofstorm_channel_policy_set(Parameters(ChannelPolicySetRequest {
+                    instance_id: request.instance_id.clone(),
+                    experiment_id: request.experiment_id.clone(),
+                    lease_id: request.lease_id.clone(),
+                    operation_id: operation_id(&suffix),
+                    from_lightning: "lnd-router".into(),
+                    to_lightning: to_lightning.into(),
+                    base_fee_sat,
+                    fee_rate_ppm,
+                    idempotency_key: idempotency_key(&suffix),
+                }))
+                .await?;
+            }
+            let policy = self
+                .proofstorm_operation_wait_many(Parameters(common_wait(vec![
+                    operation_id(&format!("policy-{treatment_id}-cln")),
+                    operation_id(&format!("policy-{treatment_id}-lnd")),
+                ])))
+                .await?
+                .0;
+            require_matrix_stage(&policy, &format!("{treatment} routing policy"), 2)?;
+
+            for (suffix, wallet, mint) in [
+                (
+                    format!("baseline-{treatment_id}-lnd"),
+                    "payer-lnd",
+                    "mint-lnd",
+                ),
+                (
+                    format!("baseline-{treatment_id}-cln"),
+                    "payer-cln",
+                    "mint-cln",
+                ),
+            ] {
+                self.proofstorm_wallet_balance(Parameters(WalletBalanceRequest {
+                    instance_id: request.instance_id.clone(),
+                    experiment_id: request.experiment_id.clone(),
+                    lease_id: request.lease_id.clone(),
+                    operation_id: operation_id(&suffix),
+                    wallet: wallet.into(),
+                    mint: mint.into(),
+                    idempotency_key: idempotency_key(&suffix),
+                }))
+                .await?;
+            }
+            for (suffix, wallet, mint) in [
+                (
+                    format!("invoice-{treatment_id}-recipient-cln"),
+                    "recipient-cln",
+                    "mint-cln",
+                ),
+                (
+                    format!("invoice-{treatment_id}-recipient-lnd"),
+                    "recipient-lnd",
+                    "mint-lnd",
+                ),
+            ] {
+                self.proofstorm_wallet_invoice(Parameters(WalletInvoiceRequest {
+                    instance_id: request.instance_id.clone(),
+                    experiment_id: request.experiment_id.clone(),
+                    lease_id: request.lease_id.clone(),
+                    operation_id: operation_id(&suffix),
+                    wallet: wallet.into(),
+                    mint: mint.into(),
+                    amount_sat: ROUTING_FEE_RECIPE_PAYMENT_SAT,
+                    timeout_seconds: default_quote_timeout_seconds(),
+                    idempotency_key: idempotency_key(&suffix),
+                }))
+                .await?;
+            }
+            let observations = self
+                .proofstorm_operation_wait_many(Parameters(common_wait(vec![
+                    operation_id(&format!("baseline-{treatment_id}-lnd")),
+                    operation_id(&format!("baseline-{treatment_id}-cln")),
+                    operation_id(&format!("invoice-{treatment_id}-recipient-cln")),
+                    operation_id(&format!("invoice-{treatment_id}-recipient-lnd")),
+                ])))
+                .await?
+                .0;
+            require_matrix_stage(
+                &observations,
+                &format!("{treatment} baseline and invoices"),
+                4,
+            )?;
+            let cln_quote = matrix_invoice_quote_id(&observations.operations[2])?;
+            let lnd_quote = matrix_invoice_quote_id(&observations.operations[3])?;
+
+            let quote_ids = [cln_quote, lnd_quote];
+            for (direction, quote_id) in ROUTING_FEE_RECIPE_PAYMENT_DIRECTIONS
+                .into_iter()
+                .zip(quote_ids)
+            {
+                let suffix = format!("pay-{treatment_id}-{}", direction.id);
+                self.proofstorm_wallet_pay(Parameters(WalletPayRequest {
+                    instance_id: request.instance_id.clone(),
+                    experiment_id: request.experiment_id.clone(),
+                    lease_id: request.lease_id.clone(),
+                    operation_id: operation_id(&suffix),
+                    wallet: direction.payer_wallet.into(),
+                    mint: direction.payer_mint.into(),
+                    recipient_wallet: direction.recipient_wallet.into(),
+                    recipient_mint: direction.recipient_mint.into(),
+                    mint_quote_id: quote_id,
+                    idempotency_key: idempotency_key(&suffix),
+                }))
+                .await?;
+            }
+            let payments = self
+                .proofstorm_operation_wait_many(Parameters(common_wait(vec![
+                    operation_id(&format!("pay-{treatment_id}-lnd-to-cln")),
+                    operation_id(&format!("pay-{treatment_id}-cln-to-lnd")),
+                ])))
+                .await?
+                .0;
+            require_matrix_stage(&payments, &format!("{treatment} payments"), 2)?;
+
+            let mut oracle_operations = Vec::with_capacity(2);
+            for direction in ROUTING_FEE_RECIPE_PAYMENT_DIRECTIONS {
+                let suffix = format!("oracle-{treatment_id}-{}", direction.oracle_endpoint);
+                let oracle = self
+                    .proofstorm_conservation_oracle(Parameters(ConservationOracleRequest {
+                        instance_id: request.instance_id.clone(),
+                        experiment_id: request.experiment_id.clone(),
+                        lease_id: request.lease_id.clone(),
+                        operation_id: operation_id(&suffix),
+                        wallet: direction.payer_wallet.into(),
+                        mint: direction.payer_mint.into(),
+                        baseline_operation_id: operation_id(&format!(
+                            "baseline-{treatment_id}-{}",
+                            direction.oracle_endpoint
+                        )),
+                        treatment_operation_id: operation_id(&format!(
+                            "pay-{treatment_id}-{}",
+                            direction.id
+                        )),
+                        idempotency_key: idempotency_key(&suffix),
+                    }))
+                    .await?
+                    .0;
+                oracle_operations.push(oracle);
+            }
+            for (index, direction) in ROUTING_FEE_RECIPE_PAYMENT_DIRECTIONS
+                .into_iter()
+                .enumerate()
+            {
+                cases.push(matrix_case_summary(
+                    treatment,
+                    direction.label,
+                    base_fee_sat,
+                    fee_rate_ppm,
+                    &payments.operations[index],
+                    &oracle_operations[index],
+                )?);
+            }
+        }
+
+        Ok(Json(serde_json::json!({
+            "recipe": request.recipe,
+            "matrix_id": request.matrix_id,
+            "all_terminal": true,
+            "journaled_child_actions": 26,
+            "wallet_funding_sat_each": ROUTING_FEE_RECIPE_WALLET_FUNDING_SAT,
+            "payment_amount_sat": ROUTING_FEE_RECIPE_PAYMENT_SAT,
+            "cases": cases,
+            "guidance": "Matrix complete. Release the lease, close the experiment, export evidence, then close and await the lab.",
+        })))
+    }
+
+    #[tool(
+        description = "Required first action after a custom regtest Lightning lab is ready: mine 101 blocks, fund two LND nodes, and open their channel. Await success before peer/channel actions. Labs created from a recipe should use proofstorm_lab_recipe_bootstrap instead"
+    )]
     async fn proofstorm_liquidity_bootstrap(
         &self,
         Parameters(request): Parameters<BootstrapLiquidityRequest>,
@@ -2111,7 +3682,9 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Connect two logical Lightning components through their locked adapters")]
+    #[tool(
+        description = "Connect Lightning peers. Requires a succeeded liquidity_bootstrap in this experiment; premature calls are rejected without creating an operation"
+    )]
     async fn proofstorm_peer_connect(
         &self,
         Parameters(request): Parameters<PeerConnectRequest>,
@@ -2129,6 +3702,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.from_lightning, ComponentKind::Lightning)?;
         component_image_any(&revision, &request.to_lightning, ComponentKind::Lightning)?;
+        self.require_liquidity_bootstrap(&request.experiment_id, &request.instance_id)?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -2205,7 +3779,9 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Open and confirm a bounded channel between logical Lightning components")]
+    #[tool(
+        description = "Connect two Lightning endpoints in a custom lab, then open and confirm a channel. Requires a succeeded liquidity_bootstrap. Proofstorm rejects unproven funding sources and channel amounts above the bootstrapped node's safe remaining on-chain budget. Labs created from a recipe should use proofstorm_lab_recipe_route_channel_open instead"
+    )]
     async fn proofstorm_channel_open(
         &self,
         Parameters(request): Parameters<ChannelOpenRequest>,
@@ -2225,6 +3801,9 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.chain, ComponentKind::Bitcoin)?;
         component_image_any(&revision, &request.from_lightning, ComponentKind::Lightning)?;
         component_image_any(&revision, &request.to_lightning, ComponentKind::Lightning)?;
+        let bootstrap =
+            self.require_liquidity_bootstrap(&request.experiment_id, &request.instance_id)?;
+        validate_channel_funding_admission(&request, &bootstrap)?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -2248,6 +3827,70 @@ impl ProofstormMcp {
                 to_lightning: request.to_lightning.clone(),
                 channel_sat: request.channel_sat,
                 push_sat: request.push_sat,
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Set the outgoing routing policy from one Lightning node to its peer. base_fee_sat is in satoshis (like all other agent-facing amounts); fee_rate_ppm is parts per million. Proofstorm converts the base fee to native millisatoshis and resolves the channel/adapter; do not use component_exec for fee policy"
+    )]
+    async fn proofstorm_channel_policy_set(
+        &self,
+        Parameters(request): Parameters<ChannelPolicySetRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ChannelOpen)?;
+        validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
+        if request.base_fee_sat > 100_000 || request.fee_rate_ppm > 1_000_000 {
+            return Err(coded_invalid_request(
+                "invalid_channel_policy",
+                "base_fee_sat must be <= 100000 and fee_rate_ppm must be <= 1000000",
+            ));
+        }
+        let base_fee_msat = request.base_fee_sat.checked_mul(1_000).ok_or_else(|| {
+            coded_invalid_request(
+                "invalid_channel_policy",
+                "base_fee_sat cannot be represented in native millisatoshis",
+            )
+        })?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ChannelOpen,
+            )
+            .map_err(store_error)?;
+        component_image_any(&revision, &request.from_lightning, ComponentKind::Lightning)?;
+        component_image_any(&revision, &request.to_lightning, ComponentKind::Lightning)?;
+        self.require_liquidity_bootstrap(&request.experiment_id, &request.instance_id)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::ChannelPolicySet,
+            &request,
+            &request.idempotency_key,
+            Capability::ChannelOpen,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::ChannelPolicySet(ChannelPolicySetAction {
+                from_lightning: request.from_lightning.clone(),
+                to_lightning: request.to_lightning.clone(),
+                base_fee_msat,
+                fee_rate_ppm: request.fee_rate_ppm,
             }),
         );
         self.runtime()?.apply_action(&instance, &action).await?;
@@ -2568,7 +4211,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Fund a logical wallet with a bounded quote paid by a named Lightning node"
+        description = "Fund a logical wallet with a bounded quote paid by a named LND node. The payer must be distinct from the mint's own payment backend; CLN and self-payment choices are rejected before an operation is created"
     )]
     async fn proofstorm_wallet_fund(
         &self,
@@ -2587,11 +4230,14 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
-        component_image_any(
+        require_component_runtime_control(&revision, &request.mint, "component", "wallet_fund")?;
+        component_image(
             &revision,
             &request.payer_lightning,
             ComponentKind::Lightning,
+            "lnd",
         )?;
+        validate_wallet_fund_payer(&revision.lab, &request.mint, &request.payer_lightning)?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -2661,60 +4307,11 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        let quote_key = format!(
-            "quote-{}",
-            &proofstorm_core::digest_json(&(
-                &self.workspace,
-                &self.principal,
-                &request.quote_id,
-                &request.idempotency_key,
-            ))[7..26]
-        );
-        let quote = match self.store.create_wallet_quote(
-            &self.workspace,
-            &self.principal,
-            &request.instance_id,
-            &request.experiment_id,
-            &request.lease_id,
-            &request.quote_id,
-            &request.wallet,
-            &request.mint,
-            WalletQuoteDirection::Receive,
-            request.amount_sat,
-            request.timeout_seconds,
-            &quote_key,
-        ) {
-            Ok(quote) if quote.phase == WalletQuotePhase::Requested => quote,
-            Ok(_) => {
-                let failed = self
-                    .store
-                    .record_operation_result(
-                        &self.workspace,
-                        &operation.id,
-                        OperationPhase::Failed,
-                        serde_json::json!({"code": "quote_not_requestable"}),
-                    )
-                    .map_err(store_error)?;
-                return Ok(Json(failed));
-            }
-            Err(error) => {
-                self.store
-                    .record_operation_result(
-                        &self.workspace,
-                        &operation.id,
-                        OperationPhase::Failed,
-                        serde_json::json!({"code": "quote_admission_failed"}),
-                    )
-                    .map_err(store_error)?;
-                return Err(store_error(error));
-            }
-        };
         let action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
             LabAction::WalletInvoice(WalletInvoiceAction {
-                quote_id: request.quote_id.clone(),
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 amount_sat: request.amount_sat,
@@ -2722,16 +4319,6 @@ impl ProofstormMcp {
             }),
         );
         self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .transition_wallet_quote(
-                &self.workspace,
-                &quote.id,
-                WalletQuotePhase::Requested,
-                WalletQuotePhase::Ready,
-                Some(&operation.id),
-                None,
-            )
-            .map_err(store_error)?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
             .map(Json)
@@ -2746,49 +4333,11 @@ impl ProofstormMcp {
         Parameters(request): Parameters<WalletPayRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize_all(&[Capability::WalletControl, Capability::ArtifactRead])?;
-        let quote = self
-            .store
-            .wallet_quote(&self.workspace, &self.principal, &request.quote_id)
-            .map_err(store_error)?;
-        if quote.direction != WalletQuoteDirection::Receive
-            || quote.instance_id != request.instance_id
-            || quote.experiment_id != request.experiment_id
-            || quote.lease_id != request.lease_id
-        {
-            return Err(invalid_operation(
-                "quote must be a receive quote in the same instance, experiment, and lease",
-            ));
-        }
-        if quote.phase != WalletQuotePhase::Ready {
-            match self
-                .store
-                .operation(&self.workspace, &self.principal, &request.operation_id)
-            {
-                Ok(existing)
-                    if existing.kind == OperationKind::WalletPay
-                        && existing.request["quote_id"] == request.quote_id
-                        && existing.request["wallet"] == request.wallet
-                        && existing.request["mint"] == request.mint =>
-                {
-                    return Ok(Json(existing));
-                }
-                Ok(_) => {
-                    return Err(invalid_operation(
-                        "operation identity does not match the existing quote payment",
-                    ));
-                }
-                Err(StoreError::NotFound { .. }) => {
-                    return Err(invalid_operation("quote is not ready for payment"));
-                }
-                Err(error) => return Err(store_error(error)),
-            }
-        }
-        if quote.wallet_id == request.wallet {
+        if request.recipient_wallet == request.wallet {
             return Err(invalid_operation(
                 "payer and recipient wallets must be distinct",
             ));
         }
-        validate_wallet_amount(quote.amount_sat)?;
         let (instance, revision) = self
             .store
             .operation_context(
@@ -2799,14 +4348,88 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
-        component_image_any(&revision, &quote.wallet_id, ComponentKind::Wallet)?;
+        component_image_any(&revision, &request.recipient_wallet, ComponentKind::Wallet)?;
+        component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        component_image_any(&revision, &request.recipient_mint, ComponentKind::Mint)?;
+        let mut request_json = serde_json::to_value(&request).map_err(|error| {
+            ErrorData::internal_error(
+                error.to_string(),
+                Some(serde_json::json!({"code": "serialization_failed"})),
+            )
+        })?;
+        if let Some(object) = request_json.as_object_mut() {
+            object.remove("idempotency_key");
+        }
+        let operation = self
+            .store
+            .create_wallet_pay_operation(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                &request.experiment_id,
+                &request.lease_id,
+                &request.operation_id,
+                &request_json,
+                &request.idempotency_key,
+                &request.recipient_wallet,
+                &request.recipient_mint,
+                &request.mint_quote_id,
+                &request.wallet,
+                &request.mint,
+            )
+            .map_err(store_error)?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::WalletPay(WalletPayAction {
+                wallet: request.wallet.clone(),
+                mint: request.mint.clone(),
+                recipient_wallet: request.recipient_wallet.clone(),
+                recipient_mint: request.recipient_mint.clone(),
+                mint_quote_id: request.mint_quote_id.clone(),
+            }),
+        );
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Refresh and claim an exact recipient mint quote without attempting payment"
+    )]
+    async fn proofstorm_wallet_quote_claim(
+        &self,
+        Parameters(request): Parameters<WalletQuoteClaimRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::WalletControl)?;
+        if !(1..=120).contains(&request.timeout_seconds) {
+            return Err(invalid_operation(
+                "timeout_seconds must be between 1 and 120",
+            ));
+        }
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::WalletControl,
+            )
+            .map_err(store_error)?;
+        component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
             &request.lease_id,
             &request.operation_id,
-            OperationKind::WalletPay,
+            OperationKind::WalletQuoteClaim,
             &request,
             &request.idempotency_key,
             Capability::WalletControl,
@@ -2814,26 +4437,15 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        self.store
-            .transition_wallet_quote(
-                &self.workspace,
-                &quote.id,
-                WalletQuotePhase::Ready,
-                WalletQuotePhase::Pending,
-                None,
-                None,
-            )
-            .map_err(store_error)?;
         let action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletPay(WalletPayAction {
-                quote_id: request.quote_id.clone(),
+            LabAction::WalletQuoteClaim(WalletQuoteClaimAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
-                recipient_wallet: quote.wallet_id,
-                amount_sat: quote.amount_sat,
+                mint_quote_id: request.mint_quote_id.clone(),
+                timeout_seconds: request.timeout_seconds,
             }),
         );
         self.runtime()?.apply_action(&instance, &action).await?;
@@ -2904,14 +4516,15 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Run a bounded read-only-wallet conservation oracle")]
+    #[tool(
+        description = "Verify one wallet_pay debit exactly from immutable artifacts. Capture wallet_balance immediately before one wallet_pay with no intervening wallet mutation, then pass both operation IDs. Proofstorm derives the expected post-payment balance from authoritative melt amount/state/Lightning fee plus the exact NUT-02 input fee derived from the spent proofs and keysets. There is no caller-controlled tolerance. Negative findings return conserved=false evidence, not execution failures. Round trips are invalid because they mint external value first"
+    )]
     async fn proofstorm_conservation_oracle(
         &self,
         Parameters(request): Parameters<ConservationOracleRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::OracleRun)?;
-        validate_oracle_bounds(&request)?;
-        let (instance, revision) = self
+        self.authorize_all(&[Capability::OracleRun, Capability::ArtifactRead])?;
+        let (_instance, revision) = self
             .store
             .operation_context(
                 &self.workspace,
@@ -2922,6 +4535,29 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        let baseline = self
+            .store
+            .operation(
+                &self.workspace,
+                &self.principal,
+                &request.baseline_operation_id,
+            )
+            .map_err(store_error)?;
+        let treatment = self
+            .store
+            .operation(
+                &self.workspace,
+                &self.principal,
+                &request.treatment_operation_id,
+            )
+            .map_err(store_error)?;
+        let evidence = conservation_observation(
+            &request,
+            &baseline,
+            &treatment,
+            &self.workspace,
+            &self.principal,
+        )?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -2935,20 +4571,13 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        let action = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            LabAction::ConservationOracle(ConservationOracleAction {
-                wallet: request.wallet.clone(),
-                mint: request.mint.clone(),
-                expected_sat: request.expected_sat,
-                tolerance_sat: request.tolerance_sat,
-            }),
-        );
-        self.runtime()?.apply_action(&instance, &action).await?;
         self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .record_operation_result(
+                &self.workspace,
+                &operation.id,
+                OperationPhase::Succeeded,
+                evidence,
+            )
             .map(Json)
             .map_err(store_error)
     }
@@ -3042,7 +4671,6 @@ impl ProofstormMcp {
             .operation(&self.workspace, &self.principal, &request.operation_id)
             .map_err(store_error)?;
         if operation.artifact.is_some() {
-            self.sync_wallet_quote_operation(&operation)?;
             return Ok(Json(operation));
         }
         self.store
@@ -3057,12 +4685,60 @@ impl ProofstormMcp {
         let Some((phase, artifact)) = terminal else {
             return Ok(Json(operation));
         };
-        let completed = self
-            .store
-            .record_operation_result(&self.workspace, &operation.id, phase, artifact)
-            .map_err(store_error)?;
-        self.sync_wallet_quote_operation(&completed)?;
+        let completed = self.record_runtime_terminal_result(&operation, phase, artifact)?;
         Ok(Json(completed))
+    }
+
+    /// Validate adapter output before committing it to the canonical journal.
+    /// Invalid terminal output is itself a terminal operation failure: it must
+    /// never leave a completed runtime job occupying an active-operation slot.
+    fn record_runtime_terminal_result(
+        &self,
+        operation: &LabOperation,
+        phase: OperationPhase,
+        artifact: serde_json::Value,
+    ) -> Result<LabOperation, ErrorData> {
+        let Ok(observations) = wallet_quote_observations_from_artifact(&artifact) else {
+            return self
+                .store
+                .record_operation_result(
+                    &self.workspace,
+                    &operation.id,
+                    OperationPhase::Failed,
+                    invalid_terminal_artifact(
+                        operation,
+                        phase,
+                        "invalid_wallet_quote_observation",
+                        "the runtime produced a wallet quote observation outside the strict contract",
+                    ),
+                )
+                .map_err(store_error);
+        };
+        if validate_operation_quote_observations(operation, &observations).is_err() {
+            return self
+                .store
+                .record_operation_result(
+                    &self.workspace,
+                    &operation.id,
+                    OperationPhase::Failed,
+                    invalid_terminal_artifact(
+                        operation,
+                        phase,
+                        "wallet_quote_observation_identity_mismatch",
+                        "the runtime wallet quote observations do not match the admitted typed operation",
+                    ),
+                )
+                .map_err(store_error);
+        }
+        self.store
+            .record_operation_result_with_quote_observations(
+                &self.workspace,
+                &operation.id,
+                phase,
+                artifact,
+                &observations,
+            )
+            .map_err(store_error)
     }
 
     #[tool(
@@ -3076,19 +4752,92 @@ impl ProofstormMcp {
         let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
         let mut backoff = std::time::Duration::from_millis(250);
+        let mut last_operation = None;
         loop {
-            let operation = self
-                .proofstorm_operation_status(Parameters(OperationRequest {
+            let operation = match tokio::time::timeout_at(
+                deadline,
+                self.proofstorm_operation_status(Parameters(OperationRequest {
                     operation_id: request.operation_id.clone(),
-                }))
-                .await?
-                .0;
+                })),
+            )
+            .await
+            {
+                Ok(result) => result?.0,
+                Err(_) => {
+                    return last_operation.map_or_else(
+                        || {
+                            Err(coded_invalid_request(
+                                "operation_wait_deadline_exceeded",
+                                "the runtime action backend did not answer before the requested operation wait deadline",
+                            ))
+                        },
+                        |operation| Ok(Json(compact_operation_wait(operation, true))),
+                    );
+                }
+            };
             if operation_terminal(operation.phase) {
                 return Ok(Json(compact_operation_wait(operation, false)));
             }
+            last_operation = Some(operation.clone());
             let now = tokio::time::Instant::now();
             if now >= deadline {
                 return Ok(Json(compact_operation_wait(operation, true)));
+            }
+            tokio::time::sleep(backoff.min(deadline - now)).await;
+            backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+        }
+    }
+
+    #[tool(
+        description = "Preferred after starting up to 8 independent operations (the per-instance active-operation limit): wait for all of them together with bounded parallel polling. Returns compact terminal artifacts in request order; timeout_seconds must be 1..=120"
+    )]
+    async fn proofstorm_operation_wait_many(
+        &self,
+        Parameters(request): Parameters<OperationWaitManyRequest>,
+    ) -> Result<Json<OperationWaitManyResult>, ErrorData> {
+        validate_operation_wait_many_request(&request)?;
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
+        let mut backoff = std::time::Duration::from_millis(250);
+        let mut last_operations = None;
+        loop {
+            let statuses = request.operation_ids.iter().map(|operation_id| {
+                self.proofstorm_operation_status(Parameters(OperationRequest {
+                    operation_id: operation_id.clone(),
+                }))
+            });
+            let operations = match tokio::time::timeout_at(
+                deadline,
+                futures::future::join_all(statuses),
+            )
+            .await
+            {
+                Ok(results) => results
+                    .into_iter()
+                    .map(|result| result.map(|operation| operation.0))
+                    .collect::<Result<Vec<_>, _>>()?,
+                Err(_) => {
+                    return last_operations.map_or_else(
+                        || {
+                            Err(coded_invalid_request(
+                                "operation_wait_many_deadline_exceeded",
+                                "the runtime action backend did not answer before the requested batch wait deadline",
+                            ))
+                        },
+                        |operations| compact_operation_wait_many(operations, true).map(Json),
+                    );
+                }
+            };
+            if operations
+                .iter()
+                .all(|operation| operation_terminal(operation.phase))
+            {
+                return compact_operation_wait_many(operations, false).map(Json);
+            }
+            last_operations = Some(operations.clone());
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return compact_operation_wait_many(operations, true).map(Json);
             }
             tokio::time::sleep(backoff.min(deadline - now)).await;
             backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
@@ -3117,10 +4866,23 @@ impl ProofstormMcp {
             &request.operation_id,
             &request.idempotency_key,
         ));
-        self.runtime()?
+        if self
+            .runtime()?
             .request_action_cancellation(&operation, &token)
-            .await?;
-        Ok(Json(operation))
+            .await?
+        {
+            return Ok(Json(operation));
+        }
+        let finalized = self
+            .store
+            .record_operation_result(
+                &self.workspace,
+                &operation.id,
+                OperationPhase::Failed,
+                missing_action_artifact(&operation),
+            )
+            .map_err(store_error)?;
+        Ok(Json(finalized))
     }
 
     #[tool(
@@ -3172,9 +4934,9 @@ impl ProofstormMcp {
                 return Ok(Json(response));
             }
             if end == 0 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "action_response_too_large",
                     "action page envelope exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "action_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -3182,7 +4944,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Export a compact deterministic evidence manifest for a closed experiment. Set include_content only for an explicit bulk download of the revision, journal, and selected artifacts"
+        description = "Export complete deterministic evidence after lease_release and experiment_close. The journal always includes every action plus artifact descriptors; leave artifact_operation_ids empty unless up to 16 specific full bodies are needed. A smaller artifact_count does not mean incomplete evidence. Bulk content stays outside model context at resource_uri"
     )]
     fn proofstorm_artifact_export(
         &self,
@@ -3213,7 +4975,7 @@ impl ProofstormMcp {
         let bundle = self.build_evidence_bundle(&export_request)?;
         if matches!(request.section, EvidenceSection::Journal) {
             if !(1..=50).contains(&request.limit) {
-                return Err(evidence_error(
+                return Err(coded_invalid_request(
                     "evidence_section_limit_invalid",
                     "journal limit must be between 1 and 50",
                 ));
@@ -3243,7 +5005,7 @@ impl ProofstormMcp {
                     return Ok(Json(response));
                 }
                 if end <= 1 {
-                    return Err(evidence_error(
+                    return Err(coded_invalid_request(
                         "evidence_action_too_large",
                         "one evidence journal action exceeds the agent response budget",
                     ));
@@ -3264,7 +5026,7 @@ impl ProofstormMcp {
             )?,
             EvidenceSection::Artifact => {
                 let operation_id = request.operation_id.as_deref().ok_or_else(|| {
-                    evidence_error(
+                    coded_invalid_request(
                         "evidence_operation_id_required",
                         "operation_id is required for an artifact section read",
                     )
@@ -3275,7 +5037,7 @@ impl ProofstormMcp {
                     .iter()
                     .find(|artifact| artifact.operation_id == operation_id)
                     .ok_or_else(|| {
-                        evidence_error(
+                        coded_invalid_request(
                             "evidence_artifact_not_selected",
                             "operation_id is not present in the selected evidence artifacts",
                         )
@@ -3293,66 +5055,73 @@ impl ProofstormMcp {
         .map(Json)
     }
 
-    #[tool(description = "Read a sanitized durable wallet quote lifecycle by Proofstorm ID")]
+    #[tool(
+        description = "Read the latest stored observation of an exact adapter-native wallet quote; this is historical data, not live wallet state"
+    )]
     async fn proofstorm_wallet_quote_status(
         &self,
         Parameters(request): Parameters<WalletQuoteRequest>,
-    ) -> Result<Json<WalletQuote>, ErrorData> {
+    ) -> Result<Json<WalletQuoteStatusResponse>, ErrorData> {
         self.authorize(Capability::ArtifactRead)?;
-        let quote = self
-            .store
-            .wallet_quote(&self.workspace, &self.principal, &request.quote_id)
-            .map_err(store_error)?;
-        if !quote.phase.is_terminal()
-            && let Some(operation_id) = quote.operation_id.as_deref()
-        {
-            let operation = self
-                .store
-                .operation(&self.workspace, &self.principal, operation_id)
-                .map_err(store_error)?;
-            if operation.artifact.is_some() {
-                self.sync_wallet_quote_operation(&operation)?;
-            } else if self.kubernetes.is_some() {
-                self.proofstorm_operation_status(Parameters(OperationRequest {
-                    operation_id: operation_id.to_owned(),
-                }))
-                .await?;
-            }
-            return self
-                .store
-                .wallet_quote(&self.workspace, &self.principal, &request.quote_id)
-                .map(Json)
-                .map_err(store_error);
-        }
-        Ok(Json(quote))
+        self.store
+            .wallet_quote_observation(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                &request.wallet,
+                &request.mint,
+                request.direction,
+                &request.quote_id,
+            )
+            .map(|last_observation| Json(WalletQuoteStatusResponse { last_observation }))
+            .map_err(store_error)
     }
 
-    #[tool(description = "List sanitized wallet quote lifecycles for an experiment")]
+    #[tool(
+        description = "List the latest stored observation per adapter-native wallet quote in an experiment; results are historical, not live wallet state"
+    )]
     fn proofstorm_wallet_quote_list(
         &self,
         Parameters(request): Parameters<WalletQuoteListRequest>,
     ) -> Result<Json<WalletQuoteListResponse>, ErrorData> {
         self.authorize(Capability::ExperimentRead)?;
-        let quotes = self
+        let (snapshot_sequence, after_sequence) = match request.cursor.as_deref() {
+            Some(cursor) => decode_quote_cursor(cursor, &request.experiment_id)?,
+            None => (
+                self.store
+                    .wallet_quote_observation_max_sequence(
+                        &self.workspace,
+                        &self.principal,
+                        &request.experiment_id,
+                    )
+                    .map_err(store_error)?,
+                0,
+            ),
+        };
+        let observations = self
             .store
-            .wallet_quotes(
+            .wallet_quote_observations(
                 &self.workspace,
                 &self.principal,
                 &request.experiment_id,
-                request.after_quote_id.as_deref(),
+                after_sequence,
+                snapshot_sequence,
                 request.limit,
             )
             .map_err(store_error)?;
         let source_has_more =
-            if quotes.len() == usize::try_from(request.limit).unwrap_or(usize::MAX) {
-                let after = quotes.last().map(|quote| quote.id.as_str());
+            if observations.len() == usize::try_from(request.limit).unwrap_or(usize::MAX) {
+                let after = observations
+                    .last()
+                    .map_or(after_sequence, |item| item.observation_sequence);
                 !self
                     .store
-                    .wallet_quotes(
+                    .wallet_quote_observations(
                         &self.workspace,
                         &self.principal,
                         &request.experiment_id,
                         after,
+                        snapshot_sequence,
                         1,
                     )
                     .map_err(store_error)?
@@ -3360,20 +5129,26 @@ impl ProofstormMcp {
             } else {
                 false
             };
-        let mut end = quotes.len();
+        let mut end = observations.len();
         loop {
-            let has_more = source_has_more || end < quotes.len();
+            let has_more = source_has_more || end < observations.len();
             let response = WalletQuoteListResponse {
-                quotes: quotes[..end].to_vec(),
-                next_after_quote_id: (has_more && end > 0).then(|| quotes[end - 1].id.clone()),
+                last_observations: observations[..end].to_vec(),
+                next_cursor: (has_more && end > 0).then(|| {
+                    encode_quote_cursor(
+                        &request.experiment_id,
+                        snapshot_sequence,
+                        observations[end - 1].observation_sequence,
+                    )
+                }),
             };
             if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
                 return Ok(Json(response));
             }
             if end == 0 {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "wallet_quote_response_too_large",
                     "wallet quote page envelope exceeds the agent response budget",
-                    Some(serde_json::json!({"code": "wallet_quote_response_too_large"})),
                 ));
             }
             end -= 1;
@@ -3406,22 +5181,225 @@ impl CatalogEntryDetail {
             features: entry.features.clone(),
             compatible_dependencies: entry.compatible_dependencies.clone(),
             support_matrix: entry.support_matrix.clone(),
+            runtime_endpoints: entry.runtime_endpoints.clone(),
             image: entry.image.clone(),
             source_digest: entry.source_digest.clone(),
             allowed_control: entry.allowed_control.clone(),
+            recommended_control: recommended_control(entry),
+            authorable_config_fields: authorable_config_fields(entry),
+            required_config_fields: required_config_fields(entry),
+            config_defaults: config_defaults(entry),
         }
     }
 }
 
+fn validate_operation_quote_observations(
+    operation: &LabOperation,
+    observations: &[WalletQuoteObservationInput],
+) -> Result<(), ErrorData> {
+    let field = |name: &str| {
+        operation
+            .request
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+    };
+    let valid = observations
+        .iter()
+        .all(|observation| match (operation.kind, observation.role) {
+            (OperationKind::WalletInvoice, WalletQuoteObservationRole::InvoiceReceive) => {
+                field("wallet") == Some(&observation.wallet_id)
+                    && field("mint") == Some(&observation.mint_id)
+                    && operation
+                        .request
+                        .get("amount_sat")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(observation.amount_sat)
+            }
+            (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentMelt) => {
+                field("wallet") == Some(&observation.wallet_id)
+                    && field("mint") == Some(&observation.mint_id)
+            }
+            (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentReceive) => {
+                field("recipient_wallet") == Some(&observation.wallet_id)
+                    && field("recipient_mint") == Some(&observation.mint_id)
+                    && field("mint_quote_id") == Some(&observation.quote_id)
+            }
+            (OperationKind::WalletQuoteClaim, WalletQuoteObservationRole::ClaimReceive) => {
+                field("wallet") == Some(&observation.wallet_id)
+                    && field("mint") == Some(&observation.mint_id)
+                    && field("mint_quote_id") == Some(&observation.quote_id)
+            }
+            _ => false,
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(coded_invalid_request(
+            "wallet_quote_observation_identity_mismatch",
+            "terminal wallet quote observations do not match the admitted typed operation",
+        ))
+    }
+}
+
 fn compact_draft_mutation(draft: Draft, changed_paths: Vec<String>) -> DraftMutationResult {
+    let validation = validate_lab(&draft.lab);
+    let summary = topology_summary(&draft.lab);
+    let mut warnings = summary.warnings;
+    warnings.extend(
+        validation
+            .issues
+            .iter()
+            .take(8)
+            .map(|issue| format!("{}@{}: {}", issue.code, issue.path, issue.message)),
+    );
     DraftMutationResult {
         draft_id: draft.id,
         version: draft.version,
-        component_count: u32::try_from(draft.lab.components.len()).unwrap_or(u32::MAX),
-        link_count: u32::try_from(draft.lab.links.len()).unwrap_or(u32::MAX),
-        valid: validate_lab(&draft.lab).valid,
+        component_count: summary.component_count,
+        link_count: summary.link_count,
+        structure: format!(
+            "components=[{}]; links=[{}]; backend_bindings={}/{}",
+            summary.component_ids.join(","),
+            summary.link_ids.join(","),
+            summary.bound_backend_link_count,
+            summary.backend_link_count
+        ),
+        topology_digest: summary.topology_digest,
+        valid: validation.valid,
+        warnings,
         changed_paths,
     }
+}
+
+struct TopologySummary {
+    component_count: u32,
+    link_count: u32,
+    component_ids: Vec<String>,
+    link_ids: Vec<String>,
+    backend_link_count: u32,
+    bound_backend_link_count: u32,
+    topology_digest: String,
+    warnings: Vec<String>,
+}
+
+fn topology_summary(lab: &LabSpec) -> TopologySummary {
+    let mut components = lab.components.clone();
+    components.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut links = lab.links.clone();
+    links.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let component_ids = components
+        .iter()
+        .map(|component| component.id.clone())
+        .collect::<Vec<_>>();
+    let link_ids = links.iter().map(|link| link.id.clone()).collect::<Vec<_>>();
+    let backend_links = links.iter().filter(|link| {
+        matches!(
+            link.kind,
+            LinkKind::ChainBackend
+                | LinkKind::PaymentBackend
+                | LinkKind::DatabaseBackend
+                | LinkKind::AuthenticationBackend
+        )
+    });
+    let backend_link_count = backend_links.clone().count();
+    let bound_backend_link_count = backend_links.filter(|link| link.binding.is_some()).count();
+    let mut warnings = Vec::new();
+    if components.is_empty() {
+        warnings.push("empty_topology: the draft contains no components".into());
+    } else if components.len() > 1 && links.is_empty() {
+        warnings.push("disconnected_topology: multiple components have no links".into());
+    }
+    if backend_link_count != bound_backend_link_count {
+        warnings.push(format!(
+            "unbound_backend_links: {bound_backend_link_count}/{backend_link_count} carry typed bindings"
+        ));
+    }
+    let payment_backends = links
+        .iter()
+        .filter(|link| link.kind == LinkKind::PaymentBackend)
+        .map(|link| link.to.as_str())
+        .collect::<BTreeSet<_>>();
+    let intermediary_lightning = components.iter().any(|component| {
+        component.kind == ComponentKind::Lightning
+            && !payment_backends.contains(component.id.as_str())
+    });
+    let direct_backend_peers = links
+        .iter()
+        .filter(|link| {
+            link.kind == LinkKind::LightningPeer
+                && payment_backends.contains(link.from.as_str())
+                && payment_backends.contains(link.to.as_str())
+        })
+        .map(|link| link.id.as_str())
+        .collect::<Vec<_>>();
+    if intermediary_lightning && !direct_backend_peers.is_empty() {
+        warnings.push(format!(
+            "direct_mint_backend_peer: link(s) {} bypass the available forwarding node; routing-fee experiments need backend <-> router <-> backend with no direct backend peer",
+            direct_backend_peers.join(",")
+        ));
+    }
+    let mint_count = components
+        .iter()
+        .filter(|component| component.kind == ComponentKind::Mint)
+        .count();
+    let wallet_count = components
+        .iter()
+        .filter(|component| component.kind == ComponentKind::Wallet)
+        .count();
+    if mint_count >= 2 && wallet_count < 2 {
+        warnings.push(format!(
+            "distinct_payment_wallets_required: {mint_count} mints but only {wallet_count} wallet component(s); bidirectional cross-mint wallet_pay requires distinct payer and recipient wallet components"
+        ));
+    }
+
+    TopologySummary {
+        component_count: u32::try_from(components.len()).unwrap_or(u32::MAX),
+        link_count: u32::try_from(links.len()).unwrap_or(u32::MAX),
+        component_ids,
+        link_ids,
+        backend_link_count: u32::try_from(backend_link_count).unwrap_or(u32::MAX),
+        bound_backend_link_count: u32::try_from(bound_backend_link_count).unwrap_or(u32::MAX),
+        topology_digest: digest_json(&(components, links)),
+        warnings,
+    }
+}
+
+fn lab_validation_result(lab: &LabSpec) -> LabValidationResult {
+    let mut validation = validate_lab(lab);
+    if validation.valid {
+        if let Err(message) = proofstorm_core::resolve_lock(lab, default_catalog()) {
+            validation.valid = false;
+            validation.issues.push(ValidationIssue {
+                code: "publication_preflight_failed".into(),
+                path: "/".into(),
+                message,
+            });
+        }
+    }
+    let summary = topology_summary(lab);
+    LabValidationResult {
+        valid: validation.valid,
+        issues: validation.issues,
+        component_ids: summary.component_ids,
+        link_ids: summary.link_ids,
+        warnings: summary.warnings,
+    }
+}
+
+fn validation_issue_summary(issues: &[ValidationIssue]) -> String {
+    let mut summary = issues
+        .iter()
+        .take(3)
+        .map(|issue| format!("{} at {}: {}", issue.code, issue.path, issue.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if issues.len() > 3 {
+        summary.push_str("; and ");
+        summary.push_str(&(issues.len() - 3).to_string());
+        summary.push_str(" more issue(s)");
+    }
+    summary
 }
 
 fn evidence_export_response(
@@ -3439,6 +5417,10 @@ fn evidence_export_response(
         lock_digest: bundle.content.instance.lock_digest.clone(),
         journal_count: u32::try_from(bundle.content.journal.len()).unwrap_or(u32::MAX),
         artifact_count: u32::try_from(bundle.content.artifacts.len()).unwrap_or(u32::MAX),
+        journal_complete: true,
+        artifact_bodies_optional: true,
+        guidance: "Evidence is complete: the journal covers every action and artifact descriptor. Do not retry merely to make artifact_count equal journal_count; explicit artifact IDs only embed optional full bodies."
+            .into(),
         resource_uri,
         content_included: include_content,
         content: include_content
@@ -3456,6 +5438,50 @@ fn evidence_resource_uri(request: &ArtifactExportRequest, digest: &str) -> Strin
         u8::from(request.include_oracle_artifacts),
         artifact_ids.join(",")
     )
+}
+
+fn encode_quote_cursor(experiment_id: &str, snapshot: u64, sequence: u64) -> String {
+    let digest = digest_json(&(experiment_id, snapshot, sequence));
+    format!("{snapshot}.{sequence}.{}", &digest[7..23])
+}
+
+fn decode_quote_cursor(cursor: &str, experiment_id: &str) -> Result<(u64, u64), ErrorData> {
+    let mut parts = cursor.split('.');
+    let snapshot = parts
+        .next()
+        .and_then(|part| part.parse::<u64>().ok())
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "invalid_wallet_quote_cursor",
+                "wallet quote cursor is invalid",
+            )
+        })?;
+    let sequence = parts
+        .next()
+        .and_then(|part| part.parse::<u64>().ok())
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "invalid_wallet_quote_cursor",
+                "wallet quote cursor is invalid",
+            )
+        })?;
+    let supplied_digest = parts
+        .next()
+        .filter(|_| parts.next().is_none())
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "invalid_wallet_quote_cursor",
+                "wallet quote cursor is invalid",
+            )
+        })?;
+    let expected = encode_quote_cursor(experiment_id, snapshot, sequence);
+    if expected.rsplit_once('.').map(|(_, digest)| digest) != Some(supplied_digest) {
+        return Err(coded_invalid_request(
+            "invalid_wallet_quote_cursor",
+            "wallet quote cursor does not belong to this experiment",
+        ));
+    }
+    Ok((snapshot, sequence))
 }
 
 fn parse_evidence_resource_uri(uri: &str) -> Result<(ArtifactExportRequest, String), ErrorData> {
@@ -3538,15 +5564,15 @@ fn evidence_pointer(
         return Ok(value);
     }
     if !pointer.starts_with('/') {
-        return Err(evidence_error(
+        return Err(coded_invalid_request(
             "evidence_pointer_invalid",
             "JSON Pointer must be empty or start with '/'",
         ));
     }
     value.pointer(pointer).cloned().ok_or_else(|| {
-        evidence_error(
+        coded_invalid_request(
             "evidence_pointer_not_found",
-            &format!("JSON Pointer {pointer:?} does not exist in the {section} section"),
+            format!("JSON Pointer {pointer:?} does not exist in the {section} section"),
         )
     })
 }
@@ -3569,12 +5595,9 @@ fn publish_draft_response(
 }
 
 fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, ErrorData> {
-    if !(1..=MAX_CATALOG_LIST_LIMIT).contains(&request.limit) {
-        return Err(catalog_error(
-            "catalog_limit_invalid",
-            "catalog list limit must be in 1..=50",
-        ));
-    }
+    // Pagination is a resource safeguard, not user intent. Saturate harmless
+    // model guesses instead of spending an agent turn on a recoverable error.
+    let limit = request.limit.clamp(1, MAX_CATALOG_LIST_LIMIT);
     let catalog = default_catalog();
     let catalog_digest = digest_json(&catalog);
     let filter_digest = catalog_filter_digest(request);
@@ -3595,7 +5618,7 @@ fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, Err
             .position(|entry| catalog_cursor(&catalog_digest, &filter_digest, entry) == cursor)
             .map(|position| position + 1)
             .ok_or_else(|| {
-                catalog_error(
+                coded_invalid_request(
                     "catalog_cursor_invalid",
                     "catalog cursor is invalid, stale, or belongs to different filters",
                 )
@@ -3609,7 +5632,7 @@ fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, Err
     let summaries = entries
         .iter()
         .skip(start)
-        .take(usize::try_from(request.limit).unwrap_or(usize::MAX))
+        .take(usize::try_from(limit).unwrap_or(usize::MAX))
         .map(|entry| CatalogEntrySummary {
             id: entry.id.clone(),
             kind: entry.kind,
@@ -3619,6 +5642,8 @@ fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, Err
             protocol_action_adapter_version: entry.protocol_action_adapter_version.clone(),
             config_version: entry.config_version.clone(),
             config_schema_digest: entry.config_schema_digest.clone(),
+            allowed_control: entry.allowed_control.clone(),
+            recommended_control: recommended_control(entry),
             release_channel: entry.release_channel,
             support_lifecycle: entry.support_lifecycle,
         })
@@ -3638,13 +5663,69 @@ fn catalog_page(request: &CatalogListRequest) -> Result<CatalogListResponse, Err
             return Ok(response);
         }
         if end == 0 {
-            return Err(catalog_error(
+            return Err(coded_invalid_request(
                 "catalog_response_too_large",
                 "catalog page envelope exceeds the agent response budget",
             ));
         }
         end -= 1;
     }
+}
+
+fn recommended_control(entry: &CatalogEntry) -> ControlClass {
+    [
+        ControlClass::Target,
+        ControlClass::Laboratory,
+        ControlClass::Attacker,
+        ControlClass::Oracle,
+    ]
+    .into_iter()
+    .find(|control| entry.allowed_control.contains(control))
+    .expect("catalog contract requires at least one allowed control")
+}
+
+fn authorable_config_fields(entry: &CatalogEntry) -> Vec<String> {
+    let mut fields = entry
+        .config_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    fields.sort();
+    fields
+}
+
+fn required_config_fields(entry: &CatalogEntry) -> Vec<String> {
+    let mut fields = entry
+        .config_schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    fields.sort();
+    fields
+}
+
+fn config_defaults(entry: &CatalogEntry) -> BTreeMap<String, serde_json::Value> {
+    entry
+        .config_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|properties| properties.iter())
+        .filter_map(|(name, schema)| {
+            schema
+                .get("default")
+                .cloned()
+                .map(|default| (name.clone(), default))
+        })
+        .collect()
 }
 
 fn catalog_filter_digest(request: &CatalogListRequest) -> String {
@@ -3711,7 +5792,7 @@ fn catalog_config_schema(
     request: CatalogConfigSchemaRequest,
 ) -> Result<CatalogConfigSchemaResponse, ErrorData> {
     if !request.pointer.is_empty() && !request.pointer.starts_with('/') {
-        return Err(catalog_error(
+        return Err(coded_invalid_request(
             "catalog_schema_pointer_invalid",
             "configuration schema pointer must be empty or begin with '/'",
         ));
@@ -3769,9 +5850,9 @@ fn collect_local_schema_references(
                     root
                 } else {
                     root.pointer(pointer).ok_or_else(|| {
-                        catalog_error(
+                        coded_invalid_request(
                             "catalog_schema_reference_invalid",
-                            &format!(
+                            format!(
                                 "configuration schema contains unresolved reference {reference:?}"
                             ),
                         )
@@ -3804,6 +5885,569 @@ fn bounded_agent_response<T: Serialize>(value: T) -> Result<T, ErrorData> {
     Ok(value)
 }
 
+fn compile_lab_plan(request: &LabPlanRequest) -> Result<LabSpec, ErrorData> {
+    let catalog = default_catalog();
+    let (components, selected_entries) = resolve_plan_components(&request.components, catalog)?;
+    validate_plan_runtime_requirements(&request.runtime_requirements, &selected_entries)?;
+    let links = request
+        .connections
+        .iter()
+        .map(|connection| compile_plan_connection(connection, &selected_entries))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(LabSpec {
+        api_version: API_VERSION.into(),
+        name: request.plan_id.clone(),
+        components,
+        links,
+        policy: request.policy.clone(),
+    })
+}
+
+fn validate_plan_runtime_requirements(
+    requirements: &[LabPlanRuntimeRequirement],
+    selected_entries: &BTreeMap<String, &'static CatalogEntry>,
+) -> Result<(), ErrorData> {
+    for requirement in requirements {
+        if requirement.controls.is_empty() {
+            return Err(ErrorData::invalid_request(
+                format!(
+                    "runtime requirement for component {:?} endpoint {:?} has no controls; no plan was stored",
+                    requirement.component, requirement.endpoint
+                ),
+                Some(serde_json::json!({
+                    "code": "lab_plan_runtime_controls_empty",
+                    "component_id": requirement.component,
+                    "endpoint": requirement.endpoint,
+                    "recovery": "remove the empty requirement or list the runtime controls the experiment will execute",
+                })),
+            ));
+        }
+        let entry = plan_endpoint(selected_entries, &requirement.component)?;
+        let endpoint = entry
+            .runtime_endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == requirement.endpoint)
+            .ok_or_else(|| {
+                ErrorData::invalid_request(
+                    format!(
+                        "component {:?} has no runtime endpoint {:?}; no plan was stored",
+                        requirement.component, requirement.endpoint
+                    ),
+                    Some(serde_json::json!({
+                        "code": "lab_plan_runtime_endpoint_not_found",
+                        "component_id": requirement.component,
+                        "implementation": entry.id,
+                        "requested_endpoint": requirement.endpoint,
+                        "available_endpoints": entry.runtime_endpoints,
+                        "recovery": "read the selected catalog entry and choose one advertised runtime endpoint",
+                    })),
+                )
+            })?;
+        let unavailable = requirement
+            .controls
+            .difference(&endpoint.controls)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !unavailable.is_empty() {
+            return Err(ErrorData::invalid_request(
+                format!(
+                    "component {:?} endpoint {:?} cannot execute required control(s) {}; no plan was stored. {}",
+                    requirement.component,
+                    requirement.endpoint,
+                    unavailable.iter().cloned().collect::<Vec<_>>().join(", "),
+                    endpoint.limitations.join("; ")
+                ),
+                Some(serde_json::json!({
+                    "code": "lab_plan_runtime_control_unsupported",
+                    "component_id": requirement.component,
+                    "implementation": entry.id,
+                    "endpoint": endpoint,
+                    "unavailable_controls": unavailable,
+                    "recovery": "choose an implementation endpoint that advertises every required control, or limit the experiment to supported observations",
+                })),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_plan_components(
+    inputs: &[LabPlanComponentInput],
+    catalog: &'static CatalogResponse,
+) -> Result<(Vec<ComponentSpec>, BTreeMap<String, &'static CatalogEntry>), ErrorData> {
+    let mut components = Vec::with_capacity(inputs.len());
+    let mut selected_entries = BTreeMap::new();
+    for input in inputs {
+        let version = match input.version.as_deref() {
+            Some(version) => version,
+            None => catalog
+                .implementations
+                .iter()
+                .find(|support| support.implementation == input.implementation)
+                .map(|support| support.preferred_version.as_str())
+                .ok_or_else(|| {
+                    ErrorData::invalid_request(
+                        format!(
+                            "catalog implementation {:?} is not installed",
+                            input.implementation
+                        ),
+                        Some(serde_json::json!({
+                            "code": "lab_plan_implementation_not_found",
+                            "component_id": input.id,
+                            "requested_implementation": input.implementation,
+                            "available_implementations": catalog.implementations.iter()
+                                .map(|support| support.implementation.as_str())
+                                .collect::<Vec<_>>(),
+                        })),
+                    )
+                })?,
+        };
+        let entry = exact_catalog_entry(&catalog.entries, &input.implementation, version)?;
+        let control = input
+            .control
+            .unwrap_or_else(|| default_plan_control(entry.kind, &entry.allowed_control));
+        if !entry.allowed_control.contains(&control) {
+            return Err(ErrorData::invalid_request(
+                format!(
+                    "component {:?} cannot use control class {control:?}",
+                    input.id
+                ),
+                Some(serde_json::json!({
+                    "code": "lab_plan_control_unsupported",
+                    "component_id": input.id,
+                    "implementation": entry.id,
+                    "allowed_control": entry.allowed_control,
+                })),
+            ));
+        }
+        components.push(ComponentSpec {
+            id: input.id.clone(),
+            kind: entry.kind,
+            implementation: entry.id.clone(),
+            version: Some(entry.version.clone()),
+            config_version: entry.config_version.clone(),
+            control,
+            config: input.config.clone(),
+        });
+        selected_entries.insert(input.id.clone(), entry);
+    }
+    Ok((components, selected_entries))
+}
+
+fn plan_endpoint(
+    selected_entries: &BTreeMap<String, &'static CatalogEntry>,
+    id: &str,
+) -> Result<&'static CatalogEntry, ErrorData> {
+    selected_entries.get(id).copied().ok_or_else(|| {
+        ErrorData::invalid_request(
+            format!("connection references unknown component {id:?}"),
+            Some(serde_json::json!({
+                "code": "lab_plan_connection_endpoint_not_found",
+                "requested_component_id": id,
+                "available_component_ids": selected_entries.keys().collect::<Vec<_>>(),
+            })),
+        )
+    })
+}
+
+fn compile_plan_connection(
+    connection: &LabPlanConnectionInput,
+    selected_entries: &BTreeMap<String, &'static CatalogEntry>,
+) -> Result<LinkSpec, ErrorData> {
+    let link = match connection {
+        LabPlanConnectionInput::BitcoinPeer { id, node_a, node_b } => LinkSpec {
+            id: id.clone(),
+            kind: LinkKind::BitcoinPeer,
+            from: node_a.clone(),
+            to: node_b.clone(),
+            binding: None,
+        },
+        LabPlanConnectionInput::LightningPeer { id, node_a, node_b } => LinkSpec {
+            id: id.clone(),
+            kind: LinkKind::LightningPeer,
+            from: node_a.clone(),
+            to: node_b.clone(),
+            binding: None,
+        },
+        LabPlanConnectionInput::ChainBackend {
+            id,
+            component,
+            chain,
+            network,
+        } => LinkSpec {
+            id: id.clone(),
+            kind: LinkKind::ChainBackend,
+            from: component.clone(),
+            to: chain.clone(),
+            binding: Some(DependencyBinding::Chain {
+                network: network.unwrap_or(BitcoinNetwork::Regtest),
+            }),
+        },
+        LabPlanConnectionInput::PaymentBackend {
+            id,
+            mint,
+            lightning,
+            method,
+            unit,
+        } => {
+            let binding = resolve_plan_payment_binding(
+                id,
+                plan_endpoint(selected_entries, mint)?,
+                plan_endpoint(selected_entries, lightning)?,
+                *method,
+                unit.as_deref(),
+            )?;
+            LinkSpec {
+                id: id.clone(),
+                kind: LinkKind::PaymentBackend,
+                from: mint.clone(),
+                to: lightning.clone(),
+                binding: Some(DependencyBinding::Payment {
+                    method: binding.method,
+                    unit: binding.unit.clone(),
+                }),
+            }
+        }
+        LabPlanConnectionInput::DatabaseBackend {
+            id,
+            component,
+            database,
+            role,
+        } => {
+            let target = plan_endpoint(selected_entries, database)?;
+            LinkSpec {
+                id: id.clone(),
+                kind: LinkKind::DatabaseBackend,
+                from: component.clone(),
+                to: database.clone(),
+                binding: Some(DependencyBinding::Database {
+                    role: role.unwrap_or(
+                        if target.features.contains(&CatalogFeature::RedisCache) {
+                            DatabaseRole::Cache
+                        } else {
+                            DatabaseRole::Primary
+                        },
+                    ),
+                }),
+            }
+        }
+        LabPlanConnectionInput::AuthenticationBackend {
+            id,
+            component,
+            identity_provider,
+            protocol,
+        } => LinkSpec {
+            id: id.clone(),
+            kind: LinkKind::AuthenticationBackend,
+            from: component.clone(),
+            to: identity_provider.clone(),
+            binding: Some(DependencyBinding::Authentication {
+                protocol: protocol.unwrap_or(AuthenticationProtocol::Oidc),
+            }),
+        },
+        LabPlanConnectionInput::NetworkPath { id, source, target } => LinkSpec {
+            id: id.clone(),
+            kind: LinkKind::NetworkPath,
+            from: source.clone(),
+            to: target.clone(),
+            binding: None,
+        },
+    };
+    Ok(link)
+}
+
+fn resolve_plan_payment_binding<'a>(
+    link_id: &str,
+    source: &'a CatalogEntry,
+    target: &CatalogEntry,
+    method: Option<PaymentMethod>,
+    unit: Option<&str>,
+) -> Result<&'a proofstorm_core::CatalogPaymentBindingSupport, ErrorData> {
+    let candidates = source
+        .support_matrix
+        .payment_bindings
+        .iter()
+        .filter(|binding| {
+            binding.backend.implementation == target.id
+                && binding.backend.versions.contains(&target.version)
+                && method.is_none_or(|method| binding.method == method)
+                && unit.is_none_or(|unit| binding.unit == unit)
+        })
+        .collect::<Vec<_>>();
+    if candidates.len() == 1 {
+        return Ok(candidates[0]);
+    }
+    Err(ErrorData::invalid_request(
+        format!(
+            "payment backend connection {link_id:?} has {} compatible binding choices; exactly one is required",
+            candidates.len()
+        ),
+        Some(serde_json::json!({
+            "code": if candidates.is_empty() {
+                "lab_plan_payment_binding_unsupported"
+            } else {
+                "lab_plan_payment_binding_ambiguous"
+            },
+            "link_id": link_id,
+            "from_implementation": source.id,
+            "to_implementation": target.id,
+            "requested_method": method,
+            "requested_unit": unit,
+            "compatible_bindings": source.support_matrix.payment_bindings,
+            "recovery": "choose a compatible backend or specify method and unit when multiple choices remain",
+        })),
+    ))
+}
+
+fn default_plan_control(kind: ComponentKind, allowed: &[ControlClass]) -> ControlClass {
+    let preferred = match kind {
+        ComponentKind::Mint => ControlClass::Target,
+        ComponentKind::Attacker => ControlClass::Attacker,
+        ComponentKind::Oracle => ControlClass::Oracle,
+        ComponentKind::Bitcoin
+        | ComponentKind::Lightning
+        | ComponentKind::Database
+        | ComponentKind::IdentityProvider
+        | ComponentKind::Wallet
+        | ComponentKind::Proxy => ControlClass::Laboratory,
+    };
+    if allowed.contains(&preferred) {
+        preferred
+    } else {
+        allowed.first().copied().unwrap_or(preferred)
+    }
+}
+
+fn resolved_plan_components(lab: &LabSpec) -> Vec<LabPlanResolvedComponent> {
+    lab.components
+        .iter()
+        .map(|component| LabPlanResolvedComponent {
+            id: component.id.clone(),
+            kind: component.kind,
+            implementation: component.implementation.clone(),
+            version: component.version.clone().unwrap_or_default(),
+            config_version: component.config_version.clone(),
+            control: component.control,
+        })
+        .collect()
+}
+
+fn resolved_plan_runtime_endpoints(
+    lab: &LabSpec,
+) -> Result<Vec<LabPlanResolvedRuntimeEndpoint>, ErrorData> {
+    let catalog = default_catalog();
+    lab.components
+        .iter()
+        .flat_map(|component| {
+            let entry = exact_catalog_entry(
+                &catalog.entries,
+                &component.implementation,
+                component.version.as_deref().unwrap_or_default(),
+            );
+            match entry {
+                Ok(entry) => entry
+                    .runtime_endpoints
+                    .iter()
+                    .map(|endpoint| {
+                        Ok(LabPlanResolvedRuntimeEndpoint {
+                            component: component.id.clone(),
+                            endpoint: endpoint.id.clone(),
+                            kind: endpoint.kind.clone(),
+                            controls: endpoint.controls.clone(),
+                            limitations: endpoint.limitations.clone(),
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                Err(error) => vec![Err(error)],
+            }
+        })
+        .collect()
+}
+
+fn preferred_recipe_component(
+    component_id: &str,
+    implementation: &str,
+    control: ControlClass,
+    config: BTreeMap<String, serde_json::Value>,
+) -> Result<ComponentSpec, ErrorData> {
+    let catalog = default_catalog();
+    let version = catalog
+        .implementations
+        .iter()
+        .find(|support| support.implementation == implementation)
+        .map(|support| support.preferred_version.as_str())
+        .ok_or_else(|| {
+            ErrorData::internal_error(
+                format!("built-in recipe implementation {implementation:?} is not installed"),
+                Some(serde_json::json!({"code": "lab_recipe_catalog_entry_missing"})),
+            )
+        })?;
+    let entry = exact_catalog_entry(&catalog.entries, implementation, version)?;
+    if !entry.allowed_control.contains(&control) {
+        return Err(ErrorData::internal_error(
+            format!(
+                "built-in recipe control {control:?} is invalid for {implementation} {version}"
+            ),
+            Some(serde_json::json!({"code": "lab_recipe_control_invalid"})),
+        ));
+    }
+    Ok(ComponentSpec {
+        id: component_id.into(),
+        kind: entry.kind,
+        implementation: entry.id.clone(),
+        version: Some(entry.version.clone()),
+        config_version: entry.config_version.clone(),
+        control,
+        config,
+    })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the recipe keeps one auditable topology declaration together"
+)]
+fn lab_from_recipe(recipe: LabRecipe, name: String) -> Result<LabSpec, ErrorData> {
+    match recipe {
+        LabRecipe::NutshellLndClnRoutingFees => Ok(LabSpec {
+            api_version: API_VERSION.into(),
+            name,
+            components: vec![
+                preferred_recipe_component(
+                    "bitcoin-core",
+                    "bitcoin-core",
+                    ControlClass::Laboratory,
+                    BTreeMap::new(),
+                )?,
+                preferred_recipe_component(
+                    "lnd-backend",
+                    "lnd",
+                    ControlClass::Laboratory,
+                    BTreeMap::from([("alias".into(), serde_json::json!("lnd-backend"))]),
+                )?,
+                preferred_recipe_component(
+                    "lnd-router",
+                    "lnd",
+                    ControlClass::Laboratory,
+                    BTreeMap::from([("alias".into(), serde_json::json!("lnd-router"))]),
+                )?,
+                preferred_recipe_component(
+                    "cln-backend",
+                    "cln",
+                    ControlClass::Laboratory,
+                    BTreeMap::from([("alias".into(), serde_json::json!("cln-backend"))]),
+                )?,
+                preferred_recipe_component(
+                    "mint-lnd",
+                    "nutshell",
+                    ControlClass::Target,
+                    BTreeMap::from([(
+                        "name".into(),
+                        serde_json::json!("Nutshell mint backed by LND"),
+                    )]),
+                )?,
+                preferred_recipe_component(
+                    "mint-cln",
+                    "nutshell",
+                    ControlClass::Target,
+                    BTreeMap::from([(
+                        "name".into(),
+                        serde_json::json!("Nutshell mint backed by CLN"),
+                    )]),
+                )?,
+                preferred_recipe_component(
+                    "payer-lnd",
+                    "nutshell-wallet",
+                    ControlClass::Laboratory,
+                    BTreeMap::new(),
+                )?,
+                preferred_recipe_component(
+                    "recipient-lnd",
+                    "nutshell-wallet",
+                    ControlClass::Laboratory,
+                    BTreeMap::new(),
+                )?,
+                preferred_recipe_component(
+                    "payer-cln",
+                    "nutshell-wallet",
+                    ControlClass::Laboratory,
+                    BTreeMap::new(),
+                )?,
+                preferred_recipe_component(
+                    "recipient-cln",
+                    "nutshell-wallet",
+                    ControlClass::Laboratory,
+                    BTreeMap::new(),
+                )?,
+            ],
+            links: vec![
+                LinkSpec {
+                    id: "lnd-chain".into(),
+                    kind: LinkKind::ChainBackend,
+                    from: "lnd-backend".into(),
+                    to: "bitcoin-core".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: BitcoinNetwork::Regtest,
+                    }),
+                },
+                LinkSpec {
+                    id: "router-chain".into(),
+                    kind: LinkKind::ChainBackend,
+                    from: "lnd-router".into(),
+                    to: "bitcoin-core".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: BitcoinNetwork::Regtest,
+                    }),
+                },
+                LinkSpec {
+                    id: "cln-chain".into(),
+                    kind: LinkKind::ChainBackend,
+                    from: "cln-backend".into(),
+                    to: "bitcoin-core".into(),
+                    binding: Some(DependencyBinding::Chain {
+                        network: BitcoinNetwork::Regtest,
+                    }),
+                },
+                LinkSpec {
+                    id: "lnd-router-peer".into(),
+                    kind: LinkKind::LightningPeer,
+                    from: "lnd-backend".into(),
+                    to: "lnd-router".into(),
+                    binding: None,
+                },
+                LinkSpec {
+                    id: "router-cln-peer".into(),
+                    kind: LinkKind::LightningPeer,
+                    from: "lnd-router".into(),
+                    to: "cln-backend".into(),
+                    binding: None,
+                },
+                LinkSpec {
+                    id: "mint-lnd-payment".into(),
+                    kind: LinkKind::PaymentBackend,
+                    from: "mint-lnd".into(),
+                    to: "lnd-backend".into(),
+                    binding: Some(DependencyBinding::Payment {
+                        method: PaymentMethod::Bolt11,
+                        unit: "sat".into(),
+                    }),
+                },
+                LinkSpec {
+                    id: "mint-cln-payment".into(),
+                    kind: LinkKind::PaymentBackend,
+                    from: "mint-cln".into(),
+                    to: "cln-backend".into(),
+                    binding: Some(DependencyBinding::Payment {
+                        method: PaymentMethod::Bolt11,
+                        unit: "sat".into(),
+                    }),
+                },
+            ],
+            policy: LabPolicy::default(),
+        }),
+    }
+}
+
 fn serialized_size(value: &impl Serialize) -> Result<usize, ErrorData> {
     serde_json::to_vec(value)
         .map(|encoded| encoded.len())
@@ -3813,10 +6457,6 @@ fn serialized_size(value: &impl Serialize) -> Result<usize, ErrorData> {
                 Some(serde_json::json!({"code": "response_serialization_failed"})),
             )
         })
-}
-
-fn catalog_error(code: &str, message: &str) -> ErrorData {
-    ErrorData::invalid_request(message.to_owned(), Some(serde_json::json!({"code": code})))
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -3833,7 +6473,7 @@ impl ServerHandler for ProofstormMcp {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Use compact list and receipt tools for discovery. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection.",
+            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. Proofstorm resolves preferred versions, kinds, controls, config contracts, and unambiguous dependency bindings. Verify the returned normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. After readiness, create one experiment and lease, use typed runtime operations, release the lease, close the experiment, export evidence, and close and await the lab. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection.",
         )
     }
 
@@ -3901,7 +6541,20 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             "proofstorm_network_capabilities",
             &[Capability::CatalogRead],
         ),
+        (
+            "proofstorm_lab_plan",
+            &[Capability::CatalogRead, Capability::LabCreate],
+        ),
+        (
+            "proofstorm_lab_apply",
+            &[
+                Capability::LabRead,
+                Capability::LabPublish,
+                Capability::LabMaterialize,
+            ],
+        ),
         ("proofstorm_lab_create", &[Capability::LabCreate]),
+        ("proofstorm_lab_recipe_create", &[Capability::LabCreate]),
         ("proofstorm_lab_read", &[Capability::LabRead]),
         ("proofstorm_lab_edit", &[Capability::LabEdit]),
         (
@@ -3952,12 +6605,45 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     ]
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the runtime discovery contract deliberately lists every tool and required grant"
+)]
 fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
         ("proofstorm_node_start", &[Capability::NodeControl]),
         ("proofstorm_node_stop", &[Capability::NodeControl]),
         ("proofstorm_node_restart", &[Capability::NodeControl]),
         ("proofstorm_component_exec", &[Capability::ComponentExec]),
+        (
+            "proofstorm_lab_recipe_bootstrap",
+            &[
+                Capability::ChainMine,
+                Capability::WalletFund,
+                Capability::PeerConnect,
+                Capability::ChannelOpen,
+            ],
+        ),
+        (
+            "proofstorm_lab_recipe_route_channel_open",
+            &[
+                Capability::ChannelOpen,
+                Capability::ChainMine,
+                Capability::ExperimentRead,
+            ],
+        ),
+        (
+            "proofstorm_lab_recipe_fee_matrix_run",
+            &[
+                Capability::WalletCreate,
+                Capability::WalletFund,
+                Capability::WalletControl,
+                Capability::ChannelOpen,
+                Capability::ExperimentRead,
+                Capability::ArtifactRead,
+                Capability::OracleRun,
+            ],
+        ),
         (
             "proofstorm_liquidity_bootstrap",
             &[
@@ -3967,11 +6653,22 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
                 Capability::ChannelOpen,
             ],
         ),
-        ("proofstorm_peer_connect", &[Capability::PeerConnect]),
+        (
+            "proofstorm_peer_connect",
+            &[Capability::PeerConnect, Capability::ExperimentRead],
+        ),
         ("proofstorm_peer_disconnect", &[Capability::PeerDisconnect]),
         (
             "proofstorm_channel_open",
-            &[Capability::ChannelOpen, Capability::ChainMine],
+            &[
+                Capability::ChannelOpen,
+                Capability::ChainMine,
+                Capability::ExperimentRead,
+            ],
+        ),
+        (
+            "proofstorm_channel_policy_set",
+            &[Capability::ChannelOpen, Capability::ExperimentRead],
         ),
         (
             "proofstorm_channel_close",
@@ -3996,9 +6693,26 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("proofstorm_wallet_balance", &[Capability::WalletControl]),
         ("proofstorm_wallet_fund", &[Capability::WalletFund]),
         ("proofstorm_wallet_invoice", &[Capability::WalletFund]),
+        ("proofstorm_component_logs", &[Capability::ComponentLogs]),
+        (
+            "proofstorm_authentication_conformance",
+            &[Capability::AuthenticationTest],
+        ),
+        (
+            "proofstorm_authentication_protected_spend",
+            &[Capability::AuthenticationTest],
+        ),
+        (
+            "proofstorm_authentication_replay",
+            &[Capability::AuthenticationTest, Capability::ArtifactRead],
+        ),
         (
             "proofstorm_wallet_pay",
             &[Capability::WalletControl, Capability::ArtifactRead],
+        ),
+        (
+            "proofstorm_wallet_quote_claim",
+            &[Capability::WalletControl],
         ),
         (
             "proofstorm_wallet_round_trip",
@@ -4008,11 +6722,18 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
                 Capability::WalletControl,
             ],
         ),
-        ("proofstorm_conservation_oracle", &[Capability::OracleRun]),
+        (
+            "proofstorm_conservation_oracle",
+            &[Capability::OracleRun, Capability::ArtifactRead],
+        ),
         ("proofstorm_reachability_oracle", &[Capability::OracleRun]),
         ("proofstorm_action_cancel", &[Capability::ActionCancel]),
         ("proofstorm_operation_status", &[Capability::ArtifactRead]),
         ("proofstorm_operation_wait", &[Capability::ArtifactRead]),
+        (
+            "proofstorm_operation_wait_many",
+            &[Capability::ArtifactRead],
+        ),
         ("proofstorm_action_list", &[Capability::ExperimentRead]),
         (
             "proofstorm_artifact_export",
@@ -4034,64 +6755,12 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     ]
 }
 
-fn wallet_quote_recovery_outcome(
-    kind: OperationKind,
-    operation_phase: OperationPhase,
-    quote_phase: WalletQuotePhase,
-    artifact_code: &str,
-) -> Option<(WalletQuotePhase, Option<&str>)> {
-    if quote_phase.is_terminal()
-        || matches!(
-            operation_phase,
-            OperationPhase::Pending | OperationPhase::Running
-        )
-    {
-        return None;
-    }
-    match (kind, operation_phase) {
-        (OperationKind::WalletInvoice, OperationPhase::Succeeded) => {
-            Some((WalletQuotePhase::Settled, None))
-        }
-        (OperationKind::WalletPay, OperationPhase::Succeeded) => {
-            Some((WalletQuotePhase::Paid, None))
-        }
-        (_, OperationPhase::Cancelled)
-            if matches!(
-                quote_phase,
-                WalletQuotePhase::Requested | WalletQuotePhase::Ready
-            ) =>
-        {
-            Some((WalletQuotePhase::Cancelled, Some("action_cancelled")))
-        }
-        (_, OperationPhase::Cancelled) => Some((
-            WalletQuotePhase::Inconclusive,
-            Some("payment_state_inconclusive"),
-        )),
-        (_, OperationPhase::Failed)
-            if matches!(
-                quote_phase,
-                WalletQuotePhase::Pending | WalletQuotePhase::Paid | WalletQuotePhase::Inconclusive
-            ) || matches!(
-                artifact_code,
-                "action_job_lost" | "terminal_artifact_missing"
-            ) =>
-        {
-            Some((WalletQuotePhase::Inconclusive, Some(artifact_code)))
-        }
-        (_, OperationPhase::Failed) if artifact_code == "action_deadline_exceeded" => {
-            Some((WalletQuotePhase::Expired, Some("action_deadline_exceeded")))
-        }
-        (_, OperationPhase::Failed) => Some((WalletQuotePhase::Failed, Some(artifact_code))),
-        _ => None,
-    }
-}
-
 impl ProofstormMcp {
     fn runtime(&self) -> Result<&KubernetesRuntime, ErrorData> {
         self.kubernetes.as_ref().ok_or_else(|| {
-            ErrorData::invalid_request(
+            coded_invalid_request(
+                "runtime_unavailable",
                 "Kubernetes runtime is not configured",
-                Some(serde_json::json!({"code": "runtime_unavailable"})),
             )
         })
     }
@@ -4231,60 +6900,73 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    fn sync_wallet_quote_operation(&self, operation: &LabOperation) -> Result<(), ErrorData> {
-        if !matches!(
-            operation.kind,
-            OperationKind::WalletInvoice | OperationKind::WalletPay
-        ) || matches!(
-            operation.phase,
-            OperationPhase::Pending | OperationPhase::Running
-        ) {
-            return Ok(());
-        }
-        let Some(quote_id) = operation.request["quote_id"].as_str() else {
-            return Err(ErrorData::internal_error(
-                "wallet quote operation has no quote identity",
-                Some(serde_json::json!({"code": "quote_identity_missing"})),
-            ));
-        };
-        let artifact_code = operation
-            .artifact
-            .as_ref()
-            .and_then(|artifact| artifact.content["code"].as_str())
-            .unwrap_or("action_failed");
-        for _ in 0..3 {
-            let quote = self
-                .store
-                .wallet_quote(&self.workspace, &self.principal, quote_id)
-                .map_err(store_error)?;
-            if quote.phase.is_terminal() {
-                return Ok(());
+    /// Refuse peer/channel actions until the experiment's chain and initial
+    /// LND liquidity have been initialized. This check happens before the
+    /// requested action is journaled, so a premature call cannot consume an
+    /// action sequence or become an opaque Kubernetes failure.
+    fn require_liquidity_bootstrap(
+        &self,
+        experiment_id: &str,
+        instance_id: &str,
+    ) -> Result<LabOperation, ErrorData> {
+        let actions = self
+            .store
+            .actions(&self.workspace, &self.principal, experiment_id, 0, 100)
+            .map_err(store_error)?;
+        let bootstrap = actions.into_iter().rev().find(|action| {
+            action.instance_id == instance_id && action.kind == OperationKind::BootstrapLiquidity
+        });
+        match bootstrap {
+            Some(action) if action.phase == OperationPhase::Succeeded => Ok(action),
+            Some(action)
+                if matches!(
+                    action.phase,
+                    OperationPhase::Pending | OperationPhase::Running
+                ) =>
+            {
+                let operation_id = action.id;
+                Err(ErrorData::invalid_request(
+                    format!(
+                        "liquidity bootstrap operation {operation_id:?} is not terminal; wait for it to succeed before connecting peers or opening channels"
+                    ),
+                    Some(serde_json::json!({
+                        "code": "runtime_initialization_in_progress",
+                        "operation_id": operation_id,
+                        "next_tool": "proofstorm_operation_wait"
+                    })),
+                ))
             }
-            let Some((next, terminal_code)) = wallet_quote_recovery_outcome(
-                operation.kind,
-                operation.phase,
-                quote.phase,
-                artifact_code,
-            ) else {
-                return Ok(());
-            };
-            match self.store.transition_wallet_quote(
-                &self.workspace,
-                quote_id,
-                quote.phase,
-                next,
-                None,
-                terminal_code,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(StoreError::StaleQuote { .. }) => {}
-                Err(error) => return Err(store_error(error)),
+            Some(action) => {
+                let operation_id = action.id;
+                Err(ErrorData::invalid_request(
+                    format!(
+                        "liquidity bootstrap operation {operation_id:?} did not succeed; inspect its artifact, then submit a new liquidity_bootstrap operation"
+                    ),
+                    Some(serde_json::json!({
+                        "code": "runtime_initialization_failed",
+                        "operation_id": operation_id,
+                        "next_tool": "proofstorm_operation_status",
+                        "recovery_tool": "proofstorm_liquidity_bootstrap"
+                    })),
+                ))
             }
+            None => Err(ErrorData::invalid_request(
+                "regtest infrastructure is running but Lightning is not initialized; call proofstorm_liquidity_bootstrap with the Bitcoin component and two LND components, wait for it to succeed, then connect peers and open any additional LND/CLN channels",
+                Some(serde_json::json!({
+                    "code": "runtime_initialization_required",
+                    "next_tool": "proofstorm_liquidity_bootstrap",
+                    "required_sequence": [
+                        "proofstorm_liquidity_bootstrap",
+                        "proofstorm_operation_wait",
+                        "proofstorm_peer_connect",
+                        "proofstorm_operation_wait",
+                        "proofstorm_channel_open",
+                        "proofstorm_operation_wait"
+                    ],
+                    "mixed_backend_hint": "bootstrap the LND-LND edge first; then open the LND-to-CLN edge from the funded LND node"
+                })),
+            )),
         }
-        Err(ErrorData::invalid_request(
-            "wallet quote changed repeatedly while synchronizing action status",
-            Some(serde_json::json!({"code": "stale_quote"})),
-        ))
     }
 
     #[allow(
@@ -4334,49 +7016,62 @@ fn component_image(
     kind: ComponentKind,
     implementation: &str,
 ) -> Result<String, ErrorData> {
+    let valid_component_ids = || valid_component_ids(revision, kind, Some(implementation));
     let Some(component) = revision
         .lab
         .components
         .iter()
         .find(|component| component.id == id)
     else {
-        return Err(invalid_operation(&format!(
-            "component {id:?} is not part of this lab revision"
-        )));
-    };
-    if component.kind != kind || component.implementation != implementation {
-        return Err(invalid_operation(&format!(
-            "component {id:?} must be a {kind:?} component using {implementation:?}"
-        )));
-    }
-    revision
-        .lock
-        .entries
-        .iter()
-        .find(|entry| entry.component_id == id)
-        .map(|entry| entry.image.clone())
-        .ok_or_else(|| invalid_operation(&format!("component {id:?} has no immutable lock entry")))
-}
-
-fn component_image_any(
-    revision: &PublishedRevision,
-    id: &str,
-    kind: ComponentKind,
-) -> Result<String, ErrorData> {
-    let Some(component) = revision
-        .lab
-        .components
-        .iter()
-        .find(|component| component.id == id)
-    else {
-        return Err(invalid_operation(&format!(
-            "component {id:?} is not part of this lab revision"
-        )));
+        let valid_component_ids = valid_component_ids();
+        return Err(ErrorData::invalid_request(
+            format!(
+                "component {id:?} is not in this revision; expected {} using {implementation:?}; valid component IDs: {valid_component_ids:?}",
+                component_kind_name(kind)
+            ),
+            Some(serde_json::json!({
+                "code": "component_id_unknown",
+                "requested_id": id,
+                "expected_kind": kind,
+                "expected_implementation": implementation,
+                "valid_component_ids": valid_component_ids,
+            })),
+        ));
     };
     if component.kind != kind {
-        return Err(invalid_operation(&format!(
-            "component {id:?} must be a {kind:?} component"
-        )));
+        let valid_component_ids = valid_component_ids();
+        return Err(ErrorData::invalid_request(
+            format!(
+                "component {id:?} is {}; expected {} using {implementation:?}; valid component IDs: {valid_component_ids:?}",
+                component_kind_name(component.kind),
+                component_kind_name(kind)
+            ),
+            Some(serde_json::json!({
+                "code": "component_kind_mismatch",
+                "requested_id": id,
+                "actual_kind": component.kind,
+                "expected_kind": kind,
+                "expected_implementation": implementation,
+                "valid_component_ids": valid_component_ids,
+            })),
+        ));
+    }
+    if component.implementation != implementation {
+        let valid_component_ids = valid_component_ids();
+        return Err(ErrorData::invalid_request(
+            format!(
+                "component {id:?} uses {:?}; expected {implementation:?}; valid component IDs: {valid_component_ids:?}",
+                component.implementation
+            ),
+            Some(serde_json::json!({
+                "code": "component_implementation_mismatch",
+                "requested_id": id,
+                "actual_implementation": component.implementation,
+                "expected_kind": kind,
+                "expected_implementation": implementation,
+                "valid_component_ids": valid_component_ids,
+            })),
+        ));
     }
     revision
         .lock
@@ -4384,7 +7079,192 @@ fn component_image_any(
         .iter()
         .find(|entry| entry.component_id == id && entry.catalog_id == component.implementation)
         .map(|entry| entry.image.clone())
-        .ok_or_else(|| invalid_operation(&format!("component {id:?} has no immutable lock entry")))
+        .ok_or_else(|| revision_integrity_error(id))
+}
+
+fn component_image_any(
+    revision: &PublishedRevision,
+    id: &str,
+    kind: ComponentKind,
+) -> Result<String, ErrorData> {
+    let valid_component_ids = || valid_component_ids(revision, kind, None);
+    let Some(component) = revision
+        .lab
+        .components
+        .iter()
+        .find(|component| component.id == id)
+    else {
+        let valid_component_ids = valid_component_ids();
+        return Err(ErrorData::invalid_request(
+            format!(
+                "component {id:?} is not in this revision; expected {}; valid component IDs: {valid_component_ids:?}",
+                component_kind_name(kind)
+            ),
+            Some(serde_json::json!({
+                "code": "component_id_unknown",
+                "requested_id": id,
+                "expected_kind": kind,
+                "valid_component_ids": valid_component_ids,
+            })),
+        ));
+    };
+    if component.kind != kind {
+        let valid_component_ids = valid_component_ids();
+        return Err(ErrorData::invalid_request(
+            format!(
+                "component {id:?} is {}; expected {}; valid component IDs: {valid_component_ids:?}",
+                component_kind_name(component.kind),
+                component_kind_name(kind)
+            ),
+            Some(serde_json::json!({
+                "code": "component_kind_mismatch",
+                "requested_id": id,
+                "actual_kind": component.kind,
+                "expected_kind": kind,
+                "valid_component_ids": valid_component_ids,
+            })),
+        ));
+    }
+    revision
+        .lock
+        .entries
+        .iter()
+        .find(|entry| entry.component_id == id && entry.catalog_id == component.implementation)
+        .map(|entry| entry.image.clone())
+        .ok_or_else(|| revision_integrity_error(id))
+}
+
+fn require_component_runtime_control(
+    revision: &PublishedRevision,
+    component_id: &str,
+    endpoint_id: &str,
+    control: &str,
+) -> Result<(), ErrorData> {
+    let component = revision
+        .lab
+        .components
+        .iter()
+        .find(|component| component.id == component_id)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "component_id_unknown",
+                format!("component {component_id:?} is not in this revision"),
+            )
+        })?;
+    let entry = exact_catalog_entry(
+        &default_catalog().entries,
+        &component.implementation,
+        component.version.as_deref().unwrap_or_default(),
+    )?;
+    let endpoint = entry
+        .runtime_endpoints
+        .iter()
+        .find(|endpoint| endpoint.id == endpoint_id)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "runtime_endpoint_not_found",
+                format!("component {component_id:?} has no runtime endpoint {endpoint_id:?}"),
+            )
+        })?;
+    if endpoint.controls.contains(control) {
+        return Ok(());
+    }
+    Err(ErrorData::invalid_request(
+        format!(
+            "component {component_id:?} endpoint {endpoint_id:?} cannot execute {control:?}; no operation was created. {}",
+            endpoint.limitations.join("; ")
+        ),
+        Some(serde_json::json!({
+            "code": "runtime_control_unsupported",
+            "component_id": component_id,
+            "implementation": entry.id,
+            "endpoint": endpoint,
+            "requested_control": control,
+            "recovery": "choose a component endpoint that advertises the required runtime control",
+        })),
+    ))
+}
+
+fn valid_component_ids(
+    revision: &PublishedRevision,
+    kind: ComponentKind,
+    implementation: Option<&str>,
+) -> Vec<String> {
+    let mut ids = revision
+        .lab
+        .components
+        .iter()
+        .filter(|component| {
+            component.kind == kind
+                && implementation.is_none_or(|expected| component.implementation == expected)
+        })
+        .map(|component| component.id.clone())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+const fn component_kind_name(kind: ComponentKind) -> &'static str {
+    match kind {
+        ComponentKind::Bitcoin => "bitcoin",
+        ComponentKind::Lightning => "lightning",
+        ComponentKind::Mint => "mint",
+        ComponentKind::Database => "database",
+        ComponentKind::IdentityProvider => "identity_provider",
+        ComponentKind::Wallet => "wallet",
+        ComponentKind::Attacker => "attacker",
+        ComponentKind::Proxy => "proxy",
+        ComponentKind::Oracle => "oracle",
+    }
+}
+
+fn revision_integrity_error(component_id: &str) -> ErrorData {
+    ErrorData::internal_error(
+        format!(
+            "published revision has no matching immutable lock entry for component {component_id:?}"
+        ),
+        Some(serde_json::json!({
+            "code": "revision_integrity_error",
+            "component_id": component_id,
+        })),
+    )
+}
+
+fn validate_authentication_components(
+    revision: &PublishedRevision,
+    mint: &str,
+    identity_provider: &str,
+) -> Result<(), ErrorData> {
+    component_image(revision, mint, ComponentKind::Mint, "nutshell")?;
+    component_image(
+        revision,
+        identity_provider,
+        ComponentKind::IdentityProvider,
+        "keycloak",
+    )?;
+    let links = revision
+        .lab
+        .links
+        .iter()
+        .filter(|link| {
+            link.kind == LinkKind::AuthenticationBackend
+                && link.from == mint
+                && link.to == identity_provider
+                && matches!(
+                    link.binding.as_ref(),
+                    Some(proofstorm_core::DependencyBinding::Authentication {
+                        protocol: AuthenticationProtocol::Oidc
+                    })
+                )
+        })
+        .count();
+    if links == 1 {
+        Ok(())
+    } else {
+        Err(invalid_operation(&format!(
+            "authentication conformance requires exactly one OIDC link from {mint:?} to {identity_provider:?}"
+        )))
+    }
 }
 
 fn runtime_action_resource(
@@ -4429,6 +7309,11 @@ fn runtime_action_resource(
     resource
 }
 
+/// On-chain headroom the bootstrap keeps for the channel funding transaction
+/// fee. Regtest funding transactions settle for a few thousand satoshis; this
+/// is deliberately generous relative to the 20,000 sat minimum channel.
+const BOOTSTRAP_FUNDING_MARGIN_SAT: u64 = 10_000;
+
 fn validate_bootstrap_bounds(request: &BootstrapLiquidityRequest) -> Result<(), ErrorData> {
     if !(1..=1_000_000_000).contains(&request.funding_sat) {
         return Err(invalid_operation(
@@ -4440,9 +7325,20 @@ fn validate_bootstrap_bounds(request: &BootstrapLiquidityRequest) -> Result<(), 
             "channel_sat must be between 20,000 and 100,000,000",
         ));
     }
-    if request.channel_sat > request.funding_sat || request.push_sat > request.channel_sat / 2 {
-        return Err(invalid_operation(
-            "channel_sat cannot exceed funding_sat and push_sat cannot exceed half the channel",
+    if request.push_sat > request.channel_sat / 2 {
+        return Err(invalid_operation("push_sat cannot exceed half the channel"));
+    }
+    // The funding transaction pays a miner fee out of the same on-chain output,
+    // so a channel equal to the funding amount always fails inside the Job with
+    // an insufficient-funds error that only reaches the node's own log.
+    if request.channel_sat + BOOTSTRAP_FUNDING_MARGIN_SAT > request.funding_sat {
+        return Err(coded_invalid_request(
+            "insufficient_funding_margin",
+            format!(
+                "funding_sat must exceed channel_sat by at least {BOOTSTRAP_FUNDING_MARGIN_SAT} sat to pay the funding transaction fee; channel_sat {} needs funding_sat of at least {}",
+                request.channel_sat,
+                request.channel_sat + BOOTSTRAP_FUNDING_MARGIN_SAT
+            ),
         ));
     }
     if request.mint_lightning == request.payer_lightning {
@@ -4460,6 +7356,44 @@ fn validate_lightning_pair(from: &str, to: &str) -> Result<(), ErrorData> {
         ));
     }
     Ok(())
+}
+
+fn validate_wallet_fund_payer(
+    lab: &LabSpec,
+    mint: &str,
+    payer_lightning: &str,
+) -> Result<(), ErrorData> {
+    let is_own_backend = lab.links.iter().any(|link| {
+        link.kind == LinkKind::PaymentBackend && link.from == mint && link.to == payer_lightning
+    });
+    if !is_own_backend {
+        return Ok(());
+    }
+
+    let eligible = lab
+        .components
+        .iter()
+        .filter(|component| {
+            component.kind == ComponentKind::Lightning
+                && component.implementation == "lnd"
+                && component.id != payer_lightning
+        })
+        .map(|component| component.id.as_str())
+        .collect::<Vec<_>>();
+    let suggestion = if eligible.is_empty() {
+        "add a distinct LND payer node".to_owned()
+    } else {
+        format!(
+            "use one of these distinct LND payer nodes: {}",
+            eligible.join(", ")
+        )
+    };
+    Err(coded_invalid_request(
+        "self_payment_unsupported",
+        format!(
+            "payer_lightning {payer_lightning:?} is the payment backend for mint {mint:?} and cannot pay its own invoice; {suggestion}"
+        ),
+    ))
 }
 
 fn validate_network_pair(from: &str, to: &str) -> Result<(), ErrorData> {
@@ -4536,6 +7470,68 @@ fn validate_channel_bounds(channel_sat: u64, push_sat: u64) -> Result<(), ErrorD
     Ok(())
 }
 
+fn validate_channel_funding_admission(
+    request: &ChannelOpenRequest,
+    bootstrap_operation: &LabOperation,
+) -> Result<(), ErrorData> {
+    let bootstrap =
+        serde_json::from_value::<StoredBootstrapFunding>(bootstrap_operation.request.clone())
+            .map_err(|_| {
+                ErrorData::internal_error(
+                    "stored liquidity bootstrap request does not match its typed contract",
+                    Some(serde_json::json!({
+                        "code": "bootstrap_request_contract_violation",
+                        "operation_id": bootstrap_operation.id,
+                    })),
+                )
+            })?;
+    let prior_channel_sat = if request.from_lightning == bootstrap.payer_lightning {
+        bootstrap.channel_sat
+    } else if request.from_lightning == bootstrap.mint_lightning {
+        0
+    } else {
+        return Err(ErrorData::invalid_request(
+            format!(
+                "channel funding for {:?} is not established by the succeeded liquidity bootstrap; open the channel from a funded bootstrap LND component",
+                request.from_lightning
+            ),
+            Some(serde_json::json!({
+                "code": "channel_funding_source_unproven",
+                "bootstrap_operation_id": bootstrap_operation.id,
+                "requested_from": request.from_lightning,
+                "funded_components": [bootstrap.payer_lightning, bootstrap.mint_lightning],
+                "recommended_from": bootstrap.payer_lightning,
+                "next_tool": "proofstorm_channel_open",
+            })),
+        ));
+    };
+    let safe_channel_sat = bootstrap
+        .funding_sat
+        .saturating_sub(prior_channel_sat)
+        .saturating_sub(BOOTSTRAP_FUNDING_MARGIN_SAT);
+    if request.channel_sat <= safe_channel_sat {
+        return Ok(());
+    }
+    Err(ErrorData::invalid_request(
+        format!(
+            "channel_sat {} exceeds the safe remaining on-chain budget of {safe_channel_sat} sat for {:?}; retry with channel_sat <= {safe_channel_sat}",
+            request.channel_sat, request.from_lightning
+        ),
+        Some(serde_json::json!({
+            "code": "insufficient_channel_funding_margin",
+            "bootstrap_operation_id": bootstrap_operation.id,
+            "from_lightning": request.from_lightning,
+            "funding_sat": bootstrap.funding_sat,
+            "prior_channel_sat": prior_channel_sat,
+            "reserved_fee_margin_sat": BOOTSTRAP_FUNDING_MARGIN_SAT,
+            "requested_channel_sat": request.channel_sat,
+            "safe_max_channel_sat": safe_channel_sat,
+            "recommended_channel_sat": safe_channel_sat,
+            "next_tool": "proofstorm_channel_open",
+        })),
+    ))
+}
+
 fn validate_channel_id(channel_id: &str) -> Result<(), ErrorData> {
     let digest = channel_id.strip_prefix("ch-").unwrap_or_default();
     if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -4584,13 +7580,255 @@ fn validate_wallet_amount(amount_sat: u64) -> Result<(), ErrorData> {
     Ok(())
 }
 
-fn validate_oracle_bounds(request: &ConservationOracleRequest) -> Result<(), ErrorData> {
-    if request.expected_sat > 100_000_000 || request.tolerance_sat > 10_000 {
-        return Err(invalid_operation(
-            "expected_sat cannot exceed 100,000,000 and tolerance_sat cannot exceed 10,000",
+fn conservation_observation(
+    request: &ConservationOracleRequest,
+    baseline: &LabOperation,
+    treatment: &LabOperation,
+    workspace: &str,
+    principal: &str,
+) -> Result<serde_json::Value, ErrorData> {
+    let same_scope = |operation: &LabOperation| {
+        operation.workspace_id == workspace
+            && operation.principal_id == principal
+            && operation.instance_id == request.instance_id
+            && operation.experiment_id == request.experiment_id
+    };
+    if baseline.id != request.baseline_operation_id
+        || baseline.kind != OperationKind::WalletBalance
+        || baseline.phase != OperationPhase::Succeeded
+        || !same_scope(baseline)
+        || baseline
+            .request
+            .get("wallet")
+            .and_then(serde_json::Value::as_str)
+            != Some(request.wallet.as_str())
+        || baseline
+            .request
+            .get("mint")
+            .and_then(serde_json::Value::as_str)
+            != Some(request.mint.as_str())
+    {
+        return Err(coded_invalid_request(
+            "conservation_baseline_invalid",
+            "baseline_operation_id must name an earlier successful wallet_balance for the same principal, instance, experiment, wallet, and mint",
         ));
     }
-    Ok(())
+    if treatment.id != request.treatment_operation_id
+        || treatment.kind != OperationKind::WalletPay
+        || treatment.phase != OperationPhase::Succeeded
+        || !same_scope(treatment)
+        || treatment.sequence <= baseline.sequence
+        || treatment
+            .request
+            .get("wallet")
+            .and_then(serde_json::Value::as_str)
+            != Some(request.wallet.as_str())
+        || treatment
+            .request
+            .get("mint")
+            .and_then(serde_json::Value::as_str)
+            != Some(request.mint.as_str())
+    {
+        return Err(coded_invalid_request(
+            "conservation_treatment_invalid",
+            "treatment_operation_id must name a later successful wallet_pay for the same principal, instance, experiment, wallet, and mint; wallet_round_trip is not balance-invariant because it mints external value first",
+        ));
+    }
+    let baseline_sat = baseline
+        .artifact
+        .as_ref()
+        .and_then(|artifact| artifact.content.get("balance_sat"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "conservation_baseline_artifact_invalid",
+                "the baseline wallet_balance artifact has no unsigned balance_sat",
+            )
+        })?;
+    if baseline_sat > 100_000_000 {
+        return Err(coded_invalid_request(
+            "conservation_baseline_out_of_bounds",
+            "the baseline balance_sat cannot exceed 100,000,000",
+        ));
+    }
+    let treatment = conservation_treatment_evidence(request, treatment, baseline_sat)?;
+    let delta_sat = treatment.expected_sat.abs_diff(treatment.actual_sat);
+    Ok(serde_json::json!({
+        "baseline_operation_id": request.baseline_operation_id,
+        "treatment_operation_id": request.treatment_operation_id,
+        "baseline_sat": baseline_sat,
+        "melt_state": treatment.melt_state,
+        "amount_sat": treatment.amount_sat,
+        "fee_paid_sat": treatment.fee_paid_sat,
+        "input_fee_sat": treatment.input_fee_sat,
+        "input_proof_count": treatment.input_proof_count,
+        "expected_sat": treatment.expected_sat,
+        "actual_sat": treatment.actual_sat,
+        "delta_sat": delta_sat,
+        "conserved": delta_sat == 0,
+    }))
+}
+
+struct ConservationTreatmentEvidence {
+    actual_sat: u64,
+    melt_state: String,
+    amount_sat: u64,
+    fee_paid_sat: u64,
+    input_fee_sat: u64,
+    input_proof_count: u64,
+    expected_sat: u64,
+}
+
+fn conservation_input_evidence(
+    treatment_content: &serde_json::Value,
+    melt_state: &str,
+) -> Result<(u64, u64), ErrorData> {
+    let invalid =
+        |message| coded_invalid_request("conservation_treatment_artifact_invalid", message);
+    let input_fee_sat = treatment_content
+        .get("input_fee_sat")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            invalid("the wallet_pay treatment artifact has no exact unsigned input_fee_sat")
+        })?;
+    let input_proof_count = treatment_content
+        .get("input_proof_count")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            invalid("the wallet_pay treatment artifact has no exact unsigned input_proof_count")
+        })?;
+    if input_fee_sat > 100_000 || input_proof_count > 10_000 {
+        return Err(invalid(
+            "the observed input fee or proof count exceeds its evidence bound",
+        ));
+    }
+    match melt_state {
+        "PAID" if input_proof_count == 0 => Err(invalid(
+            "a PAID melt must identify at least one spent input proof",
+        )),
+        "UNPAID" if input_fee_sat != 0 || input_proof_count != 0 => Err(invalid(
+            "an UNPAID melt cannot report spent input proofs or an input fee",
+        )),
+        _ => Ok((input_fee_sat, input_proof_count)),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the fail-closed evidence parser validates all correlated wallet-pay fields in one auditable path"
+)]
+fn conservation_treatment_evidence(
+    request: &ConservationOracleRequest,
+    treatment: &LabOperation,
+    baseline_sat: u64,
+) -> Result<ConservationTreatmentEvidence, ErrorData> {
+    let treatment_content = treatment
+        .artifact
+        .as_ref()
+        .map(|artifact| &artifact.content)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "conservation_treatment_artifact_invalid",
+                "the wallet_pay treatment has no terminal artifact",
+            )
+        })?;
+    let actual_sat = treatment_content
+        .get("payer_balance_sat")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "conservation_treatment_artifact_invalid",
+                "the wallet_pay treatment artifact has no unsigned payer_balance_sat",
+            )
+        })?;
+    let melt = treatment_content
+        .get("quote_observations")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|observations| {
+            observations.iter().find(|observation| {
+                observation.get("role").and_then(serde_json::Value::as_str) == Some("payment_melt")
+                    && observation
+                        .get("wallet_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(request.wallet.as_str())
+                    && observation
+                        .get("mint_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(request.mint.as_str())
+            })
+        })
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "conservation_treatment_artifact_invalid",
+                "the wallet_pay treatment artifact has no matching payment_melt observation",
+            )
+        })?;
+    let melt_state = melt
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "conservation_treatment_artifact_invalid",
+                "the payment_melt observation has no state",
+            )
+        })?;
+    let amount_sat = melt
+        .get("amount_sat")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "conservation_treatment_artifact_invalid",
+                "the payment_melt observation has no unsigned amount_sat",
+            )
+        })?;
+    let melt_state = melt_state.to_ascii_uppercase();
+    let (input_fee_sat, input_proof_count) =
+        conservation_input_evidence(treatment_content, &melt_state)?;
+    let (expected_sat, fee_paid_sat) = match melt_state.as_str() {
+        "PAID" => {
+            let fee = melt
+                .get("fee_paid_sat")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    coded_invalid_request(
+                        "conservation_treatment_artifact_invalid",
+                        "a PAID payment_melt observation has no unsigned fee_paid_sat",
+                    )
+                })?;
+            let debit = amount_sat
+                .checked_add(fee)
+                .and_then(|debit| debit.checked_add(input_fee_sat))
+                .ok_or_else(|| {
+                    coded_invalid_request(
+                        "conservation_expected_balance_invalid",
+                        "the observed payment debit overflows",
+                    )
+                })?;
+            let expected = baseline_sat.checked_sub(debit).ok_or_else(|| {
+                coded_invalid_request(
+                    "conservation_expected_balance_invalid",
+                    "the observed payment debit exceeds the baseline balance",
+                )
+            })?;
+            (expected, fee)
+        }
+        "UNPAID" => (baseline_sat, 0),
+        _ => {
+            return Err(coded_invalid_request(
+                "conservation_treatment_not_settled",
+                "the wallet_pay melt must be PAID or UNPAID before conservation can be evaluated",
+            ));
+        }
+    };
+    Ok(ConservationTreatmentEvidence {
+        actual_sat,
+        melt_state,
+        amount_sat,
+        fee_paid_sat,
+        input_fee_sat,
+        input_proof_count,
+        expected_sat,
+    })
 }
 
 fn validate_reachability_oracle_bounds(
@@ -4618,6 +7856,33 @@ fn validate_wait_timeout(timeout_seconds: u32) -> Result<(), ErrorData> {
         "timeout_seconds must be between 1 and 120".to_owned(),
         Some(serde_json::json!({"code": "wait_timeout_invalid"})),
     ))
+}
+
+fn validate_operation_wait_many_request(
+    request: &OperationWaitManyRequest,
+) -> Result<(), ErrorData> {
+    validate_wait_timeout(request.timeout_seconds)?;
+    if !(1..=8).contains(&request.operation_ids.len()) {
+        return Err(ErrorData::invalid_request(
+            "operation_ids must contain between 1 and 8 IDs".to_owned(),
+            Some(serde_json::json!({
+                "code": "operation_wait_many_count_invalid",
+                "minimum": 1,
+                "maximum": 8,
+                "requested": request.operation_ids.len(),
+            })),
+        ));
+    }
+    let unique = request.operation_ids.iter().collect::<BTreeSet<_>>();
+    if unique.len() != request.operation_ids.len() {
+        return Err(ErrorData::invalid_request(
+            "operation_ids must be unique".to_owned(),
+            Some(serde_json::json!({
+                "code": "operation_wait_many_duplicate_id",
+            })),
+        ));
+    }
+    Ok(())
 }
 
 const fn lab_wait_terminal(phase: InstancePhase) -> bool {
@@ -4695,6 +7960,7 @@ fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
         total_components: u32::try_from(status.components.len()).unwrap_or(u32::MAX),
         inventory_count: u32::try_from(status.inventory.len()).unwrap_or(u32::MAX),
         inventory_digest: digest_json(&status.inventory),
+        runtime_guidance: runtime_guidance(status.phase).map(str::to_owned),
         teardown_receipt: status.teardown_receipt,
         message: status.message,
     }
@@ -4719,9 +7985,160 @@ fn compact_lab_wait(
         timed_out,
         ready_components: u32::try_from(ready_components).unwrap_or(u32::MAX),
         total_components: u32::try_from(status.components.len()).unwrap_or(u32::MAX),
+        runtime_guidance: runtime_guidance(status.phase).map(str::to_owned),
         teardown_receipt: status.teardown_receipt,
         message: status.message,
     }
+}
+
+const fn runtime_guidance(phase: InstancePhase) -> Option<&'static str> {
+    match phase {
+        InstancePhase::Ready => Some(
+            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and lease, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Set routing policies with channel_policy_set, not component_exec.",
+        ),
+        _ => None,
+    }
+}
+
+fn require_matrix_stage(
+    result: &OperationWaitManyResult,
+    stage: &str,
+    expected_operations: usize,
+) -> Result<(), ErrorData> {
+    if result.all_terminal
+        && !result.timed_out
+        && result.operations.len() == expected_operations
+        && result
+            .operations
+            .iter()
+            .all(|operation| operation.phase == OperationPhase::Succeeded)
+    {
+        return Ok(());
+    }
+    Err(ErrorData::invalid_request(
+        format!("recipe fee matrix stopped during {stage}"),
+        Some(serde_json::json!({
+            "code": "recipe_fee_matrix_stage_failed",
+            "stage": stage,
+            "operations": result.operations.iter().map(|operation| serde_json::json!({
+                "operation_id": operation.operation_id,
+                "phase": operation.phase,
+                "timed_out": operation.timed_out,
+            })).collect::<Vec<_>>(),
+            "recovery": "inspect the listed operation artifacts, correct the runtime issue, then replay the same matrix_id",
+        })),
+    ))
+}
+
+fn matrix_invoice_quote_id(operation: &OperationWaitResult) -> Result<String, ErrorData> {
+    operation
+        .artifact
+        .as_ref()
+        .and_then(|artifact| artifact.content.get("mint_quote_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "recipe_fee_matrix_invoice_artifact_invalid",
+                format!(
+                    "invoice operation {:?} has no private mint quote reference",
+                    operation.operation_id
+                ),
+            )
+        })
+}
+
+fn matrix_case_summary(
+    treatment: &str,
+    direction: &str,
+    base_fee_sat: u64,
+    fee_rate_ppm: u32,
+    payment: &OperationWaitResult,
+    oracle: &LabOperation,
+) -> Result<serde_json::Value, ErrorData> {
+    let payment_content = payment
+        .artifact
+        .as_ref()
+        .map(|artifact| &artifact.content)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "recipe_fee_matrix_payment_artifact_missing",
+                format!(
+                    "payment operation {:?} has no terminal artifact",
+                    payment.operation_id
+                ),
+            )
+        })?;
+    let observations = wallet_quote_observations_from_artifact(payment_content).map_err(|_| {
+        coded_invalid_request(
+            "recipe_fee_matrix_payment_artifact_invalid",
+            format!(
+                "payment operation {:?} has invalid quote observations",
+                payment.operation_id
+            ),
+        )
+    })?;
+    let melt = observations
+        .iter()
+        .find(|observation| observation.role == WalletQuoteObservationRole::PaymentMelt)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "recipe_fee_matrix_melt_observation_missing",
+                format!(
+                    "payment operation {:?} has no melt observation",
+                    payment.operation_id
+                ),
+            )
+        })?;
+    let receive = observations
+        .iter()
+        .find(|observation| observation.role == WalletQuoteObservationRole::PaymentReceive)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "recipe_fee_matrix_receive_observation_missing",
+                format!(
+                    "payment operation {:?} has no receive observation",
+                    payment.operation_id
+                ),
+            )
+        })?;
+    let oracle_content = oracle
+        .artifact
+        .as_ref()
+        .map(|artifact| &artifact.content)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "recipe_fee_matrix_oracle_artifact_missing",
+                format!("oracle operation {:?} has no result", oracle.id),
+            )
+        })?;
+    Ok(serde_json::json!({
+        "treatment": treatment,
+        "direction": direction,
+        "routing_policy": {
+            "base_fee_sat": base_fee_sat,
+            "fee_rate_ppm": fee_rate_ppm,
+        },
+        "payer_wallet": melt.wallet_id,
+        "payer_mint": melt.mint_id,
+        "recipient_wallet": receive.wallet_id,
+        "recipient_mint": receive.mint_id,
+        "amount_sat": melt.amount_sat,
+        "melt_state": melt.state,
+        "receive_state": receive.state,
+        "fee_reserve_sat": melt.fee_reserve_sat,
+        "fee_paid_sat": melt.fee_paid_sat,
+        "input_fee_sat": payment_content.get("input_fee_sat"),
+        "payer_balance_after_sat": payment_content.get("payer_balance_sat"),
+        "recipient_balance_after_sat": payment_content.get("recipient_balance_sat"),
+        "balance_before_sat": oracle_content.get("baseline_sat"),
+        "expected_balance_after_sat": oracle_content.get("expected_sat"),
+        "actual_balance_after_sat": oracle_content.get("actual_sat"),
+        "conserved": oracle_content.get("conserved"),
+        "conservation_delta_sat": oracle_content.get("delta_sat"),
+        "payment_operation_id": payment.operation_id,
+        "oracle_operation_id": oracle.id,
+    }))
 }
 
 fn compact_operation_wait(operation: LabOperation, timed_out: bool) -> OperationWaitResult {
@@ -4736,15 +8153,44 @@ fn compact_operation_wait(operation: LabOperation, timed_out: bool) -> Operation
     }
 }
 
-fn invalid_operation(message: &str) -> ErrorData {
-    ErrorData::invalid_request(
-        message.to_owned(),
-        Some(serde_json::json!({"code": "invalid_operation"})),
-    )
+fn compact_operation_wait_many(
+    operations: Vec<LabOperation>,
+    timed_out: bool,
+) -> Result<OperationWaitManyResult, ErrorData> {
+    let all_terminal = operations
+        .iter()
+        .all(|operation| operation_terminal(operation.phase));
+    let mut result = OperationWaitManyResult {
+        operations: operations
+            .into_iter()
+            .map(|operation| {
+                let operation_timed_out = timed_out && !operation_terminal(operation.phase);
+                compact_operation_wait(operation, operation_timed_out)
+            })
+            .collect(),
+        all_terminal,
+        timed_out,
+        artifact_bodies_omitted: false,
+    };
+    if serialized_size(&result)? > MAX_AGENT_RESPONSE_BYTES {
+        for operation in &mut result.operations {
+            operation.artifact = None;
+        }
+        result.artifact_bodies_omitted = true;
+    }
+    Ok(result)
 }
 
-fn evidence_error(code: &str, message: &str) -> ErrorData {
-    ErrorData::invalid_request(message.to_owned(), Some(serde_json::json!({"code": code})))
+/// One coded invalid-request error.
+///
+/// The `code` travels in the error payload so agents can branch on a stable
+/// identifier rather than parsing prose.
+fn coded_invalid_request(code: &str, message: impl Into<String>) -> ErrorData {
+    ErrorData::invalid_request(message.into(), Some(serde_json::json!({"code": code})))
+}
+
+fn invalid_operation(message: &str) -> ErrorData {
+    coded_invalid_request("invalid_operation", message)
 }
 
 impl KubernetesRuntime {
@@ -4759,9 +8205,9 @@ impl KubernetesRuntime {
             .await
             .map_err(kube_error)?;
         if lab.status.as_ref().map(|status| status.phase) != Some(LabPhase::Ready) {
-            return Err(ErrorData::invalid_request(
+            return Err(coded_invalid_request(
+                "instance_not_ready",
                 format!("lab instance {:?} is not ready for actions", instance.id),
-                Some(serde_json::json!({"code": "instance_not_ready"})),
             ));
         }
         let actions =
@@ -4774,9 +8220,9 @@ impl KubernetesRuntime {
         })?;
         if let Some(existing) = actions.get_opt(name).await.map_err(kube_error)? {
             if existing.spec != action.spec {
-                return Err(ErrorData::invalid_request(
+                return Err(coded_invalid_request(
+                    "action_identity_conflict",
                     format!("action resource {name:?} already exists with a different request"),
-                    Some(serde_json::json!({"code": "action_identity_conflict"})),
                 ));
             }
             return Ok(());
@@ -4798,16 +8244,18 @@ impl KubernetesRuntime {
     ) -> Result<Option<(OperationPhase, serde_json::Value)>, ErrorData> {
         let actions =
             Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
-        let action = actions
+        let Some(action) = actions
             .get_opt(&operation.resource_name)
             .await
             .map_err(kube_error)?
-            .ok_or_else(|| {
-                ErrorData::resource_not_found(
-                    format!("action {:?} was not found", operation.resource_name),
-                    Some(serde_json::json!({"code": "action_runtime_not_found"})),
-                )
-            })?;
+        else {
+            // The runtime resource is gone (lab closed, or garbage collected)
+            // before the journal saw a terminal phase. A running operation
+            // whose resource vanished is a terminal outcome, never a live
+            // one; a pending operation may simply not be applied yet.
+            return Ok((operation.phase == OperationPhase::Running)
+                .then(|| (OperationPhase::Failed, missing_action_artifact(operation))));
+        };
         let Some(status) = action.status else {
             return Ok(None);
         };
@@ -4834,23 +8282,23 @@ impl KubernetesRuntime {
         }
     }
 
+    /// Request cancellation of a runtime action. Returns `false` when the
+    /// runtime resource no longer exists, so the caller finalizes the journal
+    /// entry itself instead of leaving it non-terminal forever.
     async fn request_action_cancellation(
         &self,
         operation: &LabOperation,
         token: &str,
-    ) -> Result<(), ErrorData> {
+    ) -> Result<bool, ErrorData> {
         let actions =
             Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
-        let action = actions
+        let Some(action) = actions
             .get_opt(&operation.resource_name)
             .await
             .map_err(kube_error)?
-            .ok_or_else(|| {
-                ErrorData::resource_not_found(
-                    format!("action {:?} was not found", operation.resource_name),
-                    Some(serde_json::json!({"code": "action_runtime_not_found"})),
-                )
-            })?;
+        else {
+            return Ok(false);
+        };
         if action.spec.workspace_id != operation.workspace_id
             || action.spec.instance_id != operation.instance_id
             || action.spec.experiment_id != operation.experiment_id
@@ -4858,9 +8306,9 @@ impl KubernetesRuntime {
             || action.spec.principal_id != operation.principal_id
             || action.spec.request_digest != operation.request_digest
         {
-            return Err(ErrorData::invalid_request(
+            return Err(coded_invalid_request(
+                "action_identity_conflict",
                 "action cancellation identity does not match the journal",
-                Some(serde_json::json!({"code": "action_identity_conflict"})),
             ));
         }
         if action.status.as_ref().is_some_and(|status| {
@@ -4870,7 +8318,7 @@ impl KubernetesRuntime {
             )
         }) || action.annotations().contains_key(ACTION_CANCEL_ANNOTATION)
         {
-            return Ok(());
+            return Ok(true);
         }
         actions
             .patch(
@@ -4882,7 +8330,7 @@ impl KubernetesRuntime {
             )
             .await
             .map_err(kube_error)?;
-        Ok(())
+        Ok(true)
     }
 
     async fn materialize(
@@ -4992,6 +8440,29 @@ fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> LabI
     }
 }
 
+fn missing_action_artifact(operation: &LabOperation) -> serde_json::Value {
+    serde_json::json!({
+        "code": "action_runtime_not_found",
+        "resource_name": operation.resource_name,
+        "message": "the runtime action resource no longer exists; its outcome was not observed",
+    })
+}
+
+fn invalid_terminal_artifact(
+    operation: &LabOperation,
+    reported_phase: OperationPhase,
+    code: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "code": code,
+        "message": message,
+        "operation_id": operation.id,
+        "reported_phase": reported_phase,
+        "recoverable": false,
+    })
+}
+
 #[allow(
     clippy::needless_pass_by_value,
     reason = "map_err adapter owns the Kubernetes error"
@@ -5036,6 +8507,829 @@ mod tests {
         }
     }
 
+    fn authored_lab(name: &str) -> AuthoredLabSpec {
+        AuthoredLabSpec {
+            api_version: API_VERSION.into(),
+            name: name.into(),
+            components: vec![],
+            links: vec![],
+            policy: LabPolicy::default(),
+        }
+    }
+
+    fn component_reference_revision() -> PublishedRevision {
+        let catalog = default_catalog();
+        let component = |id: &str, implementation: &str| {
+            let entry = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == implementation)
+                .expect("fixture implementation");
+            ComponentSpec {
+                id: id.into(),
+                kind: entry.kind,
+                implementation: entry.id.clone(),
+                version: Some(entry.version.clone()),
+                config_version: entry.config_version.clone(),
+                control: entry.allowed_control[0],
+                config: BTreeMap::new(),
+            }
+        };
+        let authored = LabSpec {
+            api_version: API_VERSION.into(),
+            name: "component-references".into(),
+            components: vec![
+                component("wallet-b", "nutshell-wallet"),
+                component("chain", "bitcoin-core"),
+                component("wallet-a", "nutshell-wallet"),
+            ],
+            links: vec![],
+            policy: LabPolicy::default(),
+        };
+        let lab = proofstorm_core::resolve_effective_lab(&authored, catalog)
+            .expect("effective component fixture");
+        let lock = proofstorm_core::resolve_lock(&lab, catalog).expect("locked component fixture");
+        PublishedRevision {
+            workspace_id: "alpha".into(),
+            digest: digest_json(&(&lab, &lock)),
+            lab,
+            lock,
+        }
+    }
+
+    #[test]
+    fn component_references_return_typed_recovery_alternatives() {
+        let revision = component_reference_revision();
+        let expected_image = default_catalog()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "nutshell-wallet")
+            .expect("wallet catalog entry")
+            .image
+            .clone();
+        assert_eq!(
+            component_image_any(&revision, "wallet-a", ComponentKind::Wallet)
+                .expect("known typed component"),
+            expected_image
+        );
+
+        let unknown = component_image_any(&revision, "invented-wallet", ComponentKind::Wallet)
+            .expect_err("unknown component must fail closed");
+        let unknown_data = unknown.data.expect("structured unknown-ID error");
+        assert_eq!(unknown_data["code"], "component_id_unknown");
+        assert_eq!(unknown_data["requested_id"], "invented-wallet");
+        assert_eq!(unknown_data["expected_kind"], "wallet");
+        assert_eq!(
+            unknown_data["valid_component_ids"],
+            serde_json::json!(["wallet-a", "wallet-b"])
+        );
+
+        let wrong_kind = component_image_any(&revision, "chain", ComponentKind::Wallet)
+            .expect_err("wrong component kind must fail closed");
+        let wrong_kind_data = wrong_kind.data.expect("structured kind error");
+        assert_eq!(wrong_kind_data["code"], "component_kind_mismatch");
+        assert_eq!(wrong_kind_data["actual_kind"], "bitcoin");
+        assert_eq!(wrong_kind_data["expected_kind"], "wallet");
+        assert_eq!(
+            wrong_kind_data["valid_component_ids"],
+            serde_json::json!(["wallet-a", "wallet-b"])
+        );
+    }
+
+    #[test]
+    fn authored_lab_policy_is_optional_and_defaults_safely() {
+        let authored = serde_json::from_value::<AuthoredLabSpec>(serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "default-policy",
+            "components": [],
+            "links": []
+        }))
+        .expect("policy may be omitted");
+        assert_eq!(authored.policy, LabPolicy::default());
+    }
+
+    #[test]
+    fn lab_request_accepts_object_or_once_stringified_object() {
+        let lab = serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "wire-compatible",
+            "components": [],
+            "links": []
+        });
+        let object = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
+            "lab": lab.clone()
+        }))
+        .expect("canonical object");
+        let stringified = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
+            "lab": serde_json::to_string(&lab).expect("encode lab")
+        }))
+        .expect("once-stringified object");
+
+        assert_eq!(
+            serde_json::to_value(object.lab).expect("object value"),
+            serde_json::to_value(stringified.lab).expect("stringified value")
+        );
+    }
+
+    #[test]
+    fn stringified_lab_still_enforces_the_strict_contract() {
+        for invalid in [
+            "not json".to_owned(),
+            serde_json::json!({
+                "api_version": API_VERSION,
+                "name": "missing-structure"
+            })
+            .to_string(),
+            serde_json::json!({
+                "api_version": API_VERSION,
+                "name": "unknown-field",
+                "components": [],
+                "links": [],
+                "surprise": true
+            })
+            .to_string(),
+        ] {
+            assert!(
+                serde_json::from_value::<ValidateLabRequest>(serde_json::json!({"lab": invalid}))
+                    .is_err(),
+                "invalid stringified lab must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn create_rejects_catalog_invalid_config_without_writing_a_draft() {
+        let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
+        let authored = serde_json::from_value::<AuthoredLabSpec>(serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "invalid-alias",
+            "components": [
+                {
+                    "id": "chain",
+                    "kind": "bitcoin",
+                    "implementation": "bitcoin-core",
+                    "version": "30.0",
+                    "config_version": "bitcoin-core/30/v1",
+                    "control": "laboratory",
+                    "config": {}
+                },
+                {
+                    "id": "node",
+                    "kind": "lightning",
+                    "implementation": "lnd",
+                    "version": "0.20.0-beta",
+                    "config_version": "lnd/0.20/v1",
+                    "control": "laboratory",
+                    "config": {"alias": "this-alias-is-deliberately-far-too-long-for-lnd"}
+                }
+            ],
+            "links": [{
+                "id": "node-chain",
+                "kind": "chain_backend",
+                "from": "node",
+                "to": "chain",
+                "network": "regtest"
+            }]
+        }))
+        .expect("wire-valid authored lab");
+
+        let validation = service
+            .proofstorm_lab_validate(Parameters(ValidateLabRequest {
+                lab: authored.clone(),
+            }))
+            .expect("validation result")
+            .0;
+        assert!(!validation.valid);
+        assert!(validation.issues.iter().any(|issue| {
+            issue.code == "publication_preflight_failed" && issue.message.contains("alias")
+        }));
+
+        let error = match service.proofstorm_lab_create(Parameters(CreateDraftRequest {
+            draft_id: "invalid-alias".into(),
+            lab: authored,
+            idempotency_key: "invalid-alias-once".into(),
+        })) {
+            Ok(_) => panic!("invalid effective config must not create a draft"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.data.expect("structured error")["code"],
+            "lab_validation_failed"
+        );
+        assert!(
+            service
+                .proofstorm_lab_read(Parameters(ReadDraftRequest {
+                    draft_id: "invalid-alias".into(),
+                }))
+                .is_err(),
+            "rejected lab left no draft behind"
+        );
+    }
+
+    #[test]
+    fn routing_fee_recipe_creates_a_valid_versioned_topology_in_one_call() {
+        let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
+        let receipt = service
+            .proofstorm_lab_recipe_create(Parameters(CreateLabRecipeRequest {
+                draft_id: "routing-fees".into(),
+                idempotency_key: "routing-fees-once".into(),
+                recipe: LabRecipe::NutshellLndClnRoutingFees,
+                name: None,
+            }))
+            .expect("recipe draft")
+            .0;
+        assert!(receipt.valid);
+        assert_eq!(receipt.component_count, 10);
+        assert_eq!(receipt.link_count, 7);
+        assert!(receipt.structure.contains("backend_bindings=5/5"));
+
+        let draft = service
+            .proofstorm_lab_read(Parameters(ReadDraftRequest {
+                draft_id: "routing-fees".into(),
+            }))
+            .expect("created recipe draft")
+            .0;
+        assert_eq!(draft.lab.name, "routing-fees");
+        for id in [
+            "bitcoin-core",
+            "lnd-backend",
+            "lnd-router",
+            "cln-backend",
+            "mint-lnd",
+            "mint-cln",
+            "payer-lnd",
+            "recipient-lnd",
+            "payer-cln",
+            "recipient-cln",
+        ] {
+            let component = draft
+                .lab
+                .components
+                .iter()
+                .find(|component| component.id == id)
+                .unwrap_or_else(|| panic!("recipe component {id}"));
+            assert!(component.version.is_some(), "{id} has an exact version");
+        }
+        assert!(validate_lab(&draft.lab).issues.is_empty());
+    }
+
+    #[test]
+    fn routing_fee_recipe_setup_owns_component_ids_and_liquidity_values() {
+        let request = LabRecipeSetupRequest {
+            instance_id: "instance".into(),
+            experiment_id: "experiment".into(),
+            lease_id: "lease".into(),
+            operation_id: "operation".into(),
+            recipe: LabRecipe::NutshellLndClnRoutingFees,
+            idempotency_key: "once".into(),
+        };
+        let bootstrap = recipe_bootstrap_request(request.clone());
+        assert_eq!(bootstrap.chain, "bitcoin-core");
+        assert_eq!(bootstrap.mint_lightning, "lnd-backend");
+        assert_eq!(bootstrap.payer_lightning, "lnd-router");
+        assert_eq!(bootstrap.funding_sat, 10_000_000);
+        assert_eq!(bootstrap.channel_sat, 2_000_000);
+        assert_eq!(bootstrap.push_sat, 0);
+
+        let channel = recipe_route_channel_request(request);
+        assert_eq!(channel.chain, "bitcoin-core");
+        assert_eq!(channel.from_lightning, "lnd-router");
+        assert_eq!(channel.to_lightning, "cln-backend");
+        assert_eq!(channel.channel_sat, 2_000_000);
+        assert_eq!(channel.push_sat, 1_000_000);
+    }
+
+    #[test]
+    fn recipe_setup_wire_contract_rejects_low_level_overrides() {
+        let mut input = serde_json::json!({
+            "instance_id": "instance",
+            "experiment_id": "experiment",
+            "lease_id": "lease",
+            "operation_id": "operation",
+            "recipe": "nutshell_lnd_cln_routing_fees",
+            "idempotency_key": "once"
+        });
+        assert!(serde_json::from_value::<LabRecipeSetupRequest>(input.clone()).is_ok());
+        input["chain"] = serde_json::json!("regtest");
+        assert!(
+            serde_json::from_value::<LabRecipeSetupRequest>(input).is_err(),
+            "recipe setup must reject caller-controlled component IDs"
+        );
+    }
+
+    #[test]
+    fn recipe_fee_matrix_wire_contract_rejects_scientific_role_overrides() {
+        let mut input = serde_json::json!({
+            "instance_id": "instance",
+            "experiment_id": "experiment",
+            "lease_id": "lease",
+            "matrix_id": "matrix",
+            "recipe": "nutshell_lnd_cln_routing_fees",
+            "idempotency_key": "once"
+        });
+        assert!(serde_json::from_value::<LabRecipeFeeMatrixRequest>(input.clone()).is_ok());
+        input["payer_wallet"] = serde_json::json!("recipient-lnd");
+        assert!(
+            serde_json::from_value::<LabRecipeFeeMatrixRequest>(input).is_err(),
+            "recipe matrix must reject caller-controlled wallet roles"
+        );
+    }
+
+    #[test]
+    fn generic_lab_plan_resolves_catalog_versions_kinds_and_bindings() {
+        let request = LabPlanRequest {
+            plan_id: "generic-plan".into(),
+            components: vec![
+                LabPlanComponentInput {
+                    id: "chain".into(),
+                    implementation: "bitcoin-core".into(),
+                    version: None,
+                    control: None,
+                    config: BTreeMap::new(),
+                },
+                LabPlanComponentInput {
+                    id: "lnd-a".into(),
+                    implementation: "lnd".into(),
+                    version: None,
+                    control: None,
+                    config: BTreeMap::new(),
+                },
+                LabPlanComponentInput {
+                    id: "lnd-b".into(),
+                    implementation: "lnd".into(),
+                    version: None,
+                    control: None,
+                    config: BTreeMap::new(),
+                },
+            ],
+            connections: vec![
+                LabPlanConnectionInput::ChainBackend {
+                    id: "a-chain".into(),
+                    component: "lnd-a".into(),
+                    chain: "chain".into(),
+                    network: None,
+                },
+                LabPlanConnectionInput::ChainBackend {
+                    id: "b-chain".into(),
+                    component: "lnd-b".into(),
+                    chain: "chain".into(),
+                    network: None,
+                },
+                LabPlanConnectionInput::LightningPeer {
+                    id: "direct".into(),
+                    node_a: "lnd-a".into(),
+                    node_b: "lnd-b".into(),
+                },
+            ],
+            runtime_requirements: vec![],
+            policy: LabPolicy::default(),
+            idempotency_key: "generic-plan-once".into(),
+        };
+        let lab = compile_lab_plan(&request).expect("generic plan compiles");
+        let validation = lab_validation_result(&lab);
+        assert!(validation.valid, "{:#?}", validation.issues);
+        assert_eq!(lab.components.len(), 3);
+        assert!(
+            lab.components
+                .iter()
+                .all(|component| component.version.is_some())
+        );
+        assert!(lab.components.iter().all(|component| {
+            component.kind == ComponentKind::Bitcoin || component.kind == ComponentKind::Lightning
+        }));
+        assert!(lab.links[..2].iter().all(|link| {
+            link.binding
+                == Some(DependencyBinding::Chain {
+                    network: BitcoinNetwork::Regtest,
+                })
+        }));
+        assert!(lab.links[2].binding.is_none());
+    }
+
+    #[test]
+    fn generic_lab_plan_infers_the_exact_catalog_payment_binding() {
+        let request = LabPlanRequest {
+            plan_id: "payment-plan".into(),
+            components: vec![
+                LabPlanComponentInput {
+                    id: "mint".into(),
+                    implementation: "nutshell".into(),
+                    version: None,
+                    control: None,
+                    config: BTreeMap::new(),
+                },
+                LabPlanComponentInput {
+                    id: "backend".into(),
+                    implementation: "lnd".into(),
+                    version: None,
+                    control: None,
+                    config: BTreeMap::new(),
+                },
+            ],
+            connections: vec![LabPlanConnectionInput::PaymentBackend {
+                id: "payment".into(),
+                mint: "mint".into(),
+                lightning: "backend".into(),
+                method: None,
+                unit: None,
+            }],
+            runtime_requirements: vec![],
+            policy: LabPolicy::default(),
+            idempotency_key: "payment-plan-once".into(),
+        };
+        let lab = compile_lab_plan(&request).expect("payment binding is unambiguous");
+        assert_eq!(
+            lab.links[0].binding,
+            Some(DependencyBinding::Payment {
+                method: PaymentMethod::Bolt11,
+                unit: "sat".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn generic_lab_plan_keeps_implementation_ids_open_and_reports_catalog_alternatives() {
+        let schema = serde_json::to_value(schemars::schema_for!(LabPlanComponentInput))
+            .expect("plan component schema");
+        assert!(
+            schema["properties"]["implementation"].get("enum").is_none(),
+            "catalog growth must not require an MCP schema change"
+        );
+        let request = LabPlanRequest {
+            plan_id: "unknown-plan".into(),
+            components: vec![LabPlanComponentInput {
+                id: "future-mint".into(),
+                implementation: "future-mint".into(),
+                version: None,
+                control: None,
+                config: BTreeMap::new(),
+            }],
+            connections: vec![],
+            runtime_requirements: vec![],
+            policy: LabPolicy::default(),
+            idempotency_key: "unknown-plan-once".into(),
+        };
+        let error = compile_lab_plan(&request).expect_err("unknown catalog entry must fail closed");
+        let data = error.data.expect("structured plan error");
+        assert_eq!(data["code"], "lab_plan_implementation_not_found");
+        assert!(
+            data["available_implementations"]
+                .as_array()
+                .is_some_and(|implementations| !implementations.is_empty())
+        );
+    }
+
+    #[test]
+    fn generic_lab_plan_rejects_unavailable_runtime_controls_before_storage() {
+        let plan_schema =
+            serde_json::to_value(schemars::schema_for!(LabPlanRequest)).expect("lab plan schema");
+        assert!(
+            plan_schema["required"].as_array().is_some_and(
+                |required| required.contains(&serde_json::json!("runtime_requirements"))
+            ),
+            "runtime intent must not be silently omitted"
+        );
+        assert!(
+            serde_json::from_value::<LabPlanRequest>(serde_json::json!({
+                "plan_id": "omitted-runtime-intent",
+                "components": [],
+                "connections": [],
+                "idempotency_key": "once"
+            }))
+            .is_err(),
+            "the wire contract must reject omitted runtime requirements"
+        );
+        let requirement_schema =
+            serde_json::to_value(schemars::schema_for!(LabPlanRuntimeRequirement))
+                .expect("runtime requirement schema");
+        assert!(
+            requirement_schema["properties"]["endpoint"]
+                .get("enum")
+                .is_none(),
+            "runtime endpoint growth must not require an MCP schema change"
+        );
+        assert!(
+            requirement_schema["properties"]["controls"]["items"]
+                .get("enum")
+                .is_none(),
+            "runtime control growth must not require an MCP schema change"
+        );
+
+        let request = LabPlanRequest {
+            plan_id: "embedded-ldk-control-plan".into(),
+            components: vec![LabPlanComponentInput {
+                id: "mint".into(),
+                implementation: "cdk-ldk".into(),
+                version: None,
+                control: None,
+                config: BTreeMap::new(),
+            }],
+            connections: vec![],
+            runtime_requirements: vec![LabPlanRuntimeRequirement {
+                component: "mint".into(),
+                endpoint: "ldk-node".into(),
+                controls: BTreeSet::from(["channel_open".into(), "peer_connect".into()]),
+            }],
+            policy: LabPolicy::default(),
+            idempotency_key: "embedded-ldk-control-plan-once".into(),
+        };
+        let error = compile_lab_plan(&request)
+            .expect_err("an embedded endpoint without a control driver must fail closed");
+        let message = error.message.to_string();
+        assert!(message.contains("channel_open"));
+        assert!(message.contains("peer_connect"));
+        assert!(message.contains("no plan was stored"));
+        let data = error.data.expect("structured runtime feasibility error");
+        assert_eq!(data["code"], "lab_plan_runtime_control_unsupported");
+        assert_eq!(data["endpoint"]["kind"], "lightning");
+        assert!(
+            data["endpoint"]["limitations"]
+                .as_array()
+                .is_some_and(|limitations| !limitations.is_empty())
+        );
+    }
+
+    #[test]
+    fn runtime_admission_rejects_a_catalog_unsupported_control_before_operation() {
+        let catalog = default_catalog();
+        let entry = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cdk-ldk")
+            .expect("CDK-LDK catalog entry");
+        let authored = LabSpec {
+            api_version: API_VERSION.into(),
+            name: "runtime-admission".into(),
+            components: vec![ComponentSpec {
+                id: "mint".into(),
+                kind: entry.kind,
+                implementation: entry.id.clone(),
+                version: Some(entry.version.clone()),
+                config_version: entry.config_version.clone(),
+                control: ControlClass::Target,
+                config: BTreeMap::new(),
+            }],
+            links: vec![],
+            policy: LabPolicy::default(),
+        };
+        let lab = proofstorm_core::resolve_effective_lab(&authored, catalog)
+            .expect("effective runtime-admission fixture");
+        let lock = proofstorm_core::resolve_lock(&lab, catalog).expect("fixture lock");
+        let revision = PublishedRevision {
+            workspace_id: "alpha".into(),
+            digest: digest_json(&(&lab, &lock)),
+            lab,
+            lock,
+        };
+
+        require_component_runtime_control(&revision, "mint", "component", "wallet_initialize")
+            .expect("declared runtime control");
+        let error =
+            require_component_runtime_control(&revision, "mint", "component", "wallet_fund")
+                .expect_err("unsupported runtime control must fail before operation creation");
+        assert!(error.message.contains("no operation was created"));
+        assert_eq!(
+            error.data.expect("structured runtime admission error")["code"],
+            "runtime_control_unsupported"
+        );
+    }
+
+    #[test]
+    fn generic_plan_connections_name_endpoint_roles_in_the_wire_schema() {
+        let encoded = serde_json::to_string(&schemars::schema_for!(LabPlanConnectionInput))
+            .expect("plan connection schema");
+        for role_name in [
+            "node_a",
+            "node_b",
+            "component",
+            "chain",
+            "mint",
+            "lightning",
+            "database",
+            "identity_provider",
+            "source",
+            "target",
+        ] {
+            assert!(
+                encoded.contains(&format!("\"{role_name}\"")),
+                "connection schema is missing semantic endpoint {role_name}"
+            );
+        }
+        assert!(
+            !encoded.contains("\"from\"") && !encoded.contains("\"to\""),
+            "ambiguous dependency direction must not return to the planner contract"
+        );
+    }
+
+    #[tokio::test]
+    async fn generic_lab_plan_is_durable_and_apply_rejects_a_digest_mismatch_before_mutation() {
+        let store = seeded_store();
+        for capability in [
+            Capability::CatalogRead,
+            Capability::LabCreate,
+            Capability::LabRead,
+            Capability::LabPublish,
+            Capability::LabMaterialize,
+        ] {
+            store
+                .grant("alpha", "designer", capability)
+                .expect("generic planner grant");
+        }
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("service");
+        let request = LabPlanRequest {
+            plan_id: "durable-plan".into(),
+            components: vec![LabPlanComponentInput {
+                id: "chain".into(),
+                implementation: "bitcoin-core".into(),
+                version: None,
+                control: None,
+                config: BTreeMap::new(),
+            }],
+            connections: vec![],
+            runtime_requirements: vec![],
+            policy: LabPolicy::default(),
+            idempotency_key: "durable-plan-once".into(),
+        };
+        let first = service
+            .proofstorm_lab_plan(Parameters(request.clone()))
+            .expect("plan stored")
+            .0;
+        let replay = service
+            .proofstorm_lab_plan(Parameters(request))
+            .expect("plan replay")
+            .0;
+        assert_eq!(first, replay);
+        let stored = store
+            .read_draft("alpha", "designer", "durable-plan")
+            .expect("durable plan can be read");
+        assert_eq!(digest_json(&stored.lab), first.plan_digest);
+
+        let result = service
+            .proofstorm_lab_apply(Parameters(LabApplyRequest {
+                plan_id: "durable-plan".into(),
+                expected_plan_digest: "not-the-plan".into(),
+                instance_id: "must-not-exist".into(),
+                idempotency_key: "apply-mismatch".into(),
+            }))
+            .await;
+        let Err(error) = result else {
+            panic!("digest mismatch must fail before publication");
+        };
+        assert_eq!(
+            error.data.expect("digest mismatch data")["code"],
+            "lab_plan_digest_mismatch"
+        );
+        assert!(
+            store
+                .revision("alpha", "designer", &first.plan_digest)
+                .is_err(),
+            "digest mismatch must not publish the stored plan"
+        );
+    }
+
+    #[test]
+    fn recipe_fee_matrix_derives_bounded_kebab_case_child_operation_ids() {
+        let request = LabRecipeFeeMatrixRequest {
+            instance_id: "instance-with-a-long-but-valid-identifier-01234567890123456789".into(),
+            experiment_id: "experiment-with-a-long-but-valid-identifier-012345678901234567".into(),
+            lease_id: "lease-with-a-long-but-valid-identifier-01234567890123456789012".into(),
+            matrix_id: "matrix-with-a-long-but-valid-identifier-0123456789012345678901".into(),
+            recipe: LabRecipe::NutshellLndClnRoutingFees,
+            idempotency_key: "once".into(),
+        };
+        let prefix = recipe_fee_matrix_operation_prefix(&request);
+        assert_eq!(prefix.len(), 23);
+        assert!(prefix.starts_with("matrix-"));
+
+        for suffix in [
+            "init-recipient-lnd",
+            "fund-payer-cln",
+            "policy-above-reserve-cln",
+            "baseline-above-reserve-lnd",
+            "invoice-above-reserve-recipient-cln",
+            "pay-above-reserve-cln-to-lnd",
+            "oracle-above-reserve-cln",
+        ] {
+            let operation_id = format!("{prefix}-{suffix}");
+            assert!(operation_id.len() <= 63, "{operation_id}");
+            assert!(
+                operation_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            );
+        }
+
+        assert_eq!(prefix, recipe_fee_matrix_operation_prefix(&request));
+
+        for direction in ROUTING_FEE_RECIPE_PAYMENT_DIRECTIONS {
+            assert!(!direction.id.contains('_'));
+            assert!(direction.label.contains('_'));
+            let payment_id = format!("{prefix}-pay-above-reserve-{}", direction.id);
+            let oracle_treatment_reference = format!("{prefix}-pay-above-reserve-{}", direction.id);
+            assert_eq!(payment_id, oracle_treatment_reference);
+            assert!(payment_id.len() <= 63);
+        }
+    }
+
+    #[test]
+    fn link_mutation_wire_contract_flattens_bindings_and_is_fail_closed() {
+        let common = serde_json::json!({
+            "draft_id": "draft",
+            "expected_version": 1,
+            "idempotency_key": "link-once"
+        });
+
+        let mut missing_network = common.clone();
+        missing_network["link"] = serde_json::json!({
+            "id": "chain-lnd",
+            "kind": "chain_backend",
+            "from": "lnd",
+            "to": "chain"
+        });
+        let error = serde_json::from_value::<MutateLinkRequest>(missing_network)
+            .expect_err("a chain backend without its flat network must fail at the wire boundary");
+        assert!(error.to_string().contains("missing field `network`"));
+
+        let mut peer_with_binding_field = common.clone();
+        peer_with_binding_field["link"] = serde_json::json!({
+            "id": "peer",
+            "kind": "lightning_peer",
+            "from": "left",
+            "to": "right",
+            "network": "regtest"
+        });
+        let error = serde_json::from_value::<MutateLinkRequest>(peer_with_binding_field)
+            .expect_err("a peer link must not admit backend binding fields");
+        assert!(error.to_string().contains("unknown field `network`"));
+
+        let mut complete_payment = common.clone();
+        complete_payment["link"] = serde_json::json!({
+            "id": "mint-lnd",
+            "kind": "payment_backend",
+            "from": "mint",
+            "to": "lnd",
+            "method": "bolt11",
+            "unit": "sat"
+        });
+        let request = serde_json::from_value::<MutateLinkRequest>(complete_payment)
+            .expect("flat payment binding fields deserialize");
+        let link = LinkSpec::try_from(request.link).expect("canonical payment binding");
+        assert_eq!(
+            link.binding,
+            Some(DependencyBinding::Payment {
+                method: PaymentMethod::Bolt11,
+                unit: "sat".into()
+            })
+        );
+
+        let bulk = serde_json::json!({
+            "lab": {
+                "api_version": API_VERSION,
+                "name": "strict-bulk",
+                "components": [],
+                "links": [{
+                    "id": "chain-lnd",
+                    "kind": "chain_backend",
+                    "from": "lnd",
+                    "to": "chain"
+                }],
+                "policy": {"allow": [], "limits": {}}
+            }
+        });
+        let error = serde_json::from_value::<ValidateLabRequest>(bulk)
+            .expect_err("bulk lab backend links must require flat binding fields");
+        assert!(error.to_string().contains("network"));
+
+        let mut nested_binding = common.clone();
+        nested_binding["link"] = serde_json::json!({
+            "id": "chain-lnd",
+            "kind": "chain_backend",
+            "from": "lnd",
+            "to": "chain",
+            "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}
+        });
+        let error = serde_json::from_value::<MutateLinkRequest>(nested_binding)
+            .expect_err("nested binding objects are excluded from the MCP wire contract");
+        assert!(error.to_string().contains("unknown field `binding`"));
+
+        let mut valid = common;
+        valid["link"] = serde_json::json!({
+            "id": "chain-lnd",
+            "kind": "chain_backend",
+            "from": "lnd",
+            "to": "chain",
+            "network": "regtest"
+        });
+        let request = serde_json::from_value::<MutateLinkRequest>(valid)
+            .expect("a complete flat backend link is valid input");
+        let link = LinkSpec::try_from(request.link).expect("canonical binding constructed");
+        assert_eq!(link.kind, LinkKind::ChainBackend);
+        assert!(matches!(
+            link.binding,
+            Some(DependencyBinding::Chain { .. })
+        ));
+    }
+
     fn seeded_store() -> Store {
         let store = Store::memory().expect("store");
         store
@@ -5075,7 +9369,12 @@ mod tests {
         let designer =
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("designer session");
         let reader = ProofstormMcp::new(store, "alpha", "reader").expect("reader session");
-        assert_eq!(designer.tool_names().len(), 18);
+        assert_eq!(designer.tool_names().len(), 20);
+        assert!(
+            !designer
+                .tool_names()
+                .contains(&"proofstorm_lab_edit".to_owned())
+        );
         assert!(
             designer
                 .tool_names()
@@ -5141,7 +9440,7 @@ mod tests {
                 .contains("0.20.3")
         );
         assert!(cdk.config_schema["properties"].get("mnemonic").is_none());
-        assert_embedded_ldk_support(&catalog);
+        assert_embedded_ldk_support(catalog);
         assert_eq!(
             cdk.config_schema["x-proofstorm-managed-settings"]["mnemonic"]["x-proofstorm-classification"],
             "runtime_policy"
@@ -5156,7 +9455,7 @@ mod tests {
                 .contains(&proofstorm_core::CatalogFeature::Bolt11)
         );
         assert_eq!(cdk.compatible_dependencies[0].implementation, "lnd");
-        assert_nutshell_support(&catalog);
+        assert_nutshell_support(catalog);
         assert_eq!(
             reader.tool_names(),
             vec![
@@ -5182,6 +9481,14 @@ mod tests {
                 .contains(&proofstorm_core::PaymentMethod::Bolt12)
         );
         assert!(cdk_ldk.support_matrix.payment_bindings.is_empty());
+        let embedded = cdk_ldk
+            .runtime_endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "ldk-node")
+            .expect("embedded LDK runtime endpoint is discoverable");
+        assert_eq!(embedded.kind, "lightning");
+        assert!(embedded.controls.is_empty());
+        assert!(!embedded.limitations.is_empty());
     }
 
     #[test]
@@ -5213,6 +9520,14 @@ mod tests {
             .0;
         assert!(detail.image.contains("@sha256:"));
         assert_eq!(detail.config_schema_digest, summary.config_schema_digest);
+        assert_eq!(detail.recommended_control, ControlClass::Target);
+        assert!(detail.required_config_fields.is_empty());
+        assert!(
+            detail
+                .authorable_config_fields
+                .contains(&"lightning_fee_percent".into())
+        );
+        assert_eq!(detail.config_defaults["lightning_reserve_fee_min_sat"], 2);
         let schema = service
             .proofstorm_catalog_config_schema_read(Parameters(CatalogConfigSchemaRequest {
                 id: summary.id.clone(),
@@ -5268,7 +9583,18 @@ mod tests {
             .0;
         assert_eq!(filtered.items.len(), 1);
         assert_eq!(filtered.items[0].id, "nutshell");
+        assert_eq!(filtered.items[0].allowed_control, [ControlClass::Target]);
+        assert_eq!(filtered.items[0].recommended_control, ControlClass::Target);
         assert!(filtered.next_cursor.is_none());
+
+        let oversized_limit = service
+            .proofstorm_catalog_list(Parameters(CatalogListRequest {
+                limit: 100,
+                ..CatalogListRequest::default()
+            }))
+            .expect("harmless oversized page limit is saturated")
+            .0;
+        assert_eq!(oversized_limit.items.len(), 12);
 
         let stale = service.proofstorm_catalog_list(Parameters(CatalogListRequest {
             implementations: ["nutshell".into()].into(),
@@ -5284,13 +9610,123 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn component_logs_requires_its_capability_and_bounded_lines() {
+        let store = seeded_store();
+        let unauthorized = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .expect("session without component.logs");
+        let request = |tail_lines: u32| ComponentLogsRequest {
+            instance_id: "instance-one".into(),
+            experiment_id: "experiment-one".into(),
+            lease_id: "lease-one".into(),
+            operation_id: "operation-logs".into(),
+            component: "chain".into(),
+            tail_lines,
+            idempotency_key: "logs-one".into(),
+        };
+        let Err(denied) = unauthorized
+            .proofstorm_component_logs(Parameters(request(100)))
+            .await
+        else {
+            panic!("component.logs is a separate authority");
+        };
+        assert_eq!(denied.data.expect("denial data")["code"], "access_denied");
+
+        store
+            .grant("alpha", "designer", Capability::ComponentLogs)
+            .expect("grant component.logs");
+        let authorized =
+            ProofstormMcp::new(store, "alpha", "designer").expect("session with component.logs");
+        for lines in [0, 2_001] {
+            let Err(rejected) = authorized
+                .proofstorm_component_logs(Parameters(request(lines)))
+                .await
+            else {
+                panic!("tail_lines {lines} must be rejected");
+            };
+            assert_eq!(
+                rejected.data.expect("bounds data")["code"],
+                "invalid_operation",
+                "tail_lines {lines} is out of bounds"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_conformance_is_a_separate_capability() {
+        let store = seeded_store();
+        let unauthorized = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .expect("session without authentication.test");
+        let Err(denied) = unauthorized
+            .proofstorm_authentication_conformance(Parameters(AuthenticationConformanceRequest {
+                instance_id: "instance-one".into(),
+                experiment_id: "experiment-one".into(),
+                lease_id: "lease-one".into(),
+                operation_id: "operation-auth".into(),
+                mint: "mint".into(),
+                identity_provider: "identity".into(),
+                idempotency_key: "auth-one".into(),
+            }))
+            .await
+        else {
+            panic!("authentication conformance must require its own capability");
+        };
+        assert_eq!(denied.data.expect("denial data")["code"], "access_denied");
+        assert!(
+            !unauthorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_conformance".to_owned())
+        );
+        assert!(
+            !unauthorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_protected_spend".to_owned())
+        );
+        assert!(
+            !unauthorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_replay".to_owned())
+        );
+
+        store
+            .grant("alpha", "designer", Capability::AuthenticationTest)
+            .expect("grant authentication.test");
+        let authorized =
+            ProofstormMcp::new(store.clone(), "alpha", "designer").expect("authorized session");
+        assert!(
+            authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_conformance".to_owned())
+        );
+        assert!(
+            authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_protected_spend".to_owned())
+        );
+        assert!(
+            !authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_replay".to_owned())
+        );
+        store
+            .grant("alpha", "designer", Capability::ArtifactRead)
+            .expect("grant artifact.read");
+        let replay_authorized =
+            ProofstormMcp::new(store, "alpha", "designer").expect("replay-authorized session");
+        assert!(
+            replay_authorized
+                .tool_names()
+                .contains(&"proofstorm_authentication_replay".to_owned())
+        );
+    }
+
     #[test]
     fn draft_mutations_return_compact_receipts() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
         let receipt = service
             .proofstorm_lab_create(Parameters(CreateDraftRequest {
                 draft_id: "compact-draft".into(),
-                lab: lab("compact-draft"),
+                lab: authored_lab("compact-draft"),
                 idempotency_key: "create-compact-draft".into(),
             }))
             .expect("create draft")
@@ -5299,7 +9735,13 @@ mod tests {
         assert_eq!(receipt.version, 1);
         assert_eq!(receipt.component_count, 0);
         assert_eq!(receipt.link_count, 0);
+        assert_eq!(
+            receipt.structure,
+            "components=[]; links=[]; backend_bindings=0/0"
+        );
+        assert!(receipt.topology_digest.starts_with("sha256:"));
         assert!(receipt.valid);
+        assert!(receipt.warnings[0].starts_with("empty_topology:"));
         assert_eq!(receipt.changed_paths, ["/"]);
         let encoded = serde_json::to_string(&receipt).expect("serialize receipt");
         assert!(!encoded.contains("api_version"));
@@ -5331,6 +9773,272 @@ mod tests {
     }
 
     #[test]
+    fn topology_receipts_expose_stable_identities_and_binding_coverage() {
+        let mut authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "receipt-topology",
+            "components": [
+                {
+                    "id": "lnd",
+                    "kind": "lightning",
+                    "implementation": "lnd",
+                    "version": "0.20",
+                    "config_version": "lnd/0.20/v1",
+                    "control": "target",
+                    "config": {"alias": "receipt-lnd"}
+                },
+                {
+                    "id": "chain",
+                    "kind": "bitcoin",
+                    "implementation": "bitcoin-core",
+                    "version": "30.0",
+                    "config_version": "bitcoin-core/30/v1",
+                    "control": "laboratory",
+                    "config": {}
+                }
+            ],
+            "links": [{
+                "id": "lnd-chain",
+                "kind": "chain_backend",
+                "from": "lnd",
+                "to": "chain",
+                "binding": {"type": "chain", "network": "regtest"}
+            }],
+            "policy": {}
+        }))
+        .expect("typed lab");
+        let first = lab_validation_result(&authored);
+        assert_eq!(first.component_ids, ["chain", "lnd"]);
+        assert_eq!(first.link_ids, ["lnd-chain"]);
+        assert!(first.warnings.is_empty());
+
+        let first_digest = topology_summary(&authored).topology_digest;
+        authored.components.reverse();
+        authored.links.reverse();
+        let reordered = lab_validation_result(&authored);
+        assert_eq!(first.component_ids, reordered.component_ids);
+        assert_eq!(first_digest, topology_summary(&authored).topology_digest);
+    }
+
+    #[test]
+    fn wallet_funding_rejects_the_mints_own_payment_backend_with_alternatives() {
+        let authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "funding-admission",
+            "components": [
+                {"id":"mint","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
+                {"id":"backend-lnd","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+                {"id":"router-lnd","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}}
+            ],
+            "links": [{"id":"pay","kind":"payment_backend","from":"mint","to":"backend-lnd","binding":{"type":"payment","method":"bolt11","unit":"sat"}}],
+            "policy": {}
+        }))
+        .expect("typed lab");
+
+        let error = validate_wallet_fund_payer(&authored, "mint", "backend-lnd")
+            .expect_err("a backend cannot pay its own invoice");
+        let data = error.data.expect("structured admission error");
+        assert_eq!(data["code"], "self_payment_unsupported");
+        assert!(error.message.contains("router-lnd"));
+        validate_wallet_fund_payer(&authored, "mint", "router-lnd")
+            .expect("a distinct LND payer is accepted");
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one table-style contract test keeps every valid and rejected conservation provenance case together"
+    )]
+    fn conservation_expectation_is_anchored_before_a_later_treatment() {
+        let operation = |id: &str,
+                         sequence: u64,
+                         kind: OperationKind,
+                         request: serde_json::Value,
+                         artifact: serde_json::Value| LabOperation {
+            id: id.into(),
+            workspace_id: "alpha".into(),
+            instance_id: "instance".into(),
+            experiment_id: "experiment".into(),
+            lease_id: "lease".into(),
+            principal_id: "designer".into(),
+            sequence,
+            kind,
+            capability: Capability::WalletControl,
+            resource_name: format!("resource-{id}"),
+            request_digest: format!("sha256:{id}"),
+            request,
+            phase: OperationPhase::Succeeded,
+            accepted_at_unix: 1,
+            started_at_unix: Some(2),
+            completed_at_unix: Some(3),
+            artifact: Some(OperationArtifact {
+                media_type: "application/json".into(),
+                digest: format!("sha256:artifact-{id}"),
+                byte_length: 1,
+                content: artifact,
+            }),
+        };
+        let baseline = operation(
+            "balance-before",
+            10,
+            OperationKind::WalletBalance,
+            serde_json::json!({"wallet":"wallet", "mint":"mint"}),
+            serde_json::json!({"balance_sat": 19_998}),
+        );
+        let treatment = operation(
+            "high-fee-pay",
+            11,
+            OperationKind::WalletPay,
+            serde_json::json!({"wallet":"wallet", "mint":"mint"}),
+            serde_json::json!({
+                "payer_balance_sat": 19_998,
+                "input_fee_sat": 0,
+                "input_proof_count": 0,
+                "quote_observations": [{
+                    "role": "payment_melt",
+                    "wallet_id": "wallet",
+                    "mint_id": "mint",
+                    "state": "UNPAID",
+                    "amount_sat": 1_000,
+                    "fee_paid_sat": 0
+                }]
+            }),
+        );
+        let request = ConservationOracleRequest {
+            instance_id: "instance".into(),
+            experiment_id: "experiment".into(),
+            lease_id: "lease".into(),
+            operation_id: "conservation".into(),
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+            baseline_operation_id: "balance-before".into(),
+            treatment_operation_id: "high-fee-pay".into(),
+            idempotency_key: "conservation".into(),
+        };
+
+        let evidence =
+            conservation_observation(&request, &baseline, &treatment, "alpha", "designer")
+                .expect("valid anchored conservation request");
+        assert_eq!(evidence["baseline_sat"], 19_998);
+        assert_eq!(evidence["expected_sat"], 19_998);
+        assert_eq!(evidence["actual_sat"], 19_998);
+        assert_eq!(evidence["conserved"], true);
+
+        let mut treatment_before_baseline = treatment.clone();
+        treatment_before_baseline.sequence = 9;
+        let error = conservation_observation(
+            &request,
+            &baseline,
+            &treatment_before_baseline,
+            "alpha",
+            "designer",
+        )
+        .expect_err("treatment must follow the balance baseline");
+        assert_eq!(
+            error.data.expect("coded error")["code"],
+            "conservation_treatment_invalid"
+        );
+
+        let mut round_trip = treatment_before_baseline;
+        round_trip.sequence = 11;
+        round_trip.kind = OperationKind::WalletRoundTrip;
+        let error = conservation_observation(&request, &baseline, &round_trip, "alpha", "designer")
+            .expect_err("a value-minting round trip is not a balance-invariance treatment");
+        assert_eq!(
+            error.data.expect("coded error")["code"],
+            "conservation_treatment_invalid"
+        );
+
+        let mut paid = treatment;
+        paid.artifact.as_mut().expect("paid artifact").content = serde_json::json!({
+            "payer_balance_sat": 18_996,
+            "input_fee_sat": 1,
+            "input_proof_count": 1,
+            "quote_observations": [{
+                "role": "payment_melt",
+                "wallet_id": "wallet",
+                "mint_id": "mint",
+                "state": "PAID",
+                "amount_sat": 1_000,
+                "fee_paid_sat": 1
+            }]
+        });
+        let evidence = conservation_observation(&request, &baseline, &paid, "alpha", "designer")
+            .expect("paid debit evidence");
+        assert_eq!(evidence["input_fee_sat"], 1);
+        assert_eq!(evidence["input_proof_count"], 1);
+        assert_eq!(evidence["expected_sat"], 18_996);
+        assert_eq!(evidence["actual_sat"], 18_996);
+        assert_eq!(evidence["conserved"], true);
+
+        let mut incomplete = paid;
+        incomplete
+            .artifact
+            .as_mut()
+            .expect("incomplete artifact")
+            .content
+            .as_object_mut()
+            .expect("artifact object")
+            .remove("input_fee_sat");
+        let error = conservation_observation(&request, &baseline, &incomplete, "alpha", "designer")
+            .expect_err("missing exact input-fee evidence must fail closed");
+        assert_eq!(
+            error.data.expect("coded error")["code"],
+            "conservation_treatment_artifact_invalid"
+        );
+    }
+
+    #[test]
+    fn topology_receipt_warns_when_a_direct_backend_link_bypasses_a_router() {
+        let authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "routing-hazard",
+            "components": [
+                {"id":"mint-a","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
+                {"id":"mint-b","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
+                {"id":"backend-a","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+                {"id":"backend-b","kind":"lightning","implementation":"cln","version":"26.06","config_version":"cln/26.06/v1","control":"laboratory","config":{}},
+                {"id":"router","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}}
+            ],
+            "links": [
+                {"id":"pay-a","kind":"payment_backend","from":"mint-a","to":"backend-a","binding":{"type":"payment","method":"bolt11","unit":"sat"}},
+                {"id":"pay-b","kind":"payment_backend","from":"mint-b","to":"backend-b","binding":{"type":"payment","method":"bolt11","unit":"sat"}},
+                {"id":"direct","kind":"lightning_peer","from":"backend-a","to":"backend-b"}
+            ],
+            "policy": {}
+        }))
+        .expect("typed lab");
+        let summary = topology_summary(&authored);
+        assert!(
+            summary
+                .warnings
+                .iter()
+                .any(|warning| warning.starts_with("direct_mint_backend_peer:"))
+        );
+    }
+
+    #[test]
+    fn topology_receipt_warns_when_cross_mint_work_has_only_one_wallet() {
+        let authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "wallet-hazard",
+            "components": [
+                {"id":"mint-a","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
+                {"id":"mint-b","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
+                {"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.20.3","config_version":"nutshell-wallet/0.20/v1","control":"laboratory","config":{}}
+            ],
+            "links": [],
+            "policy": {}
+        }))
+        .expect("typed lab");
+        let summary = topology_summary(&authored);
+        assert!(summary.warnings.iter().any(|warning| {
+            warning.starts_with("distinct_payment_wallets_required:")
+                && warning.contains("bidirectional cross-mint wallet_pay")
+        }));
+    }
+
+    #[test]
     fn fully_authorized_tool_discovery_has_a_regression_budget() {
         let store = seeded_store();
         let capabilities = tool_capabilities()
@@ -5349,15 +10057,40 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 61);
+        assert_eq!(service.tool_names().len(), 73);
         assert!(
-            encoded.len() < 190 * 1024,
+            !service
+                .tool_names()
+                .contains(&"proofstorm_lab_edit".to_owned()),
+            "whole-document replacement is not an agent tool"
+        );
+        assert!(
+            service
+                .tool_names()
+                .contains(&"proofstorm_wallet_quote_claim".to_owned()),
+            "recipient quote claiming is a first-class recovery operation"
+        );
+        assert!(
+            service
+                .tool_names()
+                .contains(&"proofstorm_component_logs".to_owned()),
+            "reading a component log is a first-class runtime observation"
+        );
+        assert!(
+            service
+                .tool_names()
+                .contains(&"proofstorm_channel_policy_set".to_owned()),
+            "routing policy is a first-class typed runtime operation"
+        );
+        assert!(
+            encoded.len() < 218 * 1024,
             "fully authorized tool discovery is {} bytes",
             encoded.len()
         );
         for (toolset, maximum) in [
+            (ProofstormToolset::Experiment, 125 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 160 * 1024),
+            (ProofstormToolset::Runtime, 180 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);
@@ -5384,6 +10117,65 @@ mod tests {
                 .tool_names()
                 .contains(&"proofstorm_wallet_pay".to_owned())
         );
+    }
+
+    #[test]
+    fn experiment_toolset_is_generic_and_one_session_capable() {
+        for required in [
+            "proofstorm_catalog_list",
+            "proofstorm_lab_plan",
+            "proofstorm_lab_apply",
+            "proofstorm_liquidity_bootstrap",
+            "proofstorm_channel_open",
+            "proofstorm_channel_policy_set",
+            "proofstorm_wallet_pay",
+            "proofstorm_network_partition",
+            "proofstorm_authentication_replay",
+            "proofstorm_operation_wait_many",
+            "proofstorm_artifact_export",
+            "proofstorm_lab_close",
+        ] {
+            assert!(
+                experiment_tool(required),
+                "experiment workflow is missing {required}"
+            );
+        }
+        for recipe_specific_or_unbounded in [
+            "proofstorm_lab_create",
+            "proofstorm_lab_validate",
+            "proofstorm_component_exec",
+            "proofstorm_lab_recipe_create",
+            "proofstorm_lab_recipe_bootstrap",
+            "proofstorm_lab_recipe_route_channel_open",
+            "proofstorm_lab_recipe_fee_matrix_run",
+            "proofstorm_wallet_round_trip",
+            "proofstorm_lab_clone",
+        ] {
+            assert!(
+                !experiment_tool(recipe_specific_or_unbounded),
+                "generic experiment workflow should not expose {recipe_specific_or_unbounded}"
+            );
+        }
+    }
+
+    #[test]
+    fn conservation_contract_has_no_caller_controlled_tolerance() {
+        let schema = serde_json::to_value(schemars::schema_for!(ConservationOracleRequest))
+            .expect("conservation schema");
+        assert!(
+            !schema.to_string().contains("tolerance_sat"),
+            "exact conservation must not expose caller-controlled slack"
+        );
+    }
+
+    #[test]
+    fn channel_policy_agent_contract_uses_satoshis() {
+        let schema = serde_json::to_value(schemars::schema_for!(ChannelPolicySetRequest))
+            .expect("channel policy schema");
+        let rendered = schema.to_string();
+        assert!(rendered.contains("base_fee_sat"));
+        assert!(!rendered.contains("base_fee_msat"));
+        assert!(rendered.contains("100000"));
     }
 
     fn assert_nutshell_support(catalog: &proofstorm_core::CatalogResponse) {
@@ -5457,6 +10249,48 @@ mod tests {
                 "wait_timeout_invalid"
             );
         }
+        let valid_batch = OperationWaitManyRequest {
+            operation_ids: vec!["operation-a".into(), "operation-b".into()],
+            timeout_seconds: 120,
+        };
+        assert!(validate_operation_wait_many_request(&valid_batch).is_ok());
+        for operation_ids in [
+            Vec::new(),
+            vec![
+                "a".into(),
+                "b".into(),
+                "c".into(),
+                "d".into(),
+                "e".into(),
+                "f".into(),
+                "g".into(),
+                "h".into(),
+                "i".into(),
+            ],
+        ] {
+            let error = validate_operation_wait_many_request(&OperationWaitManyRequest {
+                operation_ids,
+                timeout_seconds: 30,
+            })
+            .expect_err("batch size must refuse");
+            assert_eq!(
+                error.data.expect("structured batch error")["code"],
+                "operation_wait_many_count_invalid"
+            );
+        }
+        let duplicate_error = validate_operation_wait_many_request(&OperationWaitManyRequest {
+            operation_ids: vec!["same".into(), "same".into()],
+            timeout_seconds: 30,
+        })
+        .expect_err("duplicate IDs must refuse");
+        assert_eq!(
+            duplicate_error.data.expect("structured duplicate error")["code"],
+            "operation_wait_many_duplicate_id"
+        );
+        let schema = serde_json::to_string(&schemars::schema_for!(OperationWaitManyRequest))
+            .expect("batch wait schema");
+        assert!(schema.contains("\"minItems\":1"));
+        assert!(schema.contains("\"maxItems\":8"));
         assert!(!lab_wait_terminal(InstancePhase::Ready));
         assert!(lab_wait_terminal(InstancePhase::Closed));
         assert!(lab_wait_terminal(InstancePhase::CleanupBlocked));
@@ -5473,6 +10307,11 @@ mod tests {
                 .tool_names()
                 .contains(&"proofstorm_operation_wait".to_owned())
         );
+        assert!(
+            !restricted
+                .tool_names()
+                .contains(&"proofstorm_operation_wait_many".to_owned())
+        );
         store
             .grant("alpha", "designer", Capability::ArtifactRead)
             .expect("artifact grant");
@@ -5481,6 +10320,11 @@ mod tests {
             authorized
                 .tool_names()
                 .contains(&"proofstorm_operation_wait".to_owned())
+        );
+        assert!(
+            authorized
+                .tool_names()
+                .contains(&"proofstorm_operation_wait_many".to_owned())
         );
     }
 
@@ -5507,15 +10351,31 @@ mod tests {
             teardown_receipt: None,
             message: None,
         };
-        let receipt = compact_lab_status(status);
+        let receipt = compact_lab_status(status.clone());
         assert_eq!(receipt.total_components, 0);
         assert_eq!(receipt.inventory_count, 1);
         assert!(receipt.inventory_digest.starts_with("sha256:"));
+        assert!(
+            receipt
+                .runtime_guidance
+                .as_deref()
+                .is_some_and(|guidance| guidance.contains("liquidity_bootstrap"))
+        );
         let encoded = serde_json::to_string(&receipt).expect("status receipt");
         assert!(!encoded.contains("\"components\":["));
         assert!(!encoded.contains("inventory\":"));
         assert!(!encoded.contains("secret-routing-key"));
         assert!(serialized_size(&receipt).expect("status size") < 1024);
+
+        let close_receipt = compact_lab_wait(status, InstancePhase::Closed, false, false);
+        assert_eq!(close_receipt.phase, InstancePhase::Ready);
+        assert_eq!(close_receipt.target_phase, InstancePhase::Closed);
+        assert!(!close_receipt.reached);
+        let encoded = serde_json::to_string(&close_receipt).expect("close receipt");
+        assert!(!encoded.contains("\"components\":["));
+        assert!(!encoded.contains("inventory\":"));
+        assert!(!encoded.contains("secret-routing-key"));
+        assert!(serialized_size(&close_receipt).expect("close receipt size") < 1024);
 
         let items = vec!["alpha", "beta", "gamma"];
         let snapshot = digest_json(&items);
@@ -5541,6 +10401,16 @@ mod tests {
     }
 
     #[test]
+    fn artifact_export_agent_schema_cannot_request_bulk_content() {
+        let schema = schemars::schema_for!(ArtifactExportRequest);
+        let encoded = serde_json::to_string(&schema).expect("artifact export schema");
+        assert!(!encoded.contains("include_content"));
+        assert!(encoded.contains("artifact_operation_ids"));
+        assert!(encoded.contains("\"maxItems\":16"));
+        assert!(encoded.contains("Do not enumerate"));
+    }
+
+    #[test]
     fn handler_rechecks_authority_after_discovery() {
         let store = seeded_store();
         let session = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
@@ -5554,7 +10424,7 @@ mod tests {
             .expect("revoke");
         let result = session.proofstorm_lab_create(Parameters(CreateDraftRequest {
             draft_id: "refused".into(),
-            lab: lab("refused"),
+            lab: authored_lab("refused"),
             idempotency_key: "create-refused".into(),
         }));
         let Err(error) = result else {
@@ -5573,6 +10443,7 @@ mod tests {
             Capability::ChainMine,
             Capability::WalletFund,
             Capability::PeerConnect,
+            Capability::ExperimentRead,
         ] {
             store
                 .grant("alpha", "designer", capability)
@@ -5651,6 +10522,414 @@ mod tests {
         ] {
             assert!(teardown.tool_names().contains(&tool.to_owned()));
         }
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the admission fixture covers missing, pending, failed-safe, funded, and unfunded workflow states"
+    )]
+    fn peer_and_channel_admission_require_a_succeeded_bootstrap() {
+        let store = seeded_store();
+        for capability in [
+            Capability::ExperimentCreate,
+            Capability::ExperimentRead,
+            Capability::LeaseAcquire,
+            Capability::WalletFund,
+        ] {
+            store
+                .grant("alpha", "designer", capability)
+                .expect("runtime prerequisite grant");
+        }
+        store
+            .create_draft(
+                "alpha",
+                "designer",
+                "runtime-lab",
+                &lab("runtime-lab"),
+                "create-runtime-lab",
+            )
+            .expect("draft");
+        let revision = store
+            .publish("alpha", "designer", "runtime-lab", 1, "publish-runtime-lab")
+            .expect("revision");
+        store
+            .materialize(
+                "alpha",
+                "designer",
+                "runtime-instance",
+                &revision.digest,
+                "materialize-runtime-lab",
+            )
+            .expect("instance");
+        store
+            .create_experiment(
+                "alpha",
+                "designer",
+                "runtime-experiment",
+                "runtime-instance",
+                "create-runtime-experiment",
+            )
+            .expect("experiment");
+        store
+            .acquire_lease(
+                "alpha",
+                "designer",
+                "runtime-experiment",
+                "runtime-lease",
+                300,
+                2,
+                "acquire-runtime-lease",
+            )
+            .expect("lease");
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
+        let error = service
+            .require_liquidity_bootstrap("runtime-experiment", "runtime-instance")
+            .expect_err("missing bootstrap must fail closed");
+        assert_eq!(
+            error.data.expect("missing bootstrap data")["code"],
+            "runtime_initialization_required"
+        );
+
+        let bootstrap = store
+            .create_operation(
+                "alpha",
+                "designer",
+                "runtime-instance",
+                "runtime-experiment",
+                "runtime-lease",
+                "runtime-bootstrap",
+                OperationKind::BootstrapLiquidity,
+                &serde_json::json!({
+                    "instance_id": "runtime-instance",
+                    "experiment_id": "runtime-experiment",
+                    "lease_id": "runtime-lease",
+                    "operation_id": "runtime-bootstrap",
+                    "chain": "chain",
+                    "mint_lightning": "mint-lnd",
+                    "payer_lightning": "router-lnd",
+                    "funding_sat": 1_000_000,
+                    "channel_sat": 500_000,
+                    "push_sat": 250_000
+                }),
+                "create-runtime-bootstrap",
+                Capability::WalletFund,
+            )
+            .expect("bootstrap operation");
+        let error = service
+            .require_liquidity_bootstrap("runtime-experiment", "runtime-instance")
+            .expect_err("pending bootstrap must fail closed");
+        assert_eq!(
+            error.data.expect("pending bootstrap data")["code"],
+            "runtime_initialization_in_progress"
+        );
+        store
+            .record_operation_result(
+                "alpha",
+                &bootstrap.id,
+                OperationPhase::Succeeded,
+                serde_json::json!({"ready": true}),
+            )
+            .expect("bootstrap result");
+        let succeeded = service
+            .require_liquidity_bootstrap("runtime-experiment", "runtime-instance")
+            .expect("succeeded bootstrap unlocks peer/channel actions");
+        let channel_request = |from: &str, channel_sat| ChannelOpenRequest {
+            instance_id: "runtime-instance".into(),
+            experiment_id: "runtime-experiment".into(),
+            lease_id: "runtime-lease".into(),
+            operation_id: "runtime-channel".into(),
+            chain: "chain".into(),
+            from_lightning: from.into(),
+            to_lightning: "cln-mint".into(),
+            channel_sat,
+            push_sat: channel_sat / 2,
+            idempotency_key: "runtime-channel-key".into(),
+        };
+        let error =
+            validate_channel_funding_admission(&channel_request("router-lnd", 500_000), &succeeded)
+                .expect_err("a second channel cannot consume the bootstrap fee margin");
+        let data = error.data.expect("funding admission data");
+        assert_eq!(data["code"], "insufficient_channel_funding_margin");
+        assert_eq!(data["safe_max_channel_sat"], 490_000);
+        validate_channel_funding_admission(&channel_request("router-lnd", 400_000), &succeeded)
+            .expect("a channel below the safe remaining budget is admitted");
+        let error =
+            validate_channel_funding_admission(&channel_request("cln-mint", 20_000), &succeeded)
+                .expect_err("an unfunded channel source must be rejected before runtime");
+        assert_eq!(
+            error.data.expect("source admission data")["code"],
+            "channel_funding_source_unproven"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the lifecycle regression covers empty, active, and terminal journal finalization"
+    )]
+    async fn experiment_close_reconciles_before_finalization_and_fails_closed() {
+        let store = seeded_store();
+        for capability in [
+            Capability::ExperimentCreate,
+            Capability::ExperimentRead,
+            Capability::ExperimentClose,
+            Capability::LeaseAcquire,
+            Capability::LeaseRelease,
+            Capability::WalletControl,
+        ] {
+            store
+                .grant("alpha", "designer", capability)
+                .expect("experiment finalization grant");
+        }
+        store
+            .create_draft(
+                "alpha",
+                "designer",
+                "finalization-lab",
+                &lab("finalization-lab"),
+                "create-finalization-lab",
+            )
+            .expect("draft");
+        let revision = store
+            .publish(
+                "alpha",
+                "designer",
+                "finalization-lab",
+                1,
+                "publish-finalization-lab",
+            )
+            .expect("revision");
+        store
+            .materialize(
+                "alpha",
+                "designer",
+                "finalization-instance",
+                &revision.digest,
+                "materialize-finalization-lab",
+            )
+            .expect("instance");
+        store
+            .create_experiment(
+                "alpha",
+                "designer",
+                "empty-finalization",
+                "finalization-instance",
+                "create-empty-finalization",
+            )
+            .expect("empty experiment");
+        let service =
+            ProofstormMcp::new(store.clone(), "alpha", "designer").expect("finalization session");
+        let closed = service
+            .proofstorm_experiment_close(Parameters(CloseExperimentRequest {
+                experiment_id: "empty-finalization".into(),
+                idempotency_key: "close-empty-finalization".into(),
+            }))
+            .await
+            .expect("an experiment without active actions closes")
+            .0;
+        assert_eq!(closed.phase, ExperimentPhase::Closed);
+
+        store
+            .create_experiment(
+                "alpha",
+                "designer",
+                "active-finalization",
+                "finalization-instance",
+                "create-active-finalization",
+            )
+            .expect("active experiment");
+        store
+            .acquire_lease(
+                "alpha",
+                "designer",
+                "active-finalization",
+                "active-finalization-lease",
+                300,
+                1,
+                "acquire-active-finalization-lease",
+            )
+            .expect("lease");
+        let operation = store
+            .create_operation(
+                "alpha",
+                "designer",
+                "finalization-instance",
+                "active-finalization",
+                "active-finalization-lease",
+                "active-finalization-balance",
+                OperationKind::WalletBalance,
+                &serde_json::json!({"wallet": "wallet", "mint": "mint"}),
+                "create-active-finalization-balance",
+                Capability::WalletControl,
+            )
+            .expect("active operation");
+        store
+            .release_lease(
+                "alpha",
+                "designer",
+                "active-finalization-lease",
+                "release-active-finalization-lease",
+            )
+            .expect("release lease");
+        let Err(error) = service
+            .proofstorm_experiment_close(Parameters(CloseExperimentRequest {
+                experiment_id: "active-finalization".into(),
+                idempotency_key: "close-active-finalization".into(),
+            }))
+            .await
+        else {
+            panic!("an unreconciled action must prevent experiment close");
+        };
+        assert_eq!(
+            error.data.expect("runtime error data")["code"],
+            "runtime_unavailable"
+        );
+        assert_eq!(
+            store
+                .experiment("alpha", "designer", "active-finalization")
+                .expect("active experiment remains readable")
+                .phase,
+            ExperimentPhase::Active
+        );
+
+        store
+            .record_operation_result(
+                "alpha",
+                &operation.id,
+                OperationPhase::Succeeded,
+                serde_json::json!({"balance_sat": 100}),
+            )
+            .expect("terminal result");
+        let closed = service
+            .proofstorm_experiment_close(Parameters(CloseExperimentRequest {
+                experiment_id: "active-finalization".into(),
+                idempotency_key: "close-active-finalization".into(),
+            }))
+            .await
+            .expect("terminal journal closes without a runtime")
+            .0;
+        assert_eq!(closed.phase, ExperimentPhase::Closed);
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the regression fixture proves terminalization across the complete durable workflow"
+    )]
+    fn invalid_runtime_quote_artifact_fails_terminally_without_stranding_a_slot() {
+        let store = seeded_store();
+        for capability in [
+            Capability::ExperimentCreate,
+            Capability::LeaseAcquire,
+            Capability::WalletControl,
+        ] {
+            store
+                .grant("alpha", "designer", capability)
+                .expect("runtime result grant");
+        }
+        store
+            .create_draft(
+                "alpha",
+                "designer",
+                "artifact-contract-lab",
+                &lab("artifact-contract-lab"),
+                "create-artifact-contract-lab",
+            )
+            .expect("draft");
+        let revision = store
+            .publish(
+                "alpha",
+                "designer",
+                "artifact-contract-lab",
+                1,
+                "publish-artifact-contract-lab",
+            )
+            .expect("revision");
+        store
+            .materialize(
+                "alpha",
+                "designer",
+                "artifact-contract-instance",
+                &revision.digest,
+                "materialize-artifact-contract-lab",
+            )
+            .expect("instance");
+        store
+            .create_experiment(
+                "alpha",
+                "designer",
+                "artifact-contract-experiment",
+                "artifact-contract-instance",
+                "create-artifact-contract-experiment",
+            )
+            .expect("experiment");
+        store
+            .acquire_lease(
+                "alpha",
+                "designer",
+                "artifact-contract-experiment",
+                "artifact-contract-lease",
+                300,
+                1,
+                "acquire-artifact-contract-lease",
+            )
+            .expect("lease");
+        let operation = store
+            .create_operation(
+                "alpha",
+                "designer",
+                "artifact-contract-instance",
+                "artifact-contract-experiment",
+                "artifact-contract-lease",
+                "artifact-contract-pay",
+                OperationKind::WalletPay,
+                &serde_json::json!({
+                    "wallet": "payer",
+                    "mint": "payer-mint",
+                    "recipient_wallet": "recipient",
+                    "recipient_mint": "recipient-mint",
+                    "mint_quote_id": "quote"
+                }),
+                "create-artifact-contract-pay",
+                Capability::WalletControl,
+            )
+            .expect("wallet payment operation");
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
+        let completed = service
+            .record_runtime_terminal_result(
+                &operation,
+                OperationPhase::Succeeded,
+                serde_json::json!({
+                    "input_fee_sat": 1,
+                    "input_proof_count": 1,
+                    "quote_observations": [{
+                        "role": "payment_melt",
+                        "wallet_id": "payer",
+                        "mint_id": "payer-mint",
+                        "direction": "pay",
+                        "quote_id": "melt",
+                        "amount_sat": 1_000,
+                        "state": "PAID",
+                        "fee_reserve_sat": 10,
+                        "fee_paid_sat": 1,
+                        "input_fee_sat": 1
+                    }]
+                }),
+            )
+            .expect("invalid producer output is recorded as a terminal failure");
+        assert_eq!(completed.phase, OperationPhase::Failed);
+        assert_eq!(
+            completed.artifact.expect("failure artifact").content["code"],
+            "invalid_wallet_quote_observation"
+        );
+        assert!(
+            store
+                .active_operations("alpha", "artifact-contract-instance")
+                .expect("active operations")
+                .is_empty(),
+            "a bad terminal artifact must not consume an active-operation slot"
+        );
     }
 
     #[test]
@@ -5996,6 +11275,9 @@ mod tests {
         assert_eq!(manifest.byte_length, first.byte_length);
         assert!(!manifest.content_included);
         assert!(manifest.content.is_none());
+        assert!(manifest.journal_complete);
+        assert!(manifest.artifact_bodies_optional);
+        assert!(manifest.guidance.contains("Do not retry"));
         assert!(
             manifest
                 .resource_uri
@@ -6093,6 +11375,11 @@ mod tests {
                 .contains(&"proofstorm_wallet_invoice".to_owned())
         );
         assert!(
+            complete
+                .tool_names()
+                .contains(&"proofstorm_wallet_quote_claim".to_owned())
+        );
+        assert!(
             !complete
                 .tool_names()
                 .contains(&"proofstorm_wallet_pay".to_owned())
@@ -6114,6 +11401,10 @@ mod tests {
         );
         let Err(missing_quote) = status
             .proofstorm_wallet_quote_status(Parameters(WalletQuoteRequest {
+                instance_id: "missing-instance".into(),
+                wallet: "missing-wallet".into(),
+                mint: "missing-mint".into(),
+                direction: WalletQuoteDirection::Receive,
                 quote_id: "missing-quote".into(),
             }))
             .await
@@ -6140,186 +11431,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "the restart acceptance scenario keeps durable setup and reconciliation evidence together"
-    )]
-    async fn quote_status_repairs_ambiguous_state_from_durable_settlement_after_restart() {
-        let store = seeded_store();
-        for capability in [
-            Capability::ExperimentCreate,
-            Capability::LeaseAcquire,
-            Capability::WalletFund,
-            Capability::ArtifactRead,
-        ] {
-            store
-                .grant("alpha", "designer", capability)
-                .expect("recovery grant");
-        }
-        store
-            .create_draft(
-                "alpha",
-                "designer",
-                "recovery",
-                &lab("recovery"),
-                "create-recovery",
-            )
-            .expect("draft");
-        let revision = store
-            .publish("alpha", "designer", "recovery", 1, "publish-recovery")
-            .expect("revision");
-        store
-            .materialize(
-                "alpha",
-                "designer",
-                "recovery-instance",
-                &revision.digest,
-                "materialize-recovery",
-            )
-            .expect("instance");
-        store
-            .create_experiment(
-                "alpha",
-                "designer",
-                "recovery-experiment",
-                "recovery-instance",
-                "create-recovery-experiment",
-            )
-            .expect("experiment");
-        store
-            .acquire_lease(
-                "alpha",
-                "designer",
-                "recovery-experiment",
-                "recovery-lease",
-                300,
-                1,
-                "acquire-recovery-lease",
-            )
-            .expect("lease");
-        store
-            .create_wallet_quote(
-                "alpha",
-                "designer",
-                "recovery-instance",
-                "recovery-experiment",
-                "recovery-lease",
-                "recovery-quote",
-                "receiver-wallet",
-                "mint",
-                WalletQuoteDirection::Receive,
-                100,
-                300,
-                "create-recovery-quote",
-            )
-            .expect("quote");
-        let operation = store
-            .create_operation(
-                "alpha",
-                "designer",
-                "recovery-instance",
-                "recovery-experiment",
-                "recovery-lease",
-                "recovery-invoice",
-                OperationKind::WalletInvoice,
-                &serde_json::json!({"quote_id": "recovery-quote"}),
-                "create-recovery-invoice",
-                Capability::WalletFund,
-            )
-            .expect("operation");
-        store
-            .transition_wallet_quote(
-                "alpha",
-                "recovery-quote",
-                WalletQuotePhase::Requested,
-                WalletQuotePhase::Inconclusive,
-                Some(&operation.id),
-                Some("terminal_artifact_missing"),
-            )
-            .expect("ambiguous quote");
-        store
-            .record_operation_result(
-                "alpha",
-                &operation.id,
-                OperationPhase::Succeeded,
-                serde_json::json!({"phase": "settled", "amount_sat": 100}),
-            )
-            .expect("durable settlement artifact");
-
-        let restarted = ProofstormMcp::new(store, "alpha", "designer").expect("restart session");
-        let quote = restarted
-            .proofstorm_wallet_quote_status(Parameters(WalletQuoteRequest {
-                quote_id: "recovery-quote".into(),
-            }))
-            .await
-            .expect("reconciled quote")
-            .0;
-        assert_eq!(quote.phase, WalletQuotePhase::Settled);
-        assert!(quote.settled_at_unix.is_some());
-        assert!(quote.terminal_code.is_none());
-    }
-
     #[test]
-    fn wallet_quote_recovery_is_conservative_and_reconcilable() {
+    fn wallet_quote_cursor_is_snapshot_and_experiment_bound() {
+        let cursor = encode_quote_cursor("experiment-one", 42, 17);
         assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletInvoice,
-                OperationPhase::Failed,
-                WalletQuotePhase::Ready,
-                "action_deadline_exceeded",
-            ),
-            Some((WalletQuotePhase::Expired, Some("action_deadline_exceeded")))
+            decode_quote_cursor(&cursor, "experiment-one").expect("valid cursor"),
+            (42, 17)
         );
+        let error = decode_quote_cursor(&cursor, "experiment-two")
+            .expect_err("cursor cannot cross experiments");
         assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletInvoice,
-                OperationPhase::Cancelled,
-                WalletQuotePhase::Ready,
-                "action_cancelled",
-            ),
-            Some((WalletQuotePhase::Cancelled, Some("action_cancelled")))
-        );
-        for code in ["action_job_lost", "terminal_artifact_missing"] {
-            assert_eq!(
-                wallet_quote_recovery_outcome(
-                    OperationKind::WalletPay,
-                    OperationPhase::Failed,
-                    WalletQuotePhase::Pending,
-                    code,
-                ),
-                Some((WalletQuotePhase::Inconclusive, Some(code)))
-            );
-        }
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletInvoice,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Inconclusive,
-                "action_failed",
-            ),
-            Some((WalletQuotePhase::Settled, None))
-        );
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Succeeded,
-                WalletQuotePhase::Inconclusive,
-                "action_failed",
-            ),
-            Some((WalletQuotePhase::Paid, None))
-        );
-        assert_eq!(
-            wallet_quote_recovery_outcome(
-                OperationKind::WalletPay,
-                OperationPhase::Failed,
-                WalletQuotePhase::Pending,
-                "action_deadline_exceeded",
-            ),
-            Some((
-                WalletQuotePhase::Inconclusive,
-                Some("action_deadline_exceeded")
-            ))
+            error.data.expect("structured cursor error")["code"],
+            "invalid_wallet_quote_cursor"
         );
     }
 }

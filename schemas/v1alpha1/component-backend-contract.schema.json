@@ -482,7 +482,8 @@
         "native_exec",
         "network_heal",
         "peer_channel_mutation",
-        "wallet_payment"
+        "wallet_payment",
+        "authentication"
       ],
       "type": "string"
     },
