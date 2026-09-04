@@ -143,7 +143,8 @@ docker-build:
 docker-push: docker-build
 	docker push $(IMAGE)
 
-# Helm installs chart CRDs once but never upgrades them, so reconcile the
+# The Makefile is the sole CRD field owner. Helm skips chart CRD installation
+# on both fresh installs and upgrades so server-side apply can reconcile the
 # checked-in API before the controller that depends on it.
 install: tools
 	$(KUBECTL) apply --server-side --force-conflicts \
@@ -155,7 +156,8 @@ cluster-schema: build
 deploy: install cluster-schema
 	$(HELM) upgrade --install proofstorm $(CHART) \
 		--kube-context $(CONTEXT) \
-		--namespace $(CONTROL_NAMESPACE) --create-namespace --rollback-on-failure --wait
+		--namespace $(CONTROL_NAMESPACE) --create-namespace --skip-crds \
+		--rollback-on-failure --wait
 	$(KUBECTL) rollout restart deployment/proofstormd -n $(CONTROL_NAMESPACE)
 	$(KUBECTL) rollout status deployment/proofstormd -n $(CONTROL_NAMESPACE) --timeout=90s
 
