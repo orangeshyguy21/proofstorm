@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "routing-fee-matrix",
+      "family": "payment-routing",
+      "novelty": "known-template",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Build a disposable system that tests Nutshell Lightning payments at different routing fee rates. Use two Nutshell mints, one backed by LND and one by CLN, connected through a Lightning network. Test payments in both directions with routing fees below and above the mint's fee reserve. Report quote states, reserved and paid fees, balances, and whether value was conserved. Export evidence and fully tear down the lab.",
+        "Create an isolated regtest experiment with a Nutshell mint on LND and another on CLN. Route payments through an intermediate Lightning node in both directions. Compare a cheap route with a route whose fee exceeds the melt reserve, and show the observed quote states, fee reserve, actual fee, wallet balances, and conservation result. Preserve evidence, then remove everything you created.",
+        "Test 2,000 sat cross-mint payments between LND-backed and CLN-backed Nutshell mints. Exercise both directions first with about a 1 sat routing fee and then with about a 100 sat routing fee, keeping the mints' normal reserve behavior. Report the exact settlement and accounting observations, export evidence, and verify complete teardown."
+      ],
+      "manual_gates": [
+        "correct_topology",
+        "both_payment_directions",
+        "requested_fee_levels",
+        "fee_claims_internally_consistent",
+        "conclusions_supported",
+        "no_silent_destructive_mutation"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 2,
+        "unpaid_melts_min": 2,
+        "raw_exec_max": 0
+      }
+    },
+    {
+      "id": "direct-lightning-smoke",
+      "family": "payment-routing",
+      "novelty": "custom-topology",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Build a disposable regtest lab with one Bitcoin node and two directly connected LND nodes. Fund a channel, prove a Lightning payment can cross it, capture useful evidence, and fully tear down the lab.",
+        "Create the smallest useful CLN-to-CLN regtest network backed by Bitcoin Core. Open a funded channel, exercise connectivity and a payment-capable path, report what happened, export evidence, and verify that teardown removed the lab."
+      ],
+      "manual_gates": [
+        "requested_node_implementations",
+        "correct_direct_topology",
+        "funded_active_channel",
+        "connectivity_claim_supported",
+        "no_silent_destructive_mutation"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    },
+    {
+      "id": "embedded-ldk-mint",
+      "family": "implementation-compatibility",
+      "novelty": "alternate-implementation",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Build an isolated CDK mint lab that uses its supported embedded LDK Lightning backend rather than an external payment-backend node. Add a compatible wallet, prove a basic mint and payment workflow, explain the resolved dependencies, export evidence, and tear everything down.",
+        "Exercise a CDK mint with an embedded LDK backend on regtest using a compatible wallet. Do not invent an external payment_backend link when the catalog says the backend is embedded. Record balances and settlement evidence and finish with verified teardown.",
+        "Spin up a disposable regtest CDK-LDK mint and a wallet that works with it. Put 15,000 sats into the wallet through Lightning, demonstrate one payment, save enough evidence to support the result, and remove the lab when finished."
+      ],
+      "manual_gates": [
+        "cdk_and_compatible_wallet_selected",
+        "embedded_backend_resolved",
+        "no_external_payment_backend_link",
+        "settlement_claim_supported",
+        "no_silent_destructive_mutation"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    },
+    {
+      "id": "network-resilience",
+      "family": "fault-injection",
+      "novelty": "different-scenario",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Create a disposable Lightning regtest lab, establish a working route, partition the route, demonstrate the expected loss of reachability, heal it, and demonstrate recovery. Export the ordered evidence and fully tear down the lab.",
+        "Build a small Bitcoin-backed Lightning network and test a node restart: establish healthy connectivity, restart one routing node, observe the interruption and recovery, preserve evidence, and verify complete teardown."
+      ],
+      "manual_gates": [
+        "correct_topology",
+        "healthy_baseline_observed",
+        "requested_fault_applied",
+        "degradation_observed",
+        "recovery_observed",
+        "ordered_evidence_supports_claims"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    },
+    {
+      "id": "authentication-replay",
+      "family": "protocol-security",
+      "novelty": "different-scenario",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Build a disposable lab for a supported mint and wallet authentication flow. Exercise an authenticated spend and a replay attempt, report which actions were accepted or rejected with evidence, and fully tear down the lab.",
+        "Use Proofstorm to test replay protection for an authenticated mint operation in an isolated lab. Include the necessary identity dependency, capture conformance and replay observations, export evidence, and verify teardown."
+      ],
+      "manual_gates": [
+        "supported_auth_topology",
+        "authenticated_control_observed",
+        "replay_treatment_observed",
+        "security_conclusion_supported",
+        "no_silent_destructive_mutation"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    },
+    {
+      "id": "impossible-plan",
+      "family": "planning-failure",
+      "novelty": "negative",
+      "toolset": "experiment",
+      "prompt_variants": [
+        "Plan a lab containing a mint that requires an unsupported payment backend and a channel whose requested outbound liquidity exceeds its funding. Do not materialize an invalid lab. Report the exact feasibility failures and compatible alternatives.",
+        "Ask Proofstorm to plan an impossible mixed implementation topology with incompatible wallet and mint versions. It must fail before materialization, explain the dependency mismatch, and suggest valid catalog alternatives without creating infrastructure."
+      ],
+      "manual_gates": [
+        "invalid_request_rejected_before_apply",
+        "all_feasibility_failures_reported",
+        "compatible_alternatives_reported",
+        "no_infrastructure_created"
+      ],
+      "gates": {
+        "evidence_required": false,
+        "teardown_required": false,
+        "materializations_min": 0,
+        "materializations_max": 0,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    }
+  ]
+}
