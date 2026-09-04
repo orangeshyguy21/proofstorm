@@ -36,20 +36,21 @@ pub use api::{
     TeardownReceipt, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
     WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction, WalletQuoteClaimAction,
     WalletRoundTripAction,
+    WalletRoundTripAction,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,
     AuthenticationProtectedSpendJobSpec, AuthenticationReplayJobSpec, BootstrapJobSpec,
     ChannelCloseJobSpec, ChannelOpenJobSpec, ChannelPolicySetJobSpec, ChannelRebalanceJobSpec,
-    ConservationOracleJobSpec, LightningAdapter, PeerConnectJobSpec, PeerDisconnectJobSpec,
-    WalletFundJobSpec, WalletInvoiceJobSpec, WalletJobSpec, WalletPayJobSpec,
+    WalletFundJobSpec, WalletInvoiceJobSpec, WalletJobSpec, WalletMeltQuoteRefreshJobSpec,
+    WalletPayJobSpec, WalletRoundTripJobSpec, action_result_container, evaluate_action_admission,
     WalletRoundTripJobSpec, action_result_container, evaluate_action_admission,
     render_authentication_conformance_job, render_authentication_protected_spend_job,
     render_authentication_replay_job, render_bootstrap_job, render_channel_close_job,
     render_channel_open_job, render_channel_policy_set_job, render_channel_rebalance_job,
     render_conservation_oracle_job, render_lab_action_cleanup_job, render_lab_action_job,
     render_peer_connect_job, render_peer_disconnect_job, render_wallet_balance_job,
-    render_wallet_fund_job, render_wallet_initialize_job, render_wallet_invoice_job,
+    render_wallet_melt_quote_refresh_job, render_wallet_pay_job, render_wallet_round_trip_job,
     render_wallet_pay_job, render_wallet_round_trip_job,
 };
 pub use render::{

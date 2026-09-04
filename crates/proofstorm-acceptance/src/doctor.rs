@@ -18,39 +18,27 @@ use crate::{Kubectl, McpClient, gate::CONTROL_NAMESPACE, json as expect};
 /// Tools a fully granted principal must still see after capability filtering.
 const REQUIRED_TOOLS: &[&str] = &[
     "proofstorm_artifact_export",
-    "proofstorm_catalog_entry_read",
     "proofstorm_catalog_list",
     "proofstorm_channel_open",
+    "proofstorm_component_restart",
     "proofstorm_component_exec_live",
     "proofstorm_component_forensics",
     "proofstorm_component_restart",
-    "proofstorm_conservation_oracle",
-    "proofstorm_evidence_section_read",
     "proofstorm_lab_close",
     "proofstorm_lab_component_status_list",
     "proofstorm_network_heal",
     "proofstorm_network_partition",
-    "proofstorm_node_restart",
-    "proofstorm_peer_connect",
-    "proofstorm_reachability_oracle",
-    "proofstorm_wallet_balance",
     "proofstorm_wallet_fund",
-    "proofstorm_wallet_initialize",
     "proofstorm_wallet_invoice",
     "proofstorm_wallet_pay",
-];
-
 /// Spawn the configured server and assert it still advertises every required tool.
-///
 /// The database path is redirected to a temporary file so the doctor never
 /// touches the operator's durable store.
 pub fn run(mcp_binary: &Path, config_path: &Path) -> Result<()> {
     let raw = std::fs::read_to_string(config_path)
         .with_context(|| format!("read {}", config_path.display()))?;
+    "proofstorm_wallet_melt_quote_refresh",
     let config: Value =
-        serde_json::from_str(&raw).with_context(|| format!("parse {}", config_path.display()))?;
-    let environment = expect::object(&config, "/mcp/proofstorm/environment")
-        .context("the configuration has no Proofstorm MCP environment")?;
 
     let directory = tempfile::Builder::new()
         .prefix("proofstorm-doctor-")

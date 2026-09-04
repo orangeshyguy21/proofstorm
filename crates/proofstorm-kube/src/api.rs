@@ -107,6 +107,7 @@ pub enum LabAction {
     NodeStop(NodeControlAction),
     NodeRestart(NodeControlAction),
     ComponentRestart(NodeControlAction),
+    ComponentRestart(NodeControlAction),
     BootstrapLiquidity(BootstrapLiquidityAction),
     PeerConnect(PeerConnectAction),
     PeerDisconnect(PeerDisconnectAction),
@@ -122,10 +123,12 @@ pub enum LabAction {
     WalletFund(WalletFundAction),
     WalletInvoice(WalletInvoiceAction),
     WalletPay(WalletPayAction),
+    WalletMeltQuoteRefresh(WalletMeltQuoteRefreshAction),
     WalletQuoteClaim(WalletQuoteClaimAction),
     WalletRoundTrip(WalletRoundTripAction),
     ConservationOracle(ConservationOracleAction),
-    ReachabilityOracle(ReachabilityOracleAction),
+    ComponentForensics(ComponentForensicsAction),
+    ComponentExecLive(ComponentExecLiveAction),
     ComponentForensics(ComponentForensicsAction),
     ComponentExecLive(ComponentExecLiveAction),
     ComponentLogs(ComponentLogsAction),
@@ -151,6 +154,7 @@ struct LabActionSchema {
 #[allow(dead_code)]
 enum LabActionKindSchema {
     NodeStart,
+    ComponentRestart,
     NodeStop,
     NodeRestart,
     ComponentRestart,
@@ -167,10 +171,12 @@ enum LabActionKindSchema {
     WalletInitialize,
     WalletBalance,
     WalletFund,
+    WalletMeltQuoteRefresh,
     WalletInvoice,
     WalletPay,
     WalletQuoteClaim,
-    WalletRoundTrip,
+    ComponentForensics,
+    ComponentExecLive,
     ConservationOracle,
     ReachabilityOracle,
     ComponentForensics,
@@ -210,6 +216,7 @@ struct LabActionParametersSchema {
     recipient_mint: Option<String>,
     mint: Option<String>,
     identity_provider: Option<String>,
+    melt_quote_id: Option<String>,
     session_secret: Option<String>,
     source_operation_id: Option<String>,
     quote_id: Option<String>,
@@ -371,7 +378,7 @@ pub enum AuthenticationSessionFailureStage {
 
 /// An unrestricted shell program executed in a component's locked image.
 ///
-/// The Kubernetes renderer, rather than the caller, owns namespace placement,
+pub struct ComponentForensicsAction {
 /// credentials, volumes, service account, and pod security.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -380,6 +387,17 @@ pub struct ComponentForensicsAction {
     /// Component whose service metadata is exposed to the native command.
     /// Defaults to the execution component at the MCP boundary.
     pub target_component: String,
+/// Execute a bounded shell program inside the selected running component
+/// container. Unlike `ComponentForensicsAction`, this shares the component's real
+/// network namespace, process-visible filesystem, user, and Unix sockets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentExecLiveAction {
+    pub component: String,
+    pub script: String,
+    pub timeout_seconds: u32,
+}
+
     pub script: String,
     pub timeout_seconds: u32,
 }
@@ -511,6 +529,16 @@ pub struct WalletInvoiceAction {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WalletPayAction {
     pub wallet: String,
+/// Refresh an exact payer-side melt quote through the wallet adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletMeltQuoteRefreshAction {
+    pub wallet: String,
+    pub mint: String,
+    pub melt_quote_id: String,
+    pub timeout_seconds: u32,
+}
+
     pub mint: String,
     pub recipient_wallet: String,
     pub recipient_mint: String,

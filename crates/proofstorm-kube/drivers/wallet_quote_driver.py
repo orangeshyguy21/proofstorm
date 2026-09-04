@@ -4,6 +4,7 @@ The driver runs inside the pinned wallet image. It emits only sanitized JSON;
 the BOLT11 request is used for exact correlation but is never serialized.
 """
 
+import asyncio
 import glob
 import json
 import os
@@ -245,6 +246,46 @@ def melt_row():
         time.sleep(retry_seconds)
 
 
+def melt_row_by_id(target_quote_id):
+    row = query_with_retry(
+        "SELECT quote, state, amount, fee_reserve, fee_paid "
+        "FROM bolt11_melt_quotes WHERE quote = ? LIMIT 1",
+        (target_quote_id,),
+        "melt_quote_missing",
+    )
+    if row[0] != target_quote_id:
+        raise DriverFailure("melt_quote_identity_mismatch")
+    return row
+
+
+def proof_reservation_snapshot(target_quote_id):
+    _, paths = wallet_databases()
+    for path in paths:
+        connection = None
+        try:
+            connection = connect_read_only(path, 1)
+            reserved = connection.execute(
+                "SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM proofs "
+                "WHERE melt_id = ? AND reserved",
+                (target_quote_id,),
+            ).fetchone()
+            available = connection.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM proofs WHERE NOT reserved"
+            ).fetchone()
+            return {
+                "reserved_proof_count": int(reserved[0]),
+                "reserved_sat": int(reserved[1]),
+                "available_balance_sat": int(available[0]),
+            }
+        except sqlite3.OperationalError as error:
+            if "no such table" not in str(error).lower():
+                raise DriverFailure("wallet_database_read_failed") from error
+        finally:
+            if connection is not None:
+                connection.close()
+    raise DriverFailure("wallet_proof_schema_mismatch")
+
+
 def authoritative_melt_row(wallet_row):
     """Replace Nutshell 0.20 wallet-local fee accounting with mint facts.
 
@@ -339,6 +380,68 @@ def observe_melt():
         "fee_paid_sat": None if fee_paid is None else int(fee_paid),
     }
     sys.stdout.write(json.dumps(artifact, separators=(",", ":"), sort_keys=True))
+
+
+async def refresh_melt_quote_async():
+    target_quote_id = quote_id("PROOFSTORM_MELT_QUOTE_ID")
+    expected_mint = required("PROOFSTORM_EXPECTED_MINT_URL")
+    wallet_name = required("PROOFSTORM_WALLET")
+    before_row = melt_row_by_id(target_quote_id)
+    before = proof_reservation_snapshot(target_quote_id)
+
+    from cashu.wallet.wallet import Wallet
+
+    wallet = await Wallet.with_db(
+        expected_mint,
+        os.path.join(required("HOME"), ".cashu", wallet_name),
+        name=wallet_name,
+        unit="sat",
+    )
+    refreshed = await wallet.get_melt_quote(target_quote_id)
+    if refreshed is None:
+        raise DriverFailure("melt_quote_refresh_missing")
+
+    after = proof_reservation_snapshot(target_quote_id)
+    remote_state = str(getattr(refreshed, "state", ""))
+    if "." in remote_state:
+        remote_state = remote_state.rsplit(".", 1)[-1]
+    remote_state = remote_state.upper()
+    if remote_state not in ("UNPAID", "PENDING", "PAID"):
+        raise DriverFailure("unsupported_wallet_quote_state")
+
+    _, _, amount, fee_reserve, fee_paid = before_row
+    observation = {
+        "role": "payment_melt",
+        "direction": "pay",
+        "quote_id": target_quote_id,
+        "wallet_id": wallet_name,
+        "mint_id": required("PROOFSTORM_MINT"),
+        "state": remote_state,
+        "amount_sat": int(amount),
+        "fee_reserve_sat": int(fee_reserve),
+        "fee_paid_sat": None if fee_paid is None else int(fee_paid),
+    }
+    artifact = {
+        "melt_quote_id": target_quote_id,
+        "state_before": str(before_row[1]).upper(),
+        "state_after": remote_state,
+        "reserved_proof_count_before": before["reserved_proof_count"],
+        "reserved_proof_count_after": after["reserved_proof_count"],
+        "reserved_sat_before": before["reserved_sat"],
+        "reserved_sat_after": after["reserved_sat"],
+        "available_balance_sat_before": before["available_balance_sat"],
+        "available_balance_sat_after": after["available_balance_sat"],
+        "proofs_released": (
+            before["reserved_proof_count"] > 0
+            and after["reserved_proof_count"] == 0
+        ),
+        "quote_observations": [observation],
+    }
+    sys.stdout.write(json.dumps(artifact, separators=(",", ":"), sort_keys=True))
+
+
+def refresh_melt_quote():
+    asyncio.run(refresh_melt_quote_async())
 
 
 def cashu_command(*arguments, mint_url=None, wallet=None):
@@ -661,6 +764,8 @@ def main():
         observe_melt()
     elif mode == "claim-receive":
         claim_receive()
+    elif mode == "refresh-melt":
+        refresh_melt_quote()
     elif mode == "pay-and-claim":
         pay_and_claim()
     else:

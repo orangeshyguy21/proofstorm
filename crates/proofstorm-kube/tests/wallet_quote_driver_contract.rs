@@ -31,6 +31,9 @@ fn wallet_fixture(root: &Path) -> Connection {
                quote TEXT, state TEXT, amount INTEGER, fee_reserve INTEGER,
                fee_paid INTEGER, request TEXT, created_time INTEGER
              );
+             CREATE TABLE proofs (
+               amount INTEGER, reserved INTEGER, melt_id TEXT
+             );
              INSERT INTO bolt11_mint_quotes VALUES (
                '{MINT_QUOTE}', 'http://recipient-mint:3338', 'UNPAID', 100,
                1, NULL, 301, 'lnbcrt-private-material'
@@ -153,6 +156,77 @@ fn melt_fee_comes_from_the_authoritative_mint_database() {
     assert!(success, "melt driver failed: {melt}");
     assert_eq!(melt["fee_paid_sat"], 1);
     assert_ne!(melt["fee_paid_sat"], 93);
+}
+
+#[test]
+fn melt_refresh_polls_the_mint_and_proves_reserved_proofs_were_released() {
+    let Some(python) = python() else {
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temporary wallet");
+    let connection = wallet_fixture(directory.path());
+    connection
+        .execute(
+            "INSERT INTO proofs VALUES (60, 1, ?1), (42, 1, ?1), (7, 0, NULL)",
+            [MELT_QUOTE],
+        )
+        .expect("reserved proofs");
+
+    let module = directory.path().join("cashu/wallet");
+    fs::create_dir_all(&module).expect("fake cashu wallet module");
+    for package in ["cashu", "cashu/wallet"] {
+        fs::write(directory.path().join(package).join("__init__.py"), "").expect("package marker");
+    }
+    fs::write(
+        module.join("wallet.py"),
+        r#"import os, sqlite3
+class Quote:
+    state = "UNPAID"
+class Wallet:
+    def __init__(self, db):
+        self.db = db
+    @classmethod
+    async def with_db(cls, mint, db, name=None, unit=None):
+        return cls(os.path.join(db, "wallet.sqlite3"))
+    async def get_melt_quote(self, quote_id):
+        connection = sqlite3.connect(self.db)
+        connection.execute(
+            "UPDATE proofs SET reserved = 0, melt_id = NULL WHERE melt_id = ?",
+            (quote_id,),
+        )
+        connection.commit()
+        connection.close()
+        return Quote()
+"#,
+    )
+    .expect("fake wallet API");
+
+    let (success, artifact) = run_driver(
+        python,
+        directory.path(),
+        &[
+            ("PROOFSTORM_QUOTE_DRIVER_MODE", "refresh-melt"),
+            ("PROOFSTORM_MELT_QUOTE_ID", MELT_QUOTE),
+            ("PROOFSTORM_EXPECTED_MINT_URL", "http://payer-mint:3338"),
+            (
+                "PYTHONPATH",
+                directory.path().to_str().expect("python module root"),
+            ),
+        ],
+    );
+    assert!(success, "refresh driver failed: {artifact}");
+    assert_eq!(artifact["melt_quote_id"], MELT_QUOTE);
+    assert_eq!(artifact["state_before"], "UNPAID");
+    assert_eq!(artifact["state_after"], "UNPAID");
+    assert_eq!(artifact["reserved_proof_count_before"], 2);
+    assert_eq!(artifact["reserved_proof_count_after"], 0);
+    assert_eq!(artifact["reserved_sat_before"], 102);
+    assert_eq!(artifact["reserved_sat_after"], 0);
+    assert_eq!(artifact["available_balance_sat_before"], 7);
+    assert_eq!(artifact["available_balance_sat_after"], 109);
+    assert_eq!(artifact["proofs_released"], true);
+    assert_eq!(artifact["quote_observations"][0]["direction"], "pay");
+    assert!(!artifact.to_string().contains("lnbcrt"));
 }
 
 #[test]
