@@ -15,6 +15,12 @@ pub const API_VERSION: &str = "proofstorm/v1alpha1";
 pub enum Capability {
     #[serde(rename = "catalog.read")]
     CatalogRead,
+    #[serde(rename = "candidate.build")]
+    CandidateBuild,
+    #[serde(rename = "candidate.read")]
+    CandidateRead,
+    #[serde(rename = "candidate.cancel")]
+    CandidateCancel,
     #[serde(rename = "lab.read")]
     LabRead,
     #[serde(rename = "lab.create")]

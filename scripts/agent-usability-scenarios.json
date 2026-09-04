@@ -2,6 +2,69 @@
   "schema_version": 1,
   "scenarios": [
     {
+      "id": "pull-request-candidate",
+      "family": "candidate-validation",
+      "novelty": "unreleased-code",
+      "toolset": "experiment",
+      "input_sets": [
+        {
+          "pull_request_url": "https://github.com/cashubtc/nutshell/pull/1095",
+          "implementation": "nutshell",
+          "lightning_version": "0.21.0-beta",
+          "wallet_amount_sat": 2048
+        },
+        {
+          "pull_request_url": "https://github.com/cashubtc/nutshell/pull/1095/",
+          "implementation": "nutshell",
+          "lightning_version": "0.21.0-beta",
+          "wallet_amount_sat": 3072
+        },
+        {
+          "pull_request_url": "https://github.com/cashubtc/nutshell/pull/1095",
+          "implementation": "nutshell",
+          "lightning_version": "0.20.0-beta",
+          "wallet_amount_sat": 4096
+        },
+        {
+          "pull_request_url": "https://github.com/cashubtc/nutshell/pull/1095/",
+          "implementation": "nutshell",
+          "lightning_version": "0.21.0-beta",
+          "wallet_amount_sat": 1536
+        }
+      ],
+      "prompt_variants": [
+        "Test the unreleased Nutshell change at https://github.com/cashubtc/nutshell/pull/1095. Build its exact PR head, then use that candidate as the mint in a disposable regtest lab with Bitcoin Core, LND 0.21, and a compatible Nutshell wallet. Bring the lab online, fund the wallet with 2048 sat through the normal mint flow, report its balance, export compact evidence with the PR commit and image digest, and fully tear down the lab. Use only Proofstorm.",
+        "Using only Proofstorm, try https://github.com/cashubtc/nutshell/pull/1095/ as a real mint. Let the candidate build continue through bounded waits, use its exact catalog version with Bitcoin Core, LND 0.21, and a compatible wallet, and complete a normal 3072 sat wallet funding flow. Report the result, preserve commit and image provenance in compact evidence, and remove the disposable lab.",
+        "Validate Nutshell PR https://github.com/cashubtc/nutshell/pull/1095 end to end. Build the frozen PR revision, select the resulting candidate mint version, and run it in the smallest useful Bitcoin Core plus LND 0.20 regtest lab with a compatible wallet. Fund 4096 sat into the wallet, report the observed balance, export evidence identifying the commit and image, then verify teardown. No operator commands.",
+        "Can the Nutshell code in https://github.com/cashubtc/nutshell/pull/1095/ actually run? Have Proofstorm build it and recover through repeated waits if necessary. Put the exact candidate mint in a disposable Bitcoin Core and LND 0.21 lab with a compatible wallet, complete a 1536 sat mint-funded wallet flow, capture compact provenance and runtime evidence, and clean everything up."
+      ],
+      "manual_gates": [
+        "candidate_pr_resolved_to_commit",
+        "candidate_build_completed",
+        "candidate_exact_version_selected",
+        "published_lock_contains_candidate_provenance",
+        "runtime_flow_supported",
+        "no_operator_commands"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "candidate_builds_min": 1,
+        "candidate_successes_min": 1,
+        "candidate_wait_calls_min": 1,
+        "candidate_exact_version_required": true,
+        "candidate_provenance_required": true,
+        "requested_lightning_version_required": true,
+        "requested_wallet_amount_required": true,
+        "wallet_funds_min": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    },
+    {
       "id": "routing-fee-matrix",
       "family": "payment-routing",
       "novelty": "known-template",

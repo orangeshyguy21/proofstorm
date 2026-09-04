@@ -17,9 +17,9 @@ OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 Rules shared by all three profiles:
 
 - Lab and network control always goes through the MCP server. No profile
-  grants `kubectl`, `docker`, `helm`, `make`, or a release build, because a
-  release build rewrites the binary that live sessions launch from and the
-  acceptance gates restart the controller.
+  grants `kubectl`, `docker`, `helm`, `make`, or a Proofstorm release build.
+  Pull-request candidate images are built through Proofstorm MCP by a durable
+  controller-owned Job; the agent never needs a host command.
 - "Internet" means two different things. Host web access is a profile choice
   above. Network access from inside lab pods is a lab property and stays
   default-deny except for cluster DNS; both native component execution modes

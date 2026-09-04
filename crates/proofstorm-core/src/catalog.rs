@@ -8,8 +8,8 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::{
-    BackendContractRegistry, ComponentKind, ComponentSpec, ControlClass, LinkKind, PaymentMethod,
-    default_backend_registry,
+    BackendContractRegistry, CandidateSource, ComponentKind, ComponentSpec, ControlClass, LinkKind,
+    PaymentMethod, default_backend_registry,
 };
 
 #[derive(
@@ -161,6 +161,8 @@ pub struct CatalogEntry {
     pub runtime_endpoints: Vec<CatalogRuntimeEndpoint>,
     pub image: String,
     pub source_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CandidateSource>,
     pub allowed_control: Vec<ControlClass>,
 }
 
@@ -283,6 +285,38 @@ fn build_default_catalog() -> CatalogResponse {
             ),
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
+        catalog_entry_with_lifecycle(
+            "lnd",
+            backends,
+            ComponentKind::Lightning,
+            "LND regtest Lightning node",
+            adapter_version,
+            "0.21.0-beta",
+            ReleaseChannel::Prerelease,
+            SupportLifecycle::Supported,
+            "docker.io/lightninglabs/lnd@sha256:60fca3f409cf3d500db1d15c9965678a4b5a60758ff30863d52b02529c18be8b",
+            BTreeSet::from([
+                CatalogFeature::NativeCli,
+                CatalogFeature::Regtest,
+                CatalogFeature::PersistentState,
+                CatalogFeature::Bolt11,
+            ]),
+            vec![dependency(
+                LinkKind::ChainBackend,
+                "bitcoin-core",
+                &["30.0"],
+            )],
+            support_matrix(
+                &[StorageBackend::PersistentVolume],
+                &[PaymentMethod::Bolt11],
+                &[],
+                &["sat"],
+                &[],
+                &[],
+                vec![],
+            ),
+            vec![ControlClass::Laboratory, ControlClass::Attacker],
+        ),
         catalog_entry(
             "cln",
             backends,
@@ -331,7 +365,11 @@ fn build_default_catalog() -> CatalogResponse {
                 CatalogFeature::Postgres,
             ]),
             vec![
-                dependency(LinkKind::PaymentBackend, "lnd", &["0.20.0-beta"]),
+                dependency(
+                    LinkKind::PaymentBackend,
+                    "lnd",
+                    &["0.20.0-beta", "0.21.0-beta"],
+                ),
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
             ],
@@ -341,7 +379,12 @@ fn build_default_catalog() -> CatalogResponse {
                 &["cln", "lnd"],
                 &["sat"],
                 &[
-                    payment_binding(PaymentMethod::Bolt11, "sat", "lnd", &["0.20.0-beta"]),
+                    payment_binding(
+                        PaymentMethod::Bolt11,
+                        "sat",
+                        "lnd",
+                        &["0.20.0-beta", "0.21.0-beta"],
+                    ),
                     payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
                 ],
                 &[AuthenticationMode::Unauthenticated],
@@ -448,7 +491,11 @@ fn build_default_catalog() -> CatalogResponse {
                 CatalogFeature::RedisCache,
             ]),
             vec![
-                dependency(LinkKind::PaymentBackend, "lnd", &["0.20.0-beta"]),
+                dependency(
+                    LinkKind::PaymentBackend,
+                    "lnd",
+                    &["0.20.0-beta", "0.21.0-beta"],
+                ),
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
                 dependency(LinkKind::DatabaseBackend, "redis", &["8.10.1"]),
@@ -461,7 +508,12 @@ fn build_default_catalog() -> CatalogResponse {
                 &["sat"],
                 &[
                     payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
-                    payment_binding(PaymentMethod::Bolt11, "sat", "lnd", &["0.20.0-beta"]),
+                    payment_binding(
+                        PaymentMethod::Bolt11,
+                        "sat",
+                        "lnd",
+                        &["0.20.0-beta", "0.21.0-beta"],
+                    ),
                 ],
                 &[
                     AuthenticationMode::Unauthenticated,
@@ -920,6 +972,42 @@ fn catalog_entry(
     support_matrix: CatalogSupportMatrix,
     allowed_control: Vec<ControlClass>,
 ) -> CatalogEntry {
+    catalog_entry_with_lifecycle(
+        id,
+        backends,
+        kind,
+        description,
+        adapter_version,
+        version,
+        release_channel,
+        SupportLifecycle::Preferred,
+        image,
+        features,
+        compatible_dependencies,
+        support_matrix,
+        allowed_control,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "catalog entries deliberately spell out the complete support contract"
+)]
+fn catalog_entry_with_lifecycle(
+    id: &str,
+    backends: &BackendContractRegistry,
+    kind: ComponentKind,
+    description: &str,
+    adapter_version: &str,
+    version: &str,
+    release_channel: ReleaseChannel,
+    support_lifecycle: SupportLifecycle,
+    image: &str,
+    features: BTreeSet<CatalogFeature>,
+    compatible_dependencies: Vec<CatalogDependencySupport>,
+    support_matrix: CatalogSupportMatrix,
+    allowed_control: Vec<ControlClass>,
+) -> CatalogEntry {
     let backend = backends
         .require(id)
         .expect("catalog entry has a registered backend contract");
@@ -937,7 +1025,7 @@ fn catalog_entry(
         protocol_action_adapter_version: Some(adapter_version.into()),
         version: version.into(),
         release_channel,
-        support_lifecycle: SupportLifecycle::Preferred,
+        support_lifecycle,
         config_version: config_version.into(),
         config_schema,
         config_schema_digest,
@@ -953,6 +1041,7 @@ fn catalog_entry(
             config_version,
             &runtime_endpoints,
         )),
+        source: None,
         allowed_control,
     }
 }
@@ -1299,12 +1388,29 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one catalog invariant test keeps all fail-closed variants together"
+    )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), catalog.implementations.len());
+        assert_eq!(catalog.entries.len(), 13);
+        assert_eq!(catalog.implementations.len(), 12);
+        let lnd = catalog
+            .implementations
+            .iter()
+            .find(|support| support.implementation == "lnd")
+            .expect("LND support summary");
+        assert_eq!(lnd.minimum_supported, "0.20.0-beta");
+        assert_eq!(lnd.preferred_version, "0.20.0-beta");
+        assert_eq!(
+            lnd.supported_versions,
+            BTreeSet::from(["0.20.0-beta".into(), "0.21.0-beta".into()])
+        );
         assert!(catalog.implementations.iter().all(|support| {
-            support.minimum_supported == support.preferred_version
-                && support.supported_versions.len() == 1
+            support.implementation == "lnd"
+                || support.minimum_supported == support.preferred_version
+                    && support.supported_versions.len() == 1
         }));
 
         let mut duplicate = catalog.entries.clone();

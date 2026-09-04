@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "CandidateBuildPhase": {
+      "enum": [
+        "pending",
+        "resolving",
+        "building",
+        "pushing",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "api_version": {
+      "type": "string"
+    },
+    "base_version": {
+      "type": "string"
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "completed_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "error_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "error_message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "image": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "implementation": {
+      "type": "string"
+    },
+    "phase": {
+      "$ref": "#/$defs/CandidateBuildPhase"
+    },
+    "principal_id": {
+      "type": "string"
+    },
+    "pull_request_url": {
+      "type": "string"
+    },
+    "repository": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "request_digest": {
+      "type": "string"
+    },
+    "resource_name": {
+      "type": "string"
+    },
+    "started_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workspace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "api_version",
+    "id",
+    "workspace_id",
+    "principal_id",
+    "implementation",
+    "base_version",
+    "pull_request_url",
+    "resource_name",
+    "request_digest",
+    "phase",
+    "accepted_at_unix"
+  ],
+  "title": "CandidateBuild",
+  "type": "object"
+}

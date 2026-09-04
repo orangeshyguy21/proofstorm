@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use kube::CustomResource;
-use proofstorm_core::{Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock};
+use proofstorm_core::{
+    CandidateBuildPhase, Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock,
+};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,6 +70,53 @@ pub struct ProofstormLabStatus {
     pub inventory_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teardown_receipt: Option<TeardownReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(CustomResource, Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[kube(
+    group = "proofstorm.dev",
+    version = "v1alpha1",
+    kind = "ProofstormCandidateBuild",
+    plural = "proofstormcandidatebuilds",
+    shortname = "psbuild",
+    namespaced,
+    status = "ProofstormCandidateBuildStatus"
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormCandidateBuildSpec {
+    pub workspace_id: String,
+    pub candidate_id: String,
+    pub principal_id: String,
+    pub implementation: String,
+    pub base_version: String,
+    pub pull_request_url: String,
+    pub repository: String,
+    pub commit_sha: String,
+    pub version: String,
+    pub request_digest: String,
+    pub accepted_at_unix: i64,
+    pub image_repository: String,
+    pub dockerfile: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormCandidateBuildStatus {
+    pub phase: CandidateBuildPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }

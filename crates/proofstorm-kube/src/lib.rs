@@ -1,5 +1,6 @@
 mod adapter;
 mod api;
+mod candidate;
 mod operation;
 mod render;
 mod scheduler;
@@ -31,11 +32,16 @@ pub use api::{
     ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction, ComponentExecLiveAction,
     ComponentForensicsAction, ComponentLogsAction, ConservationOracleAction, LabAction, LabPhase,
     NetworkHealAction, NetworkPartitionAction, NodeControlAction, PeerConnectAction,
-    PeerDisconnectAction, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
+    PeerDisconnectAction, ProofstormCandidateBuild, ProofstormCandidateBuildSpec,
+    ProofstormCandidateBuildStatus, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
     ProofstormLabActionStatus, ProofstormLabSpec, ProofstormLabStatus, ReachabilityOracleAction,
     TeardownReceipt, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
     WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction, WalletQuoteClaimAction,
     WalletRoundTripAction,
+};
+pub use candidate::{
+    CANDIDATE_BUILD_LABEL, CANDIDATE_CANCEL_ANNOTATION, CandidateBuildRenderError,
+    render_candidate_build_job,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,

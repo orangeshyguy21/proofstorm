@@ -1,5 +1,29 @@
 {
   "$defs": {
+    "CandidateSource": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "type": "string"
+        },
+        "commit_sha": {
+          "type": "string"
+        },
+        "pull_request_url": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "pull_request_url",
+        "repository",
+        "commit_sha"
+      ],
+      "type": "object"
+    },
     "CatalogDependencySupport": {
       "additionalProperties": false,
       "properties": {
@@ -99,6 +123,16 @@
         },
         "rollout_digest": {
           "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "source_digest": {
           "type": "string"

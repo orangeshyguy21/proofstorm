@@ -29,19 +29,20 @@ use kube::{
     },
 };
 use proofstorm_core::WorkloadControllerKind;
-use proofstorm_core::{BackendContractRegistry, default_backend_registry};
+use proofstorm_core::{BackendContractRegistry, CandidateBuildPhase, default_backend_registry};
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
     AuthenticationReplayResult, AuthenticationSessionFailureStage, BACKEND_ID_ANNOTATION,
-    COMPONENT_LABEL, ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
-    INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION,
-    LIFECYCLE_STATE_ANNOTATION, LabAction, LabPhase, MAX_PROTOCOL_PROBES_PER_LAB,
-    PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION, PROTOCOL_PROBER_NAME, ProofstormLab,
+    CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, ComponentObservationResources,
+    EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
+    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LabAction, LabPhase,
+    MAX_PROTOCOL_PROBES_PER_LAB, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
+    PROTOCOL_PROBER_NAME, ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormLab,
     ProofstormLabAction, ProofstormLabActionStatus, ProofstormLabStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
-    observe_component_statuses, render_component_network_policy, render_lab,
-    render_lab_action_cleanup_job, render_lab_action_job, render_security_spine,
+    observe_component_statuses, render_candidate_build_job, render_component_network_policy,
+    render_lab, render_lab_action_cleanup_job, render_lab_action_job, render_security_spine,
     schedule_protocol_probers,
 };
 use thiserror::Error;
@@ -79,6 +80,8 @@ enum Error {
     Adapter(#[from] AdapterError),
     #[error("action adapter failed: {0}")]
     Action(#[from] ActionRenderError),
+    #[error("candidate build adapter failed: {0}")]
+    CandidateBuild(#[from] proofstorm_kube::CandidateBuildRenderError),
     #[error("{kind} status is {actual} bytes; controller maximum is {maximum} bytes")]
     StatusBudgetExceeded {
         kind: &'static str,
@@ -94,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::try_default().await?;
     let labs = Api::<ProofstormLab>::all(client.clone());
     let actions = Api::<ProofstormLabAction>::all(client.clone());
+    let candidate_builds = Api::<ProofstormCandidateBuild>::all(client.clone());
     let context = Arc::new(Context { client });
     let lab_controller = Controller::new(labs, watcher::Config::default())
         .with_config(
@@ -119,8 +123,276 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => eprintln!("action reconciliation failed: {error}"),
             }
         });
+    let candidate_controller = Controller::new(candidate_builds, watcher::Config::default())
+        .with_config(kube::runtime::controller::Config::default().concurrency(2))
+        .shutdown_on_signal()
+        .run(
+            reconcile_candidate_build,
+            candidate_error_policy,
+            context.clone(),
+        )
+        .for_each(|result| async move {
+            match result {
+                Ok((object, _)) => eprintln!("reconciled ProofstormCandidateBuild {object:?}"),
+                Err(error) => eprintln!("candidate build reconciliation failed: {error}"),
+            }
+        });
     let probe_scheduler = run_protocol_probe_scheduler(context);
-    tokio::join!(lab_controller, action_controller, probe_scheduler);
+    tokio::join!(
+        lab_controller,
+        action_controller,
+        candidate_controller,
+        probe_scheduler
+    );
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one reconciliation pass keeps durable Job creation and monotonic terminal observation together"
+)]
+async fn reconcile_candidate_build(
+    build: Arc<ProofstormCandidateBuild>,
+    context: Arc<Context>,
+) -> Result<Action, Error> {
+    let namespace = build
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(build.name_any()))?;
+    if build
+        .status
+        .as_ref()
+        .is_some_and(|status| status.phase.terminal())
+    {
+        return Ok(Action::await_change());
+    }
+    let jobs = Api::<Job>::namespaced(context.client.clone(), &namespace);
+    let job_name = format!("{}-build", build.name_any());
+    if build
+        .annotations()
+        .contains_key(CANDIDATE_CANCEL_ANNOTATION)
+    {
+        let _ = jobs
+            .delete(
+                &job_name,
+                &DeleteParams {
+                    propagation_policy: Some(PropagationPolicy::Background),
+                    ..DeleteParams::default()
+                },
+            )
+            .await;
+        patch_candidate_status(
+            build.as_ref(),
+            &context,
+            ProofstormCandidateBuildStatus {
+                phase: CandidateBuildPhase::Cancelled,
+                observed_generation: build.metadata.generation,
+                job_name: Some(job_name),
+                started_at_unix: build
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.started_at_unix),
+                completed_at_unix: Some(now_unix()),
+                ..ProofstormCandidateBuildStatus::default()
+            },
+        )
+        .await?;
+        return Ok(Action::await_change());
+    }
+    let observed = jobs.get_opt(&job_name).await?;
+    let Some(observed) = observed else {
+        if build
+            .status
+            .as_ref()
+            .and_then(|status| status.started_at_unix)
+            .is_some()
+        {
+            patch_candidate_status(
+                build.as_ref(),
+                &context,
+                ProofstormCandidateBuildStatus {
+                    phase: CandidateBuildPhase::Failed,
+                    observed_generation: build.metadata.generation,
+                    job_name: Some(job_name),
+                    started_at_unix: build
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.started_at_unix),
+                    completed_at_unix: Some(now_unix()),
+                    error_code: Some("candidate_job_lost".into()),
+                    message: Some(
+                        "controller-owned build Job disappeared after execution began".into(),
+                    ),
+                    ..ProofstormCandidateBuildStatus::default()
+                },
+            )
+            .await?;
+            return Ok(Action::await_change());
+        }
+        let job = render_candidate_build_job(build.as_ref())?;
+        jobs.patch(
+            &job_name,
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(&job),
+        )
+        .await?;
+        patch_candidate_status(
+            build.as_ref(),
+            &context,
+            ProofstormCandidateBuildStatus {
+                phase: CandidateBuildPhase::Building,
+                observed_generation: build.metadata.generation,
+                job_name: Some(job_name),
+                started_at_unix: Some(now_unix()),
+                ..ProofstormCandidateBuildStatus::default()
+            },
+        )
+        .await?;
+        return Ok(Action::requeue(Duration::from_secs(3)));
+    };
+    let status = observed.status.unwrap_or_default();
+    let succeeded = status.succeeded.unwrap_or_default() > 0;
+    let failed = status.failed.unwrap_or_default() > 0
+        || status.conditions.as_ref().is_some_and(|conditions| {
+            conditions
+                .iter()
+                .any(|condition| condition.type_ == "Failed" && condition.status == "True")
+        });
+    let started_at_unix = build
+        .status
+        .as_ref()
+        .and_then(|value| value.started_at_unix)
+        .or_else(|| Some(now_unix()));
+    if !succeeded && !failed {
+        patch_candidate_status(
+            build.as_ref(),
+            &context,
+            ProofstormCandidateBuildStatus {
+                phase: CandidateBuildPhase::Building,
+                observed_generation: build.metadata.generation,
+                job_name: Some(job_name),
+                started_at_unix,
+                ..ProofstormCandidateBuildStatus::default()
+            },
+        )
+        .await?;
+        return Ok(Action::requeue(Duration::from_secs(3)));
+    }
+    let pod_api = Api::<Pod>::namespaced(context.client.clone(), &namespace);
+    let pods = pod_api
+        .list(&ListParams::default().labels(&format!("job-name={job_name}")))
+        .await?;
+    let terminal = if failed {
+        let failure = candidate_failure_message(&pod_api, &status, &pods.items).await;
+        ProofstormCandidateBuildStatus {
+            phase: CandidateBuildPhase::Failed,
+            observed_generation: build.metadata.generation,
+            job_name: Some(job_name),
+            started_at_unix,
+            completed_at_unix: Some(now_unix()),
+            error_code: Some("candidate_build_failed".into()),
+            message: Some(failure),
+            ..ProofstormCandidateBuildStatus::default()
+        }
+    } else {
+        let digest = pods
+            .items
+            .iter()
+            .find_map(|pod| termination_message(pod, "buildkit"))
+            .and_then(|message| serde_json::from_str::<serde_json::Value>(&message).ok())
+            .and_then(|receipt| receipt.get("digest")?.as_str().map(str::to_owned));
+        if digest.as_deref().is_some_and(valid_sha256_digest) {
+            ProofstormCandidateBuildStatus {
+                phase: CandidateBuildPhase::Succeeded,
+                observed_generation: build.metadata.generation,
+                job_name: Some(job_name),
+                started_at_unix,
+                completed_at_unix: Some(now_unix()),
+                image: Some(format!(
+                    "{}@{}",
+                    build.spec.image_repository,
+                    digest.unwrap_or_default()
+                )),
+                ..ProofstormCandidateBuildStatus::default()
+            }
+        } else {
+            ProofstormCandidateBuildStatus {
+                phase: CandidateBuildPhase::Failed,
+                observed_generation: build.metadata.generation,
+                job_name: Some(job_name),
+                started_at_unix,
+                completed_at_unix: Some(now_unix()),
+                error_code: Some("candidate_digest_missing".into()),
+                message: Some("successful build Job did not report an image digest".into()),
+                ..ProofstormCandidateBuildStatus::default()
+            }
+        }
+    };
+    patch_candidate_status(build.as_ref(), &context, terminal).await?;
+    Ok(Action::await_change())
+}
+
+async fn candidate_failure_message(
+    pods: &Api<Pod>,
+    status: &JobStatus,
+    observed: &[Pod],
+) -> String {
+    let log_tail = if let Some(pod) = observed.first() {
+        pods.logs(
+            &pod.name_any(),
+            &kube::api::LogParams {
+                container: Some("buildkit".into()),
+                tail_lines: Some(24),
+                ..kube::api::LogParams::default()
+            },
+        )
+        .await
+        .ok()
+        .map(|logs| bounded_log_tail(&logs, 3_000))
+    } else {
+        None
+    };
+    serde_json::json!({
+        "failure": action_failure(status, observed),
+        "log_tail": log_tail,
+        "recovery": "this exact candidate request is terminal; inspect the diagnostic and do not retry under a new ID unless the source or build environment changes"
+    })
+    .to_string()
+}
+
+fn bounded_log_tail(logs: &str, maximum_chars: usize) -> String {
+    let reversed = logs.chars().rev().take(maximum_chars).collect::<String>();
+    reversed.chars().rev().collect()
+}
+
+fn valid_sha256_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
+async fn patch_candidate_status(
+    build: &ProofstormCandidateBuild,
+    context: &Context,
+    status: ProofstormCandidateBuildStatus,
+) -> Result<(), Error> {
+    if build.status.as_ref() == Some(&status) {
+        return Ok(());
+    }
+    let namespace = build
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(build.name_any()))?;
+    let builds = Api::<ProofstormCandidateBuild>::namespaced(context.client.clone(), &namespace);
+    builds
+        .patch_status(
+            &build.name_any(),
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(serde_json::json!({
+                "apiVersion": "proofstorm.dev/v1alpha1",
+                "kind": "ProofstormCandidateBuild",
+                "status": status,
+            })),
+        )
+        .await?;
     Ok(())
 }
 
@@ -2750,6 +3022,19 @@ fn action_error_policy(
 ) -> Action {
     eprintln!("retryable action controller error: {error}");
     jittered_requeue(&action.spec.operation_id, 5, 4)
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "kube runtime requires an owned Arc in the error-policy callback signature"
+)]
+fn candidate_error_policy(
+    build: Arc<ProofstormCandidateBuild>,
+    error: &Error,
+    _context: Arc<Context>,
+) -> Action {
+    eprintln!("retryable candidate build controller error: {error}");
+    jittered_requeue(&build.spec.candidate_id, 5, 4)
 }
 
 fn jittered_requeue(identity: &str, base_seconds: u64, spread_seconds: u64) -> Action {

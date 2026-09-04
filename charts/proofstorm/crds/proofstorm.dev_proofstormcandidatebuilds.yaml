@@ -1,0 +1,113 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: proofstormcandidatebuilds.proofstorm.dev
+spec:
+  group: proofstorm.dev
+  names:
+    categories: []
+    kind: ProofstormCandidateBuild
+    plural: proofstormcandidatebuilds
+    shortNames:
+    - psbuild
+    singular: proofstormcandidatebuild
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns: []
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for ProofstormCandidateBuildSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              acceptedAtUnix:
+                format: int64
+                type: integer
+              baseVersion:
+                type: string
+              candidateId:
+                type: string
+              commitSha:
+                type: string
+              dockerfile:
+                type: string
+              imageRepository:
+                type: string
+              implementation:
+                type: string
+              principalId:
+                type: string
+              pullRequestUrl:
+                type: string
+              repository:
+                type: string
+              requestDigest:
+                type: string
+              version:
+                type: string
+              workspaceId:
+                type: string
+            required:
+            - acceptedAtUnix
+            - baseVersion
+            - candidateId
+            - commitSha
+            - dockerfile
+            - imageRepository
+            - implementation
+            - principalId
+            - pullRequestUrl
+            - repository
+            - requestDigest
+            - version
+            - workspaceId
+            type: object
+          status:
+            nullable: true
+            properties:
+              completedAtUnix:
+                format: int64
+                nullable: true
+                type: integer
+              errorCode:
+                nullable: true
+                type: string
+              image:
+                nullable: true
+                type: string
+              jobName:
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              observedGeneration:
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                enum:
+                - pending
+                - resolving
+                - building
+                - pushing
+                - succeeded
+                - failed
+                - cancelled
+                type: string
+              startedAtUnix:
+                format: int64
+                nullable: true
+                type: integer
+            required:
+            - phase
+            type: object
+        required:
+        - spec
+        title: ProofstormCandidateBuild
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

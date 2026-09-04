@@ -213,6 +213,9 @@ spec:
               capability:
                 enum:
                 - catalog.read
+                - candidate.build
+                - candidate.read
+                - candidate.cancel
                 - lab.read
                 - lab.create
                 - lab.edit

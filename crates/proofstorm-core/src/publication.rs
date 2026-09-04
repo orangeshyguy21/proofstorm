@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogResponse, DatabaseRole,
-    DependencyBinding, LabSpec, LinkKind, LinkSpec, default_backend_registry,
+    CandidateSource, CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogResponse,
+    DatabaseRole, DependencyBinding, LabSpec, LinkKind, LinkSpec, default_backend_registry,
     validate_catalog_component,
 };
 
@@ -31,6 +31,8 @@ pub struct LockEntry {
     pub rollout_digest: String,
     pub image: String,
     pub source_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CandidateSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -166,6 +168,7 @@ pub fn resolve_lock(lab: &LabSpec, catalog: &CatalogResponse) -> Result<Resolved
                 rollout_digest,
                 image: entry.image.clone(),
                 source_digest: entry.source_digest.clone(),
+                source: entry.source.clone(),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;

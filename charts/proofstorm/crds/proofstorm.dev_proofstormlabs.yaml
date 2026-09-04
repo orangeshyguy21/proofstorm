@@ -162,6 +162,9 @@ spec:
                         items:
                           enum:
                           - catalog.read
+                          - candidate.build
+                          - candidate.read
+                          - candidate.cancel
                           - lab.read
                           - lab.create
                           - lab.edit
@@ -315,6 +318,23 @@ spec:
                           type: string
                         rollout_digest:
                           type: string
+                        source:
+                          nullable: true
+                          properties:
+                            candidate_id:
+                              type: string
+                            commit_sha:
+                              type: string
+                            pull_request_url:
+                              type: string
+                            repository:
+                              type: string
+                          required:
+                          - candidate_id
+                          - commit_sha
+                          - pull_request_url
+                          - repository
+                          type: object
                         source_digest:
                           type: string
                         version:

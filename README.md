@@ -93,6 +93,22 @@ To enable the Kubernetes-backed lifecycle tools, add
 operator's current Kubernetes client configuration; agents still receive only
 Proofstorm's MCP interface, never Kubernetes authority.
 
+Candidate builds are also agent-operated. Grant
+`candidate.build,candidate.read,candidate.cancel`, configure the Kubernetes
+runtime, and give the agent a public GitHub pull-request URL plus an installed
+implementation ID such as `nutshell`. `proofstorm_candidate_build` freezes the
+PR head commit and creates a controller-owned BuildKit Job; the job continues
+if the MCP client disconnects. The agent can make repeated bounded
+`proofstorm_candidate_wait` calls (at most 120 seconds each), recover prior
+builds with `proofstorm_candidate_list`, and inspect bounded logs through the
+receipt's resource URI. A successful build becomes a workspace-scoped,
+experimental exact catalog version, so the normal `catalog_list` → `lab_plan`
+→ `lab_apply` workflow remains unchanged. Published locks retain the PR URL,
+repository, commit SHA, candidate ID, and immutable image digest.
+Set `GITHUB_TOKEN` on the MCP server when higher GitHub API rate limits are
+needed; it is server configuration and is never accepted as tool input or
+passed into the build Job.
+
 Every component independently declares an implementation `version` and a
 required adapter `config_version`. The catalog advertises both. Publication
 refuses unsupported configuration versions, and the resolved lock records both

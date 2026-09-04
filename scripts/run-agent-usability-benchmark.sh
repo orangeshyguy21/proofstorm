@@ -121,7 +121,7 @@ if [[ ! "$MAX_EQUIVALENT_PLANS" =~ ^[2-9][0-9]*$ || "$MAX_EQUIVALENT_PLANS" -gt 
   exit 2
 fi
 
-for command in "$OPENCODE_BIN" jq git shasum; do
+for command in "$OPENCODE_BIN" jq git shasum sqlite3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'required command is unavailable: %s\n' "$command" >&2
     exit 1
@@ -153,6 +153,7 @@ SCENARIO_FAMILY="$(jq -r '.family' <<<"$SCENARIO_JSON")"
 SCENARIO_NOVELTY="$(jq -r '.novelty' <<<"$SCENARIO_JSON")"
 EXPECTATIONS="$(jq -c '.gates' <<<"$SCENARIO_JSON")"
 MANUAL_GATES="$(jq -c '.manual_gates' <<<"$SCENARIO_JSON")"
+INPUTS="$(jq -c --argjson index "$VARIANT_INDEX" '.input_sets?[$index] // {}' <<<"$SCENARIO_JSON")"
 PROMPT_BASE="$(jq -r --argjson index "$VARIANT_INDEX" '.prompt_variants[$index]' <<<"$SCENARIO_JSON")"
 PROMPT="$PROMPT_BASE Use run identifier $RUN_ID for names that must be unique."
 
@@ -165,10 +166,11 @@ if [[ "$PRINT_PROMPT" == "true" ]]; then
     --argjson variant_index "$VARIANT_INDEX" \
     --arg toolset "$TOOLSET" \
     --arg prompt "$PROMPT" \
+    --argjson inputs "$INPUTS" \
     --argjson gates "$EXPECTATIONS" \
     --argjson manual_gates "$MANUAL_GATES" \
     '{run_id:$run_id, scenario:$scenario, family:$family, novelty:$novelty,
-      variant_index:$variant_index, toolset:$toolset, prompt:$prompt,
+      variant_index:$variant_index, toolset:$toolset, prompt:$prompt, inputs:$inputs,
       gates:$gates, manual_gates:$manual_gates}'
   exit 0
 fi
@@ -217,6 +219,8 @@ METRICS="$RUN_ROOT/metrics.json"
 SCORECARD="$RUN_ROOT/scorecard.json"
 MANIFEST="$RUN_ROOT/manifest.json"
 STOP_REASON="$RUN_ROOT/limit-reason.txt"
+CANDIDATE_BUILDS="$RUN_ROOT/candidate-builds.json"
+REVISIONS="$RUN_ROOT/revisions.json"
 WORKSPACE="agent-usability-$RUN_ID"
 
 jq \
@@ -249,6 +253,7 @@ jq -n \
   --arg toolset "$TOOLSET" \
   --arg workspace "$WORKSPACE" \
   --arg prompt "$PROMPT" \
+  --argjson inputs "$INPUTS" \
   --arg source_commit "$SOURCE_COMMIT" \
   --argjson source_dirty_files "$SOURCE_DIRTY" \
   --arg binary_digest "sha256:$BINARY_DIGEST" \
@@ -260,7 +265,7 @@ jq -n \
     scenario_novelty:$scenario_novelty, variant_index:$variant_index,
     expectations:$expectations, manual_gates:$manual_gates,
     model:$model, toolset:$toolset, workspace:$workspace,
-    prompt:$prompt, source_commit:$source_commit,
+    prompt:$prompt, inputs:$inputs, source_commit:$source_commit,
     source_dirty_files:$source_dirty_files, binary_digest:$binary_digest,
     started_at:$started_at,
     limits:{max_steps:$max_steps,max_seconds:$max_seconds,
@@ -350,6 +355,13 @@ if [[ -f "$STOP_REASON" ]]; then
   LIMIT_REASON="$(tr -d '\r\n' <"$STOP_REASON")"
 fi
 
+sqlite3 "$DATABASE" \
+  "SELECT coalesce(json_group_array(json(build_json)), '[]') FROM candidate_builds" \
+  >"$CANDIDATE_BUILDS"
+sqlite3 "$DATABASE" \
+  "SELECT coalesce(json_group_array(json(revision_json)), '[]') FROM revisions" \
+  >"$REVISIONS"
+
 jq -s \
   --arg run_id "$RUN_ID" \
   --arg scenario "$SCENARIO" \
@@ -360,7 +372,10 @@ jq -s \
   --argjson opencode_exit "$OPENCODE_STATUS" \
   --argjson export_exit "$EXPORT_STATUS" \
   --argjson kubectl_exit "$KUBECTL_STATUS" \
+  --argjson inputs "$INPUTS" \
   --arg limit_reason "$LIMIT_REASON" \
+  --slurpfile candidate_builds "$CANDIDATE_BUILDS" \
+  --slurpfile revisions "$REVISIONS" \
   --slurpfile namespaces_before "$BEFORE_NAMESPACES" \
   --slurpfile namespaces "$AFTER_NAMESPACES" \
   'def tool_events: [.[] | select(type == "object" and .type == "tool_use")];
@@ -373,6 +388,8 @@ jq -s \
    def terminal_outputs:
      [parsed_outputs[]
       | ., ((.operations? // [])[])];
+   def durable_candidate_builds: ($candidate_builds[0] // []);
+   def published_revisions: ($revisions[0] // []);
    def quote_observations:
      [parsed_outputs[]
       | ((.artifact?.content?.quote_observations? // [])[]),
@@ -404,7 +421,7 @@ jq -s \
           rejected_target_visible:
             ($message | test("component|field|operation|instance|endpoint|revision"; "i")),
           mutation_disposition_visible:
-            ($message | test("no (operation|plan|mutation) was created|no changes were made|already exists with different immutable identity"; "i")),
+            ($message | test("no (operation|plan|mutation) was (created|stored)|no changes were made|already exists with different immutable identity"; "i")),
           bounded_recovery_visible:
             ($message | test("recovery:|next:|valid (component|endpoint|implementation)|choose (a|one)|workflow is infeasible"; "i")),
           next_two_calls:
@@ -492,6 +509,10 @@ jq -s \
          (quote_observations
           | map(select(.role? == "payment_melt" and .state? == "UNPAID"))
           | length),
+       successful_wallet_funds:
+         (terminal_outputs
+          | map(select(.kind? == "wallet_fund" and .phase? == "succeeded"))
+          | length),
        equivalent_plan_repeats_max:
          ([tool_events[]
            | select(.part.tool | endswith("lab_plan"))
@@ -500,6 +521,58 @@ jq -s \
           | group_by(.)
           | map(length)
           | max // 0)
+     },
+     candidate: {
+       builds: (durable_candidate_builds | length),
+       successes:
+         (durable_candidate_builds | map(select(.phase == "succeeded")) | length),
+       wait_calls: tool_count("proofstorm_proofstorm_candidate_wait"),
+       wait_timeouts:
+         ([tool_events[]
+           | select(.part.tool == "proofstorm_proofstorm_candidate_wait")
+           | (.part.state.output? // empty)
+           | fromjson?
+           | select(.timed_out? == true)]
+          | length),
+       valid_immutable_builds:
+         (durable_candidate_builds
+          | map(select(
+              .phase == "succeeded"
+              and (.commit_sha? | test("^[0-9a-f]{40}$"))
+              and (.image? | test("@sha256:[0-9a-f]{64}$"))
+              and (.version? | startswith("candidate-"))))
+          | length),
+       exact_version_published:
+         ([durable_candidate_builds[] as $build
+           | published_revisions[].lab.components[]
+           | select(
+               .implementation == $build.implementation
+               and .version == $build.version)]
+          | length),
+       provenance_locked:
+         ([durable_candidate_builds[] as $build
+           | published_revisions[].lock.entries[]
+           | select(
+               .catalog_id == $build.implementation
+               and .version == $build.version
+               and .image == $build.image
+               and .source.candidate_id == $build.id
+               and .source.pull_request_url == $build.pull_request_url
+               and .source.repository == $build.repository
+               and .source.commit_sha == $build.commit_sha)]
+          | length),
+       requested_lightning_version_published:
+         ([published_revisions[].lab.components[]
+           | select(
+               .implementation == "lnd"
+               and .version == ($inputs.lightning_version // ""))]
+          | length),
+       requested_wallet_fund_calls:
+         ([tool_events[]
+           | select(
+               .part.tool == "proofstorm_proofstorm_wallet_fund"
+               and .part.state.input.amount_sat? == ($inputs.wallet_amount_sat // null))]
+          | length)
      },
      remaining_instance_namespaces:
        (if $kubectl_exit == 0 then
@@ -536,6 +609,34 @@ jq -n \
         $metrics[0].workflow.lab_materializations >= $expectations.materializations_min
         and $metrics[0].workflow.lab_materializations <= $expectations.materializations_max
       ),
+      candidate_build_count_met:
+        ($metrics[0].candidate.builds >= ($expectations.candidate_builds_min // 0)),
+      candidate_success_count_met:
+        ($metrics[0].candidate.successes >= ($expectations.candidate_successes_min // 0)),
+      candidate_wait_count_met:
+        ($metrics[0].candidate.wait_calls >= ($expectations.candidate_wait_calls_min // 0)),
+      candidate_immutable_identity_met: (
+        ($expectations.candidate_successes_min // 0) == 0
+        or $metrics[0].candidate.valid_immutable_builds >= $expectations.candidate_successes_min
+      ),
+      candidate_exact_version_met: (
+        ($expectations.candidate_exact_version_required // false | not)
+        or $metrics[0].candidate.exact_version_published > 0
+      ),
+      candidate_provenance_met: (
+        ($expectations.candidate_provenance_required // false | not)
+        or $metrics[0].candidate.provenance_locked > 0
+      ),
+      requested_lightning_version_met: (
+        ($expectations.requested_lightning_version_required // false | not)
+        or $metrics[0].candidate.requested_lightning_version_published > 0
+      ),
+      requested_wallet_amount_met: (
+        ($expectations.requested_wallet_amount_required // false | not)
+        or $metrics[0].candidate.requested_wallet_fund_calls > 0
+      ),
+      wallet_fund_count_met:
+        ($metrics[0].workflow.successful_wallet_funds >= ($expectations.wallet_funds_min // 0)),
       paid_melt_count_met:
         ($metrics[0].workflow.paid_melts >= $expectations.paid_melts_min),
       unpaid_melt_count_met:
@@ -561,6 +662,7 @@ jq -n \
       whole_document_edits: $metrics[0].workflow.whole_document_edits
     },
     recovery: $metrics[0].recovery,
+    candidate: $metrics[0].candidate,
     efficiency: {
       tool_calls: $metrics[0].tool_calls,
       model_steps: $metrics[0].steps,
@@ -579,6 +681,20 @@ jq -n \
          and $metrics[0].workflow.equivalent_plan_repeats_max <= 2
          and $metrics[0].workflow.lab_materializations >= $expectations.materializations_min
          and $metrics[0].workflow.lab_materializations <= $expectations.materializations_max
+         and $metrics[0].candidate.builds >= ($expectations.candidate_builds_min // 0)
+         and $metrics[0].candidate.successes >= ($expectations.candidate_successes_min // 0)
+         and $metrics[0].candidate.wait_calls >= ($expectations.candidate_wait_calls_min // 0)
+         and (($expectations.candidate_successes_min // 0) == 0
+              or $metrics[0].candidate.valid_immutable_builds >= $expectations.candidate_successes_min)
+         and (($expectations.candidate_exact_version_required // false | not)
+              or $metrics[0].candidate.exact_version_published > 0)
+         and (($expectations.candidate_provenance_required // false | not)
+              or $metrics[0].candidate.provenance_locked > 0)
+         and (($expectations.requested_lightning_version_required // false | not)
+              or $metrics[0].candidate.requested_lightning_version_published > 0)
+         and (($expectations.requested_wallet_amount_required // false | not)
+              or $metrics[0].candidate.requested_wallet_fund_calls > 0)
+         and $metrics[0].workflow.successful_wallet_funds >= ($expectations.wallet_funds_min // 0)
          and (($expectations.evidence_required | not)
               or $metrics[0].workflow.evidence_exports > 0)
          and (if $expectations.teardown_required then
