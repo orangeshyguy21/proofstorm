@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use kube::CustomResource;
-use proofstorm_core::{Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock};
+use proofstorm_core::{
+    CandidateBuildPhase, Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock,
+};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -76,6 +78,53 @@ pub struct ProofstormLabStatus {
 #[kube(
     group = "proofstorm.dev",
     version = "v1alpha1",
+    kind = "ProofstormCandidateBuild",
+    plural = "proofstormcandidatebuilds",
+    shortname = "psbuild",
+    namespaced,
+    status = "ProofstormCandidateBuildStatus"
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormCandidateBuildSpec {
+    pub workspace_id: String,
+    pub candidate_id: String,
+    pub principal_id: String,
+    pub implementation: String,
+    pub base_version: String,
+    pub pull_request_url: String,
+    pub repository: String,
+    pub commit_sha: String,
+    pub version: String,
+    pub request_digest: String,
+    pub accepted_at_unix: i64,
+    pub image_repository: String,
+    pub dockerfile: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormCandidateBuildStatus {
+    pub phase: CandidateBuildPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(CustomResource, Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[kube(
+    group = "proofstorm.dev",
+    version = "v1alpha1",
     kind = "ProofstormLabAction",
     plural = "proofstormlabactions",
     shortname = "psaction",
@@ -106,6 +155,7 @@ pub enum LabAction {
     NodeStart(NodeControlAction),
     NodeStop(NodeControlAction),
     NodeRestart(NodeControlAction),
+    ComponentRestart(NodeControlAction),
     BootstrapLiquidity(BootstrapLiquidityAction),
     PeerConnect(PeerConnectAction),
     PeerDisconnect(PeerDisconnectAction),
@@ -122,10 +172,12 @@ pub enum LabAction {
     WalletInvoice(WalletInvoiceAction),
     WalletPay(WalletPayAction),
     WalletQuoteClaim(WalletQuoteClaimAction),
+    WalletMeltQuoteRefresh(WalletMeltQuoteRefreshAction),
     WalletRoundTrip(WalletRoundTripAction),
     ConservationOracle(ConservationOracleAction),
     ReachabilityOracle(ReachabilityOracleAction),
-    NativeExec(NativeExecAction),
+    ComponentForensics(ComponentForensicsAction),
+    ComponentExecLive(ComponentExecLiveAction),
     ComponentLogs(ComponentLogsAction),
     AuthenticationConformance(AuthenticationConformanceAction),
     AuthenticationProtectedSpend(AuthenticationProtectedSpendAction),
@@ -151,6 +203,7 @@ enum LabActionKindSchema {
     NodeStart,
     NodeStop,
     NodeRestart,
+    ComponentRestart,
     BootstrapLiquidity,
     PeerConnect,
     PeerDisconnect,
@@ -167,10 +220,12 @@ enum LabActionKindSchema {
     WalletInvoice,
     WalletPay,
     WalletQuoteClaim,
+    WalletMeltQuoteRefresh,
     WalletRoundTrip,
     ConservationOracle,
     ReachabilityOracle,
-    NativeExec,
+    ComponentForensics,
+    ComponentExecLive,
     ComponentLogs,
     AuthenticationConformance,
     AuthenticationProtectedSpend,
@@ -210,6 +265,7 @@ struct LabActionParametersSchema {
     source_operation_id: Option<String>,
     quote_id: Option<String>,
     mint_quote_id: Option<String>,
+    melt_quote_id: Option<String>,
     amount_sat: Option<u64>,
     timeout_seconds: Option<u32>,
     expected_sat: Option<u64>,
@@ -371,11 +427,22 @@ pub enum AuthenticationSessionFailureStage {
 /// credentials, volumes, service account, and pod security.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct NativeExecAction {
+pub struct ComponentForensicsAction {
     pub component: String,
     /// Component whose service metadata is exposed to the native command.
     /// Defaults to the execution component at the MCP boundary.
     pub target_component: String,
+    pub script: String,
+    pub timeout_seconds: u32,
+}
+
+/// Execute a bounded shell program inside the selected running component
+/// container. Unlike `ComponentForensicsAction`, this shares the component's real
+/// network namespace, process-visible filesystem, user, and Unix sockets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentExecLiveAction {
+    pub component: String,
     pub script: String,
     pub timeout_seconds: u32,
 }
@@ -508,6 +575,16 @@ pub struct WalletQuoteClaimAction {
     pub wallet: String,
     pub mint: String,
     pub mint_quote_id: String,
+    pub timeout_seconds: u32,
+}
+
+/// Refresh an exact payer-side melt quote through the wallet adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletMeltQuoteRefreshAction {
+    pub wallet: String,
+    pub mint: String,
+    pub melt_quote_id: String,
     pub timeout_seconds: u32,
 }
 

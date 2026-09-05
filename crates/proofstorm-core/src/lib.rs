@@ -1,6 +1,7 @@
 //! Domain contracts shared by every Proofstorm interface.
 
 mod backend;
+mod candidate;
 mod catalog;
 mod coverage;
 mod evidence;
@@ -27,6 +28,10 @@ pub use backend::{
     ProtocolProbeContract, ProtocolProbePlan, ReadinessPrerequisite, RedisConfig,
     StorageObservationContract, StorageRequirementTemplate, TargetDescriptorContract,
     WorkloadControllerKind, WorkloadObservationContract, default_backend_registry,
+};
+pub use candidate::{
+    CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateSource,
+    candidate_catalog_entry, effective_catalog,
 };
 pub use catalog::{
     AuthenticationMode, CatalogDependencySupport, CatalogEntry, CatalogFeature,

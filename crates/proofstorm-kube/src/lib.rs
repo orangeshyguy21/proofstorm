@@ -1,5 +1,6 @@
 mod adapter;
 mod api;
+mod candidate;
 mod operation;
 mod render;
 mod scheduler;
@@ -28,28 +29,34 @@ pub use api::{
     AuthenticationConformanceResult, AuthenticationProtectedSpendAction,
     AuthenticationProtectedSpendResult, AuthenticationReplayAction, AuthenticationReplayResult,
     AuthenticationSessionFailureStage, BootstrapLiquidityAction, ChannelCloseAction,
-    ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction, ComponentLogsAction,
-    ConservationOracleAction, LabAction, LabPhase, NativeExecAction, NetworkHealAction,
-    NetworkPartitionAction, NodeControlAction, PeerConnectAction, PeerDisconnectAction,
-    ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec, ProofstormLabActionStatus,
-    ProofstormLabSpec, ProofstormLabStatus, ReachabilityOracleAction, TeardownReceipt,
-    WalletBalanceAction, WalletFundAction, WalletInitializeAction, WalletInvoiceAction,
-    WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction,
+    ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction, ComponentExecLiveAction,
+    ComponentForensicsAction, ComponentLogsAction, ConservationOracleAction, LabAction, LabPhase,
+    NetworkHealAction, NetworkPartitionAction, NodeControlAction, PeerConnectAction,
+    PeerDisconnectAction, ProofstormCandidateBuild, ProofstormCandidateBuildSpec,
+    ProofstormCandidateBuildStatus, ProofstormLab, ProofstormLabAction, ProofstormLabActionSpec,
+    ProofstormLabActionStatus, ProofstormLabSpec, ProofstormLabStatus, ReachabilityOracleAction,
+    TeardownReceipt, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
+    WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction, WalletQuoteClaimAction,
+    WalletRoundTripAction,
+};
+pub use candidate::{
+    CANDIDATE_BUILD_LABEL, CANDIDATE_CANCEL_ANNOTATION, CandidateBuildRenderError,
+    render_candidate_build_job,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,
     AuthenticationProtectedSpendJobSpec, AuthenticationReplayJobSpec, BootstrapJobSpec,
     ChannelCloseJobSpec, ChannelOpenJobSpec, ChannelPolicySetJobSpec, ChannelRebalanceJobSpec,
     ConservationOracleJobSpec, LightningAdapter, PeerConnectJobSpec, PeerDisconnectJobSpec,
-    WalletFundJobSpec, WalletInvoiceJobSpec, WalletJobSpec, WalletPayJobSpec,
-    WalletRoundTripJobSpec, action_result_container, evaluate_action_admission,
+    WalletFundJobSpec, WalletInvoiceJobSpec, WalletJobSpec, WalletMeltQuoteRefreshJobSpec,
+    WalletPayJobSpec, WalletRoundTripJobSpec, action_result_container, evaluate_action_admission,
     render_authentication_conformance_job, render_authentication_protected_spend_job,
     render_authentication_replay_job, render_bootstrap_job, render_channel_close_job,
     render_channel_open_job, render_channel_policy_set_job, render_channel_rebalance_job,
     render_conservation_oracle_job, render_lab_action_cleanup_job, render_lab_action_job,
     render_peer_connect_job, render_peer_disconnect_job, render_wallet_balance_job,
     render_wallet_fund_job, render_wallet_initialize_job, render_wallet_invoice_job,
-    render_wallet_pay_job, render_wallet_round_trip_job,
+    render_wallet_melt_quote_refresh_job, render_wallet_pay_job, render_wallet_round_trip_job,
 };
 pub use render::{
     INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_security_spine,

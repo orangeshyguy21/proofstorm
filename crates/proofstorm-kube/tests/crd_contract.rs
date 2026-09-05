@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use kube::CustomResourceExt;
-use proofstorm_kube::{ProofstormLab, ProofstormLabAction};
+use proofstorm_kube::{ProofstormCandidateBuild, ProofstormLab, ProofstormLabAction};
 
 #[test]
 fn checked_in_crds_match_typed_contracts() {
@@ -14,6 +14,11 @@ fn checked_in_crds_match_typed_contracts() {
         (
             "proofstorm.dev_proofstormlabactions.yaml",
             serde_yaml::to_string(&ProofstormLabAction::crd()).expect("serialize action CRD"),
+        ),
+        (
+            "proofstorm.dev_proofstormcandidatebuilds.yaml",
+            serde_yaml::to_string(&ProofstormCandidateBuild::crd())
+                .expect("serialize candidate build CRD"),
         ),
     ];
     for (name, generated) in cases {

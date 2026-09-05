@@ -17,15 +17,23 @@ OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 Rules shared by all three profiles:
 
 - Lab and network control always goes through the MCP server. No profile
-  grants `kubectl`, `docker`, `helm`, `make`, or a release build, because a
-  release build rewrites the binary that live sessions launch from and the
-  acceptance gates restart the controller.
+  grants `kubectl`, `docker`, `helm`, `make`, or a Proofstorm release build.
+  Pull-request candidate images are built through Proofstorm MCP by a durable
+  controller-owned Job; the agent never needs a host command.
 - "Internet" means two different things. Host web access is a profile choice
   above. Network access from inside lab pods is a lab property and stays
-  default-deny except for cluster DNS; `proofstorm_component_exec` runs
-  in-cluster and cannot reach the internet under any profile.
+  default-deny except for cluster DNS; both native component execution modes
+  run in-cluster and cannot reach the internet under any profile.
 - `PROOFSTORM_DB` and `PROOFSTORM_WORKSPACE` are relative to the repository
   root. Use a fresh database path per run when runs must not share state.
+
+Host permissions and the MCP toolset are independent. These profiles default
+`PROOFSTORM_TOOLSET` to `native`, a slim experiment surface that uses the real
+component CLIs for funding, payments, peers, and channels. Keep `experiment` for
+typed-contract comparisons. Native commands run through `component_exec_live`
+inside a lab component; the host `bash` permission can remain denied. See the
+[validation plan](../../docs/native-first-experiments.md) for evaluation and
+cleanup requirements.
 
 OpenCode resolves permission patterns with `*` matching any characters, so
 `tests/*` covers every file below `tests/`. Agent-level `permission` blocks

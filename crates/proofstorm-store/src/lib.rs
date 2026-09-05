@@ -11,11 +11,12 @@ use std::{
 };
 
 use proofstorm_core::{
-    Capability, DraftMutation, Experiment, ExperimentLease, ExperimentPhase, LabInstance,
-    LabOperation, LabSpec, LeasePhase, OperationArtifact, OperationKind, OperationPhase,
-    PublishedRevision, WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
-    WalletQuoteObservationRole, apply_draft_mutation, default_catalog, resolve_effective_lab,
-    resolve_lock, validate_lab,
+    CandidateBuild, CandidateBuildPhase, Capability, CatalogResponse, DraftMutation, Experiment,
+    ExperimentLease, ExperimentPhase, LabInstance, LabOperation, LabSpec, LeasePhase,
+    OperationArtifact, OperationKind, OperationPhase, PublishedRevision, WalletQuoteDirection,
+    WalletQuoteObservation, WalletQuoteObservationInput, WalletQuoteObservationRole,
+    apply_draft_mutation, default_catalog, effective_catalog, resolve_effective_lab, resolve_lock,
+    validate_lab,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use schemars::JsonSchema;
@@ -271,6 +272,16 @@ impl Store {
                id TEXT NOT NULL,
                version INTEGER NOT NULL,
                lab_json TEXT NOT NULL,
+               PRIMARY KEY (workspace_id, id)
+             );
+             CREATE TABLE IF NOT EXISTS candidate_builds (
+               workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+               id TEXT NOT NULL,
+               principal_id TEXT NOT NULL REFERENCES principals(id),
+               resource_name TEXT NOT NULL UNIQUE,
+               request_digest TEXT NOT NULL,
+               build_json TEXT NOT NULL,
+               accepted_at INTEGER NOT NULL,
                PRIMARY KEY (workspace_id, id)
              );
              CREATE TABLE IF NOT EXISTS revisions (
@@ -552,6 +563,108 @@ impl Store {
             })
     }
 
+    pub fn create_candidate_build(
+        &self,
+        workspace: &str,
+        principal: &str,
+        candidate: &CandidateBuild,
+        idempotency_key: &str,
+    ) -> Result<CandidateBuild, StoreError> {
+        self.authorize(workspace, principal, Capability::CandidateBuild)?;
+        validate_candidate_build(workspace, principal, candidate)?;
+        let request = serde_json::json!({
+            "candidateId": candidate.id,
+            "implementation": candidate.implementation,
+            "baseVersion": candidate.base_version,
+            "pullRequestUrl": candidate.pull_request_url,
+        });
+        if let Some(response) = self.idempotent_response(
+            workspace,
+            principal,
+            idempotency_key,
+            "candidate.build",
+            &request,
+        )? {
+            return Ok(response);
+        }
+        let inserted = self.lock()?.execute(
+            "INSERT OR IGNORE INTO candidate_builds(
+               workspace_id, id, principal_id, resource_name, request_digest,
+               build_json, accepted_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                workspace,
+                candidate.id,
+                principal,
+                candidate.resource_name,
+                candidate.request_digest,
+                serde_json::to_string(candidate)?,
+                candidate.accepted_at_unix,
+            ],
+        )?;
+        if inserted == 0 {
+            let existing = self.candidate_build_unchecked(workspace, &candidate.id)?;
+            if existing != *candidate {
+                return Err(StoreError::Conflict {
+                    resource: "candidate build",
+                    id: candidate.id.clone(),
+                });
+            }
+        }
+        self.record_idempotency(
+            workspace,
+            principal,
+            idempotency_key,
+            "candidate.build",
+            &request,
+            candidate,
+        )?;
+        Ok(candidate.clone())
+    }
+
+    pub fn candidate_build(
+        &self,
+        workspace: &str,
+        principal: &str,
+        id: &str,
+    ) -> Result<CandidateBuild, StoreError> {
+        self.authorize(workspace, principal, Capability::CandidateRead)?;
+        self.candidate_build_unchecked(workspace, id)
+    }
+
+    pub fn candidate_builds(
+        &self,
+        workspace: &str,
+        principal: &str,
+    ) -> Result<Vec<CandidateBuild>, StoreError> {
+        self.authorize(workspace, principal, Capability::CandidateRead)?;
+        self.candidate_builds_unchecked(workspace)
+    }
+
+    pub fn update_candidate_build(
+        &self,
+        workspace: &str,
+        candidate: &CandidateBuild,
+    ) -> Result<CandidateBuild, StoreError> {
+        let current = self.candidate_build_unchecked(workspace, &candidate.id)?;
+        validate_candidate_update(&current, candidate)?;
+        self.lock()?.execute(
+            "UPDATE candidate_builds SET build_json = ?1
+             WHERE workspace_id = ?2 AND id = ?3",
+            params![serde_json::to_string(candidate)?, workspace, candidate.id],
+        )?;
+        Ok(candidate.clone())
+    }
+
+    pub fn effective_catalog(
+        &self,
+        workspace: &str,
+        principal: &str,
+    ) -> Result<CatalogResponse, StoreError> {
+        self.authorize(workspace, principal, Capability::CatalogRead)?;
+        self.effective_catalog_unchecked(workspace)
+    }
+
     pub fn create_draft(
         &self,
         workspace: &str,
@@ -682,8 +795,8 @@ impl Store {
             });
         }
         let mut lab = current.lab.clone();
-        apply_draft_mutation(&mut lab, mutation, default_catalog())
-            .map_err(StoreError::Validation)?;
+        let catalog = self.effective_catalog_unchecked(workspace)?;
+        apply_draft_mutation(&mut lab, mutation, &catalog).map_err(StoreError::Validation)?;
         if lab == current.lab {
             self.record_idempotency(
                 workspace,
@@ -826,10 +939,10 @@ impl Store {
                 &report.issues,
             )?));
         }
-        let catalog = default_catalog();
+        let catalog = self.effective_catalog_unchecked(workspace)?;
         let effective_lab =
-            resolve_effective_lab(&draft.lab, catalog).map_err(StoreError::Catalog)?;
-        let lock = resolve_lock(&effective_lab, catalog).map_err(StoreError::Catalog)?;
+            resolve_effective_lab(&draft.lab, &catalog).map_err(StoreError::Catalog)?;
+        let lock = resolve_lock(&effective_lab, &catalog).map_err(StoreError::Catalog)?;
         let digest = proofstorm_core::publication_digest(workspace, &effective_lab, &lock);
         let revision = PublishedRevision {
             workspace_id: workspace.to_owned(),
@@ -2039,6 +2152,52 @@ impl Store {
         self.operation_unchecked(workspace, operation_id)
     }
 
+    fn candidate_build_unchecked(
+        &self,
+        workspace: &str,
+        id: &str,
+    ) -> Result<CandidateBuild, StoreError> {
+        self.lock()?
+            .query_row(
+                "SELECT build_json FROM candidate_builds
+                 WHERE workspace_id = ?1 AND id = ?2",
+                params![workspace, id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|encoded| serde_json::from_str(&encoded).map_err(StoreError::from))
+            .transpose()?
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "candidate build",
+                id: id.to_owned(),
+            })
+    }
+
+    fn candidate_builds_unchecked(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<CandidateBuild>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT build_json FROM candidate_builds
+             WHERE workspace_id = ?1 ORDER BY accepted_at DESC, id ASC",
+        )?;
+        statement
+            .query_map([workspace], |row| row.get::<_, String>(0))?
+            .map(|encoded| {
+                serde_json::from_str(&encoded.map_err(StoreError::from)?).map_err(StoreError::from)
+            })
+            .collect()
+    }
+
+    fn effective_catalog_unchecked(&self, workspace: &str) -> Result<CatalogResponse, StoreError> {
+        effective_catalog(
+            default_catalog(),
+            &self.candidate_builds_unchecked(workspace)?,
+        )
+        .map_err(StoreError::Catalog)
+    }
+
     fn read_draft_unchecked(&self, workspace: &str, id: &str) -> Result<Draft, StoreError> {
         let record = self
             .lock()?
@@ -2487,6 +2646,139 @@ fn optional_sql_u64(value: Option<i64>) -> Result<Option<u64>, StoreError> {
     value
         .map(|value| u64::try_from(value).map_err(|_| StoreError::InvalidStoredVersion(value)))
         .transpose()
+}
+
+fn validate_candidate_build(
+    workspace: &str,
+    principal: &str,
+    candidate: &CandidateBuild,
+) -> Result<(), StoreError> {
+    if candidate.api_version != proofstorm_core::CANDIDATE_BUILD_API_VERSION
+        || candidate.workspace_id != workspace
+        || candidate.principal_id != principal
+        || !is_slug(&candidate.id)
+        || !is_slug(&candidate.implementation)
+        || candidate.base_version.is_empty()
+        || candidate.phase != CandidateBuildPhase::Pending
+        || candidate.repository.as_deref().is_none_or(str::is_empty)
+        || candidate.version.as_deref().is_none_or(str::is_empty)
+        || candidate.image.is_some()
+        || candidate.error_code.is_some()
+        || candidate.error_message.is_some()
+    {
+        return Err(StoreError::Validation(
+            "candidate build has an invalid immutable identity or initial state".into(),
+        ));
+    }
+    if !candidate
+        .pull_request_url
+        .starts_with("https://github.com/")
+    {
+        return Err(StoreError::Validation(
+            "candidate pull request must be a public https://github.com URL".into(),
+        ));
+    }
+    let commit_sha = candidate.commit_sha.as_deref().unwrap_or_default();
+    if commit_sha.len() != 40 || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(StoreError::Validation(
+            "candidate commit_sha must be a full 40-character Git SHA".into(),
+        ));
+    }
+    let base = default_catalog()
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.id == candidate.implementation && entry.version == candidate.base_version
+        })
+        .ok_or_else(|| {
+            StoreError::Catalog(format!(
+                "candidate base {} {} is not installed",
+                candidate.implementation, candidate.base_version
+            ))
+        })?;
+    if base.support_lifecycle == proofstorm_core::SupportLifecycle::Experimental {
+        return Err(StoreError::Validation(
+            "candidate builds must derive from a built-in release".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_candidate_update(
+    current: &CandidateBuild,
+    candidate: &CandidateBuild,
+) -> Result<(), StoreError> {
+    let immutable_matches = current.api_version == candidate.api_version
+        && current.id == candidate.id
+        && current.workspace_id == candidate.workspace_id
+        && current.principal_id == candidate.principal_id
+        && current.implementation == candidate.implementation
+        && current.base_version == candidate.base_version
+        && current.pull_request_url == candidate.pull_request_url
+        && current.resource_name == candidate.resource_name
+        && current.request_digest == candidate.request_digest
+        && current.accepted_at_unix == candidate.accepted_at_unix
+        && current.repository == candidate.repository
+        && current.commit_sha == candidate.commit_sha
+        && current.version == candidate.version;
+    if !immutable_matches {
+        return Err(StoreError::Conflict {
+            resource: "candidate build",
+            id: candidate.id.clone(),
+        });
+    }
+    if current.phase.terminal() && current != candidate {
+        return Err(StoreError::Validation(
+            "terminal candidate build state is immutable".into(),
+        ));
+    }
+    let valid_transition = current.phase == candidate.phase
+        || matches!(
+            (current.phase, candidate.phase),
+            (
+                CandidateBuildPhase::Pending,
+                CandidateBuildPhase::Resolving
+                    | CandidateBuildPhase::Building
+                    | CandidateBuildPhase::Succeeded
+                    | CandidateBuildPhase::Failed
+                    | CandidateBuildPhase::Cancelled
+            ) | (
+                CandidateBuildPhase::Resolving,
+                CandidateBuildPhase::Building
+                    | CandidateBuildPhase::Failed
+                    | CandidateBuildPhase::Cancelled
+            ) | (
+                CandidateBuildPhase::Building,
+                CandidateBuildPhase::Pushing
+                    | CandidateBuildPhase::Succeeded
+                    | CandidateBuildPhase::Failed
+                    | CandidateBuildPhase::Cancelled
+            ) | (
+                CandidateBuildPhase::Pushing,
+                CandidateBuildPhase::Succeeded
+                    | CandidateBuildPhase::Failed
+                    | CandidateBuildPhase::Cancelled
+            )
+        );
+    if !valid_transition {
+        return Err(StoreError::Validation(format!(
+            "invalid candidate build transition from {:?} to {:?}",
+            current.phase, candidate.phase
+        )));
+    }
+    if candidate.phase == CandidateBuildPhase::Succeeded
+        && candidate.image.as_deref().is_none_or(|image| {
+            let Some((_, digest)) = image.rsplit_once("@sha256:") else {
+                return true;
+            };
+            digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err(StoreError::Validation(
+            "successful candidate build must have an immutable sha256 image".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn is_slug(value: &str) -> bool {

@@ -11,11 +11,11 @@ use thiserror::Error;
 use crate::{
     AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
     AuthenticationReplayAction, BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction,
-    ChannelPolicySetAction, ChannelRebalanceAction, ConservationOracleAction, LabAction,
-    NativeExecAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab, ProofstormLabAction,
-    ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
-    WalletInvoiceAction, WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction,
-    component_ports, instance_namespace,
+    ChannelPolicySetAction, ChannelRebalanceAction, ComponentForensicsAction,
+    ConservationOracleAction, LabAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab,
+    ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
+    WalletInitializeAction, WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction,
+    WalletQuoteClaimAction, WalletRoundTripAction, component_ports, instance_namespace,
 };
 
 const REACHABILITY_PROBE_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
@@ -205,6 +205,16 @@ pub struct WalletQuoteClaimJobSpec<'a> {
     pub wallet: &'a str,
     pub mint: &'a str,
     pub mint_quote_id: &'a str,
+    pub wallet_image: &'a str,
+    pub timeout_seconds: u32,
+}
+
+pub struct WalletMeltQuoteRefreshJobSpec<'a> {
+    pub resource_name: &'a str,
+    pub instance_key: &'a str,
+    pub wallet: &'a str,
+    pub mint: &'a str,
+    pub melt_quote_id: &'a str,
     pub wallet_image: &'a str,
     pub timeout_seconds: u32,
 }
@@ -504,7 +514,9 @@ fn unsatisfied(
 
 fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
     match action {
-        LabAction::NativeExec(request) => Some((&request.component, &request.target_component)),
+        LabAction::ComponentForensics(request) => {
+            Some((&request.component, &request.target_component))
+        }
         LabAction::ReachabilityOracle(request) => {
             Some((&request.from_component, &request.to_component))
         }
@@ -512,12 +524,18 @@ fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive action-to-participant contract is clearest in one match"
+)]
 fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
     use OperationClass as Operation;
     match action {
         LabAction::NodeStart(request) => vec![(&request.component, Operation::Start)],
         LabAction::NodeStop(request) => vec![(&request.component, Operation::Stop)],
-        LabAction::NodeRestart(request) => vec![(&request.component, Operation::Restart)],
+        LabAction::NodeRestart(request) | LabAction::ComponentRestart(request) => {
+            vec![(&request.component, Operation::Restart)]
+        }
         LabAction::BootstrapLiquidity(request) => vec![
             (&request.chain, Operation::PeerChannelMutation),
             (&request.mint_lightning, Operation::PeerChannelMutation),
@@ -583,6 +601,10 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
         ],
+        LabAction::WalletMeltQuoteRefresh(request) => vec![
+            (&request.wallet, Operation::WalletPayment),
+            (&request.mint, Operation::WalletPayment),
+        ],
         LabAction::WalletRoundTrip(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
@@ -595,7 +617,12 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
         LabAction::ReachabilityOracle(request) => {
             vec![(&request.from_component, Operation::NativeExec)]
         }
-        LabAction::NativeExec(request) => vec![(&request.component, Operation::NativeExec)],
+        LabAction::ComponentForensics(request) => {
+            vec![(&request.component, Operation::NativeExec)]
+        }
+        LabAction::ComponentExecLive(request) => {
+            vec![(&request.component, Operation::NativeExec)]
+        }
         LabAction::AuthenticationConformance(request) => vec![
             (&request.mint, Operation::Authentication),
             (&request.identity_provider, Operation::Authentication),
@@ -617,6 +644,7 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentRestart(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_)
         | LabAction::BootstrapLiquidity(_)
@@ -633,14 +661,15 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::WalletInvoice(_)
         | LabAction::WalletPay(_)
         | LabAction::WalletQuoteClaim(_)
+        | LabAction::WalletMeltQuoteRefresh(_)
         | LabAction::WalletRoundTrip(_) => "wallet",
         LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
-        LabAction::NativeExec(_) => "exec",
+        LabAction::ComponentForensics(_) => "forensics",
         LabAction::AuthenticationConformance(_)
         | LabAction::AuthenticationProtectedSpend(_)
         | LabAction::AuthenticationReplay(_) => "authentication",
         // Never rendered as a Job; the controller reads the log itself.
-        LabAction::ComponentLogs(_) => "",
+        LabAction::ComponentLogs(_) | LabAction::ComponentExecLive(_) => "",
     }
 }
 
@@ -659,6 +688,8 @@ pub fn render_lab_action_job(
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentRestart(_)
+        | LabAction::ComponentExecLive(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_) => {
             return Err(ActionRenderError::Bounds(
@@ -691,12 +722,15 @@ pub fn render_lab_action_job(
         LabAction::WalletQuoteClaim(request) => {
             render_wallet_quote_claim_action(action, lab, request)?
         }
+        LabAction::WalletMeltQuoteRefresh(request) => {
+            render_wallet_melt_quote_refresh_action(action, lab, request)?
+        }
         LabAction::WalletRoundTrip(request) => render_wallet_action(action, lab, request)?,
         LabAction::ConservationOracle(request) => render_oracle_action(action, lab, request)?,
         LabAction::ReachabilityOracle(request) => {
             render_reachability_oracle_action(action, lab, request)?
         }
-        LabAction::NativeExec(request) => render_native_exec_action(action, lab, request)?,
+        LabAction::ComponentForensics(request) => render_native_exec_action(action, lab, request)?,
         LabAction::AuthenticationConformance(request) => {
             render_authentication_conformance_action(action, lab, request)?
         }
@@ -815,9 +849,9 @@ fn authentication_components<'a>(
 fn render_native_exec_action(
     action: &ProofstormLabAction,
     lab: &ProofstormLab,
-    request: &NativeExecAction,
+    request: &ComponentForensicsAction,
 ) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::ComponentExec {
+    if action.spec.capability != Capability::ComponentForensics {
         return Err(ActionRenderError::Capability);
     }
     if request.script.is_empty() || request.script.len() > 16 * 1024 {
@@ -1499,6 +1533,34 @@ fn render_wallet_quote_claim_action(
         wallet: &request.wallet,
         mint: &request.mint,
         mint_quote_id: &request.mint_quote_id,
+        wallet_image,
+        timeout_seconds: request.timeout_seconds,
+    })
+    .map_err(ActionRenderError::from)
+}
+
+fn render_wallet_melt_quote_refresh_action(
+    action: &ProofstormLabAction,
+    lab: &ProofstormLab,
+    request: &WalletMeltQuoteRefreshAction,
+) -> Result<Job, ActionRenderError> {
+    if action.spec.capability != Capability::WalletControl {
+        return Err(ActionRenderError::Capability);
+    }
+    validate_quote_id(&request.melt_quote_id)?;
+    if !(1..=120).contains(&request.timeout_seconds) {
+        return Err(ActionRenderError::Bounds(
+            "timeout_seconds must be in 1..=120",
+        ));
+    }
+    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    render_wallet_melt_quote_refresh_job(&WalletMeltQuoteRefreshJobSpec {
+        resource_name: &action.name_any(),
+        instance_key: &action.spec.instance_key,
+        wallet: &request.wallet,
+        mint: &request.mint,
+        melt_quote_id: &request.melt_quote_id,
         wallet_image,
         timeout_seconds: request.timeout_seconds,
     })
@@ -3109,6 +3171,42 @@ pub fn render_wallet_quote_claim_job(
     )
 }
 
+/// Refresh an exact payer-side melt quote and prove reservation release.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes Job contract cannot be decoded.
+pub fn render_wallet_melt_quote_refresh_job(
+    spec: &WalletMeltQuoteRefreshJobSpec<'_>,
+) -> Result<Job, serde_json::Error> {
+    let WalletMeltQuoteRefreshJobSpec {
+        resource_name,
+        instance_key,
+        wallet,
+        mint,
+        melt_quote_id,
+        wallet_image,
+        timeout_seconds,
+    } = *spec;
+    let namespace = instance_namespace(instance_key);
+    let script = "set -eu; cd /app; python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log";
+    let timeout = timeout_seconds.to_string();
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
+        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "refresh-melt"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MELT_QUOTE_ID", melt_quote_id), ("PROOFSTORM_DB_TIMEOUT_SECONDS", timeout.as_str())])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
+    });
+    job(
+        resource_name,
+        &namespace,
+        instance_key,
+        "wallet-melt-quote-refresh",
+        i64::from(timeout_seconds.saturating_add(30)),
+        &pod,
+    )
+}
+
 /// Render a disposable wallet mint-and-self-swap job with an out-of-band payer.
 ///
 /// # Errors
@@ -3517,7 +3615,7 @@ mod tests {
     fn admission_uses_operation_prerequisites_instead_of_lab_ready() {
         let (mut lab, mut action) = typed_bootstrap();
 
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "mint-lnd".into(),
             script: "bitcoin-cli -help".into(),
@@ -3692,7 +3790,7 @@ mod tests {
             })
         ));
 
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain-b".into(),
             script: "bitcoin-cli -help".into(),
@@ -3735,7 +3833,7 @@ mod tests {
             component: "mint-lnd".into(),
         });
         assert!(evaluate_action_admission(&action, &lab).is_ok());
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "mint-lnd".into(),
             target_component: "payer-lnd".into(),
             script: "lncli --help".into(),
@@ -3934,6 +4032,49 @@ mod tests {
     }
 
     #[test]
+    fn wallet_melt_refresh_is_exact_bounded_and_uses_the_wallet_identity() {
+        let job = render_wallet_melt_quote_refresh_job(&WalletMeltQuoteRefreshJobSpec {
+            resource_name: "op-refresh",
+            instance_key: "i0123456789012345678",
+            wallet: "payer-wallet",
+            mint: "payer-mint",
+            melt_quote_id: "melt-opaque-1",
+            wallet_image: "nutshell-wallet",
+            timeout_seconds: 45,
+        })
+        .expect("refresh job");
+        let spec = job.spec.expect("job spec");
+        assert_eq!(spec.active_deadline_seconds, Some(75));
+        let pod = spec.template.spec.expect("pod spec");
+        assert_eq!(pod.automount_service_account_token, Some(false));
+        let container = &pod.containers[0];
+        let env = container.env.as_ref().expect("environment");
+        for (name, value) in [
+            ("HOME", "/wallet"),
+            ("PROOFSTORM_QUOTE_DRIVER_MODE", "refresh-melt"),
+            ("PROOFSTORM_WALLET", "payer-wallet"),
+            ("PROOFSTORM_MINT", "payer-mint"),
+            ("PROOFSTORM_EXPECTED_MINT_URL", "http://payer-mint:3338"),
+            ("PROOFSTORM_MELT_QUOTE_ID", "melt-opaque-1"),
+        ] {
+            assert_eq!(
+                env.iter()
+                    .find(|variable| variable.name == name)
+                    .and_then(|variable| variable.value.as_deref()),
+                Some(value),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            pod.volumes
+                .as_ref()
+                .and_then(|volumes| volumes[0].persistent_volume_claim.as_ref())
+                .map(|claim| claim.claim_name.as_str()),
+            Some("payer-wallet-data")
+        );
+    }
+
+    #[test]
     fn bounded_jobs_have_deadlines_and_no_service_account_tokens() {
         let job = render_bootstrap_job(&BootstrapJobSpec {
             resource_name: "op-123",
@@ -3971,8 +4112,8 @@ mod tests {
             .image
             .clone();
         let script = "bitcoin-cli --help; printf '%s' '$NOT_EXPANDED_BY_RENDERER'";
-        action.spec.capability = Capability::ComponentExec;
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain".into(),
             script: script.into(),
@@ -4005,7 +4146,7 @@ mod tests {
                 .map(|claim| claim.claim_name.as_str()),
             Some("data-chain-0")
         );
-        assert_eq!(action_result_container(&action.spec.action), "exec");
+        assert_eq!(action_result_container(&action.spec.action), "forensics");
         let pod_labels = job
             .spec
             .as_ref()
@@ -4025,8 +4166,8 @@ mod tests {
     #[test]
     fn native_exec_can_target_a_distinct_bitcoin_component() {
         let (lab, mut action) = typed_bootstrap();
-        action.spec.capability = Capability::ComponentExec;
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain-b".into(),
             script: "bitcoin-cli getblockchaininfo".into(),
@@ -4082,8 +4223,8 @@ mod tests {
     #[test]
     fn native_exec_mounts_are_compiled_from_the_executor_plan() {
         let (lab, mut action) = typed_bootstrap();
-        action.spec.capability = Capability::ComponentExec;
-        action.spec.action = LabAction::NativeExec(NativeExecAction {
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
             component: "mint".into(),
             target_component: "chain-b".into(),
             script: "cdk-mintd --help".into(),

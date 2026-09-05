@@ -1,8 +1,35 @@
 {
   "$defs": {
+    "CandidateSource": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "type": "string"
+        },
+        "commit_sha": {
+          "type": "string"
+        },
+        "pull_request_url": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "pull_request_url",
+        "repository",
+        "commit_sha"
+      ],
+      "type": "object"
+    },
     "Capability": {
       "enum": [
         "catalog.read",
+        "candidate.build",
+        "candidate.read",
+        "candidate.cancel",
         "lab.read",
         "lab.create",
         "lab.edit",
@@ -23,6 +50,7 @@
         "node.add",
         "node.remove",
         "node.control",
+        "component.control",
         "peer.connect",
         "peer.disconnect",
         "wallet.create",
@@ -40,7 +68,8 @@
         "network.partition",
         "network.heal",
         "component.logs",
-        "component.exec",
+        "component.exec_live",
+        "component.forensics",
         "authentication.test",
         "traffic.capture",
         "oracle.list",
@@ -632,6 +661,16 @@
         "rollout_digest": {
           "type": "string"
         },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "source_digest": {
           "type": "string"
         },
@@ -684,6 +723,7 @@
         "node_start",
         "node_stop",
         "node_restart",
+        "component_restart",
         "bootstrap_liquidity",
         "peer_connect",
         "peer_disconnect",
@@ -702,10 +742,12 @@
         "wallet_invoice",
         "wallet_pay",
         "wallet_quote_claim",
+        "wallet_melt_quote_refresh",
         "wallet_round_trip",
         "conservation_oracle",
         "reachability_oracle",
-        "native_exec",
+        "component_forensics",
+        "component_exec_live",
         "component_logs",
         "authentication_conformance",
         "authentication_protected_spend",

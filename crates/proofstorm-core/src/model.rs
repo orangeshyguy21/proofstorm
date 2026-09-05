@@ -15,6 +15,12 @@ pub const API_VERSION: &str = "proofstorm/v1alpha1";
 pub enum Capability {
     #[serde(rename = "catalog.read")]
     CatalogRead,
+    #[serde(rename = "candidate.build")]
+    CandidateBuild,
+    #[serde(rename = "candidate.read")]
+    CandidateRead,
+    #[serde(rename = "candidate.cancel")]
+    CandidateCancel,
     #[serde(rename = "lab.read")]
     LabRead,
     #[serde(rename = "lab.create")]
@@ -55,6 +61,8 @@ pub enum Capability {
     NodeRemove,
     #[serde(rename = "node.control")]
     NodeControl,
+    #[serde(rename = "component.control")]
+    ComponentControl,
     #[serde(rename = "peer.connect")]
     PeerConnect,
     #[serde(rename = "peer.disconnect")]
@@ -89,8 +97,10 @@ pub enum Capability {
     NetworkHeal,
     #[serde(rename = "component.logs")]
     ComponentLogs,
-    #[serde(rename = "component.exec")]
-    ComponentExec,
+    #[serde(rename = "component.exec_live")]
+    ComponentExecLive,
+    #[serde(rename = "component.forensics")]
+    ComponentForensics,
     #[serde(rename = "authentication.test")]
     AuthenticationTest,
     #[serde(rename = "traffic.capture")]

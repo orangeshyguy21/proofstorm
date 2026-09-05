@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use proofstorm_core::{
-    API_VERSION, Capability, ComponentKind, ComponentSpec, ControlClass, DraftMutation,
-    LOCK_API_VERSION, LabPolicy, LabSpec, OperationKind, OperationPhase, WalletQuoteDirection,
-    WalletQuoteObservationInput, WalletQuoteObservationRole,
+    API_VERSION, CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, Capability,
+    ComponentKind, ComponentSpec, ControlClass, DraftMutation, LOCK_API_VERSION, LabPolicy,
+    LabSpec, OperationKind, OperationPhase, WalletQuoteDirection, WalletQuoteObservationInput,
+    WalletQuoteObservationRole,
 };
 use proofstorm_store::{Store, StoreError, Workspace};
 
@@ -15,6 +16,68 @@ fn empty_lab(name: &str) -> LabSpec {
         links: vec![],
         policy: LabPolicy::default(),
     }
+}
+
+#[test]
+fn successful_candidate_becomes_a_workspace_catalog_version() {
+    let store = Store::memory().expect("store");
+    seed(&store);
+    for capability in [Capability::CandidateBuild, Capability::CandidateRead] {
+        store
+            .grant("alpha", "designer", capability)
+            .expect("candidate grant");
+    }
+    let candidate = CandidateBuild {
+        api_version: CANDIDATE_BUILD_API_VERSION.into(),
+        id: "nutshell-pr-1095".into(),
+        workspace_id: "alpha".into(),
+        principal_id: "designer".into(),
+        implementation: "nutshell".into(),
+        base_version: "0.20.3".into(),
+        pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
+        resource_name: "candidate-aabbccdd".into(),
+        request_digest: "sha256:request".into(),
+        phase: CandidateBuildPhase::Pending,
+        accepted_at_unix: 1,
+        started_at_unix: None,
+        completed_at_unix: None,
+        repository: Some("https://github.com/cashubtc/nutshell.git".into()),
+        commit_sha: Some("aabbccddaabbccddaabbccddaabbccddaabbccdd".into()),
+        version: Some("candidate-pr1095-aabbccdd".into()),
+        image: None,
+        error_code: None,
+        error_message: None,
+    };
+    let created = store
+        .create_candidate_build("alpha", "designer", &candidate, "candidate-1")
+        .expect("create candidate");
+    assert_eq!(created, candidate);
+    let mut succeeded = candidate;
+    succeeded.phase = CandidateBuildPhase::Succeeded;
+    succeeded.started_at_unix = Some(2);
+    succeeded.completed_at_unix = Some(3);
+    succeeded.image = Some(format!(
+        "proofstorm-registry.localhost:5000/proofstorm-candidates/nutshell@sha256:{}",
+        "1".repeat(64)
+    ));
+    store
+        .update_candidate_build("alpha", &succeeded)
+        .expect("record success");
+    let catalog = store
+        .effective_catalog("alpha", "designer")
+        .expect("effective catalog");
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.version == "candidate-pr1095-aabbccdd")
+        .expect("candidate version");
+    assert_eq!(
+        entry
+            .source
+            .as_ref()
+            .map(|source| source.candidate_id.as_str()),
+        Some("nutshell-pr-1095")
+    );
 }
 
 fn seed(store: &Store) {

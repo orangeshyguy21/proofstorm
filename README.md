@@ -49,8 +49,10 @@ make down
 
 The MCP configuration is operator-owned. Its principal and capability set are
 not agent inputs, and the agent never receives kubeconfig. A principal granted
-`component.exec` can inspect component-local credentials from inside that lab,
-so that capability must be treated as secret-bearing authority.
+`component.exec_live` or `component.forensics` can inspect component-local
+credentials, so both capabilities must be treated as secret-bearing authority.
+Live execution additionally shares the running component's process, network,
+user, localhost, and Unix-socket context.
 `authentication.test` is narrower: it permits a fixed controller-rendered
 authentication conformance action to consume disposable test-user credentials
 inside the lab, while MCP returns only its typed, secret-free result.
@@ -79,7 +81,12 @@ cargo run -p proofstorm-mcp
 
 The configured capability list replaces that principal's grants in the selected
 workspace. It is trusted operator configuration, never model-supplied input.
-Set `PROOFSTORM_TOOLSET=design`, `runtime`, or `evidence` to expose only the
+Set `PROOFSTORM_TOOLSET=native` for a slim cross-phase experiment surface:
+native CLIs handle wallet operations and routing policy, while Proofstorm keeps
+provisioning, coordination, lifecycle, faults, and observations such as wallet
+balance and reachability. The `experiment` profile retains typed contracts for
+regression testing and comparison. Set `PROOFSTORM_TOOLSET=design`, `runtime`, or
+`evidence` to expose only the
 agent-facing tools for that phase; the default is `all`. A toolset only removes
 routes and is always intersected with the principal's durable capabilities, so
 it cannot grant authority. Focused toolsets reduce the MCP discovery schema
@@ -90,6 +97,22 @@ To enable the Kubernetes-backed lifecycle tools, add
 `PROOFSTORM_CONTROL_NAMESPACE=proofstorm-system`. The MCP server then uses the
 operator's current Kubernetes client configuration; agents still receive only
 Proofstorm's MCP interface, never Kubernetes authority.
+
+Candidate builds are also agent-operated. Grant
+`candidate.build,candidate.read,candidate.cancel`, configure the Kubernetes
+runtime, and give the agent a public GitHub pull-request URL plus an installed
+implementation ID such as `nutshell`. `proofstorm_candidate_build` freezes the
+PR head commit and creates a controller-owned BuildKit Job; the job continues
+if the MCP client disconnects. The agent can make repeated bounded
+`proofstorm_candidate_wait` calls (at most 120 seconds each), recover prior
+builds with `proofstorm_candidate_list`, and inspect bounded logs through the
+receipt's resource URI. A successful build becomes a workspace-scoped,
+experimental exact catalog version, so the normal `catalog_list` → `lab_plan`
+→ `lab_apply` workflow remains unchanged. Published locks retain the PR URL,
+repository, commit SHA, candidate ID, and immutable image digest.
+Set `GITHUB_TOKEN` on the MCP server when higher GitHub API rate limits are
+needed; it is server configuration and is never accepted as tool input or
+passed into the build Job.
 
 Every component independently declares an implementation `version` and a
 required adapter `config_version`. The catalog advertises both. Publication
@@ -155,31 +178,21 @@ make e2e-slice5
 make down
 ```
 
-Proofstorm also exposes `proofstorm_component_exec` under the separate,
-high-authority `component.exec` capability. It runs an unrestricted
-non-interactive shell program in the selected component's exact digest-pinned
-image with its canonical lab-local state mounted. The program runs in a fresh
-short-lived Pod rather than inside the component's running container, so it
-shares the component's image and data but not its process space: `localhost` is
-not the component, and tools like `ps` cannot see the component's processes.
-Reach the component over the network using the injected endpoint variables. A
-component that is not ready has no Service endpoints, and connections to it are
-refused immediately rather than timing out, so the exec artifact reports the
-target's ready endpoint count to keep that case distinguishable from a missing
-listener or a blocked network policy. `component` selects that
-execution context; optional `target_component` selects which lab component's
-service metadata is exposed and defaults to the execution component. This lets
-one pinned Bitcoin CLI deliberately query any Bitcoin node in a multi-node lab.
-The command receives generic `PROOFSTORM_TARGET_*` identity, DNS, and named-port
-metadata plus implementation-native endpoint variables such as
-`BITCOIN_RPC_HOST` and `BITCOIN_RPC_PORT`; Proofstorm never parses or replaces
-the native command. Proofstorm still owns the
-namespace, image, volumes, pod identity, network policy, deadline, and output
-limit; the workload receives no Kubernetes service-account token, host mount,
-or cross-lab credential. The terminal artifact records the native exit code and
-up to 20 KiB of combined output. Use typed actions for portable orchestration
-and native exec when protocol fidelity or implementation-specific attack
-surfaces matter.
+Proofstorm exposes two deliberately different native shell primitives.
+`proofstorm_component_exec_live` (`component.exec_live`) runs inside the
+selected running container, so native CLIs see the component's real localhost,
+Unix sockets, files, credentials, user, and network identity. It is bounded,
+fully journaled, and fail-closed against replay after controller interruption.
+`proofstorm_component_forensics` (`component.forensics`) instead creates a
+short-lived pod from the locked image and data mounts. It is useful for offline
+source/database inspection, but explicitly does not promise live CLI or socket
+connectivity. Both record bounded output and an exit code. Native CLIs are the
+normal surface for operating deployed software; use typed actions where they
+provide coordination, lifecycle guarantees, or useful portable observations.
+The [native-first validation plan](docs/native-first-experiments.md) describes
+how execution choices and evidence are evaluated. `proofstorm_component_restart`
+(`component.control`) rolls any primary component workload, including mints and
+wallets, while preserving its persistent state.
 
 Run the live native-protocol acceptance gate with:
 

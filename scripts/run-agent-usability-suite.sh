@@ -17,7 +17,7 @@ usage() {
     "" \
     "Runs the selected scenario corpus strictly serially. The next fresh" \
     "headless OpenCode session is never started until the prior benchmark" \
-    "has exited and verified that no Proofstorm instance namespace remains."
+    "has exited and verified that no Proofstorm lab, candidate job, or storage remains."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -82,11 +82,11 @@ for scenario in "${SELECTED_SCENARIOS[@]}"; do
       --variant "$VARIANT" \
       --model "$MODEL"
 
-    remaining="$(jq '.remaining_instance_namespaces | length' \
-      "$ROOT/dev/agent-usability-runs/$run_id/metrics.json")"
-    if [[ "$remaining" != "0" ]]; then
-      printf 'stopping serial suite: run %s left %s instance namespace(s)\n' \
-        "$run_id" "$remaining" >&2
+    idle="$(jq -r '.verified_idle == true' \
+      "$ROOT/dev/agent-usability-runs/$run_id/cluster-after.json")"
+    if [[ "$idle" != "true" ]]; then
+      printf 'stopping serial suite: cluster idleness is not verified after %s\n' \
+        "$run_id" >&2
       exit 1
     fi
   done

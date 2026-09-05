@@ -29,7 +29,7 @@ const CAPABILITIES: &[&str] = &[
     "chain.mine",
     "peer.connect",
     "channel.open",
-    "component.exec",
+    "component.forensics",
     "artifact.read",
 ];
 
@@ -50,7 +50,7 @@ fn lab_document() -> Value {
             {"id": "payer-chain", "kind": "chain_backend", "from": "payer-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
             {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "mint-lnd", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}}
         ],
-        "policy": {"allow": ["component.exec"], "limits": {"max_components": 16, "max_links": 32, "max_config_bytes": 32768}}
+        "policy": {"allow": ["component.forensics"], "limits": {"max_components": 16, "max_links": 32, "max_config_bytes": 32768}}
     })
 }
 
@@ -183,7 +183,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
     client.call(
-        "proofstorm_component_exec",
+        "proofstorm_component_forensics",
         scoped(&instance, &experiment, &lease, "compose-invoice", json!({
             "component": "recipient-wallet", "target_component": "mint", "script": compose_script,
             "timeout_seconds": 60, "idempotency_key": format!("compose-{run}")
@@ -262,7 +262,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "python3 -c 'import glob,sqlite3; print(next(r[0] for p in glob.glob(\"/wallet/.cashu/recipient-wallet/*.sqlite3\") for r in [sqlite3.connect(p).execute(\"SELECT request FROM bolt11_mint_quotes WHERE quote = ?\", (\"{external_quote}\",)).fetchone()] if r))'"
     );
     client.call(
-        "proofstorm_component_exec",
+        "proofstorm_component_forensics",
         scoped(
             &instance,
             &experiment,
@@ -283,7 +283,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "set -eu; attempt=0; until lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=payer-lnd:10009 getinfo >/dev/null 2>&1; do attempt=$((attempt+1)); test \"$attempt\" -lt 30; sleep 1; done; lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=payer-lnd:10009 payinvoice --force '{external_invoice}'"
     );
     client.call(
-        "proofstorm_component_exec",
+        "proofstorm_component_forensics",
         scoped(
             &instance,
             &experiment,
@@ -390,13 +390,14 @@ pub fn run(context: &GateContext) -> Result<()> {
         .into_iter()
         .flatten()
     {
-        if action.get("kind").and_then(Value::as_str) == Some("native_exec") {
-            action["request"] = Value::String("component_exec intentionally secret-bearing".into());
+        if action.get("kind").and_then(Value::as_str) == Some("component_forensics") {
+            action["request"] =
+                Value::String("component_forensics intentionally secret-bearing".into());
         }
     }
     assert_no_invoice(
         &typed_evidence,
-        "typed evidence outside component_exec requests",
+        "typed evidence outside component_forensics requests",
     )?;
 
     client.call("proofstorm_lab_close", json!({"instance_id": instance}))?;

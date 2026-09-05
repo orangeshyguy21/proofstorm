@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use kube::CustomResourceExt;
-use proofstorm_kube::{ProofstormLab, ProofstormLabAction};
+use proofstorm_kube::{ProofstormCandidateBuild, ProofstormLab, ProofstormLabAction};
 
 fn main() -> anyhow::Result<()> {
     let output = std::env::args_os()
@@ -15,6 +15,10 @@ fn main() -> anyhow::Result<()> {
     fs::write(
         output.join("proofstorm.dev_proofstormlabactions.yaml"),
         serde_yaml::to_string(&ProofstormLabAction::crd())?,
+    )?;
+    fs::write(
+        output.join("proofstorm.dev_proofstormcandidatebuilds.yaml"),
+        serde_yaml::to_string(&ProofstormCandidateBuild::crd())?,
     )?;
     Ok(())
 }

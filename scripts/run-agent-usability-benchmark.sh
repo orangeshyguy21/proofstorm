@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Parse the whole run before executing it: repository edits during a long agent
+# session must not change the shell's continuation after wait.
+main() {
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -121,7 +125,7 @@ if [[ ! "$MAX_EQUIVALENT_PLANS" =~ ^[2-9][0-9]*$ || "$MAX_EQUIVALENT_PLANS" -gt 
   exit 2
 fi
 
-for command in "$OPENCODE_BIN" jq git shasum; do
+for command in "$OPENCODE_BIN" jq git shasum sqlite3 python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'required command is unavailable: %s\n' "$command" >&2
     exit 1
@@ -153,8 +157,13 @@ SCENARIO_FAMILY="$(jq -r '.family' <<<"$SCENARIO_JSON")"
 SCENARIO_NOVELTY="$(jq -r '.novelty' <<<"$SCENARIO_JSON")"
 EXPECTATIONS="$(jq -c '.gates' <<<"$SCENARIO_JSON")"
 MANUAL_GATES="$(jq -c '.manual_gates' <<<"$SCENARIO_JSON")"
+EXECUTION_SURFACE="$(jq -r '.execution_surface // "mixed"' <<<"$SCENARIO_JSON")"
+INPUTS="$(jq -c --argjson index "$VARIANT_INDEX" '.input_sets?[$index] // {}' <<<"$SCENARIO_JSON")"
 PROMPT_BASE="$(jq -r --argjson index "$VARIANT_INDEX" '.prompt_variants[$index]' <<<"$SCENARIO_JSON")"
 PROMPT="$PROMPT_BASE Use run identifier $RUN_ID for names that must be unique."
+if [[ "$EXECUTION_SURFACE" == "typed-contract" ]]; then
+  PROMPT="$PROMPT This run checks the typed-operation contract: use advertised typed operations rather than native execution."
+fi
 
 if [[ "$PRINT_PROMPT" == "true" ]]; then
   jq -n \
@@ -165,10 +174,11 @@ if [[ "$PRINT_PROMPT" == "true" ]]; then
     --argjson variant_index "$VARIANT_INDEX" \
     --arg toolset "$TOOLSET" \
     --arg prompt "$PROMPT" \
+    --argjson inputs "$INPUTS" \
     --argjson gates "$EXPECTATIONS" \
     --argjson manual_gates "$MANUAL_GATES" \
     '{run_id:$run_id, scenario:$scenario, family:$family, novelty:$novelty,
-      variant_index:$variant_index, toolset:$toolset, prompt:$prompt,
+      variant_index:$variant_index, toolset:$toolset, prompt:$prompt, inputs:$inputs,
       gates:$gates, manual_gates:$manual_gates}'
   exit 0
 fi
@@ -199,16 +209,13 @@ if [[ -e "$RUN_ROOT" ]]; then
   exit 1
 fi
 mkdir -p "$RUN_ROOT"
+python3 "$ROOT/scripts/agent-usability-cluster.py" --output "$RUN_ROOT/cluster-before.json"
 
 BEFORE_NAMESPACES="$RUN_ROOT/namespaces-before.json"
 AFTER_NAMESPACES="$RUN_ROOT/namespaces-after.json"
 "$KUBECTL" --context k3d-proofstorm get namespaces \
   -l proofstorm.dev/instance -o json >"$BEFORE_NAMESPACES"
-if [[ "$(jq '.items | length' "$BEFORE_NAMESPACES")" != "0" ]]; then
-  printf '%s\n' "cluster has existing Proofstorm instances; refusing an ambiguous benchmark" >&2
-  jq -r '.items[].metadata.name' "$BEFORE_NAMESPACES" >&2
-  exit 1
-fi
+# The idle guard above requires no existing lab or candidate workloads.
 
 DATABASE="$RUN_ROOT/proofstorm.sqlite3"
 CONFIG="$RUN_ROOT/opencode.json"
@@ -220,6 +227,8 @@ METRICS="$RUN_ROOT/metrics.json"
 SCORECARD="$RUN_ROOT/scorecard.json"
 MANIFEST="$RUN_ROOT/manifest.json"
 STOP_REASON="$RUN_ROOT/limit-reason.txt"
+CANDIDATE_BUILDS="$RUN_ROOT/candidate-builds.json"
+REVISIONS="$RUN_ROOT/revisions.json"
 WORKSPACE="agent-usability-$RUN_ID"
 
 jq \
@@ -252,6 +261,8 @@ jq -n \
   --arg toolset "$TOOLSET" \
   --arg workspace "$WORKSPACE" \
   --arg prompt "$PROMPT" \
+  --argjson inputs "$INPUTS" \
+  --arg execution_surface "$EXECUTION_SURFACE" \
   --arg source_commit "$SOURCE_COMMIT" \
   --argjson source_dirty_files "$SOURCE_DIRTY" \
   --arg binary_digest "sha256:$BINARY_DIGEST" \
@@ -263,11 +274,16 @@ jq -n \
     scenario_novelty:$scenario_novelty, variant_index:$variant_index,
     expectations:$expectations, manual_gates:$manual_gates,
     model:$model, toolset:$toolset, workspace:$workspace,
-    prompt:$prompt, source_commit:$source_commit,
+    prompt:$prompt, inputs:$inputs, execution_surface:$execution_surface, source_commit:$source_commit,
     source_dirty_files:$source_dirty_files, binary_digest:$binary_digest,
     started_at:$started_at,
     limits:{max_steps:$max_steps,max_seconds:$max_seconds,
       max_equivalent_plans:$max_equivalent_plans}}' >"$MANIFEST"
+
+git -C "$ROOT" diff --binary HEAD >"$RUN_ROOT/source-diff.patch"
+shasum -a 256 "$SCENARIO_CATALOG" "$0" "$ROOT/scripts/evaluate-agent-usability.py" "$ROOT/scripts/agent-usability-cluster.py" >"$RUN_ROOT/harness-digests.txt"
+mkdir "$RUN_ROOT/harness"
+cp "$SCENARIO_CATALOG" "$0" "$ROOT/scripts/evaluate-agent-usability.py" "$ROOT/scripts/agent-usability-cluster.py" "$RUN_ROOT/harness/"
 
 printf '[proofstorm-benchmark] run=%s scenario=%s variant=%s model=%s toolset=%s\n' \
   "$RUN_ID" "$SCENARIO" "$VARIANT_INDEX" "$MODEL" "$TOOLSET"
@@ -353,6 +369,13 @@ if [[ -f "$STOP_REASON" ]]; then
   LIMIT_REASON="$(tr -d '\r\n' <"$STOP_REASON")"
 fi
 
+sqlite3 "$DATABASE" \
+  "SELECT coalesce(json_group_array(json(build_json)), '[]') FROM candidate_builds" \
+  >"$CANDIDATE_BUILDS"
+sqlite3 "$DATABASE" \
+  "SELECT coalesce(json_group_array(json(revision_json)), '[]') FROM revisions" \
+  >"$REVISIONS"
+
 jq -s \
   --arg run_id "$RUN_ID" \
   --arg scenario "$SCENARIO" \
@@ -363,10 +386,14 @@ jq -s \
   --argjson opencode_exit "$OPENCODE_STATUS" \
   --argjson export_exit "$EXPORT_STATUS" \
   --argjson kubectl_exit "$KUBECTL_STATUS" \
+  --argjson inputs "$INPUTS" \
   --arg limit_reason "$LIMIT_REASON" \
+  --slurpfile candidate_builds "$CANDIDATE_BUILDS" \
+  --slurpfile revisions "$REVISIONS" \
+  --slurpfile namespaces_before "$BEFORE_NAMESPACES" \
   --slurpfile namespaces "$AFTER_NAMESPACES" \
-  'def tool_events: [.[] | select(.type == "tool_use")];
-   def step_events: [.[] | select(.type == "step_finish")];
+  'def tool_events: [.[] | select(type == "object" and .type == "tool_use")];
+   def step_events: [.[] | select(type == "object" and .type == "step_finish")];
    def parsed_outputs:
      [tool_events[]
       | (.part.state.output? // empty)
@@ -375,6 +402,8 @@ jq -s \
    def terminal_outputs:
      [parsed_outputs[]
       | ., ((.operations? // [])[])];
+   def durable_candidate_builds: ($candidate_builds[0] // []);
+   def published_revisions: ($revisions[0] // []);
    def quote_observations:
      [parsed_outputs[]
       | ((.artifact?.content?.quote_observations? // [])[]),
@@ -391,8 +420,8 @@ jq -s \
    def normalized_error_input:
      del(.idempotency_key, .operation_id);
    def recovery_episodes:
-     [tool_events
-      | to_entries[]
+     [tool_events as $calls
+      | $calls | to_entries[]
       | select(.value.part.state.status == "error")
       | .key as $index
       | (.value.part.state.error // "") as $message
@@ -406,11 +435,11 @@ jq -s \
           rejected_target_visible:
             ($message | test("component|field|operation|instance|endpoint|revision"; "i")),
           mutation_disposition_visible:
-            ($message | test("no (operation|plan|mutation) was created|no changes were made|already exists with different immutable identity"; "i")),
+            ($message | test("no (operation|plan|mutation) was (created|stored)|no plan was stored|no changes were made|already exists with different immutable identity"; "i")),
           bounded_recovery_visible:
             ($message | test("recovery:|next:|valid (component|endpoint|implementation)|choose (a|one)|workflow is infeasible"; "i")),
           next_two_calls:
-            ([tool_events[$index + 1:$index + 3][]
+            ([$calls[$index + 1:$index + 3][]
               | {tool: .part.tool, status: .part.state.status}])
         }];
    def repeated_equivalent_errors:
@@ -464,14 +493,19 @@ jq -s \
          + completed_tool_count("proofstorm_proofstorm_lab_apply")
        ),
        whole_document_edits: tool_count("proofstorm_proofstorm_lab_edit"),
-       raw_exec_calls: tool_count("proofstorm_proofstorm_component_exec"),
+       raw_exec_calls: (
+         tool_count("proofstorm_proofstorm_component_exec_live")
+         + tool_count("proofstorm_proofstorm_component_forensics")
+       ),
+       live_exec_calls: tool_count("proofstorm_proofstorm_component_exec_live"),
+       forensics_calls: tool_count("proofstorm_proofstorm_component_forensics"),
        evidence_exports: completed_tool_count("proofstorm_proofstorm_artifact_export"),
        operation_failures:
          (terminal_outputs | map(select(.terminal? == true and .phase? == "failed")) | length),
        native_exec_nonzero_exits:
          (terminal_outputs
           | map(select(
-              .kind? == "native_exec"
+              (.kind? == "component_forensics" or .kind? == "component_exec_live")
               and (.artifact?.content?.exit_code? // 0) != 0
             ))
           | length),
@@ -489,6 +523,10 @@ jq -s \
          (quote_observations
           | map(select(.role? == "payment_melt" and .state? == "UNPAID"))
           | length),
+       successful_wallet_funds:
+         (terminal_outputs
+          | map(select(.kind? == "wallet_fund" and .phase? == "succeeded"))
+          | length),
        equivalent_plan_repeats_max:
          ([tool_events[]
            | select(.part.tool | endswith("lab_plan"))
@@ -498,8 +536,63 @@ jq -s \
           | map(length)
           | max // 0)
      },
+     candidate: {
+       builds: (durable_candidate_builds | length),
+       successes:
+         (durable_candidate_builds | map(select(.phase == "succeeded")) | length),
+       wait_calls: tool_count("proofstorm_proofstorm_candidate_wait"),
+       wait_timeouts:
+         ([tool_events[]
+           | select(.part.tool == "proofstorm_proofstorm_candidate_wait")
+           | (.part.state.output? // empty)
+           | fromjson?
+           | select(.timed_out? == true)]
+          | length),
+       valid_immutable_builds:
+         (durable_candidate_builds
+          | map(select(
+              .phase == "succeeded"
+              and (.commit_sha? | test("^[0-9a-f]{40}$"))
+              and (.image? | test("@sha256:[0-9a-f]{64}$"))
+              and (.version? | startswith("candidate-"))))
+          | length),
+       exact_version_published:
+         ([durable_candidate_builds[] as $build
+           | published_revisions[].lab.components[]
+           | select(
+               .implementation == $build.implementation
+               and .version == $build.version)]
+          | length),
+       provenance_locked:
+         ([durable_candidate_builds[] as $build
+           | published_revisions[].lock.entries[]
+           | select(
+               .catalog_id == $build.implementation
+               and .version == $build.version
+               and .image == $build.image
+               and .source.candidate_id == $build.id
+               and .source.pull_request_url == $build.pull_request_url
+               and .source.repository == $build.repository
+               and .source.commit_sha == $build.commit_sha)]
+          | length),
+       requested_lightning_version_published:
+         ([published_revisions[].lab.components[]
+           | select(
+               .implementation == "lnd"
+               and .version == ($inputs.lightning_version // ""))]
+          | length),
+       requested_wallet_fund_calls:
+         ([tool_events[]
+           | select(
+               .part.tool == "proofstorm_proofstorm_wallet_fund"
+               and .part.state.input.amount_sat? == ($inputs.wallet_amount_sat // null))]
+          | length)
+     },
      remaining_instance_namespaces:
-       (if $kubectl_exit == 0 then ($namespaces[0].items | map(.metadata.name)) else null end)
+       (if $kubectl_exit == 0 then
+          (($namespaces[0].items | map(.metadata.name))
+           - ($namespaces_before[0].items | map(.metadata.name)))
+        else null end)
    }' "$EVENTS" >"$METRICS"
 
 jq -n \
@@ -530,6 +623,34 @@ jq -n \
         $metrics[0].workflow.lab_materializations >= $expectations.materializations_min
         and $metrics[0].workflow.lab_materializations <= $expectations.materializations_max
       ),
+      candidate_build_count_met:
+        ($metrics[0].candidate.builds >= ($expectations.candidate_builds_min // 0)),
+      candidate_success_count_met:
+        ($metrics[0].candidate.successes >= ($expectations.candidate_successes_min // 0)),
+      candidate_wait_count_met:
+        ($metrics[0].candidate.wait_calls >= ($expectations.candidate_wait_calls_min // 0)),
+      candidate_immutable_identity_met: (
+        ($expectations.candidate_successes_min // 0) == 0
+        or $metrics[0].candidate.valid_immutable_builds >= $expectations.candidate_successes_min
+      ),
+      candidate_exact_version_met: (
+        ($expectations.candidate_exact_version_required // false | not)
+        or $metrics[0].candidate.exact_version_published > 0
+      ),
+      candidate_provenance_met: (
+        ($expectations.candidate_provenance_required // false | not)
+        or $metrics[0].candidate.provenance_locked > 0
+      ),
+      requested_lightning_version_met: (
+        ($expectations.requested_lightning_version_required // false | not)
+        or $metrics[0].candidate.requested_lightning_version_published > 0
+      ),
+      requested_wallet_amount_met: (
+        ($expectations.requested_wallet_amount_required // false | not)
+        or $metrics[0].candidate.requested_wallet_fund_calls > 0
+      ),
+      wallet_fund_count_met:
+        ($metrics[0].workflow.successful_wallet_funds >= ($expectations.wallet_funds_min // 0)),
       paid_melt_count_met:
         ($metrics[0].workflow.paid_melts >= $expectations.paid_melts_min),
       unpaid_melt_count_met:
@@ -555,6 +676,7 @@ jq -n \
       whole_document_edits: $metrics[0].workflow.whole_document_edits
     },
     recovery: $metrics[0].recovery,
+    candidate: $metrics[0].candidate,
     efficiency: {
       tool_calls: $metrics[0].tool_calls,
       model_steps: $metrics[0].steps,
@@ -563,31 +685,7 @@ jq -n \
     },
     manual_hard_gates:
       (reduce $manual_gates[] as $gate ({}; .[$gate] = null)),
-    proficiency: (
-      if $metrics[0].tool_errors <= 2
-         and $metrics[0].recovery.diagnostic_fidelity_failures == 0
-         and ($metrics[0].recovery.repeated_equivalent_errors | length) == 0
-         and $metrics[0].workflow.operation_failures <= 2
-         and $metrics[0].workflow.native_exec_nonzero_exits == 0
-         and $metrics[0].workflow.raw_exec_calls <= $expectations.raw_exec_max
-         and $metrics[0].workflow.equivalent_plan_repeats_max <= 2
-         and $metrics[0].workflow.lab_materializations >= $expectations.materializations_min
-         and $metrics[0].workflow.lab_materializations <= $expectations.materializations_max
-         and (($expectations.evidence_required | not)
-              or $metrics[0].workflow.evidence_exports > 0)
-         and (if $expectations.teardown_required then
-                $metrics[0].workflow.verified_teardowns > 0
-                and ($metrics[0].remaining_instance_namespaces | length) == 0
-              else
-                ($metrics[0].remaining_instance_namespaces | length) == 0
-              end)
-         and $metrics[0].workflow.paid_melts >= $expectations.paid_melts_min
-         and $metrics[0].workflow.unpaid_melts >= $expectations.unpaid_melts_min
-         and $metrics[0].workflow.whole_document_edits == 0
-      then "candidate"
-      else "failed"
-      end
-    )
+    proficiency: "needs_review"
   }' >"$SCORECARD"
 
 TEMP_MANIFEST="$RUN_ROOT/manifest.updated.json"
@@ -603,6 +701,13 @@ jq \
   "$MANIFEST" >"$TEMP_MANIFEST"
 mv "$TEMP_MANIFEST" "$MANIFEST"
 
+set +e
+python3 "$ROOT/scripts/agent-usability-cluster.py" --retire-builds "$RUN_ROOT" \
+  --wait-seconds 30 --output "$RUN_ROOT/cluster-after.json"
+CLUSTER_STATUS=$?
+set -e
+python3 "$RUN_ROOT/harness/evaluate-agent-usability.py" "$RUN_ROOT"
+
 printf '[proofstorm-benchmark] artifacts=%s\n' "$RUN_ROOT"
 jq . "$METRICS"
 jq . "$SCORECARD"
@@ -610,3 +715,10 @@ jq . "$SCORECARD"
 if [[ "$OPENCODE_STATUS" -ne 0 ]]; then
   exit "$OPENCODE_STATUS"
 fi
+
+if [[ "$CLUSTER_STATUS" -ne 0 ]]; then
+  exit "$CLUSTER_STATUS"
+fi
+
+}
+main "$@"

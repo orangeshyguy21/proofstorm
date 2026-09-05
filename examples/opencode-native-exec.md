@@ -14,16 +14,14 @@ Give the agent this request:
 > Discover compact catalog identities, read only the exact selected entries and
 > configuration schemas, then create and materialize a minimal lab
 > with two Bitcoin Core nodes, one LND node linked to the first Bitcoin node, a
-> CDK mint linked to LND, and a Nutshell wallet. Include `component.exec` in the
+> CDK mint linked to LND, and a Nutshell wallet. Include `component.exec_live` in the
 > lab policy. Create an
 > experiment and acquire an exclusive lease. Use
-> `proofstorm_component_exec` to run `bitcoin-cli --help`, then use the native
+> `proofstorm_component_exec_live` to run `bitcoin-cli --help`, then use the native
 > Bitcoin CLI with the lab-provided RPC environment to call
 > `getblockchaininfo` on each Bitcoin node. Prove explicit multi-node selection
-> by executing one command in the first Bitcoin component with
-> `target_component` set to the second Bitcoin component; use
-> `BITCOIN_RPC_HOST` and `BITCOIN_RPC_PORT` rather than guessing Kubernetes
-> addresses. Run `lncli --help` in the LND component and the native
+> by executing a command in each selected live Bitcoin component. Run
+> `lncli --help` and `lncli getinfo` in the LND component and the native
 > wallet CLI help in the wallet component. Inspect every terminal operation
 > artifact and report its exit code and a concise output summary. Also prove
 > the exec workload has no Kubernetes service-account token at
