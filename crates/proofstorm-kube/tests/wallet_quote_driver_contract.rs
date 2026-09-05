@@ -165,6 +165,19 @@ fn melt_refresh_polls_the_mint_and_proves_reserved_proofs_were_released() {
     };
     let directory = tempfile::tempdir().expect("temporary wallet");
     let connection = wallet_fixture(directory.path());
+    let auth = Connection::open(directory.path().join(".cashu/recipient/auth.sqlite3"))
+        .expect("authentication database sorts before the wallet database");
+    auth.execute_batch(
+        "CREATE TABLE proofs (amount INTEGER, reserved INTEGER, melt_id TEXT);
+         CREATE TABLE bolt11_melt_quotes (quote TEXT, state TEXT, amount INTEGER,
+           fee_reserve INTEGER, fee_paid INTEGER, request TEXT, created_time INTEGER);
+         INSERT INTO proofs VALUES (999, 0, NULL);
+         INSERT INTO bolt11_melt_quotes (quote) VALUES ('unrelated-quote');",
+    )
+    .expect("unrelated authentication wallet schema");
+    connection
+        .execute_batch("UPDATE bolt11_melt_quotes SET fee_paid = 93")
+        .expect("legacy local fee must not become an authoritative fee");
     connection
         .execute(
             "INSERT INTO proofs VALUES (60, 1, ?1), (42, 1, ?1), (7, 0, NULL), (13, NULL, NULL)",
@@ -226,6 +239,7 @@ class Wallet:
     assert_eq!(artifact["available_balance_sat_after"], 122);
     assert_eq!(artifact["proofs_released"], true);
     assert_eq!(artifact["quote_observations"][0]["direction"], "pay");
+    assert!(artifact["quote_observations"][0]["fee_paid_sat"].is_null());
     assert!(!artifact.to_string().contains("lnbcrt"));
 }
 

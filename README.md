@@ -181,8 +181,10 @@ make down
 Proofstorm exposes two deliberately different native shell primitives.
 `proofstorm_component_exec_live` (`component.exec_live`) runs inside the
 selected running container, so native CLIs see the component's real localhost,
-Unix sockets, files, credentials, user, and network identity. It is bounded,
-fully journaled, and fail-closed against replay after controller interruption.
+Unix sockets, files, credentials, user, and network identity. Requests and
+results are journaled, and replay after controller interruption is refused.
+A timeout bounds observation; output may be unavailable and remote process exit
+is unconfirmed. Verify and stop owned processes explicitly.
 `proofstorm_component_forensics` (`component.forensics`) instead creates a
 short-lived pod from the locked image and data mounts. It is useful for offline
 source/database inspection, but explicitly does not promise live CLI or socket
@@ -190,7 +192,9 @@ connectivity. Both record bounded output and an exit code. Native CLIs are the
 normal surface for operating deployed software; use typed actions where they
 provide coordination, lifecycle guarantees, or useful portable observations.
 The [native-first validation plan](docs/native-first-experiments.md) describes
-how execution choices and evidence are evaluated. `proofstorm_component_restart`
+how execution choices and evidence are evaluated; the
+[recovery round](docs/recovery-round-2026-09-04.md) records live findings.
+`proofstorm_component_restart`
 (`component.control`) rolls any primary component workload, including mints and
 wallets, while preserving its persistent state.
 

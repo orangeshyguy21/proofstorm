@@ -165,10 +165,9 @@ pub struct LabPlanRequest {
     pub plan_id: String,
     pub components: Vec<LabPlanComponentInput>,
     pub connections: Vec<LabPlanConnectionInput>,
-    /// Required. Runtime controls the experiment will need, grouped by
-    /// component and logical endpoint. Use an empty array only for a plan-only
-    /// request with no intended runtime work. Proofstorm checks these before
-    /// storage so an unavailable driver cannot become a live-lab failure.
+    /// Required endpoint controls, grouped by component. Discover IDs from
+    /// `catalog_entry_read`. Use [] only for plans with no runtime work.
+    /// Unsupported controls fail before storage.
     pub runtime_requirements: Vec<LabPlanRuntimeRequirement>,
     #[serde(default)]
     pub policy: LabPolicy,
@@ -183,8 +182,10 @@ pub struct LabPlanRuntimeRequirement {
     /// endpoint IDs are discovered from `catalog_entry_read`.
     #[serde(default = "default_runtime_endpoint")]
     pub endpoint: String,
-    /// Open control identifiers such as `channel_open`, `wallet_pay`,
-    /// `node_restart`, or `authentication_replay`.
+    /// Use IDs advertised by this catalog endpoint. `component_exec_live`
+    /// covers its native CLI commands. Platform faults (`network_partition`,
+    /// `network_heal`) are not endpoint controls. Wallet operations belong to
+    /// the wallet endpoint.
     pub controls: BTreeSet<String>,
 }
 
@@ -2565,7 +2566,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Plan any supported lab topology from catalog implementation IDs and role connections. Read catalog_entry details for selected implementations and declare every intended runtime control in runtime_requirements; Proofstorm rejects unavailable driver controls before storing or materializing. It selects preferred versions, infers component kinds, configuration contracts, and typed dependency bindings. Adding implementations or controls does not add MCP tools. Next call lab_apply with the returned digest"
+        description = "Plan a supported topology from catalog IDs and role connections. Declare advertised endpoint controls in runtime_requirements; unsupported controls fail before storage. Preferred versions, kinds, configuration contracts and dependency bindings are inferred. Next: lab_apply with the returned digest"
     )]
     fn proofstorm_lab_plan(
         &self,
@@ -3808,7 +3809,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Operate deployed software with a bounded, non-interactive POSIX /bin/sh script in its running component container. Native CLIs share the service's network, user, files, localhost APIs and Unix sockets. This is the normal surface for implementation-specific operations. Read catalog endpoint hints and native CLI help. Results are journaled. Nonzero exits may follow partial mutations; inspect artifacts and verify state before retrying. Use Proofstorm actions for provisioning, coordination, faults, lifecycle and portable observations"
+        description = "Run a non-interactive POSIX /bin/sh script in the live component. Native CLIs share its user, files, network and sockets. Read catalog hints and CLI help. Results are journaled; nonzero exits may follow mutations. Verify state before retries. A timeout does not prove remote process exit; inspect and stop owned processes. Use platform actions for provisioning, faults, lifecycle and portable observations"
     )]
     async fn proofstorm_component_exec_live(
         &self,
@@ -4520,7 +4521,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Bidirectionally partition two logical components using a durable bounded network fault"
+        description = "Bidirectionally partition two components with a durable bounded fault. Existing connections can survive; for immediate interruption use native disconnect or restart, then verify application state"
     )]
     async fn proofstorm_network_partition(
         &self,
@@ -5016,7 +5017,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Refresh one exact payer-side melt quote through the wallet adapter. This performs the wallet's native mint round-trip and, when the mint reports UNPAID, releases proofs reserved by that melt. The artifact reports before/after quote state, reserved proof count, and available balance"
+        description = "Refresh an exact payer melt quote through the wallet's mint round-trip. An UNPAID response releases that quote's reserved proofs. Receipt: wallet-local state before, mint state after, reserved counts/amounts and available balances. Unknown fees are null"
     )]
     async fn proofstorm_wallet_melt_quote_refresh(
         &self,
