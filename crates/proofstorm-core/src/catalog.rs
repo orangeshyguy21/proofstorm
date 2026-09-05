@@ -1199,7 +1199,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "wallet_pay",
             ],
             &[
-                "live Nutshell CLI entrypoint is HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -- --help; prefer typed wallet controls when available",
+                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet",
             ],
         )],
         "keycloak" => vec![runtime_endpoint(

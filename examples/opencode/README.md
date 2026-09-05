@@ -27,6 +27,14 @@ Rules shared by all three profiles:
 - `PROOFSTORM_DB` and `PROOFSTORM_WORKSPACE` are relative to the repository
   root. Use a fresh database path per run when runs must not share state.
 
+Host permissions and the MCP toolset are independent. These profiles default
+`PROOFSTORM_TOOLSET` to `native`, a slim experiment surface that uses the real
+component CLIs for funding, payments, peers, and channels. Keep `experiment` for
+typed-contract comparisons. Native commands run through `component_exec_live`
+inside a lab component; the host `bash` permission can remain denied. See the
+[validation plan](../../docs/native-first-experiments.md) for evaluation and
+cleanup requirements.
+
 OpenCode resolves permission patterns with `*` matching any characters, so
 `tests/*` covers every file below `tests/`. Agent-level `permission` blocks
 override these globals if you add named agents to a profile.

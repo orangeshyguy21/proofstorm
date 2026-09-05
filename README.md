@@ -81,7 +81,12 @@ cargo run -p proofstorm-mcp
 
 The configured capability list replaces that principal's grants in the selected
 workspace. It is trusted operator configuration, never model-supplied input.
-Set `PROOFSTORM_TOOLSET=design`, `runtime`, or `evidence` to expose only the
+Set `PROOFSTORM_TOOLSET=native` for a slim cross-phase experiment surface:
+native CLIs handle wallet operations and routing policy, while Proofstorm keeps
+provisioning, coordination, lifecycle, faults, and observations such as wallet
+balance and reachability. The `experiment` profile retains typed contracts for
+regression testing and comparison. Set `PROOFSTORM_TOOLSET=design`, `runtime`, or
+`evidence` to expose only the
 agent-facing tools for that phase; the default is `all`. A toolset only removes
 routes and is always intersected with the principal's durable capabilities, so
 it cannot grant authority. Focused toolsets reduce the MCP discovery schema
@@ -181,8 +186,11 @@ fully journaled, and fail-closed against replay after controller interruption.
 `proofstorm_component_forensics` (`component.forensics`) instead creates a
 short-lived pod from the locked image and data mounts. It is useful for offline
 source/database inspection, but explicitly does not promise live CLI or socket
-connectivity. Both record bounded output and an exit code; prefer typed actions
-for portable orchestration. `proofstorm_component_restart`
+connectivity. Both record bounded output and an exit code. Native CLIs are the
+normal surface for operating deployed software; use typed actions where they
+provide coordination, lifecycle guarantees, or useful portable observations.
+The [native-first validation plan](docs/native-first-experiments.md) describes
+how execution choices and evidence are evaluated. `proofstorm_component_restart`
 (`component.control`) rolls any primary component workload, including mints and
 wallets, while preserving its persistent state.
 

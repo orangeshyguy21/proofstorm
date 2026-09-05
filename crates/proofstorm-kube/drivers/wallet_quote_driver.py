@@ -270,7 +270,10 @@ def proof_reservation_snapshot(target_quote_id):
                 (target_quote_id,),
             ).fetchone()
             available = connection.execute(
-                "SELECT COALESCE(SUM(amount), 0) FROM proofs WHERE NOT reserved"
+                # Nutshell inserts fresh proofs with reserved=NULL. SQL NOT NULL
+                # does not evaluate true, so normalize it to the unreserved state.
+                "SELECT COALESCE(SUM(amount), 0) FROM proofs "
+                "WHERE NOT COALESCE(reserved, 0)"
             ).fetchone()
             return {
                 "reserved_proof_count": int(reserved[0]),

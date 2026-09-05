@@ -167,7 +167,7 @@ fn melt_refresh_polls_the_mint_and_proves_reserved_proofs_were_released() {
     let connection = wallet_fixture(directory.path());
     connection
         .execute(
-            "INSERT INTO proofs VALUES (60, 1, ?1), (42, 1, ?1), (7, 0, NULL)",
+            "INSERT INTO proofs VALUES (60, 1, ?1), (42, 1, ?1), (7, 0, NULL), (13, NULL, NULL)",
             [MELT_QUOTE],
         )
         .expect("reserved proofs");
@@ -222,8 +222,8 @@ class Wallet:
     assert_eq!(artifact["reserved_proof_count_after"], 0);
     assert_eq!(artifact["reserved_sat_before"], 102);
     assert_eq!(artifact["reserved_sat_after"], 0);
-    assert_eq!(artifact["available_balance_sat_before"], 7);
-    assert_eq!(artifact["available_balance_sat_after"], 109);
+    assert_eq!(artifact["available_balance_sat_before"], 20);
+    assert_eq!(artifact["available_balance_sat_after"], 122);
     assert_eq!(artifact["proofs_released"], true);
     assert_eq!(artifact["quote_observations"][0]["direction"], "pay");
     assert!(!artifact.to_string().contains("lnbcrt"));

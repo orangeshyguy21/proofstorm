@@ -437,6 +437,9 @@ pub struct CandidateBuildReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub logs_resource_uri: String,
+    /// Configured build transformations to disclose alongside source identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build_profile_notes: Vec<String>,
     pub timed_out: bool,
     pub next_tool: String,
 }
@@ -1833,6 +1836,9 @@ pub enum ProofstormToolset {
     /// One compact, cross-phase surface for an agent that must design, run,
     /// evidence, and tear down an experiment without restarting its session.
     Experiment,
+    /// Native-first experiments keep coordination and observations, using live
+    /// CLIs for implementation-specific operations instead of parallel wrappers.
+    Native,
     Design,
     Runtime,
     Evidence,
@@ -1845,11 +1851,12 @@ impl std::str::FromStr for ProofstormToolset {
         match value {
             "all" => Ok(Self::All),
             "experiment" => Ok(Self::Experiment),
+            "native" => Ok(Self::Native),
             "design" => Ok(Self::Design),
             "runtime" => Ok(Self::Runtime),
             "evidence" => Ok(Self::Evidence),
             _ => Err(format!(
-                "invalid PROOFSTORM_TOOLSET {value:?}; expected all, experiment, design, runtime, or evidence"
+                "invalid PROOFSTORM_TOOLSET {value:?}; expected all, experiment, native, design, runtime, or evidence"
             )),
         }
     }
@@ -1860,6 +1867,26 @@ impl ProofstormToolset {
         match self {
             Self::All => true,
             Self::Experiment => experiment_tool(tool),
+            Self::Native => {
+                (experiment_tool(tool) || tool == "proofstorm_network_capabilities")
+                    && !matches!(
+                        tool,
+                        "proofstorm_wallet_initialize"
+                            | "proofstorm_liquidity_bootstrap"
+                            | "proofstorm_peer_connect"
+                            | "proofstorm_channel_open"
+                            | "proofstorm_wallet_fund"
+                            | "proofstorm_wallet_invoice"
+                            | "proofstorm_wallet_pay"
+                            | "proofstorm_wallet_melt_quote_refresh"
+                            | "proofstorm_channel_policy_set"
+                            | "proofstorm_node_restart"
+                            | "proofstorm_authentication_conformance"
+                            | "proofstorm_authentication_protected_spend"
+                            | "proofstorm_authentication_replay"
+                            | "proofstorm_conservation_oracle"
+                    )
+            }
             Self::Design => matches!(
                 tool,
                 "proofstorm_workspace_read"
@@ -3781,7 +3808,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Execute a bounded non-interactive shell program inside the selected running component container. This shares the component's real network namespace, user, files, localhost APIs, and Unix sockets. Native CLIs still require their own flags; read the selected catalog entry's runtime endpoint limitations for exact invocation hints. Prefer typed actions for routine mutations; this powerful escape hatch is fully journaled"
+        description = "Operate deployed software with a bounded, non-interactive POSIX /bin/sh script in its running component container. Native CLIs share the service's network, user, files, localhost APIs and Unix sockets. This is the normal surface for implementation-specific operations. Read catalog endpoint hints and native CLI help. Results are journaled. Nonzero exits may follow partial mutations; inspect artifacts and verify state before retrying. Use Proofstorm actions for provisioning, coordination, faults, lifecycle and portable observations"
     )]
     async fn proofstorm_component_exec_live(
         &self,
@@ -4126,7 +4153,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Required first action after a custom regtest Lightning lab is ready: mine 101 blocks, fund two LND nodes, and open their channel. Await success before peer/channel actions. Labs created from a recipe should use proofstorm_lab_recipe_bootstrap instead"
+        description = "Optional convenience workflow for two distinct LND nodes: mine 101 blocks, fund them, and open their channel. Required only by the typed peer_connect/channel_open helpers, not by native CLI operations or arbitrary lab topologies. Use native Bitcoin and Lightning CLIs for other funding and channel arrangements"
     )]
     async fn proofstorm_liquidity_bootstrap(
         &self,
@@ -7109,7 +7136,7 @@ impl ServerHandler for ProofstormMcp {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. After readiness, create one experiment and lease, use typed runtime operations, release the lease, close the experiment, export evidence, and close and await the lab. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection.",
+            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. After readiness, create one experiment and lease. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Release the lease, close the experiment, export evidence, and close and await the lab. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection.",
         )
     }
 
@@ -8042,8 +8069,12 @@ fn validate_bootstrap_bounds(request: &BootstrapLiquidityRequest) -> Result<(), 
         ));
     }
     if request.mint_lightning == request.payer_lightning {
-        return Err(invalid_operation(
-            "mint and payer Lightning components must be distinct",
+        return Err(coded_invalid_request(
+            "liquidity_bootstrap_topology_unsupported",
+            format!(
+                "component {:?} was selected as both mint and payer Lightning node; this helper requires two distinct LND nodes. No operation was created. Recovery: use native Bitcoin and Lightning CLIs through component_exec_live for this topology, or select two existing compatible nodes for this optional helper",
+                request.mint_lightning
+            ),
         ));
     }
     Ok(())
@@ -8999,6 +9030,14 @@ fn compact_candidate_build(candidate: &CandidateBuild, timed_out: bool) -> Candi
         error_code: candidate.error_code.clone(),
         message: candidate.error_message.clone(),
         logs_resource_uri: format!("proofstorm://candidate-build/{}/logs", candidate.id),
+        build_profile_notes: if matches!(
+            candidate.implementation.as_str(),
+            "nutshell" | "nutshell-wallet"
+        ) {
+            vec!["The configured Nutshell build profile modifies the Dockerfile: before poetry install, it removes breez-sdk-spark from the Poetry lock and installs breez-sdk-spark==0.17.0 with pip. The source commit is frozen, but this is a dependency-adjusted build, not the untouched upstream build recipe".into()]
+        } else {
+            vec![]
+        },
         timed_out,
         next_tool: next_tool.into(),
     }
@@ -11257,6 +11296,7 @@ mod tests {
         );
         for (toolset, maximum) in [
             (ProofstormToolset::Experiment, 145 * 1024),
+            (ProofstormToolset::Native, 120 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
             (ProofstormToolset::Runtime, 200 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
@@ -11273,6 +11313,7 @@ mod tests {
             assert!(size < maximum, "{toolset:?} discovery is {size} bytes");
             assert!(tools.contains(&"proofstorm_catalog_list".to_owned()));
         }
+        assert_native_toolset(&service);
         let design = service.clone().with_toolset(ProofstormToolset::Design);
         assert!(
             !design
@@ -11285,6 +11326,39 @@ mod tests {
                 .tool_names()
                 .contains(&"proofstorm_wallet_pay".to_owned())
         );
+    }
+
+    fn assert_native_toolset(service: &ProofstormMcp) {
+        let native = service.clone().with_toolset(ProofstormToolset::Native);
+        for required in [
+            "proofstorm_component_exec_live",
+            "proofstorm_component_forensics",
+            "proofstorm_wallet_balance",
+            "proofstorm_network_partition",
+            "proofstorm_network_capabilities",
+            "proofstorm_network_heal",
+            "proofstorm_artifact_export",
+            "proofstorm_lab_close",
+        ] {
+            assert!(native.tool_names().contains(&required.to_owned()));
+        }
+        assert!(
+            !native
+                .tool_names()
+                .contains(&"proofstorm_wallet_pay".to_owned())
+        );
+        assert!(
+            !native
+                .tool_names()
+                .contains(&"proofstorm_channel_policy_set".to_owned())
+        );
+        for workflow_specific in [
+            "proofstorm_liquidity_bootstrap",
+            "proofstorm_peer_connect",
+            "proofstorm_channel_open",
+        ] {
+            assert!(!native.tool_names().contains(&workflow_specific.to_owned()));
+        }
     }
 
     #[test]

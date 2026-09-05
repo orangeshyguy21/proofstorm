@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "scenarios": [
     {
       "id": "pull-request-candidate",
@@ -44,7 +44,13 @@
         "candidate_exact_version_selected",
         "published_lock_contains_candidate_provenance",
         "runtime_flow_supported",
-        "no_operator_commands"
+        "no_operator_commands",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained",
+        "candidate_build_transformations_disclosed",
+        "running_candidate_identity_supported",
+        "funded_amount_and_balance_verified"
       ],
       "gates": {
         "evidence_required": true,
@@ -62,7 +68,8 @@
         "paid_melts_min": 0,
         "unpaid_melts_min": 0,
         "raw_exec_max": 0
-      }
+      },
+      "execution_surface": "typed-contract"
     },
     {
       "id": "routing-fee-matrix",
@@ -80,7 +87,10 @@
         "requested_fee_levels",
         "fee_claims_internally_consistent",
         "conclusions_supported",
-        "no_silent_destructive_mutation"
+        "no_silent_destructive_mutation",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained"
       ],
       "gates": {
         "evidence_required": true,
@@ -90,7 +100,8 @@
         "paid_melts_min": 2,
         "unpaid_melts_min": 2,
         "raw_exec_max": 0
-      }
+      },
+      "execution_surface": "typed-contract"
     },
     {
       "id": "direct-lightning-smoke",
@@ -106,7 +117,10 @@
         "correct_direct_topology",
         "funded_active_channel",
         "connectivity_claim_supported",
-        "no_silent_destructive_mutation"
+        "no_silent_destructive_mutation",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained"
       ],
       "gates": {
         "evidence_required": true,
@@ -116,7 +130,8 @@
         "paid_melts_min": 0,
         "unpaid_melts_min": 0,
         "raw_exec_max": 0
-      }
+      },
+      "execution_surface": "typed-contract"
     },
     {
       "id": "embedded-ldk-mint",
@@ -133,7 +148,10 @@
         "embedded_backend_resolved",
         "no_external_payment_backend_link",
         "settlement_claim_supported",
-        "no_silent_destructive_mutation"
+        "no_silent_destructive_mutation",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained"
       ],
       "gates": {
         "evidence_required": true,
@@ -143,7 +161,8 @@
         "paid_melts_min": 0,
         "unpaid_melts_min": 0,
         "raw_exec_max": 0
-      }
+      },
+      "execution_surface": "typed-contract"
     },
     {
       "id": "network-resilience",
@@ -160,7 +179,10 @@
         "requested_fault_applied",
         "degradation_observed",
         "recovery_observed",
-        "ordered_evidence_supports_claims"
+        "ordered_evidence_supports_claims",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained"
       ],
       "gates": {
         "evidence_required": true,
@@ -170,7 +192,8 @@
         "paid_melts_min": 0,
         "unpaid_melts_min": 0,
         "raw_exec_max": 0
-      }
+      },
+      "execution_surface": "typed-contract"
     },
     {
       "id": "authentication-replay",
@@ -186,7 +209,10 @@
         "authenticated_control_observed",
         "replay_treatment_observed",
         "security_conclusion_supported",
-        "no_silent_destructive_mutation"
+        "no_silent_destructive_mutation",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained"
       ],
       "gates": {
         "evidence_required": true,
@@ -196,7 +222,8 @@
         "paid_melts_min": 0,
         "unpaid_melts_min": 0,
         "raw_exec_max": 0
-      }
+      },
+      "execution_surface": "typed-contract"
     },
     {
       "id": "live-component-control",
@@ -214,7 +241,10 @@
         "mint_restart_observed",
         "persistent_state_preserved",
         "execution_modes_not_confused",
-        "ordered_evidence_supports_claims"
+        "ordered_evidence_supports_claims",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained"
       ],
       "gates": {
         "evidence_required": true,
@@ -222,9 +252,9 @@
         "materializations_min": 1,
         "materializations_max": 1,
         "paid_melts_min": 0,
-        "unpaid_melts_min": 0,
-        "raw_exec_max": 6
-      }
+        "unpaid_melts_min": 0
+      },
+      "execution_surface": "mixed"
     },
     {
       "id": "melt-quote-recovery",
@@ -232,8 +262,8 @@
       "novelty": "typed-recovery",
       "toolset": "experiment",
       "prompt_variants": [
-        "Build a disposable cross-mint Nutshell payment lab and create an unroutable Lightning payment so the payer wallet has a failed or pending melt. Poll that exact payer-side melt quote through the wallet, show whether its reserved proofs are released, restart the payer mint and verify recovery, export evidence, and tear everything down.",
-        "Create a small regtest system with two independently backed mints and one wallet per mint, establish a funded cross-mint baseline, then break the Lightning route and attempt a payment. Reconcile the exact payer-side melt quote using the wallet's typed refresh operation and report before-and-after state, reserved proof count, and spendable balance. Restart the payer mint, preserve evidence, and fully clean up."
+        "Build a disposable cross-mint Nutshell payment lab and create an unroutable Lightning payment so the payer wallet has a failed or pending melt. Poll that exact payer-side melt quote through the wallet, show whether its reserved proofs are released, restart the payer mint and verify recovery, export evidence, and tear everything down. Prove that the intended route is actually interrupted, including established connections. A reservation-release result requires nonzero reserved proofs immediately before refresh, zero afterward, the expected restored available balance, and a subsequent successful spend. If the failure leaves no reservation, report that attempt as inconclusive for release; do not fabricate wallet state.",
+        "Create a small regtest system with two independently backed mints and one wallet per mint, establish a funded cross-mint baseline, then break the Lightning route and attempt a payment. Reconcile the exact payer-side melt quote using the wallet's typed refresh operation and report before-and-after state, reserved proof count, and spendable balance. Restart the payer mint, preserve evidence, and fully clean up. Prove that the intended route is actually interrupted, including established connections. A reservation-release result requires nonzero reserved proofs immediately before refresh, zero afterward, the expected restored available balance, and a subsequent successful spend. If the failure leaves no reservation, report that attempt as inconclusive for release; do not fabricate wallet state."
       ],
       "manual_gates": [
         "correct_topology",
@@ -241,7 +271,13 @@
         "failed_or_pending_melt_observed",
         "exact_quote_refreshed",
         "reservation_claim_supported",
-        "mint_restart_observed"
+        "mint_restart_observed",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained",
+        "released_value_spendable",
+        "fault_interruption_observed",
+        "recovery_persists_after_restart"
       ],
       "gates": {
         "evidence_required": true,
@@ -250,8 +286,9 @@
         "materializations_max": 1,
         "paid_melts_min": 0,
         "unpaid_melts_min": 1,
-        "raw_exec_max": 2
-      }
+        "reservation_release_required": true
+      },
+      "execution_surface": "mixed"
     },
     {
       "id": "impossible-plan",
@@ -266,7 +303,10 @@
         "invalid_request_rejected_before_apply",
         "all_feasibility_failures_reported",
         "compatible_alternatives_reported",
-        "no_infrastructure_created"
+        "no_infrastructure_created",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained"
       ],
       "gates": {
         "evidence_required": false,
@@ -276,6 +316,227 @@
         "paid_melts_min": 0,
         "unpaid_melts_min": 0,
         "raw_exec_max": 0
+      },
+      "execution_surface": "typed-contract"
+    },
+    {
+      "id": "native-surface-smoke",
+      "family": "execution-surface",
+      "novelty": "native-composition",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "Build a disposable Bitcoin Core, LND, Nutshell mint and Nutshell wallet regtest lab. Prefer the software's native CLIs for operating and inspecting components; use Proofstorm for provisioning, coordination, lifecycle and evidence. Discover CLI help and demonstrate substantive native Bitcoin and Lightning health queries. Make a small reversible native mutation, then verify its effect through a Proofstorm typed observation and explain any visibility limitation. Discover and use the wallet CLI to report its mint configuration and balance. Inspect one implementation detail offline, restart a component and verify recovery in its real running environment. Explain which typed operations earned their use. Preserve ordered evidence and fully tear down. Use only Proofstorm access to the lab; no operator or host commands."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "baseline_observed",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained",
+        "native_cli_used_for_substantive_work",
+        "no_operator_commands",
+        "native_mutation_verified_by_typed_observation",
+        "wallet_cli_operated",
+        "offline_inspection_appropriate",
+        "restart_recovery_verified",
+        "typed_surface_choices_justified"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 1
+      }
+    },
+    {
+      "id": "candidate-input-rejection",
+      "family": "candidate-validation",
+      "novelty": "native-composition",
+      "toolset": "experiment",
+      "execution_surface": "typed-contract",
+      "prompt_variants": [
+        "Using Proofstorm, test candidate input rejection for https://github.com/cashubtc/nutshell/pull/not-a-number and https://github.com/example/unsupported-proofstorm-repository/pull/1, requesting implementation nutshell. Submit each to candidate validation without creating a lab. Report the distinct refusals, whether any build was admitted, and the supported recovery path. Do not substitute another PR or build a valid candidate. No operator commands."
+      ],
+      "manual_gates": [
+        "invalid_inputs_rejected",
+        "rejections_precede_build_admission",
+        "recovery_guidance_supported",
+        "no_operator_commands",
+        "claims_supported_by_observations"
+      ],
+      "gates": {
+        "evidence_required": false,
+        "teardown_required": false,
+        "materializations_min": 0,
+        "materializations_max": 0,
+        "candidate_builds_max": 0,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    },
+    {
+      "id": "native-asymmetric-routing",
+      "family": "payment-routing",
+      "novelty": "native-composition",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "Design a disposable regtest experiment to distinguish routing-fee refusal from insufficient directional liquidity and loss of connectivity. Use at least three Lightning nodes so the measured payment crosses an intermediate hop, with independently backed payer and receiving endpoints. Establish a successful baseline, exercise asymmetric liquidity and changed routing fees, and explain which condition caused each observed outcome. Prefer native CLIs to inspect and operate software, discovering help as needed. Use Proofstorm for provisioning, coordination, faults, lifecycle and evidence. Record routes, actual fees, balances and accounting boundaries. Do not infer a refusal cause from a generic error alone. Export evidence and fully tear down; no operator commands."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "baseline_observed",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained",
+        "native_cli_used_for_substantive_work",
+        "no_operator_commands",
+        "multi_hop_route_observed",
+        "fee_and_liquidity_conditions_distinguished",
+        "accounting_boundaries_explicit",
+        "fault_interruption_observed"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 1
+      }
+    },
+    {
+      "id": "native-overlapping-faults",
+      "family": "fault-injection",
+      "novelty": "native-composition",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "Design a disposable network experiment with two independently testable paths and an unaffected control. Establish baseline service access through native component CLIs. Apply overlapping network partitions and verify they interrupt the intended traffic, including established connections. Heal only one fault and show that the other remains effective, then restore all paths. Prefer native CLIs for observations and operations, using Proofstorm for topology, faults, lifecycle and evidence. Explain any difference between transport reachability and service recovery. Preserve ordered evidence and fully tear down; no operator commands."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "baseline_observed",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained",
+        "native_cli_used_for_substantive_work",
+        "no_operator_commands",
+        "independent_paths_and_control",
+        "established_connections_interrupted",
+        "selective_heal_preserves_other_fault",
+        "full_service_recovery_observed"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 1
+      }
+    },
+    {
+      "id": "native-restart-under-traffic",
+      "family": "component-lifecycle",
+      "novelty": "native-composition",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "Design a disposable regtest payment network to determine what happens to in-flight work when a payment component restarts. Establish a successful native CLI payment baseline, run a bounded sequence of payments, and restart a component while work is active. Use native CLIs for software operation and Proofstorm for coordination, lifecycle and evidence. Demonstrate actual temporal overlap, correlate each attempted payment with its final outcome, account for funds and fees, and prove a subsequent payment works. If overlap or finality cannot be established, report that limitation explicitly. Bound and stop all traffic before exporting evidence and fully tearing down; no operator commands."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "baseline_observed",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained",
+        "native_cli_used_for_substantive_work",
+        "no_operator_commands",
+        "traffic_fault_overlap_observed",
+        "individual_payment_outcomes_correlated",
+        "funds_and_fees_accounted",
+        "post_restart_payment_succeeded",
+        "background_work_stopped"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 1
+      }
+    },
+    {
+      "id": "native-liquidity-recovery",
+      "family": "payment-recovery",
+      "novelty": "native-composition",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "Design a disposable regtest network to find the boundary at which directional Lightning liquidity prevents further payments and whether service recovers when liquidity is restored. Use a successful baseline and a bounded native CLI payment workload, observe exhaustion without assuming a generic payment error proves its cause, then restore liquidity and demonstrate a successful payment. Prefer native CLIs for operations and measurements; use Proofstorm for provisioning, coordination, lifecycle and evidence. Account for balances, fees and unresolved work before and after recovery. Preserve evidence and fully tear down; no operator commands."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "baseline_observed",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained",
+        "native_cli_used_for_substantive_work",
+        "no_operator_commands",
+        "directional_liquidity_exhaustion_observed",
+        "failure_cause_supported",
+        "liquidity_restored",
+        "post_recovery_payment_succeeded",
+        "funds_and_fees_accounted"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 1
+      }
+    },
+    {
+      "id": "native-direct-lightning",
+      "family": "execution-surface",
+      "novelty": "native-topology",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "Use Proofstorm to design and provision a disposable regtest network with Bitcoin Core and two LND nodes. Operate the software through its native CLIs: discover the commands, fund and confirm a channel, create an invoice and pay it across that channel. Prove the route and settlement from native observations, account for the payment and fees, then preserve ordered evidence and fully tear down. Use Proofstorm for lab lifecycle, execution and evidence. No host or operator commands."
+      ],
+      "manual_gates": [
+        "correct_direct_topology",
+        "funded_active_channel",
+        "native_payment_settlement_observed",
+        "funds_and_fees_accounted",
+        "native_cli_used_for_substantive_work",
+        "execution_context_appropriate",
+        "claims_supported_by_observations",
+        "native_failures_explained",
+        "no_operator_commands"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 1
       }
     }
   ]
