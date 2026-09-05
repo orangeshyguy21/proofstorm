@@ -71,7 +71,7 @@ fn stdio_server_advertises_exact_slice_one_tools() {
         expect::array(structured, "/items")
             .expect("catalog items")
             .len(),
-        13
+        14
     );
     expect::within_bytes(structured, 8 * 1024, "catalog structured content")
         .expect("catalog fits the agent budget");

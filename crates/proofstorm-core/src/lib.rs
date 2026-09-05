@@ -34,7 +34,7 @@ pub use candidate::{
     candidate_catalog_entry, effective_catalog,
 };
 pub use catalog::{
-    AuthenticationMode, CatalogDependencySupport, CatalogEntry, CatalogFeature,
+    AuthenticationMode, BuildProvenance, CatalogDependencySupport, CatalogEntry, CatalogFeature,
     CatalogImplementationSupport, CatalogPaymentBindingSupport, CatalogResponse,
     CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
     StorageBackend, SupportLifecycle, default_catalog, validate_catalog_component,
@@ -76,3 +76,4 @@ pub use quote::{
 };
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, validate_lab};
+pub mod native;

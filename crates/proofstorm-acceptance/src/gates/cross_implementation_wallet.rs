@@ -5,9 +5,9 @@
 //!
 //! Ported from `tests/kubernetes/cross_implementation_wallet_mcp_client.py`.
 
-use std::{thread::sleep, time::Duration};
+use std::{fs, thread::sleep, time::Duration};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::{EXPERIMENT_CAPABILITIES, GateContext, gate::CONTROL_NAMESPACE, json as expect, lab};
@@ -31,6 +31,8 @@ fn lab_document() -> Value {
             {"id": "cdk-mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK Cross-Parity", "description": "Cross-implementation wallet acceptance"}},
             {"id": "nutshell-mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell Cross-Parity", "description": "Cross-implementation wallet acceptance", "redis_cache_ttl_seconds": 900}},
             {"id": "cdk-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
+            {"id": "cdk-recipient", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
+            {"id": "nutshell-recipient", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
             {"id": "nutshell-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}
         ],
         "links": [
@@ -52,6 +54,54 @@ fn redis(context: &GateContext, namespace: &str, command: &str) -> Result<String
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
+    let directory = context
+        .root
+        .join("dev/wallet-integration-runs")
+        .join(&context.run_id);
+    fs::create_dir_all(&directory)?;
+    let result = exercise(context);
+    let mut client = context.session(
+        "cross-mint-wallet-live",
+        "experiment-agent",
+        EXPERIMENT_CAPABILITIES,
+    )?;
+    let _ = client.call(
+        "proofstorm_lease_release",
+        json!({"lease_id":LEASE,"idempotency_key":"release-cross-mint-lease"}),
+    );
+    let _ = client.call(
+        "proofstorm_experiment_close",
+        json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-cross-mint-experiment"}),
+    );
+    if let Ok(export) = client.call(
+        "proofstorm_artifact_export",
+        json!({"experiment_id":EXPERIMENT,"include_content":true}),
+    ) {
+        fs::write(
+            directory.join("evidence.json"),
+            serde_json::to_vec_pretty(&export)?,
+        )?;
+    }
+    fs::write(
+        directory.join("outcome.json"),
+        serde_json::to_vec_pretty(
+            &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(|error|format!("{error:#}"))}),
+        )?,
+    )?;
+    // A failed assertion must still retire the disposable lab through its finalizer.
+    client.call("proofstorm_lab_close", json!({"instance_id":INSTANCE}))?;
+    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    fs::write(
+        directory.join("closed.json"),
+        serde_json::to_vec_pretty(&closed)?,
+    )?;
+    if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
+        bail!("cross-implementation gate did not verify teardown");
+    }
+    result.context("cross-implementation wallet regression failed")
+}
+
+fn exercise(context: &GateContext) -> Result<()> {
     let mut client = context.session(
         "cross-mint-wallet-live",
         "experiment-agent",
@@ -110,10 +160,12 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut wanted = [
         "cache",
         "cdk-mint",
+        "cdk-recipient",
         "cdk-wallet",
         "chain",
         "mint-lnd",
         "nutshell-mint",
+        "nutshell-recipient",
         "nutshell-wallet",
         "payer-lnd",
     ];
@@ -187,7 +239,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     client.call(
         "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 12, "idempotency_key": "acquire-cross-mint-lease"}),
+        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 24, "idempotency_key": "acquire-cross-mint-lease"}),
     )?;
 
     client.call(
@@ -280,19 +332,77 @@ pub fn run(context: &GateContext) -> Result<()> {
             bail!("{implementation} wallet round trip failed: {round_trip}");
         }
 
+        // The oracle requires a later wallet_pay treatment, not a round trip
+        // that funds and spends in one action. Keep the round-trip assertion and
+        // give conservation its own immediately preceding baseline/payment.
+        let recipient = format!("{implementation}-recipient");
+        client.call("proofstorm_wallet_initialize", merge(json!({"wallet":recipient,
+            "operation_id":format!("{prefix}-recipient-initialize"),"idempotency_key":format!("{prefix}-recipient-initialize")})))?;
+        lab::wait_operation(&mut client, &format!("{prefix}-recipient-initialize"), 160)?;
+        client.call("proofstorm_wallet_invoice",merge(json!({"wallet":recipient,"amount_sat":100,"timeout_seconds":30,
+            "operation_id":format!("{prefix}-recipient-invoice"),"idempotency_key":format!("{prefix}-recipient-invoice")})))?;
+        let invoice =
+            lab::wait_operation(&mut client, &format!("{prefix}-recipient-invoice"), 160)?;
+        let quote = expect::string(lab::artifact_content(&invoice)?, "/mint_quote_id")?;
+        client.call("proofstorm_wallet_balance",merge(json!({"operation_id":format!("{prefix}-balance-before-pay"),"idempotency_key":format!("{prefix}-balance-before-pay")})))?;
+        lab::wait_operation(&mut client, &format!("{prefix}-balance-before-pay"), 160)?;
         client.call(
-            "proofstorm_conservation_oracle",
-            merge(json!({
-                "operation_id": format!("{prefix}-conservation"),
-                "baseline_operation_id": format!("{prefix}-balance-before-round-trip"),
-                "treatment_operation_id": format!("{prefix}-round-trip"),
-                "idempotency_key": format!("{prefix}-conservation")
-            })),
+            "proofstorm_wallet_pay",
+            merge(
+                json!({"recipient_wallet":recipient,"recipient_mint":mint,"mint_quote_id":quote,
+            "operation_id":format!("{prefix}-pay"),"idempotency_key":format!("{prefix}-pay")}),
+            ),
         )?;
-        let oracle = lab::wait_operation(&mut client, &format!("{prefix}-conservation"), 160)?;
-        if !expect::boolean(lab::artifact_content(&oracle)?, "/conserved")? {
-            bail!("{implementation} conservation check failed: {oracle}");
+        let paid = lab::wait_operation(&mut client, &format!("{prefix}-pay"), 160)?;
+        let observations = expect::array(lab::artifact_content(&paid)?, "/quote_observations")?;
+        if !observations.iter().any(|o| {
+            o.get("role") == Some(&json!("payment_melt")) && o.get("state") == Some(&json!("PAID"))
+        }) || !observations.iter().any(|o| {
+            o.get("role") == Some(&json!("payment_receive"))
+                && o.get("state") == Some(&json!("ISSUED"))
+        }) {
+            bail!("conservation treatment did not pay recipient");
         }
+        let oracle_request = merge(json!({
+            "operation_id": format!("{prefix}-conservation"),
+            "baseline_operation_id": format!("{prefix}-balance-before-pay"),
+            "treatment_operation_id": format!("{prefix}-pay"),
+            "idempotency_key": format!("{prefix}-conservation")
+        }));
+        let oracle = if implementation == "cdk" {
+            // The existing mint-fee reader supports Nutshell SQLite only.
+            // Preserve its explicit unknown for CDK instead of fabricating a
+            // zero network fee or claiming cross-mint oracle parity.
+            let melt = observations
+                .iter()
+                .find(|o| o.get("role") == Some(&json!("payment_melt")))
+                .expect("verified melt");
+            if melt.get("fee_paid_sat") != Some(&Value::Null) {
+                bail!("CDK authoritative fee support changed; review this boundary fixture");
+            }
+            client.call_refused(
+                "proofstorm_conservation_oracle",
+                oracle_request,
+                "conservation_treatment_artifact_invalid",
+            )?;
+            json!({"refused":true,"code":"conservation_treatment_artifact_invalid",
+                "reason":"authoritative_mint_fee_unavailable","conservation_claimed":false})
+        } else {
+            client.call("proofstorm_conservation_oracle", oracle_request)?;
+            let oracle = lab::wait_operation(&mut client, &format!("{prefix}-conservation"), 160)?;
+            if !expect::boolean(lab::artifact_content(&oracle)?, "/conserved")? {
+                bail!("{implementation} conservation check failed: {oracle}");
+            }
+            oracle
+        };
+        fs::write(
+            context
+                .root
+                .join("dev/wallet-integration-runs")
+                .join(&context.run_id)
+                .join(format!("{prefix}-conservation.json")),
+            serde_json::to_vec_pretty(&oracle)?,
+        )?;
     }
 
     let cache_size: u64 = redis(context, namespace, "dbsize")?.trim().parse()?;
@@ -336,11 +446,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
-
     println!(
-        "CDK 0.18.0 and Redis-backed Nutshell 0.20.3 passed the same wallet workflow; NUT-20 interoperability, cache use, secret stability, ephemeral restart, recovery, and teardown passed"
+        "CDK and Nutshell wallet workflows, Nutshell conservation, CDK missing-fee refusal and cache restart checks passed; verifying teardown next"
     );
     Ok(())
 }

@@ -202,6 +202,8 @@ pub struct LabPlanResolvedComponent {
     pub version: String,
     pub config_version: String,
     pub control: ControlClass,
+    /// Authored overrides only; omitted defaults and backend settings are not expanded.
+    pub config: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1078,9 +1080,18 @@ pub struct ComponentExecLiveRequest {
     pub lease_id: String,
     pub operation_id: String,
     pub component: String,
-    /// An unrestricted non-interactive shell program executed inside the
-    /// selected running component container.
+    /// POSIX shell program. Its exit code describes the shell, including any pipelines.
+    #[serde(default)]
     pub script: String,
+    /// Direct command and arguments. Prefer this to preserve the native process exit status.
+    #[serde(default)]
+    pub argv: Vec<String>,
+    /// `json_fields`: status, state, `failure_reason`, settled, `synced_to_chain`,
+    /// amount, `amount_sat`, `fee_paid`, `fee_paid_sat`, `value_sat`, `total_fees`, `total_fees_msat`,
+    /// `num_active_channels`, balance, `confirmed_balance`, `unconfirmed_balance`.
+    /// Default private. Public exposes raw safe-query output; other strings are not selectable.
+    #[serde(default)]
+    pub output: proofstorm_core::native::NativeOutput,
     pub timeout_seconds: u32,
     pub idempotency_key: String,
 }
@@ -2121,6 +2132,30 @@ impl ProofstormMcp {
         self
     }
 
+    fn require_wallet_action(
+        &self,
+        revision: &PublishedRevision,
+        wallet: &str,
+        control: &str,
+    ) -> Result<(), ErrorData> {
+        let component = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == wallet)
+            .ok_or_else(|| {
+                coded_invalid_request("component_id_unknown", "wallet is not in the revision")
+            })?;
+        if component.implementation == "nutshell-wallet" {
+            return Ok(());
+        }
+        let catalog = self
+            .store
+            .effective_catalog(&self.workspace, &self.principal)
+            .map_err(store_error)?;
+        require_component_runtime_control(revision, wallet, "component", control, &catalog)
+    }
+
     fn authorize(&self, capability: Capability) -> Result<(), ErrorData> {
         self.store
             .authorize(&self.workspace, &self.principal, capability)
@@ -2566,7 +2601,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Plan a supported topology from catalog IDs and role connections. Declare advertised endpoint controls in runtime_requirements; unsupported controls fail before storage. Preferred versions, kinds, configuration contracts and dependency bindings are inferred. Next: lab_apply with the returned digest"
+        description = "Plan from catalog IDs and backend-role connections. Declare advertised endpoint controls in runtime_requirements. Verify component config in the receipt before lab_apply. Changed plans need a new plan_id and idempotency_key; exact retries reuse both. Versions, kinds and backend bindings are inferred"
     )]
     fn proofstorm_lab_plan(
         &self,
@@ -2604,7 +2639,18 @@ impl ProofstormMcp {
                 &lab,
                 &request.idempotency_key,
             )
-            .map_err(store_error)
+            .map_err(|error| match error {
+                StoreError::Conflict { resource: "draft", id } => ErrorData::invalid_request(
+                    "plan_id already exists; existing plan unchanged and nothing applied. Use a new plan_id and idempotency_key for a changed plan; replay the original request and key for an exact retry",
+                    Some(serde_json::json!({
+                        "code": "lab_plan_id_conflict",
+                        "plan_id": id,
+                        "mutation_disposition": "existing_plan_unchanged",
+                        "recovery": "use a new plan_id and idempotency_key for a changed plan",
+                    })),
+                ),
+                other => store_error(other),
+            })
             .and_then(|draft| {
                 bounded_agent_response(LabPlanReceipt {
                     plan_id: draft.id,
@@ -3809,21 +3855,21 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Run a non-interactive POSIX /bin/sh script in the live component. Native CLIs share its user, files, network and sockets. Read catalog hints and CLI help. Results are journaled; nonzero exits may follow mutations. Verify state before retries. A timeout does not prove remote process exit; inspect and stop owned processes. Use platform actions for provisioning, faults, lifecycle and portable observations"
+        description = "Supervise argv (command exit) or script (shell exit) inside the live component. Read catalog hints and native help first. Default output is private; public exposes bounded raw output. json_fields selects safe receipt values and fails closed. Retain the operation ID; wait or cancel it, never use nohup. Inspect exit_code/exit_signal, timed_out, cancelled, cleanup_verified and projection_succeeded independently of operation phase. Cancellation does not undo mutations."
     )]
     async fn proofstorm_component_exec_live(
         &self,
         Parameters(request): Parameters<ComponentExecLiveRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize(Capability::ComponentExecLive)?;
-        if request.script.is_empty() || request.script.len() > 16 * 1024 {
-            return Err(invalid_operation(
-                "script must contain 1..=16384 UTF-8 bytes",
-            ));
+        proofstorm_core::native::NativeCommand {
+            script: request.script.clone(),
+            argv: request.argv.clone(),
+            timeout_seconds: request.timeout_seconds,
+            output: request.output.clone(),
         }
-        if !(1..=300).contains(&request.timeout_seconds) {
-            return Err(invalid_operation("timeout_seconds must be in 1..=300"));
-        }
+        .validate()
+        .map_err(invalid_operation)?;
         let (instance, revision) = self
             .store
             .operation_context(
@@ -3860,7 +3906,9 @@ impl ProofstormMcp {
             LabAction::ComponentExecLive(ComponentExecLiveAction {
                 component: request.component,
                 script: request.script,
+                argv: request.argv,
                 timeout_seconds: request.timeout_seconds,
+                output: request.output,
             }),
         );
         self.runtime()?.apply_action(&instance, &action).await?;
@@ -4686,6 +4734,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_initialize")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4715,7 +4764,9 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Read a sanitized balance from a snapshot of a logical wallet")]
+    #[tool(
+        description = "Read a sanitized wallet-local balance using its locked observation adapter; CDK uses a passive SQLite transaction and Nutshell uses a disposable snapshot"
+    )]
     async fn proofstorm_wallet_balance(
         &self,
         Parameters(request): Parameters<WalletBalanceRequest>,
@@ -4732,6 +4783,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_balance")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4799,6 +4851,7 @@ impl ProofstormMcp {
             "lnd",
         )?;
         validate_wallet_fund_payer(&revision.lab, &request.mint, &request.payer_lightning)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_fund")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4855,6 +4908,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_invoice")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4921,6 +4975,8 @@ impl ProofstormMcp {
         if let Some(object) = request_json.as_object_mut() {
             object.remove("idempotency_key");
         }
+        self.require_wallet_action(&revision, &request.wallet, "wallet_pay")?;
+        self.require_wallet_action(&revision, &request.recipient_wallet, "wallet_quote_claim")?;
         let operation = self
             .store
             .create_wallet_pay_operation(
@@ -4985,6 +5041,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_quote_claim")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -5041,6 +5098,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_melt_quote_refresh")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -5101,6 +5159,7 @@ impl ProofstormMcp {
             ComponentKind::Lightning,
             "lnd",
         )?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_round_trip")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -5175,6 +5234,7 @@ impl ProofstormMcp {
             &self.workspace,
             &self.principal,
         )?;
+        self.require_wallet_action(&revision, &request.wallet, "conservation_oracle")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -6893,6 +6953,7 @@ fn resolved_plan_components(lab: &LabSpec) -> Vec<LabPlanResolvedComponent> {
             version: component.version.clone().unwrap_or_default(),
             config_version: component.config_version.clone(),
             control: component.control,
+            config: component.config.clone(),
         })
         .collect()
 }
@@ -9381,27 +9442,10 @@ impl KubernetesRuntime {
         let Some(status) = action.status else {
             return Ok(None);
         };
-        match status.phase {
-            ActionPhase::Pending | ActionPhase::Running => Ok(None),
-            ActionPhase::Succeeded => Ok(Some((
-                OperationPhase::Succeeded,
-                status.artifact.map_or_else(
-                    || serde_json::json!({"code": "terminal_artifact_missing"}),
-                    |artifact| serde_json::to_value(artifact).expect("typed artifact serializes"),
-                ),
-            ))),
-            ActionPhase::Failed => Ok(Some((
-                OperationPhase::Failed,
-                status.error.map_or_else(
-                    || serde_json::json!({"code": "action_failed"}),
-                    |error| serde_json::to_value(error).expect("typed action error serializes"),
-                ),
-            ))),
-            ActionPhase::Cancelled => Ok(Some((
-                OperationPhase::Cancelled,
-                serde_json::json!({"code": "action_cancelled"}),
-            ))),
-        }
+        Ok(terminal_action_observation(
+            status,
+            matches!(action.spec.action, LabAction::ComponentExecLive(_)),
+        ))
     }
 
     /// Request cancellation of a runtime action. Returns `false` when the
@@ -9562,6 +9606,38 @@ fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> LabI
     }
 }
 
+fn terminal_action_observation(
+    status: proofstorm_kube::ProofstormLabActionStatus,
+    native: bool,
+) -> Option<(OperationPhase, serde_json::Value)> {
+    let (phase, fallback) = match status.phase {
+        ActionPhase::Pending | ActionPhase::Running => return None,
+        ActionPhase::Succeeded => (OperationPhase::Succeeded, "terminal_artifact_missing"),
+        ActionPhase::Failed => (OperationPhase::Failed, "action_failed"),
+        ActionPhase::Cancelled => (OperationPhase::Cancelled, "action_cancelled"),
+    };
+    // A cancelled or failed native execution can still have a supervisor receipt
+    // proving cleanup (or explicitly declining that proof). Preserve that evidence.
+    let content = match status.phase {
+        ActionPhase::Succeeded => status.artifact,
+        ActionPhase::Failed | ActionPhase::Cancelled if native => status.artifact.or(status.error),
+        ActionPhase::Failed => status.error,
+        _ => None,
+    };
+    let artifact = content.map_or_else(
+        || serde_json::json!({"code": fallback}),
+        |artifact| serde_json::to_value(artifact).expect("typed artifact serializes"),
+    );
+    Some((
+        phase,
+        if native {
+            proofstorm_core::native::cap_public_streams(artifact)
+        } else {
+            artifact
+        },
+    ))
+}
+
 fn missing_action_artifact(operation: &LabOperation) -> serde_json::Value {
     serde_json::json!({
         "code": "action_runtime_not_found",
@@ -9616,6 +9692,70 @@ fn store_error(error: StoreError) -> ErrorData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn escaped_native_output_cannot_overflow_the_journal_receipt() {
+        for text in [
+            "\0".repeat(16384),
+            "界\n\\\"".repeat(8192),
+            "x".repeat(16384),
+        ] {
+            let receipt = serde_json::json!({"stdout":text,"stderr":text,
+                "cleanup_verified":true,"exit_code":7,"output_truncated":false});
+            let status = proofstorm_kube::ProofstormLabActionStatus {
+                phase: ActionPhase::Succeeded,
+                artifact: Some(serde_json::from_value(receipt).unwrap()),
+                ..Default::default()
+            };
+            let (_, artifact) = terminal_action_observation(status, true).unwrap();
+            assert!(serde_json::to_vec(&artifact).unwrap().len() < 28 * 1024);
+            assert_eq!(artifact["cleanup_verified"], true);
+            assert_eq!(artifact["exit_code"], 7);
+            assert_eq!(artifact["output_truncated"], true);
+            assert!(!artifact["stdout"].as_str().unwrap().is_empty());
+        }
+    }
+    #[test]
+    fn terminal_native_receipts_survive_cancellation_and_failure() {
+        for (phase, expected) in [
+            (ActionPhase::Cancelled, OperationPhase::Cancelled),
+            (ActionPhase::Failed, OperationPhase::Failed),
+        ] {
+            let receipt = serde_json::json!({"cleanup_verified": phase == ActionPhase::Cancelled,
+                "cancelled":true,"exit_signal":15,"stdout":"","stderr":""});
+            let status = proofstorm_kube::ProofstormLabActionStatus {
+                phase,
+                artifact: Some(serde_json::from_value(receipt.clone()).unwrap()),
+                error: Some(
+                    serde_json::from_value(serde_json::json!({"code":"generic_error"})).unwrap(),
+                ),
+                ..Default::default()
+            };
+            assert_eq!(
+                terminal_action_observation(status.clone(), true),
+                Some((expected, receipt))
+            );
+            let legacy = if phase == ActionPhase::Failed {
+                serde_json::json!({"code":"generic_error"})
+            } else {
+                serde_json::json!({"code":"action_cancelled"})
+            };
+            assert_eq!(
+                terminal_action_observation(status, false),
+                Some((expected, legacy))
+            );
+        }
+        let status = proofstorm_kube::ProofstormLabActionStatus {
+            phase: ActionPhase::Cancelled,
+            ..Default::default()
+        };
+        assert_eq!(
+            terminal_action_observation(status, true),
+            Some((
+                OperationPhase::Cancelled,
+                serde_json::json!({"code":"action_cancelled"})
+            ))
+        );
+    }
     use super::*;
     use proofstorm_core::{API_VERSION, LabPolicy};
 
@@ -10001,7 +10141,7 @@ mod tests {
                     implementation: "lnd".into(),
                     version: None,
                     control: None,
-                    config: BTreeMap::new(),
+                    config: BTreeMap::from([("alias".into(), serde_json::json!("authored-lnd"))]),
                 },
                 LabPlanComponentInput {
                     id: "lnd-b".into(),
@@ -10053,6 +10193,9 @@ mod tests {
                 })
         }));
         assert!(lab.links[2].binding.is_none());
+        let components = resolved_plan_components(&lab);
+        assert_eq!(components[1].config["alias"], "authored-lnd");
+        assert!(components[0].config.is_empty());
     }
 
     #[test]
@@ -10333,10 +10476,26 @@ mod tests {
             .expect("plan stored")
             .0;
         let replay = service
-            .proofstorm_lab_plan(Parameters(request))
+            .proofstorm_lab_plan(Parameters(request.clone()))
             .expect("plan replay")
             .0;
         assert_eq!(first, replay);
+        let mut changed = request.clone();
+        changed.components[0].id = "changed-chain".into();
+        changed.idempotency_key = "changed-plan-once".into();
+        let Err(error) = service.proofstorm_lab_plan(Parameters(changed.clone())) else {
+            panic!("a changed plan cannot overwrite the original");
+        };
+        let data = error.data.expect("actionable conflict data");
+        assert_eq!(data["code"], "lab_plan_id_conflict");
+        assert_eq!(data["plan_id"], request.plan_id);
+        assert_eq!(data["mutation_disposition"], "existing_plan_unchanged");
+        changed.plan_id = "changed-plan".into();
+        let corrected = service
+            .proofstorm_lab_plan(Parameters(changed))
+            .expect("new identity permits a corrected plan")
+            .0;
+        assert_eq!(corrected.components[0].id, "changed-chain");
         let stored = store
             .read_draft("alpha", "designer", "durable-plan")
             .expect("durable plan can be read");
@@ -10569,13 +10728,13 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 13);
+        assert_eq!(catalog.entries.len(), 14);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 12);
+        assert_eq!(catalog.implementations.len(), 13);
         assert!(catalog.implementations.iter().all(|support| {
             support
                 .supported_versions
@@ -10679,7 +10838,7 @@ mod tests {
             .proofstorm_catalog_list(Parameters(CatalogListRequest::default()))
             .expect("catalog discovery")
             .0;
-        assert_eq!(page.items.len(), 13);
+        assert_eq!(page.items.len(), 14);
         assert!(page.next_cursor.is_none());
         assert!(serialized_size(&page).expect("page size") < 8 * 1024);
         assert!(page.items.iter().all(|entry| {
@@ -10791,7 +10950,7 @@ mod tests {
             }))
             .expect("harmless oversized page limit is saturated")
             .0;
-        assert_eq!(oversized_limit.items.len(), 13);
+        assert_eq!(oversized_limit.items.len(), 14);
 
         let stale = service.proofstorm_catalog_list(Parameters(CatalogListRequest {
             implementations: ["nutshell".into()].into(),
@@ -11296,7 +11455,8 @@ mod tests {
             encoded.len()
         );
         for (toolset, maximum) in [
-            (ProofstormToolset::Experiment, 145 * 1024),
+            // Supervised argv/output options add one KiB to this profile.
+            (ProofstormToolset::Experiment, 146 * 1024),
             (ProofstormToolset::Native, 120 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
             (ProofstormToolset::Runtime, 200 * 1024),

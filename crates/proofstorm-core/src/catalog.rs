@@ -140,6 +140,18 @@ pub struct CatalogRuntimeEndpoint {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct BuildProvenance {
+    pub repository: String,
+    pub commit_sha: String,
+    pub artifact_url: String,
+    pub artifact_sha256: String,
+    pub platform: String,
+    pub runtime_image: String,
+    pub recipe_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CatalogEntry {
     pub id: String,
     pub kind: ComponentKind,
@@ -163,6 +175,8 @@ pub struct CatalogEntry {
     pub source_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CandidateSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_provenance: Option<BuildProvenance>,
     pub allowed_control: Vec<ControlClass>,
 }
 
@@ -617,6 +631,7 @@ fn build_default_catalog() -> CatalogResponse {
             ),
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
+        cdk_cli_wallet_entry(backends, adapter_version),
         catalog_entry(
             "attacker-workspace",
             backends,
@@ -1042,8 +1057,47 @@ fn catalog_entry_with_lifecycle(
             &runtime_endpoints,
         )),
         source: None,
+        build_provenance: None,
         allowed_control,
     }
+}
+
+fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
+    let mut entry = catalog_entry(
+        "cdk-cli-wallet",
+        backends,
+        ComponentKind::Wallet,
+        "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 laboratory build",
+        adapter_version,
+        "0.18.0",
+        ReleaseChannel::Stable,
+        "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+        BTreeSet::from([
+            CatalogFeature::NativeCli,
+            CatalogFeature::PersistentState,
+            CatalogFeature::Sqlite,
+            CatalogFeature::Bolt11,
+        ]),
+        vec![],
+        support_matrix(
+            &[StorageBackend::PersistentVolume, StorageBackend::Sqlite],
+            &[PaymentMethod::Bolt11],
+            &[],
+            &["sat"],
+            &[],
+            &[AuthenticationMode::Unauthenticated],
+            vec![],
+        ),
+        vec![ControlClass::Laboratory, ControlClass::Attacker],
+    );
+    entry.protocol_action_adapter_version = Some("cdk-cli/0.18/observations/v1".into());
+    let provenance: BuildProvenance = serde_json::from_str(include_str!(
+        "../../../docker/wallet/cdk-cli-0.18.0-provenance.json"
+    ))
+    .expect("pinned wallet build provenance");
+    entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
+    entry.build_provenance = Some(provenance);
+    entry
 }
 
 fn runtime_endpoint(
@@ -1185,6 +1239,14 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 &["the embedded BDK backend has no direct runtime controls"],
             ),
         ],
+        "cdk-cli-wallet" => vec![runtime_endpoint(
+            "component",
+            "wallet",
+            &["component_logs", "wallet_balance"],
+            &[
+                "Native entrypoint: cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive --help. Set --work-dir /wallet/cdk on EVERY native invocation. SQLite and sat are the installed observation contract. Native commands, including balance, may recover incomplete sagas; use wallet_balance for passive wallet-local observations. Initialize with the native balance command before observing an empty database. A failed melt is not a rollback: completed preparation swaps can charge input fees even when payment fails. Reconcile passive balances and quote/recipient state before a new attempt. Reuse the same operation ID and idempotency key to retrieve an existing execution, not a new CLI mutation. Use native mint/melt commands. In this pinned release, mint-pending checks pending proofs, not paid mint-quote issuance despite its help text. Resume a paid quote with mint <url> --quote-id <id>, then verify the passive balance; command success alone does not prove issuance. Typed wallet mutations, quote recovery and conservation are unavailable. Initial image is Linux arm64 only. Mint compatibility requires live evidence for each claimed combination.",
+            ],
+        )],
         "nutshell-wallet" => vec![runtime_endpoint(
             "component",
             "wallet",
@@ -1388,14 +1450,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn packaged_wallet_provenance_and_observation_surface_are_explicit() {
+        use sha2::{Digest, Sha256};
+        let entry = default_catalog()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cdk-cli-wallet")
+            .expect("CDK wallet");
+        let provenance = entry.build_provenance.as_ref().expect("release provenance");
+        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.kube-cdk");
+        assert_eq!(
+            provenance.recipe_digest,
+            format!("sha256:{:x}", Sha256::digest(recipe))
+        );
+        assert_eq!(
+            provenance.commit_sha,
+            "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
+        );
+        assert_eq!(provenance.platform, "linux/arm64");
+        let controls = &entry.runtime_endpoints[0].controls;
+        assert!(controls.contains("wallet_balance"));
+        assert!(controls.contains("component_exec_live"));
+        assert!(!controls.contains("wallet_fund"));
+        assert!(!controls.contains("wallet_pay"));
+        assert!(!entry.features.contains(&CatalogFeature::WalletOperations));
+        assert!(
+            entry.source.is_none(),
+            "release provenance must not invent a PR"
+        );
+    }
+
+    #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "one catalog invariant test keeps all fail-closed variants together"
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 13);
-        assert_eq!(catalog.implementations.len(), 12);
+        assert_eq!(catalog.entries.len(), 14);
+        assert_eq!(catalog.implementations.len(), 13);
         let lnd = catalog
             .implementations
             .iter()

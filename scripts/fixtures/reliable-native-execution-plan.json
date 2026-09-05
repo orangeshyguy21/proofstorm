@@ -1,0 +1,52 @@
+{
+  "components": [
+    {
+      "id": "chain",
+      "implementation": "bitcoin-core",
+      "version": "30.0"
+    },
+    {
+      "id": "lightning",
+      "implementation": "lnd",
+      "version": "0.20.0-beta"
+    },
+    {
+      "id": "wallet",
+      "implementation": "cdk-cli-wallet",
+      "version": "0.18.0"
+    }
+  ],
+  "connections": [
+    {
+      "id": "chain-link",
+      "kind": "chain_backend",
+      "component": "lightning",
+      "chain": "chain",
+      "network": "regtest"
+    }
+  ],
+  "runtime_requirements": [
+    {
+      "component": "lightning",
+      "controls": [
+        "component_exec_live"
+      ]
+    },
+    {
+      "component": "wallet",
+      "controls": [
+        "component_exec_live"
+      ]
+    }
+  ],
+  "policy": {
+    "allow": [
+      "component.exec_live"
+    ],
+    "limits": {
+      "max_components": 4,
+      "max_links": 4,
+      "max_config_bytes": 16384
+    }
+  }
+}

@@ -258,6 +258,32 @@ spec:
                       properties:
                         adapter_version:
                           type: string
+                        build_provenance:
+                          nullable: true
+                          properties:
+                            artifact_sha256:
+                              type: string
+                            artifact_url:
+                              type: string
+                            commit_sha:
+                              type: string
+                            platform:
+                              type: string
+                            recipe_digest:
+                              type: string
+                            repository:
+                              type: string
+                            runtime_image:
+                              type: string
+                          required:
+                          - artifact_sha256
+                          - artifact_url
+                          - commit_sha
+                          - platform
+                          - recipe_digest
+                          - repository
+                          - runtime_image
+                          type: object
                         catalog_id:
                           type: string
                         compatible_dependencies:

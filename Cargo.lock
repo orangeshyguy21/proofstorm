@@ -1388,6 +1388,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nohash-hasher"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1619,6 +1631,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "proofstorm-exec"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "nix",
+ "proofstorm-core",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "proofstorm-kube"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -1682,6 +1704,7 @@ dependencies = [
  "proofstorm-kube",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
 ]

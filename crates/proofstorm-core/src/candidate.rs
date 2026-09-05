@@ -125,6 +125,7 @@ pub fn candidate_catalog_entry(
     entry.release_channel = ReleaseChannel::Prerelease;
     entry.support_lifecycle = SupportLifecycle::Experimental;
     entry.image.clone_from(image);
+    entry.build_provenance = None;
     entry.source_digest = digest_json(&(
         base.source_digest.as_str(),
         source.candidate_id.as_str(),

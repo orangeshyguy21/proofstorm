@@ -477,6 +477,8 @@ pub enum EffectiveComponentConfig {
     Keycloak(KeycloakConfig),
     #[serde(rename = "nutshell-wallet")]
     NutshellWallet,
+    #[serde(rename = "cdk-cli-wallet")]
+    CdkCliWallet,
     #[serde(rename = "attacker-workspace")]
     AttackerWorkspace,
 }
@@ -863,6 +865,7 @@ impl EffectiveComponentConfig {
                 .ok_or_else(|| typed_config_error(component, "access_token_lifespan_seconds"))?,
             })),
             "nutshell-wallet" => Ok(Self::NutshellWallet),
+            "cdk-cli-wallet" => Ok(Self::CdkCliWallet),
             "attacker-workspace" => Ok(Self::AttackerWorkspace),
             implementation => Err(format!(
                 "backend_typed_config_missing: implementation {implementation:?} has no typed effective configuration"
@@ -1688,6 +1691,20 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             BTreeMap::new(),
             BTreeMap::new(),
             "proofstorm/nutshell-wallet-state/v1",
+            BTreeSet::from([
+                ComponentConditionType::WorkloadReady,
+                ComponentConditionType::StorageReady,
+                ComponentConditionType::ComponentReady,
+                ComponentConditionType::ExperimentControllable,
+            ]),
+        ),
+        contract(
+            "cdk-cli-wallet",
+            ComponentKind::Wallet,
+            "cdk-cli-wallet/0.18/v1",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "proofstorm/cdk-cli-wallet-state/v1",
             BTreeSet::from([
                 ComponentConditionType::WorkloadReady,
                 ComponentConditionType::StorageReady,
@@ -2566,7 +2583,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Proofstorm-selected sat unit", Policy),
             ),
         ]),
-        "nutshell-wallet" => BTreeMap::from([
+        "nutshell-wallet" | "cdk-cli-wallet" => BTreeMap::from([
             (
                 "data_directory".into(),
                 string("Persistent wallet data directory", Policy),
@@ -2857,7 +2874,7 @@ fn observation_contract(
         "bitcoin-core" | "lnd" | "cln" | "postgresql" => {
             (WorkloadControllerKind::StatefulSet, vec![stateful_data()])
         }
-        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" | "nutshell-wallet" => {
+        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" | "nutshell-wallet" | "cdk-cli-wallet" => {
             (WorkloadControllerKind::Deployment, vec![component_data()])
         }
         _ => (WorkloadControllerKind::Deployment, vec![]),
@@ -3018,7 +3035,7 @@ fn execution_contract(
                 ("HOME".into(), "/app/data".into()),
             ]),
         ),
-        "nutshell-wallet" => (
+        "nutshell-wallet" | "cdk-cli-wallet" => (
             vec![binding(
                 "wallet",
                 "/wallet",
@@ -3203,6 +3220,7 @@ mod tests {
                 "redis" => "redis/8.10/v1",
                 "keycloak" => "keycloak/25/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
+                "cdk-cli-wallet" => "cdk-cli-wallet/0.18/v1",
                 "attacker-workspace" => "attacker-workspace/0.1/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),
             }

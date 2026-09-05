@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:15a83c7e76ce9fbcb53e148759b4ba660aa2d880cec130e6415ed3a65e7f8d77",
+  "catalog_digest": "sha256:d1903df788c43fd63bd3c31b268501ef73fff4a05a72db19523e6ecc1db57d59",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -529,6 +529,57 @@
           ]
         }
       ]
+    },
+    {
+      "implementation": "cdk-cli-wallet",
+      "kind": "wallet",
+      "upstream_version": "0.18.0",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "cdk-cli-wallet/0.18/v1",
+      "config_schema_digest": "sha256:6d88a6e4226ad8e2f1396b819e09879657ebef4a9f7b154015f1ddd0be3bed90",
+      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+      "fields": {
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "idle_process": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "storage_size": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "wallet_identity": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "wallet_seed": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume",
+          "sqlite"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
     },
     {
       "implementation": "cdk-ldk",

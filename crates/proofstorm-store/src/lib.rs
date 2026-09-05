@@ -690,10 +690,16 @@ impl Store {
             version: 1,
             lab: lab.clone(),
         };
-        self.lock()?.execute(
-            "INSERT INTO drafts(workspace_id, id, version, lab_json) VALUES (?1, ?2, 1, ?3)",
+        let inserted = self.lock()?.execute(
+            "INSERT INTO drafts(workspace_id, id, version, lab_json) VALUES (?1, ?2, 1, ?3) ON CONFLICT(workspace_id, id) DO NOTHING",
             params![workspace, id, serde_json::to_string(lab)?],
         )?;
+        if inserted == 0 {
+            return Err(StoreError::Conflict {
+                resource: "draft",
+                id: id.to_owned(),
+            });
+        }
         self.record_idempotency(
             workspace,
             principal,

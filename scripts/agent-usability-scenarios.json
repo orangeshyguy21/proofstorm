@@ -579,6 +579,148 @@
         "live_exec_successes_min": 1
       },
       "execution_surface": "mixed"
+    },
+    {
+      "id": "cdk-wallet-native-smoke",
+      "family": "wallet-implementation",
+      "novelty": "second-native-wallet",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "Determine whether a new agent can discover and operate the installed CDK CLI wallet using Proofstorm. Build exactly one disposable regtest lab with a CDK 0.18.0 mint configured with input_fee_ppk=0, two CDK CLI 0.18.0 wallet components, Bitcoin Core and sufficient LND infrastructure for real Lightning funding and payment. Discover exact catalog/configuration and native CLI help. Use native wallet operations to initialize, fund one wallet with a small BOLT11 payment and pay a separate Lightning invoice. Compare the passive Proofstorm wallet_balance observation with independent native evidence, and verify the second wallet stays empty and has separate state. CDK native commands can recover incomplete operations, even balance; distinguish those calls from passive observations. Restart the funded wallet, verify identity and balance persistence, and complete a further small payment. Use explicit bounded command supervision for potentially blocking native processes, retain actual exit codes, and verify cleanup of child processes. Do not replay an ambiguous payment or fabricate/edit proofs. Keep seed/proof material and payment preimages out of outputs; small BOLT11 requests may be used through the authorized native surface, while ecash token transfer is outside this checkpoint. Explain any discovery friction or unsupported typed operation. Use only Proofstorm access, no host/operator commands. Export evidence and fully tear down. Reserve the final 20 percent of the run for evidence and cleanup; stop after two equivalent failures without a changed hypothesis. This is a discovery and interoperability smoke test, not a crash-recovery test."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "baseline_observed",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained",
+        "native_cli_used_for_substantive_work",
+        "no_operator_commands",
+        "native_mutation_verified_by_typed_observation",
+        "wallet_cli_operated",
+        "restart_recovery_verified",
+        "typed_surface_choices_justified",
+        "wallet_state_isolation_verified",
+        "native_payments_independently_settled",
+        "bounded_native_processes_cleaned"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 4
+      }
+    },
+    {
+      "id": "cdk-wallet-plan-config",
+      "family": "wallet-implementation",
+      "novelty": "planning-only-diagnostic",
+      "toolset": "native",
+      "execution_surface": "typed-contract",
+      "capabilities": "catalog.read,lab.create,lab.read",
+      "prompt_variants": [
+        "Planning-only diagnostic: use Proofstorm catalog discovery and lab_plan to prepare a regtest topology containing Bitcoin Core, two LND nodes, one CDK 0.18.0 mint, and two CDK CLI 0.18.0 wallets. Bind both LND nodes to Bitcoin, the mint to one LND node, and the LND nodes as Lightning peers. The mint must explicitly use input_fee_ppk=0 in its authored config. Do not apply or materialize any plan, build images, create experiments, or run runtime actions. Read the resulting receipt and verify that the zero-fee override is present, rather than merely stating it is present. If it is absent, submit an actually corrected request with new plan and idempotency IDs; stop after two equivalent requests. Report the final plan ID, digest and exact mint configuration, or the specific blocker. All evidence for this diagnostic is the planning transcript and stored draft; no experiment export or lab teardown is needed. Use only Proofstorm tools."
+      ],
+      "manual_gates": [
+        "required_config_submitted",
+        "required_config_stored",
+        "correct_backend_bindings",
+        "planning_only",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained"
+      ],
+      "gates": {
+        "evidence_required": false,
+        "teardown_required": false,
+        "materializations_min": 0,
+        "materializations_max": 0,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "raw_exec_max": 0
+      }
+    },
+    {
+      "id": "cdk-wallet-preplanned-smoke",
+      "family": "wallet-implementation",
+      "novelty": "native-wallet-with-assisted-planning",
+      "toolset": "native",
+      "execution_surface": "native-first",
+      "prompt_variants": [
+        "OUTPUT CONTRACT: Prefer direct argv with default private output for CDK funding/claim/payment commands. Native exit and cleanup receipts plus independent recipient settlement and passive wallet balances establish the outcome; you do not need to parse CDK text to complete this zero-fee smoke. Use json_fields for native JSON, especially LND sendpayment and recipient lookup. Public output is restricted to safe help, hashes and explicitly extracted setup/BOLT11/payment-hash values. Never publish raw payment output or grep-selected/redacted payment lines. If a native text receipt is actually needed, keep the raw file private and project strictly parsed enumerated/numeric fields; an unknown format is a parsing error, never a fabricated FAILED status or zero amount.\n\nOperate CDK CLI wallets on the operator-verified plan supplied below. This is an assisted-setup wallet smoke test, not a lab-design test. Do not create, edit or replace plans; apply the supplied exact plan digest to one disposable instance. Component roles: btc is Bitcoin Core 30.0; lnd-a is the CDK mint backend; lnd-b is the independent Lightning funding payer and invoice recipient; mint is CDK 0.18.0 with explicit input_fee_ppk=0; wallet-1 and wallet-2 are CDK CLI 0.18.0 with separate persistent /wallet volumes. Before executing node commands, read the catalog native invocation hints for Bitcoin Core, LND and CDK CLI; do not guess credential paths or assume jq/curl are installed. Read native subcommand help before wallet mutations. Provisioning readiness does not mean payment readiness: establish a direct channel and independently verify at least 100000 sat of usable outbound liquidity in EACH direction, above channel reserves and commitment fees, before starting wallet funding. Both directions are needed even though the wallet initially receives only 5000 sat. Discover and perform this setup through native CLIs; use a push amount or a separate node-to-node rebalance without increasing the wallet funding amount. Initialize both wallets natively, record only hashes of their seed identities, and confirm independent state with wallet-2 empty. Fund wallet-1 with 5000 sat through a real Lightning payment from lnd-b, explicitly finish mint issuance, and compare native evidence with passive wallet_balance for mint. Pay a separate 700-sat lnd-b invoice natively, verify recipient settlement and fees without printing preimages, and check 4300 sat remains with zero reserved/pending amounts. Restart wallet-1, check its identity and balance persisted, pay another 300-sat lnd-b invoice, independently verify settlement and final balance 4000 sat; wallet-2 must remain empty. Use cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive on every invocation. Native balance can recover sagas, so distinguish it from the passive observation. In this pinned release mint-pending checks pending proofs, not paid quote issuance: resume the exact existing paid quote with mint <url> --quote-id <id>. Use a short explicit --wait-duration when creating an unpaid quote, or extract its invoice from a component-local file while the supervised handle remains live; do not block waiting for funding that has not been sent. Use the shared component_exec_live supervisor: argv for direct command scope or script for shell scope, an explicit execution timeout of at most 300 seconds, operation_wait for receipts, and action_cancel for owned operations. Never use nohup or background jobs. Inspect exit_code, exit_signal, timed_out and cleanup_verified, not just operation phase. Shell wrappers must capture the native command exit status immediately and exit with that status after safe output parsing; do not replace it with the parser or a later balance command exit status. Keep CDK payment text private; use a parsed receipt only when independent observations cannot answer the question. Never retry ambiguous payments without checking their outcomes. LND native data is at /home/lnd/.lnd. Execution output is private by default. For LND sendpayment use --force --json and output mode json_fields selecting status and failure_reason; do not print its raw output or attempt generic redaction. Use json_fields for other supported safe receipt fields. CDK table/text output may remain entirely private. Do not write a parser just to reproduce evidence already available from settlement and passive balances. Public output is allowed for safe help, seed fingerprints and explicitly extracted BOLT11/payment-hash/setup values; never expose seed, proof or preimage values. Command requests are journaled: keep sensitive inputs in component-local files. Small BOLT11 requests may pass through the authorized surface; ecash token transfers are outside scope. Use only Proofstorm tools, no host commands. Keep retries bounded: after two equivalent failures without a changed hypothesis, report the blocker and clean up. Reserve the final 20 percent for process cleanup, evidence export and verified lab teardown. Report which milestones were actually reached, distinguish discovery friction from wallet defects and harness failures, and do not claim recovery safety from a normal restart. Keep the report concise and finish it before the hard cap. Native payments are not counted as typed paid_melts; use recipient settlement and wallet balances as evidence.\n\nWork economically: use catalog_entry_read once per relevant kind, bounded waits for handles, and batch independent observations. Avoid repeated full help or receipt dumps. wallet_balance takes the mint component ID mint, whereas cdk-cli takes its URL. Finish with a concise evidence-backed report; treat an unmet output-policy condition as a failed gate, even when money movement succeeds."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "baseline_observed",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained",
+        "native_cli_used_for_substantive_work",
+        "no_operator_commands",
+        "native_mutation_verified_by_typed_observation",
+        "wallet_cli_operated",
+        "restart_recovery_verified",
+        "typed_surface_choices_justified",
+        "wallet_state_isolation_verified",
+        "native_payments_independently_settled",
+        "bounded_native_processes_cleaned",
+        "native_exit_status_preserved",
+        "native_output_policy_respected",
+        "final_report_within_cap"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 4
+      },
+      "seed_plan": "scripts/fixtures/cdk-wallet-verified-plan.json",
+      "capabilities": "catalog.read,lab.read,lab.publish,lab.materialize,lab.status,lab.close,experiment.create,experiment.read,experiment.close,lease.acquire,lease.release,action.cancel,component.control,component.exec_live,component.logs,oracle.run,artifact.read,chain.mine,wallet.create,wallet.control,wallet.fund,peer.connect,channel.open"
+    },
+    {
+      "id": "reliable-native-execution",
+      "family": "execution-reliability",
+      "novelty": "supervised-native-exec-and-cleanup-admission",
+      "toolset": "native",
+      "execution_surface": "mixed",
+      "seed_plan": "scripts/fixtures/reliable-native-execution-plan.json",
+      "capabilities": "catalog.read,lab.read,lab.publish,lab.materialize,lab.status,lab.close,experiment.create,experiment.read,experiment.close,lease.acquire,lease.release,action.cancel,component.exec_live,artifact.read",
+      "prompt_variants": [
+        "Exercise the shared native execution contract on the operator-verified small plan supplied below. This is an execution-reliability test with assisted setup, NOT a wallet funding or recovery test. Apply the supplied plan directly; do not create or edit plans. Roles: chain is Bitcoin Core 30.0, lightning is LND 0.20.0-beta, wallet is CDK CLI 0.18.0. Do not fund wallets, mine, open channels, make payments, restart the controller or replace pods. Use only authorized Proofstorm tools.\nCreate an experiment and acquire a lease covering the bounded run. Use unique operation IDs for distinct cases. Discover the current component_exec_live schema. Provide exactly one command form: argv for command exit scope, or script for shell exit scope. Submit and retain operation handles; wait for native receipts rather than inferring success from operation phase. Use public output only for safe native CLI help/version on both lightning and wallet. Keep other output private by default. Do not launch nohup jobs, install utilities or invent wallet-specific wrappers.\nGenerate a fresh synthetic secret canary inside wallet and store a small JSON document locally with that canary in payment_preimage plus known safe fields status=SUCCEEDED and value_sat=7. Never put the canary value in requests, public output, projections or reports; no real seed/proof material is needed. Exercise reading that file once with default private output and once with json_fields selecting status and value_sat. Require empty ordinary stdout/stderr and inspect capture byte/hash metadata; selected output must contain only the requested safe fields. Do not read private capture files back into public output or reconstruct the canary outside the component. Explain the limits of what you verified.\nExercise a known nonzero command exit (for example argv invoking /bin/sh -c 'exit 7') and a separate script exit to distinguish command versus shell exit_scope. Exercise malformed/table output with json_fields and a known nonzero exit: require a static projection failure with no raw-output fallback while preserving the command exit status. Inspect truncation/completeness flags; do not turn an expected nonzero exit into a failure claim about the supervisor.\nStart one long supervised operation with a component-local start marker. Confirm it genuinely began through a separate bounded marker check, then request action_cancel and wait for its native cancelled/cleanup receipt. Separately let a started operation reach its own short execution deadline and retain timed_out, exit/signal and cleanup evidence. A wait-tool timeout is not this deadline. Require cleanup_verified=true on terminal cases; retain unknown/unverified outcomes honestly and close the lab rather than replay an uncertain mutation. Do not infer actual descendant absence beyond the supervisor receipt or claim controller-restart coverage.\nAfter these cases, deliberately observe the runner's cleanup admission boundary. Use at most two harmless, owned supervisor timer operations if a time witness is needed; each execution deadline is at most 300 seconds. Plan their timing from receipt timestamps and the run budget so a live handle spans the boundary; use bounded status/wait calls, preferably at most 45 seconds. Do not pad model steps with redundant discovery or repeatedly launch experimental commands. If cleanup activates early, preserve partial results and proceed directly to cleanup.\nAt or after the boundary, make exactly one new harmless exec request intended as the admission probe, using a new operation ID; expect cleanup_phase_only before MCP. A pre-boundary success is not a refusal result. Cancel/wait for any remaining owned operations, release the lease, close the experiment, export evidence, close the lab, verify absence, and produce a concise final report before the hard cap. Public help is the only intended public output. Report exact operation IDs and observed receipt fields, separate expected refusals from defects and discovery friction, and distinguish a passed target property from a clean agent completion. Do not launch additional scenarios."
+      ],
+      "manual_gates": [
+        "question_exercised",
+        "direct_and_shell_exit_scope_verified",
+        "private_and_selected_output_verified",
+        "canary_not_disclosed",
+        "nonzero_exit_preserved",
+        "projection_failure_closed",
+        "started_cancellation_cleanup_verified",
+        "execution_deadline_cleanup_verified",
+        "cleanup_admission_refusal_verified",
+        "owned_operations_terminal",
+        "cleanup_budget_respected",
+        "final_report_within_cap",
+        "claims_supported_by_observations",
+        "execution_context_appropriate",
+        "native_failures_explained"
+      ],
+      "gates": {
+        "evidence_required": true,
+        "teardown_required": true,
+        "materializations_min": 1,
+        "materializations_max": 1,
+        "paid_melts_min": 0,
+        "unpaid_melts_min": 0,
+        "live_exec_successes_min": 2
+      }
     }
   ]
 }

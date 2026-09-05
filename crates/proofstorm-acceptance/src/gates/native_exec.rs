@@ -201,6 +201,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             "operation_id": operation,
             "component": component,
             "script": script,
+            "output": {"mode":"public"},
             "timeout_seconds": 30,
             "idempotency_key": format!("{operation}-native-exec")
         });

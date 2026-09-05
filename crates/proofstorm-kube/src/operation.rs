@@ -1410,9 +1410,26 @@ fn render_wallet_balance_action(
     if action.spec.capability != Capability::WalletControl {
         return Err(ActionRenderError::Capability);
     }
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
+    let (implementation, wallet_image) =
+        locked_component(lab, &request.wallet, ComponentKind::Wallet)?;
+    let locked_version = lab
+        .spec
+        .lock
+        .entries
+        .iter()
+        .find(|entry| entry.component_id == request.wallet)
+        .and_then(|entry| entry.protocol_action_adapter_version.as_deref());
+    let adapter = WALLET_OBSERVATION_ADAPTERS
+        .iter()
+        .find(|adapter| {
+            adapter.implementation == implementation && Some(adapter.version) == locked_version
+        })
+        .ok_or_else(|| ActionRenderError::UnsupportedAdapter {
+            component: request.wallet.clone(),
+            adapter: implementation.into(),
+        })?;
     locked_component(lab, &request.mint, ComponentKind::Mint)?;
-    render_wallet_balance_job(&WalletJobSpec {
+    (adapter.balance)(&WalletJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
         wallet: &request.wallet,
@@ -1420,6 +1437,59 @@ fn render_wallet_balance_action(
         wallet_image,
     })
     .map_err(ActionRenderError::from)
+}
+
+/// Narrow protocol-action boundary: observations are independently locked from
+/// workload configuration. Mutation drivers remain Nutshell-only in this slice.
+struct WalletObservationAdapter {
+    implementation: &'static str,
+    version: &'static str,
+    balance: fn(&WalletJobSpec<'_>) -> Result<Job, serde_json::Error>,
+}
+
+const WALLET_OBSERVATION_ADAPTERS: &[WalletObservationAdapter] = &[
+    WalletObservationAdapter {
+        implementation: "nutshell-wallet",
+        version: "0.1.0-alpha.1",
+        balance: render_wallet_balance_job,
+    },
+    WalletObservationAdapter {
+        implementation: "cdk-cli-wallet",
+        version: "cdk-cli/0.18/observations/v1",
+        balance: render_cdk_wallet_balance_job,
+    },
+];
+
+fn render_cdk_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let script = concat!(
+        "python3 - <<'PROOFSTORM_READER' > /dev/termination-log\n",
+        include_str!("../drivers/cdk_wallet_balance.py"),
+        "\nPROOFSTORM_READER\n"
+    );
+    let mint_url = format!("http://{}:3338", spec.mint);
+    // SQLite needs writable WAL coordination files even for mode=ro. The
+    // locked reader uses query_only and a read transaction; it never starts CDK.
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload",
+        "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(spec.instance_key),
+        "nodeSelector": {"kubernetes.io/arch": "arm64"},
+        "containers": [container_with_env("wallet", spec.wallet_image, script,
+            &[mount("wallet", "/wallet", false)], vec![
+                ("PROOFSTORM_DATABASE", "/wallet/cdk/cdk-cli.sqlite"),
+                ("PROOFSTORM_WALLET", spec.wallet), ("PROOFSTORM_MINT", spec.mint),
+                ("PROOFSTORM_MINT_URL", mint_url.as_str()),
+            ])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{}-data", spec.wallet)}}]
+    });
+    job(
+        spec.resource_name,
+        &instance_namespace(spec.instance_key),
+        spec.instance_key,
+        "wallet-balance",
+        30,
+        &pod,
+    )
 }
 
 fn render_wallet_fund_action(
@@ -4711,6 +4781,59 @@ mod tests {
             snapshot.volume_mounts.as_ref().expect("mounts")[0].read_only,
             Some(true)
         );
+    }
+
+    #[test]
+    fn cdk_observation_is_version_locked_and_never_starts_the_wallet() {
+        let (mut lab, mut action) = typed_bootstrap();
+        let wallet = lab
+            .spec
+            .lab
+            .components
+            .iter_mut()
+            .find(|component| component.id == "wallet")
+            .expect("wallet");
+        wallet.implementation = "cdk-cli-wallet".into();
+        wallet.config_version = "cdk-cli-wallet/0.18/v1".into();
+        wallet.version = Some("0.18.0".into());
+        lab.spec.lock = resolve_lock(&lab.spec.lab, default_catalog()).expect("CDK lock");
+        action.spec.capability = Capability::WalletControl;
+        action.spec.action = LabAction::WalletBalance(WalletBalanceAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+        });
+        let job = render_lab_action_job(&action, &lab).expect("passive observation");
+        let spec = job.spec.expect("job");
+        assert_eq!(spec.active_deadline_seconds, Some(30));
+        let pod = spec.template.spec.expect("pod");
+        assert!(pod.init_containers.is_none());
+        assert_eq!(
+            pod.containers[0].volume_mounts.as_ref().expect("mount")[0].read_only,
+            Some(false)
+        );
+        let script = pod.containers[0]
+            .command
+            .as_ref()
+            .expect("command")
+            .last()
+            .expect("script");
+        assert!(script.contains("mode=ro"));
+        assert!(!script.contains("subprocess"));
+        assert!(!script.contains("cp -R"));
+        lab.spec
+            .lock
+            .entries
+            .iter_mut()
+            .find(|entry| entry.component_id == "wallet")
+            .expect("wallet lock")
+            .protocol_action_adapter_version = Some("uninstalled-version".into());
+        assert!(render_lab_action_job(&action, &lab).is_err());
+        action.spec.capability = Capability::WalletCreate;
+        action.spec.action = LabAction::WalletInitialize(WalletInitializeAction {
+            wallet: "wallet".into(),
+            mint: "mint".into(),
+        });
+        assert!(render_lab_action_job(&action, &lab).is_err());
     }
 
     #[test]

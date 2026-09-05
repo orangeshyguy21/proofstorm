@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/cashubtc/cdk",
+  "commit_sha": "d3dec24c784e8fec1fd65f853241c7a2261c7abd",
+  "artifact_url": "https://github.com/cashubtc/cdk/releases/download/v0.18.0/cdk-cli-0.18.0-aarch64",
+  "artifact_sha256": "9e0112477188155d5aeb6970a53b8fd0f336ba563db81ffe74e1fe2beaf48a8f",
+  "platform": "linux/arm64",
+  "runtime_image": "docker.io/library/python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254",
+  "recipe_digest": "sha256:93af73f91d73642a9e4503883d69fb91b630be3896e46834c5ffac0914a06caa"
+}

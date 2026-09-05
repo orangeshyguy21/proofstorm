@@ -1,10 +1,20 @@
+FROM rust:1.88.0-alpine AS native
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY docker/wallet/cdk-cli-0.18.0-provenance.json ./docker/wallet/cdk-cli-0.18.0-provenance.json
+RUN cargo build --locked --release -p proofstorm-exec
+
 FROM rust:1.88.0-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY docker/wallet/cdk-cli-0.18.0-provenance.json ./docker/wallet/cdk-cli-0.18.0-provenance.json
 RUN cargo build --locked --release -p proofstormd
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /src/target/release/proofstormd /usr/local/bin/proofstormd
+COPY --from=native /src/target/release/proofstorm-exec /usr/local/lib/proofstorm-exec
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/proofstormd"]

@@ -275,6 +275,8 @@ struct LabActionParametersSchema {
     service: Option<String>,
     attempts: Option<u32>,
     script: Option<String>,
+    argv: Option<Vec<String>>,
+    output: Option<proofstorm_core::native::NativeOutput>,
     tail_lines: Option<u32>,
 }
 
@@ -443,8 +445,24 @@ pub struct ComponentForensicsAction {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentExecLiveAction {
     pub component: String,
+    #[serde(default)]
     pub script: String,
+    #[serde(default)]
+    pub argv: Vec<String>,
     pub timeout_seconds: u32,
+    #[serde(default)]
+    pub output: proofstorm_core::native::NativeOutput,
+}
+
+/// Identifies the exact supervised execution across controller reconciliations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeExecutionRef {
+    pub pod: String,
+    pub pod_uid: String,
+    pub container: String,
+    pub directory: String,
+    pub runner_digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -642,6 +660,8 @@ fn preserved_object_schema(_: &mut SchemaGenerator) -> Schema {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormLabActionStatus {
     pub phase: ActionPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_execution: Option<NativeExecutionRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

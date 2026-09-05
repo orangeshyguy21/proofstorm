@@ -2,6 +2,7 @@
 members = [
     "crates/proofstorm-acceptance",
     "crates/proofstorm-core",
+    "crates/proofstorm-exec",
     "crates/proofstorm-kube",
     "crates/proofstorm-mcp",
     "crates/proofstorm-store",

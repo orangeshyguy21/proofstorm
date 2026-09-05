@@ -33,6 +33,8 @@ pub struct LockEntry {
     pub source_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CandidateSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_provenance: Option<crate::catalog::BuildProvenance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -169,6 +171,7 @@ pub fn resolve_lock(lab: &LabSpec, catalog: &CatalogResponse) -> Result<Resolved
                 image: entry.image.clone(),
                 source_digest: entry.source_digest.clone(),
                 source: entry.source.clone(),
+                build_provenance: entry.build_provenance.clone(),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
