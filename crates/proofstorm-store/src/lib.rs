@@ -4,7 +4,7 @@
 )]
 
 mod environment;
-pub use environment::EnvironmentEntry;
+pub use environment::{EnvironmentEntry, PendingObservationPage};
 mod delegation;
 #[cfg(test)]
 mod session_tests;

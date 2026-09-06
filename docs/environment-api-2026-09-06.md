@@ -22,7 +22,7 @@ The HTTP server binds only to loopback. It serves GET requests, sends `Cache-Con
 
 ## What the view means
 
-- **Inventory:** every retained materialized instance in this database/workspace, plus names reserved before materialization. Advanced-tool instances and historical generations are included. A current named lab has a `handle`; old generations retain their instance ID and revision, but no longer have the reused handle. Instances known only to another database are outside this inventory.
+- **Inventory:** labs currently present in the selected cluster and tracked in this database/workspace. Kubernetes inventory is read before stored lab records. Deleted labs, old generations absent from the cluster, and unmaterialized reservations are excluded. A current named lab has a `handle`. Instances known only to another database are outside this inventory. A cluster inventory failure fails the request; it is never interpreted as an empty cluster. The browser retains its last snapshot with a warning while reconnecting.
 - **Topology:** stable component and link IDs from the immutable published revision. Links describe configured relationships. They do not establish current reachability, payment flows, or strict network-policy allowlists.
 - **Endpoints:** desired Service host, port and transport, plus whether the existing local connection implementation supports that endpoint and its authentication method. Cluster DNS addresses are not laptop URLs. Metadata does not start a tunnel or promise current availability. Credentials, component configuration, Kubernetes annotations, command arguments, and artifact content are excluded.
 - **Resources:** desired workload container requests/limits, namespace defaults, replica counts, and both standalone PVCs and StatefulSet claim templates. Quantities retain Kubernetes units. Resource rows cover the current component page plus shared workloads. These are rendered requirements, not measured usage or an aggregate cluster capacity estimate. Stopped workloads, scheduler scale changes, existing PVC retention, and temporary action jobs can make actual resource allocation differ. Repeated shared workloads across pages should be deduplicated by name. Claim-template requests are per replica; init-container resources should not simply be added to steady-state container demand.
@@ -35,9 +35,9 @@ Protocol traffic, measured resource usage, and attached external clients are exp
 
 The response reports its observation start and finish times. Each lab reports when its journal was read, its latest recorded operation activity, and when Kubernetes was fetched. Runtime resource versions and observed/current generations are included. `source_updated_at_unix` comes from Kubernetes status field-management metadata when available; otherwise it is null. Component condition transition timestamps are not polling timestamps.
 
-`runtime.state` is `available`, `stale`, `missing`, `unavailable`, or `not_materialized`. Revision/generation mismatches cannot produce a current `ready: true`. A failed or timed-out runtime read preserves stored topology and history, with a safe error code. A missing runtime object does not itself prove verified teardown; a named handle's closed phase records the completed lifecycle. Inspecting never repairs missing observations or synchronizes results. `proofstorm serve` runs a separate background collector automatically; without the web server, use `proofstorm sync NAME` or `sync NAME --watch`.
+`runtime.state` is `available`, `stale`, `missing`, `unavailable`, or `not_materialized`. Revision/generation mismatches cannot produce a current `ready: true`. After inventory succeeds, a failed or timed-out per-lab runtime read preserves its stored topology and history with a safe error code. A missing runtime object does not itself prove verified teardown; a named handle's closed phase records the completed lifecycle. Inspecting never repairs missing observations or synchronizes results. `proofstorm serve` runs a separate background collector automatically; without the web server, use `proofstorm sync NAME` or `sync NAME --watch`.
 
-Pages are observations taken over an interval, not one atomic snapshot across SQLite and Kubernetes. Permission and storage errors fail the request; runtime observation failures are represented within each lab.
+Pages are observations taken over an interval, not one atomic snapshot across SQLite and Kubernetes. Permission and database access errors fail the request; runtime observation failures are represented within each lab. If a lab's stored records cannot be decoded by this version, its entry carries `read_error: "stored_record_incompatible"` and retains its ID and any current handle. Its empty sections mean unavailable data, not an empty lab. Other labs remain readable. The reader does not rewrite historical records or reinterpret retired permissions.
 
 ## Pagination
 
@@ -47,7 +47,7 @@ All collections use `{ "items": [...], "next_cursor": null | "..." }`. Treat cur
 | --- | --- |
 | `cursor` | Continue the environment's lab list. |
 | `limit` | Requested maximum page size, 1–50; default 20. |
-| `instance_id` | Select one instance, including historical instances. |
+| `instance_id` | Select one instance, which must still be present in the selected cluster. |
 | `component_cursor` | Continue that instance's components and corresponding resources. |
 | `link_cursor` | Continue that instance's declared links. |
 | `session_cursor` | Continue that instance's sessions. |

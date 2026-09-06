@@ -2516,6 +2516,17 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     let ready = components
         .iter()
         .all(|component| component.ready || stopped_components.contains(&component.id));
+    let blocked = components.iter().any(|component| {
+        component.conditions.iter().any(|condition| {
+            condition.state == proofstorm_core::ComponentConditionState::False
+                && condition.reason.blocks_startup()
+        })
+    });
+    let message = (!ready).then(|| if blocked {
+        "component startup is blocked; inspect workload_ready conditions for error reasons and recovery steps".to_owned()
+    } else {
+        "waiting for protocol component readiness".to_owned()
+    });
 
     patch_status(
         lab.as_ref(),
@@ -2537,7 +2548,7 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             inventory,
             inventory_digest: Some(inventory_digest),
             teardown_receipt: None,
-            message: (!ready).then(|| "waiting for protocol component readiness".to_owned()),
+            message,
         },
     )
     .await?;

@@ -100,6 +100,7 @@ async fn handle(
             match labs.environment(&query).await {
                 Ok(view) => Ok(json(StatusCode::OK, &view)),
                 Err(e) => {
+                    eprintln!("environment read failed: {e}");
                     let code = e
                         .details
                         .as_ref()

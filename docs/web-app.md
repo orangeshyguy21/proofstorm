@@ -3,11 +3,22 @@
 Proofstorm runs protocol labs and lets you watch agents work in them.
 
 ```sh
-make build
-target/debug/proofstorm init
-target/debug/proofstorm serve
+make serve
 # Open http://127.0.0.1:8787
 ```
+
+After `make setup`, `make serve` rebuilds the web assets and CLI, initializes
+the local developer permissions, and starts the server. Keep it running;
+Ctrl-C stops it. Use `make serve PORT=8788` for another port, or
+`make serve ARGS='--database /absolute/path/state.db --workspace my-lab'`
+to select another agent workspace. Global options in `ARGS` apply to both
+initialization and serving. Each launch restores the selected identity's
+default developer permissions.
+
+No separate `init` is needed for `make serve`. When an agent uses a configured
+MCP server, that server registers its own identity and grants at startup too.
+An agent using the CLI directly needs `init` if its selected identity has not
+already been initialized.
 
 Use the same database, workspace and Kubernetes context for the website and the
 agent. The CLI defaults and example MCP configurations share
@@ -17,9 +28,15 @@ The website automatically discovers the lab and shows its components,
 connections, readiness, desired resources, sessions and recorded activity.
 
 The UI is read-only. Click a component for service endpoints and resource
-requests; drag the topology to pan, or use the zoom controls. Historical and
-missing labs can be included from the sidebar. Activity and sessions offer
+requests; drag the topology to pan, or use the zoom controls. Only labs present
+in the current cluster are listed; deleted labs disappear automatically. Activity and sessions offer
 explicit history pagination; the graph follows every component and link page.
+Labs with incompatible stored records show "History unavailable" individually,
+so older history cannot prevent current labs from loading. Their stored data
+is preserved. Database failures and permission failures have distinct messages.
+The receipt collector ignores pending records for labs absent from the cluster.
+For current labs it skips incompatible pending records and reports degraded
+collection while continuing to process readable operations.
 
 ## Live updates
 
@@ -73,7 +90,7 @@ principal's permissions. It accepts same-origin browser requests and local
 processes, rejects foreign origins and Host names, and exposes no mutation API.
 It is not a multi-user deployment or remote authentication service.
 
-The view covers labs retained in the selected database/workspace. It does not
+The view covers labs present in the selected cluster and tracked in the selected database/workspace. It does not
 discover labs created using another database. Connections are declared topology,
 not live payment flows. CPU/memory/storage are desired demands, not measured
 usage. Protocol traffic and attached external clients are not collected yet.

@@ -54,6 +54,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -229,6 +237,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -408,6 +424,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -588,6 +612,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -799,6 +831,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },

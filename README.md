@@ -17,6 +17,11 @@ target/debug/proofstorm up examples/developer-lab.json
 target/debug/proofstorm status demo
 ```
 
+Setup restores required local catalog images from the Docker cache, and doctor
+verifies image pulls from the cluster nodes. Missing exact artifacts fail setup
+explicitly. See [startup failures and image recovery](docs/startup-failures.md)
+for agent-visible error states and cold-machine prerequisites.
+
 The example starts Bitcoin Core and a Cashu mint with an embedded BDK backend.
 It uses Bitcoin regtest and the mint's on-chain NUT-30 support. It does not
 create a Lightning channel or fund a wallet automatically.
@@ -87,7 +92,7 @@ closes just that lab.
 ```bash
 # make build includes the Rust/Wasm website
 target/debug/proofstorm environment
-target/debug/proofstorm serve --port 8787
+make serve
 # Open http://127.0.0.1:8787 to watch agents build labs
 # From another terminal:
 curl http://127.0.0.1:8787/v1/environment
@@ -95,7 +100,8 @@ curl http://127.0.0.1:8787/v1/environment
 
 The same read-only view is available through MCP `proofstorm_environment_read`.
 It includes topology, endpoint metadata, desired resources, session overlaps,
-and recorded activity across retained labs. Each source reports its freshness;
+and recorded activity across labs currently present in the cluster. Deleted labs
+disappear automatically. Each source reports its freshness;
 protocol traffic and external clients are explicitly unobserved. Results are
 paged, and reads never start commands or collect receipts. The web server uses
 SSE to keep the topology and activity current and runs a background receipt
@@ -103,6 +109,13 @@ collector, including after an agent disconnects. Use the same database and
 workspace as your agent. See the [live web app guide](docs/web-app.md) and the
 [environment API contract](docs/environment-api-2026-09-06.md) for scope,
 pagination, local HTTP access, and the JSON Schema.
+
+`make serve` builds the website and CLI, initializes the local developer
+permissions, then keeps the server running. No separate `init` is needed.
+Use `make serve PORT=8788` to change the port. Global CLI options passed through
+`ARGS` apply to both initialization and serving. Each launch restores the
+selected identity's default developer permissions. A configured MCP server
+registers its own agent identity and grants at startup.
 
 ## Agent quick start
 

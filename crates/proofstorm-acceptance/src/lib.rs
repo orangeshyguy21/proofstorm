@@ -38,6 +38,7 @@ pub mod doctor;
 pub mod gate;
 pub mod gates;
 pub mod http;
+pub mod images;
 pub mod json;
 pub mod kubectl;
 pub mod lab;

@@ -35,10 +35,13 @@ impl Observer {
                     break;
                 };
                 status.last_attempt_at_unix = Some(now);
-                if let Ok((next, recorded, failed)) = result {
+                if let Ok((next, recorded, failed, incompatible)) = result {
                     cursor = next;
                     status.recorded_operations += recorded;
-                    if failed {
+                    if incompatible {
+                        status.state = "degraded".into();
+                        status.error = Some("Some pending operations use incompatible stored records and cannot be collected. Collection continues for readable operations; runtime failures are retried automatically.".into());
+                    } else if failed {
                         status.state = "degraded".into();
                         status.error = Some(
                             "Some runtime receipts could not be collected; retrying automatically."
@@ -49,9 +52,13 @@ impl Observer {
                         status.error = None;
                         status.last_success_at_unix = Some(now);
                     }
-                } else {
+                } else if let Err(error) = result {
                     status.state = "unavailable".into();
-                    status.error=Some("Receipt collection requires lab.status, experiment.read and artifact.read in this workspace, and a readable journal.".into());
+                    status.error = Some(match error.details.as_ref().and_then(|details| details["code"].as_str()) {
+                        Some("access_denied") => "Receipt collection needs lab.status, experiment.read and artifact.read in this workspace.",
+                        Some("runtime_failure") => "Receipt collection cannot read the current cluster; retrying automatically.",
+                        _ => "Receipt collection cannot read the workspace journal; check the server terminal.",
+                    }.into());
                 }
             }
         });
@@ -64,26 +71,21 @@ impl Drop for Observer {
     }
 }
 
-async fn collect(labs: &Labs, cursor: &str) -> Result<(String, u64, bool), ()> {
+async fn collect(labs: &Labs, cursor: &str) -> Result<(String, u64, bool, bool), crate::Error> {
     for cap in [
         Capability::LabStatus,
         Capability::ExperimentRead,
         Capability::ArtifactRead,
     ] {
         labs.store
-            .authorize(&labs.workspace, &labs.principal, cap)
-            .map_err(|_| ())?;
+            .authorize(&labs.workspace, &labs.principal, cap)?;
     }
-    let operations = labs
-        .store
-        .pending_observations(&labs.workspace, &labs.principal, cursor, 50)
-        .map_err(|_| ())?;
-    let next = if operations.len() == 50 {
-        operations.last().map(|o| o.id.clone()).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let results = stream::iter(operations)
+    let live = labs.runtime.current_instance_ids(&labs.workspace).await?;
+    let page =
+        labs.store
+            .pending_observations(&labs.workspace, &labs.principal, cursor, 50, &live)?;
+    let next = page.next_cursor.unwrap_or_default();
+    let results = stream::iter(page.operations)
         .map(|op| async move {
             let observed =
                 tokio::time::timeout(Duration::from_secs(3), labs.runtime.action_status(&op))
@@ -114,5 +116,6 @@ async fn collect(labs: &Labs, cursor: &str) -> Result<(String, u64, bool), ()> {
         next,
         u64::try_from(results.iter().filter(|r| matches!(r, Ok(true))).count()).unwrap_or(0),
         results.iter().any(Result::is_err),
+        page.incompatible_records != 0,
     ))
 }

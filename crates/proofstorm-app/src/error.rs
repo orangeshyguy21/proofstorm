@@ -58,7 +58,10 @@ impl From<proofstorm_store::StoreError> for Error {
         Self {
             kind,
             message: error.to_string(),
-            details: Some(serde_json::json!({"code": error.code()})),
+            details: Some(serde_json::json!({"code": match &error {
+                StoreError::Serialization(_) => "stored_record_incompatible",
+                _ => error.code(),
+            }})),
         }
     }
 }

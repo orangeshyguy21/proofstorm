@@ -2293,6 +2293,7 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
+ "proofstorm-core",
  "proofstorm-kube",
  "serde_json",
  "sha2",
@@ -2318,6 +2319,7 @@ dependencies = [
  "proofstorm-store",
  "proofstorm-view",
  "reqwest",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",

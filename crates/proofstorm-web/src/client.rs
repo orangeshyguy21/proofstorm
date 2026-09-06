@@ -13,10 +13,24 @@ async fn get<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
         .await
         .map_err(|_| "The server could not be reached. Keeping the last snapshot.".to_owned())?;
     if !response.ok() {
-        return Err(format!(
-            "Server returned HTTP {}. Check the server and workspace permissions.",
-            response.status()
-        ));
+        let status = response.status();
+        let body = response.json::<serde_json::Value>().await.ok();
+        let code = body
+            .as_ref()
+            .and_then(|body| body["error"]["code"].as_str());
+        return Err(match (status, code) {
+            (403, _) => "Access denied. Check the server's workspace permissions.".into(),
+            (_, Some("store_failure")) => {
+                "The server could not read the workspace database. Check the server terminal."
+                    .into()
+            }
+            (_, Some("stored_record_incompatible")) => {
+                "A stored workspace record is incompatible with this version of Proofstorm.".into()
+            }
+            (_, Some("runtime_failure")) => "The current cluster could not be read. Check the cluster connection; keeping the last snapshot.".into(),
+            (_, Some("lab_not_in_cluster")) => "This lab has been removed from the cluster. Refreshing the lab list.".into(),
+            _ => format!("Server returned HTTP {status}. Check the server terminal."),
+        });
     }
     response
         .json()
@@ -39,13 +53,9 @@ pub async fn environment() -> Result<EnvironmentView, String> {
         view.labs.next_cursor = page.labs.next_cursor;
         view.observation_finished_at_unix = page.observation_finished_at_unix;
     }
-    view.labs.items.sort_by_key(|lab| {
-        (
-            crate::model::archived(lab),
-            crate::model::lab_name(lab),
-            lab.id.clone(),
-        )
-    });
+    view.labs
+        .items
+        .sort_by_key(|lab| (crate::model::lab_name(lab), lab.id.clone()));
     view.labs.items.dedup_by(|a, b| a.id == b.id);
     Ok(view)
 }

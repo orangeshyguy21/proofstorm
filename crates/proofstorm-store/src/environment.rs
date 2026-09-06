@@ -7,6 +7,12 @@ pub struct EnvironmentEntry {
     pub handle: Option<LabHandle>,
 }
 
+pub struct PendingObservationPage {
+    pub operations: Vec<LabOperation>,
+    pub next_cursor: Option<String>,
+    pub incompatible_records: usize,
+}
+
 impl Store {
     /// Opaque invalidation inputs: catches writes through this connection and other processes.
     /// Database-wide changes may cause harmless extra refreshes; no row data is returned.
@@ -117,17 +123,37 @@ impl Store {
         principal: &str,
         cursor: &str,
         limit: u32,
-    ) -> Result<Vec<LabOperation>, StoreError> {
+        live_instances: &std::collections::BTreeSet<String>,
+    ) -> Result<PendingObservationPage, StoreError> {
         self.authorize(workspace, principal, Capability::ArtifactRead)?;
         self.authorize(workspace, principal, Capability::ExperimentRead)?;
         validate_page(cursor, limit)?;
         let ids = {
             let db = self.lock()?;
-            db.prepare("SELECT id FROM actions WHERE workspace_id=?1 AND id>?2 AND phase_json IN ('\"pending\"','\"running\"') ORDER BY id LIMIT ?3")?.query_map(params![workspace,cursor,limit],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?
+            db.prepare("SELECT id,instance_id FROM actions WHERE workspace_id=?1 AND id>?2 AND phase_json IN ('\"pending\"','\"running\"') ORDER BY id LIMIT ?3")?.query_map(params![workspace,cursor,limit],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?
         };
-        ids.into_iter()
-            .map(|id| self.operation_unchecked(workspace, &id))
-            .collect()
+        // Advance over raw rows, including incompatible history, so no old record
+        // can starve receipt collection for operations on later pages.
+        let next_cursor = ids
+            .last()
+            .filter(|_| ids.len() == limit as usize)
+            .map(|(id, _)| id.clone());
+        let mut page = PendingObservationPage {
+            operations: Vec::new(),
+            next_cursor,
+            incompatible_records: 0,
+        };
+        for (id, instance) in ids {
+            if !live_instances.contains(&instance) {
+                continue;
+            }
+            match self.operation_unchecked(workspace, &id) {
+                Ok(operation) => page.operations.push(operation),
+                Err(StoreError::Serialization(_)) => page.incompatible_records += 1,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(page)
     }
 
     pub fn last_instance_activity(

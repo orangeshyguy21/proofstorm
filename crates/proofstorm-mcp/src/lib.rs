@@ -893,6 +893,9 @@ pub struct InstanceRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabStatusSummary {
+    /// First eight startup failures; use `component_status_list` for all details.
+    #[serde(default)]
+    pub blockers: Vec<StartupBlocker>,
     pub instance_id: String,
     pub revision_digest: String,
     pub lock_digest: String,
@@ -969,6 +972,9 @@ pub struct LabWaitRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabWaitResult {
+    /// First eight startup failures. For a ready target, these end the wait early.
+    #[serde(default)]
+    pub blockers: Vec<StartupBlocker>,
     pub instance_id: String,
     pub phase: InstancePhase,
     pub target_phase: InstancePhase,
@@ -2692,7 +2698,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Read the workspace environment: retained labs, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page labs, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one lab's sections. Same JSON contract as proofstorm environment and GET /v1/environment."
+        description = "Read the workspace environment: labs currently present in the selected cluster, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. Deleted and unmaterialized labs are excluded. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page labs, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one lab's sections. Same JSON contract as proofstorm environment and GET /v1/environment."
     )]
     async fn proofstorm_environment_read(
         &self,
@@ -3495,7 +3501,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Read a compact lab readiness receipt with component and inventory counts. Use the component-status and inventory list tools for paged detail"
+        description = "Read lab readiness counts and up to eight startup blockers with reasons and recovery guidance. Use component-status and inventory list tools for paged detail"
     )]
     async fn proofstorm_lab_status(
         &self,
@@ -3508,7 +3514,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "List sanitized component readiness for a lab instance in bounded cursor pages"
+        description = "List component readiness and startup failure reasons with recovery guidance. Image pull failures are blocked startup, not build progress; no experiment or logs operation is needed to diagnose these conditions. Results use bounded cursor pages"
     )]
     async fn proofstorm_lab_component_status_list(
         &self,
@@ -3606,7 +3612,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Wait with bounded server-side exponential backoff for a lab to reach a target phase, returning only compact phase, readiness counts, message, and teardown receipt. timeout_seconds must be 1..=120"
+        description = "Wait for a lab to reach a target phase. A ready wait returns early with blockers when image pulls, scheduling or container startup are failing; reached=false and timed_out=false means blocked, not still loading. Inspect blocker reasons and recovery messages instead of repeating waits. timeout_seconds must be 1..=120"
     )]
     async fn proofstorm_lab_wait(
         &self,
@@ -3645,7 +3651,11 @@ impl ProofstormMcp {
                 }
             };
             let reached = status.phase == request.target_phase;
-            if reached || lab_wait_terminal(status.phase) {
+            if reached
+                || lab_wait_terminal(status.phase)
+                || (request.target_phase == InstancePhase::Ready
+                    && !startup_blockers(&status).is_empty())
+            {
                 return Ok(Json(compact_lab_wait(
                     status,
                     request.target_phase,
@@ -9368,7 +9378,41 @@ fn compact_developer_view(view: proofstorm_app::lab::LabView) -> DeveloperLabVie
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartupBlocker {
+    pub component_id: String,
+    pub reason: proofstorm_core::ComponentConditionReason,
+    pub message: String,
+}
+
+fn startup_blockers(status: &LabInstanceStatus) -> Vec<StartupBlocker> {
+    status
+        .components
+        .iter()
+        .filter_map(|component| {
+            component
+                .conditions
+                .iter()
+                .find(|condition| {
+                    condition.state == proofstorm_core::ComponentConditionState::False
+                        && condition.reason.blocks_startup()
+                })
+                .map(|condition| StartupBlocker {
+                    component_id: component.id.clone(),
+                    reason: condition.reason,
+                    message: condition.message.clone(),
+                })
+        })
+        .take(8)
+        .collect()
+}
+
 fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
+    let blockers = startup_blockers(&status);
+    if status.phase == InstancePhase::Pending && !blockers.is_empty() {
+        status.message = Some("Component startup is blocked. Follow the blocker recovery guidance; another wait alone will not fix the failure.".into());
+    }
     let ready_components = status
         .components
         .iter()
@@ -9376,6 +9420,7 @@ fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
         .count();
     status.inventory.sort_by_key(inventory_key);
     LabStatusSummary {
+        blockers,
         instance_id: status.instance.id,
         revision_digest: status.instance.revision_digest,
         lock_digest: status.instance.lock_digest,
@@ -9392,17 +9437,22 @@ fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
 }
 
 fn compact_lab_wait(
-    status: LabInstanceStatus,
+    mut status: LabInstanceStatus,
     target_phase: InstancePhase,
     reached: bool,
     timed_out: bool,
 ) -> LabWaitResult {
+    let blockers = startup_blockers(&status);
+    if status.phase == InstancePhase::Pending && !blockers.is_empty() {
+        status.message = Some("Component startup is blocked. Follow the blocker recovery guidance; another wait alone will not fix the failure.".into());
+    }
     let ready_components = status
         .components
         .iter()
         .filter(|component| component.ready)
         .count();
     LabWaitResult {
+        blockers,
         instance_id: status.instance.id,
         phase: status.phase,
         target_phase,
@@ -11270,14 +11320,14 @@ mod tests {
         store
             .grant("alpha", "designer", Capability::ExperimentRead)
             .unwrap();
-        let lab = store
+        let _lab = store
             .reserve_lab("alpha", "designer", "pending", "digest")
             .unwrap();
         let client = kube::Client::new(
             tower::service_fn(|_: http::Request<kube::client::Body>| {
-                std::future::ready(Err::<http::Response<kube::client::Body>, _>(
-                    std::io::Error::other("unexpected runtime read"),
-                ))
+                std::future::ready(Ok::<_, std::io::Error>(http::Response::new(kube::client::Body::from(
+                    serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormLabList","metadata":{},"items":[]}).to_string().into_bytes()
+                ))))
             }),
             "system",
         );
@@ -11297,12 +11347,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            result.structured_content.as_ref().unwrap()["labs"]["items"][0]["id"],
-            lab.instance_id
-        );
-        assert_eq!(
-            result.structured_content.as_ref().unwrap()["labs"]["items"][0]["runtime"]["state"],
-            "not_materialized"
+            result.structured_content.as_ref().unwrap()["labs"]["items"],
+            serde_json::json!([])
         );
         assert!(serde_json::to_vec(&result).unwrap().len() < MAX_AGENT_RESPONSE_BYTES);
         store
@@ -12102,12 +12148,12 @@ mod tests {
             encoded.len()
         );
         for (toolset, maximum) in [
-            // Custody, delegation, and approved-command metadata have bounded budgets.
+            // Startup reasons and blocker receipts add up to 4 KiB to readiness profiles.
             (ProofstormToolset::Developer, 64 * 1024),
-            (ProofstormToolset::Experiment, 160 * 1024),
+            (ProofstormToolset::Experiment, 164 * 1024),
             (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 214 * 1024),
+            (ProofstormToolset::Runtime, 216 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);
@@ -12500,6 +12546,109 @@ mod tests {
         assert_eq!(
             stale.data.expect("cursor data")["code"],
             "status_cursor_invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn lab_wait_returns_startup_blockers_without_waiting_for_timeout() {
+        use proofstorm_core::{
+            ComponentCondition, ComponentConditionReason as Reason, ComponentConditionState,
+            ComponentConditionType,
+        };
+        let store = seeded_store();
+        store
+            .create_draft("alpha", "designer", "blocked", &lab("blocked"), "create")
+            .unwrap();
+        let revision = store
+            .publish("alpha", "designer", "blocked", 1, "publish")
+            .unwrap();
+        let instance = store
+            .materialize(
+                "alpha",
+                "designer",
+                "blocked",
+                &revision.digest,
+                "materialize",
+            )
+            .unwrap();
+        let component = ComponentStatus {
+            id: "wallet-cdk".into(), kind: proofstorm_core::ComponentKind::Wallet,
+            observed_revision_digest: revision.digest.clone(), observed_rollout_digest: "rollout".into(),
+            ready: false, service: String::new(), ports: BTreeMap::new(),
+            conditions: vec![ComponentCondition {
+                condition_type: ComponentConditionType::WorkloadReady, state: ComponentConditionState::False,
+                reason: Reason::ImagePullBackoff,
+                message: "Image pull is failing, not building. Operator: run make images and make doctor.".into(),
+                last_transition_unix: 1,
+            }],
+        };
+        let mut resource = proofstorm_kube::ProofstormLab::new(
+            &instance.resource_name,
+            proofstorm_kube::ProofstormLabSpec {
+                workspace_id: "alpha".into(),
+                instance_id: instance.id.clone(),
+                instance_key: instance.instance_key,
+                revision_digest: revision.digest.clone(),
+                lock: revision.lock,
+                lab: revision.lab,
+            },
+        );
+        resource.status = Some(proofstorm_kube::ProofstormLabStatus {
+            components: vec![component],
+            observed_revision_digest: revision.digest,
+            ..Default::default()
+        });
+        let body = serde_json::to_string(&resource).unwrap();
+        let client = kube::Client::new(
+            tower::service_fn(move |_: http::Request<kube::client::Body>| {
+                std::future::ready(Ok::<_, std::io::Error>(http::Response::new(
+                    kube::client::Body::from(body.clone().into_bytes()),
+                )))
+            }),
+            "system",
+        );
+        let service = ProofstormMcp::new(store, "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client, "system");
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            service.proofstorm_lab_wait(Parameters(LabWaitRequest {
+                instance_id: "blocked".into(),
+                target_phase: InstancePhase::Ready,
+                timeout_seconds: 120,
+            })),
+        )
+        .await
+        .expect("blocked startup must return immediately")
+        .unwrap()
+        .0;
+        assert!(!result.reached);
+        assert!(!result.timed_out);
+        assert_eq!(result.blockers[0].component_id, "wallet-cdk");
+        assert_eq!(result.blockers[0].reason, Reason::ImagePullBackoff);
+        assert!(result.blockers[0].message.contains("make images"));
+        let message = result.message.as_deref().unwrap();
+        assert!(message.contains("startup is blocked"));
+        let summary = service
+            .proofstorm_lab_status(Parameters(InstanceRequest {
+                instance_id: "blocked".into(),
+            }))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(summary.blockers.len(), 1);
+        let detail = service
+            .proofstorm_lab_component_status_list(Parameters(LabComponentStatusListRequest {
+                instance_id: "blocked".into(),
+                limit: 20,
+                cursor: None,
+            }))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            detail.components[0].conditions[0].reason,
+            Reason::ImagePullBackoff
         );
     }
 

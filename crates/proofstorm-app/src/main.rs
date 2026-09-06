@@ -46,7 +46,7 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         after: u64,
     },
-    /// Read all retained labs, topology, resource demand, sessions and activity as JSON.
+    /// Read current cluster labs, topology, resource demand, sessions and activity as JSON.
     Environment {
         #[arg(long)]
         instance_id: Option<String>,

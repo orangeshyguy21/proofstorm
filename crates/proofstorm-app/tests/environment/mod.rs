@@ -32,6 +32,246 @@ fn ready(cluster: &Arc<Mutex<Cluster>>) {
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one persisted fixture verifies partial reads, preservation, and cluster deletion"
+)]
+async fn incompatible_history_does_not_hide_current_labs_or_rewrite_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("journal.db");
+    let store = Store::open(&path).unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let healthy = labs.up("healthy", &spec()).await.unwrap().lab;
+    let mut legacy_spec = spec();
+    legacy_spec.name = "legacy".into();
+    let legacy = labs.up("legacy", &legacy_spec).await.unwrap().lab;
+    let digest = store
+        .instance("local", "developer", &legacy.instance_id)
+        .unwrap()
+        .revision_digest;
+    let db = rusqlite::Connection::open(&path).unwrap();
+    let raw: String = db
+        .query_row(
+            "SELECT revision_json FROM revisions WHERE digest=?1",
+            [&digest],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut encoded: Value = serde_json::from_str(&raw).unwrap();
+    encoded["lab"]["policy"]["allow"] = json!(["lease.acquire", "lease.release", "component.exec"]);
+    let legacy_json = encoded.to_string();
+    db.execute(
+        "UPDATE revisions SET revision_json=?1 WHERE digest=?2",
+        rusqlite::params![legacy_json, digest],
+    )
+    .unwrap();
+    ready(&cluster);
+
+    let viewer = observer(&labs);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(proofstorm_app::http::serve_listener(
+        viewer.clone(),
+        listener,
+    ));
+    let response = reqwest::get(format!("http://{address}/v1/environment"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let view: proofstorm_app::environment::EnvironmentView = response.json().await.unwrap();
+    assert_eq!(view.labs.items.len(), 2);
+    let current = view
+        .labs
+        .items
+        .iter()
+        .find(|lab| lab.id == healthy.instance_id)
+        .unwrap();
+    assert!(current.read_error.is_none());
+    assert_eq!(current.components.items[0].ready, Some(true));
+    let old = view
+        .labs
+        .items
+        .iter()
+        .find(|lab| lab.id == legacy.instance_id)
+        .unwrap();
+    assert_eq!(
+        old.read_error.as_deref(),
+        Some("stored_record_incompatible")
+    );
+    assert_eq!(old.handle.as_ref().unwrap().name, "legacy");
+    assert!(old.components.items.is_empty());
+    let detail = viewer
+        .environment(&EnvironmentQuery {
+            instance_id: Some(legacy.instance_id.clone()),
+            ..EnvironmentQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(detail.labs.items[0].read_error, old.read_error);
+    let after: String = db
+        .query_row(
+            "SELECT revision_json FROM revisions WHERE digest=?1",
+            [&digest],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, legacy_json);
+    // Compatibility is confined to observation; it cannot grant retired permissions.
+    assert!(store.revision("local", "developer", &digest).is_err());
+    cluster
+        .lock()
+        .unwrap()
+        .objects
+        .retain(|_, object| object["spec"]["instanceId"] != legacy.instance_id);
+    let current = viewer
+        .environment(&EnvironmentQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(current.labs.items.len(), 1);
+    assert_eq!(current.labs.items[0].id, healthy.instance_id);
+    assert!(
+        viewer
+            .environment(&EnvironmentQuery {
+                instance_id: Some(legacy.instance_id),
+                ..EnvironmentQuery::default()
+            })
+            .await
+            .is_err()
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn incompatible_pending_receipts_do_not_starve_current_operations() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("journal.db");
+    let store = Store::open(&path).unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    labs.up("demo", &spec()).await.unwrap();
+    let bad = labs
+        .exec("demo", "chain", command(), "a-legacy")
+        .await
+        .unwrap();
+    let good = labs
+        .exec("demo", "chain", command(), "z-current")
+        .await
+        .unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute(
+        "UPDATE actions SET capability_json='\"component.exec\"' WHERE id=?1",
+        [&bad.id],
+    )
+    .unwrap();
+    let live = std::collections::BTreeSet::from([good.instance_id.clone()]);
+    let first = store
+        .pending_observations("local", "developer", "", 1, &live)
+        .unwrap();
+    assert!(first.operations.is_empty());
+    assert_eq!(first.incompatible_records, 1);
+    assert_eq!(first.next_cursor.as_deref(), Some(bad.id.as_str()));
+    let second = store
+        .pending_observations(
+            "local",
+            "developer",
+            first.next_cursor.as_deref().unwrap(),
+            1,
+            &live,
+        )
+        .unwrap();
+    assert_eq!(second.operations[0].id, good.id);
+    let absent = store
+        .pending_observations(
+            "local",
+            "developer",
+            "",
+            50,
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    assert!(absent.operations.is_empty());
+    assert_eq!(absent.incompatible_records, 0);
+    for (path, object) in &mut cluster.lock().unwrap().objects {
+        if path.contains("/proofstormlabactions/") {
+            object["status"] = json!({"phase":"Succeeded", "artifact":{"exit_code":0,"cleanup_verified":true,"timed_out":false}});
+        }
+    }
+    let collector = proofstorm_app::observer::Observer::start(labs);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if collector.status.read().unwrap().recorded_operations == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .operation("local", "developer", &good.id)
+            .unwrap()
+            .phase,
+        OperationPhase::Succeeded
+    );
+    let status = collector.status.read().unwrap();
+    assert_eq!(status.state, "degraded");
+    assert!(
+        status
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("incompatible stored records")
+    );
+    let retained: (String, String) = db
+        .query_row(
+            "SELECT capability_json,phase_json FROM actions WHERE id=?1",
+            [&bad.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(retained.0, "\"component.exec\"");
+    assert_ne!(retained.1, "\"succeeded\"");
+}
+
+#[tokio::test]
+async fn http_preserves_startup_failure_reason_and_recovery_message() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store, cluster.clone());
+    labs.up("blocked", &spec()).await.unwrap();
+    ready(&cluster);
+    let message = "Image pull is failing and backing off, not building. Operator: run make images and make doctor; verify registry access.";
+    for (path, object) in &mut cluster.lock().unwrap().objects {
+        if path.contains("/proofstormlabs/") {
+            object["status"]["phase"] = json!("Pending");
+            object["status"]["components"][0]["ready"] = json!(false);
+            object["status"]["components"][0]["conditions"] = json!([{
+                "condition_type":"workload_ready", "state":"false", "reason":"image_pull_backoff", "message":message, "last_transition_unix":1
+            }]);
+        }
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/environment", listener.local_addr().unwrap());
+    let server = tokio::spawn(proofstorm_app::http::serve_listener(
+        observer(&labs),
+        listener,
+    ));
+    let response = reqwest::get(url).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    let component = &body["labs"]["items"][0]["components"]["items"][0];
+    assert_eq!(component["ready"], false);
+    assert_eq!(component["conditions"][0]["reason"], "image_pull_backoff");
+    assert_eq!(component["conditions"][0]["message"], message);
+    server.abort();
+}
+
+#[tokio::test]
 async fn environment_reads_are_passive_scoped_and_credential_free() {
     let store = Store::memory().unwrap();
     seed(&store);
@@ -173,7 +413,7 @@ async fn assert_workspace_isolation(labs: &Labs, instance_id: &str) {
 }
 
 #[tokio::test]
-async fn environment_lists_unnamed_historical_and_unmaterialized_labs_without_duplicates() {
+async fn environment_lists_only_current_cluster_labs_without_duplicates() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
@@ -193,7 +433,7 @@ async fn environment_lists_unnamed_historical_and_unmaterialized_labs_without_du
             "advanced-instance",
         )
         .unwrap();
-    let pending = store
+    let _pending = store
         .reserve_lab("local", "developer", "pending", "digest")
         .unwrap();
     let mut query = EnvironmentQuery {
@@ -205,16 +445,6 @@ async fn environment_lists_unnamed_historical_and_unmaterialized_labs_without_du
         let view = labs.environment(&query).await.unwrap();
         assert_eq!(view.labs.items.len(), 1);
         let item = &view.labs.items[0];
-        if item.id == old.instance_id {
-            assert!(item.handle.is_none());
-            assert!(matches!(item.runtime.state, ObservationState::Missing));
-        }
-        if item.id == pending.instance_id {
-            assert!(matches!(
-                item.runtime.state,
-                ObservationState::NotMaterialized
-            ));
-        }
         ids.push(item.id.clone());
         match view.labs.next_cursor {
             Some(cursor) => query.cursor = cursor,
@@ -223,8 +453,8 @@ async fn environment_lists_unnamed_historical_and_unmaterialized_labs_without_du
     }
     ids.sort();
     ids.dedup();
-    assert_eq!(ids.len(), 4);
-    assert!(ids.contains(&old.instance_id));
+    assert_eq!(ids.len(), 1);
+    assert!(!ids.contains(&old.instance_id));
     assert!(ids.contains(&new.instance_id));
 }
 
@@ -334,8 +564,16 @@ async fn stale_missing_and_wrong_runtime_identity_never_claim_ready() {
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
+    assert!(view.labs.items.is_empty());
+    cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["workspaceId"] = json!("local");
+    cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["instanceKey"] =
+        json!("wrong-key");
+    let mismatch = labs
+        .environment(&EnvironmentQuery::default())
+        .await
+        .unwrap();
     assert_eq!(
-        view.labs.items[0].runtime.error.as_deref(),
+        mismatch.labs.items[0].runtime.error.as_deref(),
         Some("runtime_identity_mismatch")
     );
     cluster.lock().unwrap().objects.remove(&path);
@@ -343,11 +581,7 @@ async fn stale_missing_and_wrong_runtime_identity_never_claim_ready() {
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
-    assert!(matches!(
-        view.labs.items[0].runtime.state,
-        ObservationState::Missing
-    ));
-    assert_eq!(view.labs.items[0].components.items.len(), 1);
+    assert!(view.labs.items.is_empty());
 }
 
 #[tokio::test]
@@ -440,27 +674,18 @@ async fn http_matches_shared_contract_and_refuses_writes_foreign_origins_and_rev
 }
 
 #[tokio::test]
-async fn runtime_failure_keeps_history_visible_without_exposing_errors() {
+async fn cluster_inventory_failure_is_not_reported_as_an_empty_cluster() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
     let labs = service(store, cluster.clone());
     labs.up("demo", &spec()).await.unwrap();
     cluster.lock().unwrap().fail_reads = true;
-    let view = labs
+    let error = labs
         .environment(&EnvironmentQuery::default())
         .await
-        .unwrap();
-    assert!(matches!(
-        view.labs.items[0].runtime.state,
-        ObservationState::Unavailable
-    ));
-    assert_eq!(view.labs.items[0].components.items.len(), 1);
-    assert!(
-        !serde_json::to_string(&view)
-            .unwrap()
-            .contains("PRIVATE-RUNTIME-DETAIL")
-    );
+        .unwrap_err();
+    assert_eq!(error.details.unwrap()["code"], "runtime_failure");
 }
 
 #[tokio::test]

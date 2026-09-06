@@ -97,6 +97,9 @@ pub struct Coverage {
 pub struct EnvironmentLab {
     pub id: String,
     pub handle: Option<LabHandle>,
+    /// A retained lab could not be decoded; empty sections are unavailable, not empty history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_error: Option<String>,
     pub revision_digest: Option<String>,
     pub journal_read_at_unix: i64,
     pub last_recorded_activity_at_unix: Option<i64>,
@@ -141,6 +144,8 @@ pub struct ComponentView {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConditionView {
+    #[serde(default)]
+    pub message: String,
     pub condition_type: ComponentConditionType,
     pub state: ComponentConditionState,
     pub reason: ComponentConditionReason,

@@ -1,6 +1,6 @@
 use crate::{
     client,
-    model::{archived, closed, health, lab_name, lab_phase, label, position},
+    model::{closed, health, lab_name, lab_phase, label, position},
 };
 use leptos::{prelude::*, task::spawn_local};
 use proofstorm_view::{ComponentView, EnvironmentLab, EnvironmentView, ObserverStatus};
@@ -26,7 +26,6 @@ pub fn App() -> impl IntoView {
     let history_pages = RwSignal::new(1_usize);
     let refresh = RwSignal::new(0_u64);
     let search = RwSignal::new(String::new());
-    let show_archived = RwSignal::new(false);
     let busy = Rc::new(Cell::new(false));
     let dirty = Rc::new(Cell::new(false));
     let refresher = move || refresh.update(|n| *n = n.wrapping_add(1));
@@ -120,10 +119,9 @@ pub fn App() -> impl IntoView {
                 <div class="sidebar-heading"><span class="eyebrow">"WORKSPACE"</span><strong>{move || environment.get().map_or_else(|| "Connecting…".into(), |v| v.workspace_id)}</strong></div>
                 <div class="section-label"><span>"LABS"</span><span>{move || environment.get().map_or(0, |v| v.labs.items.len())}</span></div>
                 <input class="search" aria-label="Find a lab" placeholder="Find a lab…" on:input=move |ev| search.set(event_target_value(&ev)) />
-                <label class="archive-toggle"><input type="checkbox" on:change=move |ev| show_archived.set(event_target_checked(&ev)) />"Include closed / missing"</label>
                 <nav class="lab-list" aria-label="Labs">{move || {
                     let query = search.get().to_lowercase();
-                    environment.get().map(|v| v.labs.items.into_iter().filter(|lab| (show_archived.get() || !archived(lab) || selected.get() == lab.id) && lab_name(lab).to_lowercase().contains(&query)).map(|lab| {
+                    environment.get().map(|v| v.labs.items.into_iter().filter(|lab| lab_name(lab).to_lowercase().contains(&query)).map(|lab| {
                         let id = lab.id.clone(); let active_id = id.clone();
                         let name = lab_name(&lab); let status = lab_phase(&lab);
                         view! { <button class=move || if selected.get() == active_id { "lab-item selected" } else { "lab-item" } on:click=move |_| { selected.set(id.clone()); detail.set(None); component.set(String::new()); history_pages.set(1); }><span class="lab-icon">"⬡"</span><span><strong>{name}</strong><small>{status}</small></span><span class="chevron">"›"</span></button> }
@@ -173,11 +171,17 @@ fn LabPanel(
     let links = lab.links.items.len();
     let lab_for_detail = lab.clone();
     let graph_lab = lab.clone();
+    if lab.read_error.is_some() {
+        return view! {
+            <div class="page-heading"><div><div class="breadcrumb">"ENVIRONMENT / LAB"</div><h1>{name}<span class="phase-badge">"History unavailable"</span></h1><p class="instance-id">{lab.id.clone()}</p></div></div>
+            <div class="notice warning">"This lab's stored history uses an incompatible record format. Its topology, activity, and runtime status could not be loaded. The stored data has been preserved; other labs can still be viewed."</div>
+        }.into_any();
+    }
     view! {
         <div class="page-heading"><div><div class="breadcrumb">"ENVIRONMENT / LAB"</div><h1>{name}<span class="phase-badge">{phase}</span></h1><p class="instance-id">{lab.id.clone()}</p></div><div class="heading-note">"Updated "{time(lab.runtime.fetched_at_unix)}<small>"from your local cluster"</small></div></div>
         <Show when=move || state != "available" && !is_closed><div class="notice warning">"Runtime observation: "{warning_state.clone()}". Component readiness is unknown until a current observation is available."</div></Show>
         <div class="metrics"><div><span>"COMPONENTS"</span><strong>{count}</strong><small>{format!("{ready} ready")}</small></div><div><span>"CONNECTIONS"</span><strong>{links}</strong><small>"declared topology"</small></div><div><span>"SESSIONS"</span><strong>{format!("{}{}",lab.sessions.items.len(),if lab.sessions.next_cursor.is_some(){"+"}else{""})}</strong><small>"activity tracking"</small></div><div><span>"OBSERVATION"</span><strong class="metric-text">{observation_state}</strong><small>"cluster status"</small></div></div>
-        <section class="topology-section"><div class="panel-title"><h2>"Lab topology"</h2><span>"Select a component to inspect"</span><div class="legend"><i class="ready"></i>"Ready"<i class="pending"></i>"Pending"<i class="unknown"></i>"Unknown"</div></div>
+        <section class="topology-section"><div class="panel-title"><h2>"Lab topology"</h2><span>"Select a component to inspect"</span><div class="legend"><i class="ready"></i>"Ready"<i class="pending"></i>"Pending"<i class="blocked"></i>"Blocked"<i class="unknown"></i>"Unknown"</div></div>
             <div class="topology-body"><Graph lab=graph_lab selected=selected_component zoom pan /><aside class="inspector">{move || {
                 lab_for_detail.components.items.iter().find(|c| c.id == selected_component.get()).cloned().map_or_else(|| view! { <div class="inspector-empty"><span>"⌖"</span><h3>"Explore your lab"</h3><p>"Choose a node to see its endpoints, health and resource requests."</p><small>"Connections describe configuration. They do not represent observed traffic."</small></div> }.into_any(), |c| view! { <ComponentPanel component=c lab=lab_for_detail.clone() /> }.into_any())
             }}</aside></div>
@@ -187,7 +191,7 @@ fn LabPanel(
             {lab.activity.items.is_empty().then(|| view! { <p class="quiet-empty">"Agent actions will appear here. Receipts are collected automatically."</p> })}
         </div></section><section class="history-panel"><div class="panel-title"><h2>"Sessions"</h2><span>"Informational"</span></div><div class="session-list">{lab.sessions.items.iter().map(|s| view! { <div class="session-row"><span class="avatar">"A"</span><div><strong>{s.session.principal_id.clone()}</strong><small>{format!("{} · {} overlaps",label(&s.session.phase),s.overlapping_session_count)}</small><code>{s.session.id.clone()}</code></div></div> }).collect_view()}{lab.sessions.items.is_empty().then(|| view! { <p class="quiet-empty">"No sessions recorded for this lab."</p> })}</div><p class="session-note">"Sessions track activity. They never lock or reserve the lab."</p></section></div>
         {(lab.activity.next_cursor.is_some() || lab.sessions.next_cursor.is_some()).then(|| view! { <button class="load-more" on:click=move |_| history_pages.update(|pages| *pages += 1)>"Load more history"</button> })}
-    }
+    }.into_any()
 }
 
 #[component]
@@ -249,7 +253,7 @@ fn ComponentPanel(component: ComponentView, lab: EnvironmentLab) -> impl IntoVie
     view! { <div class="component-panel"><span class="eyebrow">{label(&component.kind)}</span><h3>{component.id.clone()}</h3><p>{component.implementation.clone()}" · "{health(&component)}</p>
         <h4>"Connections"</h4>{component.endpoints.is_empty().then(|| view!{<p>"No service endpoints."</p>})}
         {component.endpoints.into_iter().map(|e| view!{<div class="endpoint"><strong>{e.name}</strong><code>{format!("{}:{}",e.cluster_host,e.port)}</code><small>{format!("{} · {}",e.transport,if e.local_connection_supported {"local connection available"} else {"cluster access"})}</small></div>}).collect_view()}
-        <h4>"Conditions"</h4>{component.conditions.is_empty().then(|| view!{<p>"No conditions observed yet."</p>})}{component.conditions.into_iter().map(|c|view!{<div class="condition"><strong>{label(&c.condition_type)}" · "{label(&c.state)}</strong><small>{label(&c.reason)}</small></div>}).collect_view()}
+        <h4>"Conditions"</h4>{component.conditions.is_empty().then(|| view!{<p>"No conditions observed yet."</p>})}{component.conditions.into_iter().map(|c|view!{<div class="condition"><strong>{label(&c.condition_type)}" · "{label(&c.state)}</strong><small>{label(&c.reason)}</small><p>{c.message}</p></div>}).collect_view()}
         <h4>"Desired resources"</h4>{lab.resource_error.map(|_|view!{<p>"Resource demands unavailable."</p>})}
         {lab.resources.map(|r|view!{<div>{r.workloads.into_iter().filter(|w|w.component.as_deref()==Some(&id)).map(|w|view!{<div class="demand"><strong>{w.name}" × "{w.replicas}</strong>{w.containers.into_iter().map(|c|view!{<small>{c.name}{format!(" · requests {} · limits {}",quantities(&c.requests),quantities(&c.limits))}</small>}).collect_view()}</div>}).collect_view()}{r.storage.into_iter().filter(|s|s.component.as_deref()==Some(&id)).map(|s|view!{<div class="demand"><strong>"Storage · "{s.name}</strong><small>{quantities(&s.requests)}</small></div>}).collect_view()}</div>})}
         {connection.map(|command| view! {<small class="inspector-note">"Connect from your machine:"</small><code class="connect-command">{command}</code>})}

@@ -21,7 +21,9 @@ pub fn closed(lab: &EnvironmentLab) -> bool {
         .is_some_and(|h| h.phase == proofstorm_view::LabHandlePhase::Closed)
 }
 pub fn lab_phase(lab: &EnvironmentLab) -> String {
-    if closed(lab) {
+    if lab.read_error.is_some() {
+        "history unavailable".into()
+    } else if closed(lab) {
         "closed".into()
     } else {
         lab.runtime
@@ -30,16 +32,15 @@ pub fn lab_phase(lab: &EnvironmentLab) -> String {
             .map_or_else(|| label(&lab.runtime.state), label)
     }
 }
-pub fn archived(lab: &EnvironmentLab) -> bool {
-    lab.handle
-        .as_ref()
-        .is_some_and(|h| h.phase == proofstorm_view::LabHandlePhase::Closed)
-        || matches!(
-            lab.runtime.state,
-            proofstorm_view::ObservationState::Missing
-        )
-}
 pub fn health(component: &ComponentView) -> &'static str {
+    if component.ready == Some(false)
+        && component
+            .conditions
+            .iter()
+            .any(|c| c.reason.blocks_startup())
+    {
+        return "blocked";
+    }
     match component.ready {
         Some(true) => "ready",
         Some(false) => "pending",

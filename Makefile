@@ -19,6 +19,7 @@ CONTROL_NAMESPACE := proofstorm-system
 REGISTRY := localhost:5111
 IMAGE := $(REGISTRY)/proofstormd:$(PROOFSTORM_VERSION)
 CHART := $(ROOT)charts/proofstorm
+PORT ?= 8787
 
 # Pinned tools win over anything already on PATH.
 export PATH := $(BIN_DIR):$(PATH)
@@ -39,17 +40,19 @@ EXPECTED_FAIL_GATES := nutshell-oidc
 # Development checkpoints needing an image provisioned in the local registry.
 LOCAL_IMAGE_GATES := private-handoff private-transfer cdk-wallet cdk-wallet-fees reliable-exec cocod-wallet cocod-projection
 
-.PHONY: help build web web-tools web-dev test lint tools cluster-up docker-build docker-push install \
+.PHONY: help build serve web web-tools web-dev test lint tools images images-build cluster-up docker-build docker-push install \
 	deploy setup doctor cluster-schema e2e build-installer down clean-tools \
 	$(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES) $(LOCAL_IMAGE_GATES))
 
 help:
 	@echo "Proofstorm targets:"
-	@echo "  make setup            tools, cluster, image, CRDs, controller, binaries, doctor"
-	@echo "  make doctor           verify pinned tools, cluster, controller, and MCP discovery"
+	@echo "  make setup            tools, cluster, catalog images, CRDs, controller, binaries, doctor"
+	@echo "  make doctor           verify tools, cluster, controller, MCP discovery, and catalog image pulls"
+	@echo "  make images           restore exact catalog images into the local registry"
 	@echo "  make down             delete the local cluster and its registry"
 	@echo ""
 	@echo "  make build            build the web app, developer CLI, MCP server, and gate runner"
+	@echo "  make serve            build, initialize, and start the website (PORT=8787; ARGS for global CLI options)"
 	@echo "  make web              compile the Rust/Wasm web app"
 	@echo "  make web-dev          hot-reload UI (run proofstorm serve separately)"
 	@echo "  make test             hermetic workspace tests; needs no cluster"
@@ -73,6 +76,10 @@ help:
 build: web
 	cargo build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance
 	cargo build --locked --release -p proofstorm-app -p proofstorm-mcp
+
+serve: web
+	cargo run --locked -p proofstorm-app -- init $(ARGS)
+	cargo run --locked -p proofstorm-app -- serve --port $(PORT) $(ARGS)
 
 test:
 	cargo test --workspace --all-targets
@@ -174,11 +181,18 @@ deploy: install cluster-schema
 	$(HELM) upgrade --install proofstorm $(CHART) \
 		--kube-context $(CONTEXT) \
 		--namespace $(CONTROL_NAMESPACE) --create-namespace --skip-crds \
+		--set image.tag=$(PROOFSTORM_VERSION) \
 		--rollback-on-failure --wait
 	$(KUBECTL) rollout restart deployment/proofstormd -n $(CONTROL_NAMESPACE)
 	$(KUBECTL) rollout status deployment/proofstormd -n $(CONTROL_NAMESPACE) --timeout=90s
 
-setup: cluster-up docker-push deploy build doctor
+images-build:
+	cargo build --locked -p proofstorm-acceptance
+
+images: cluster-up images-build
+	$(ACCEPTANCE) images
+
+setup: cluster-up images docker-push deploy build doctor
 
 doctor: tools build
 	@docker info >/dev/null
@@ -189,7 +203,8 @@ doctor: tools build
 	@$(KUBECTL) wait --for=condition=Available deployment/proofstormd \
 		-n $(CONTROL_NAMESPACE) --timeout=90s
 	@$(ACCEPTANCE) doctor
-	@echo "proofstorm doctor passed: pinned tools, cluster, controller, and MCP discovery are healthy"
+	@$(ACCEPTANCE) images-check
+	@echo "proofstorm doctor passed: tools, cluster, controller, MCP discovery, and catalog image pulls are healthy"
 
 down: tools
 	@$(K3D) cluster get proofstorm >/dev/null 2>&1 && $(K3D) cluster delete proofstorm || true

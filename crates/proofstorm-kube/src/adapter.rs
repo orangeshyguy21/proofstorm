@@ -744,6 +744,9 @@ fn workload_observation(
                 return stale_workload();
             }
             let status = workload.status.as_ref();
+            if let Some(failure) = pod_startup_failure(plan, resources.pods) {
+                return failure;
+            }
             workload_replica_observation(
                 workload.metadata.generation,
                 status.and_then(|status| status.observed_generation),
@@ -773,6 +776,9 @@ fn workload_observation(
                 return stale_workload();
             }
             let status = workload.status.as_ref();
+            if let Some(failure) = pod_startup_failure(plan, resources.pods) {
+                return failure;
+            }
             workload_replica_observation(
                 workload.metadata.generation,
                 status.and_then(|status| status.observed_generation),
@@ -781,6 +787,111 @@ fn workload_observation(
             )
         }
     }
+}
+
+fn pod_startup_failure(
+    plan: &ComponentPlanContract,
+    pods: &[Pod],
+) -> Option<(
+    ComponentConditionState,
+    ComponentConditionReason,
+    &'static str,
+)> {
+    use ComponentConditionReason as Reason;
+    for pod in pods.iter().filter(|pod| {
+        pod.metadata.deletion_timestamp.is_none()
+            && pod
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(COMPONENT_LABEL))
+                == Some(&plan.component_id)
+            && pod
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(INSTANCE_LABEL))
+                == Some(&plan.instance_key)
+            && pod
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(ROLLOUT_DIGEST_ANNOTATION))
+                == Some(&plan.rollout_digest)
+    }) {
+        let Some(status) = &pod.status else {
+            continue;
+        };
+        if status.conditions.as_ref().is_some_and(|conditions| {
+            conditions.iter().any(|c| {
+                c.type_ == "PodScheduled"
+                    && c.status == "False"
+                    && c.reason.as_deref() == Some("Unschedulable")
+            })
+        }) {
+            return Some((
+                ComponentConditionState::False,
+                Reason::PodUnschedulable,
+                "Pod cannot be scheduled. Check cluster capacity, volume binding, and placement constraints.",
+            ));
+        }
+        for container in status
+            .init_container_statuses
+            .iter()
+            .flatten()
+            .chain(status.container_statuses.iter().flatten())
+        {
+            let Some(state) = &container.state else {
+                continue;
+            };
+            let failure = match state
+                .waiting
+                .as_ref()
+                .and_then(|waiting| waiting.reason.as_deref())
+            {
+                Some("ErrImagePull") => Some((
+                    Reason::ImagePullFailed,
+                    "Image pull failed. Operator: run make images and make doctor; verify image availability and registry access.",
+                )),
+                Some("ImagePullBackOff") => Some((
+                    Reason::ImagePullBackoff,
+                    "Image pull is failing and backing off, not building. Operator: run make images and make doctor; verify registry access.",
+                )),
+                Some("InvalidImageName") => Some((
+                    Reason::InvalidImageName,
+                    "Invalid container image reference. Correct the image in the component catalog and republish the lab.",
+                )),
+                Some("CreateContainerConfigError") => Some((
+                    Reason::ContainerConfigError,
+                    "Container configuration is invalid or a required Secret/ConfigMap is missing. Operator must repair the configuration.",
+                )),
+                Some("CrashLoopBackOff") => Some((
+                    Reason::ContainerCrashLoop,
+                    "Container repeatedly crashes. Inspect component logs and configuration before retrying.",
+                )),
+                Some("CreateContainerError" | "RunContainerError" | "StartError") => Some((
+                    Reason::ContainerStartError,
+                    "Container could not start. Operator: inspect the Pod events and runtime configuration.",
+                )),
+                _ => None,
+            };
+            if let Some((reason, message)) = failure {
+                return Some((ComponentConditionState::False, reason, message));
+            }
+            if state
+                .terminated
+                .as_ref()
+                .is_some_and(|terminated| terminated.exit_code != 0)
+            {
+                return Some((
+                    ComponentConditionState::False,
+                    Reason::ContainerExited,
+                    "Container exited unsuccessfully. Inspect component logs and configuration before retrying.",
+                ));
+            }
+        }
+    }
+    None
 }
 
 fn workload_identity_matches(
@@ -3574,6 +3685,74 @@ mod tests {
             .as_mut()
             .expect("endpoint conditions")
             .ready = Some(true);
+    }
+
+    #[test]
+    fn startup_failures_cover_init_containers_and_ignore_stale_pods() {
+        let mut fixture = chain_observation_fixture();
+        make_chain_fixture_ready(&mut fixture);
+        let plan = &fixture.plans[0];
+        for (waiting, expected) in [
+            ("ErrImagePull", ComponentConditionReason::ImagePullFailed),
+            (
+                "ImagePullBackOff",
+                ComponentConditionReason::ImagePullBackoff,
+            ),
+            (
+                "InvalidImageName",
+                ComponentConditionReason::InvalidImageName,
+            ),
+            (
+                "CreateContainerConfigError",
+                ComponentConditionReason::ContainerConfigError,
+            ),
+            (
+                "CrashLoopBackOff",
+                ComponentConditionReason::ContainerCrashLoop,
+            ),
+            (
+                "RunContainerError",
+                ComponentConditionReason::ContainerStartError,
+            ),
+        ] {
+            for init in [false, true] {
+                let mut pod: Pod = serde_json::from_value(json!({
+                    "metadata": {"labels": labels(&plan.instance_key, Some(&plan.component_id)), "annotations": rollout_annotations(plan)},
+                    "status": {if init {"initContainerStatuses"} else {"containerStatuses"}: [{
+                        "name":"component", "image":"PRIVATE-IMAGE", "imageID":"", "ready":false, "restartCount":0,
+                        "state":{"waiting":{"reason":waiting,"message":"SECRET raw registry response"}}
+                    }]}
+                })).unwrap();
+                let failure = pod_startup_failure(plan, std::slice::from_ref(&pod)).unwrap();
+                assert_eq!(failure.1, expected);
+                assert!(failure.1.blocks_startup());
+                assert!(failure.2.len() <= MAX_CONDITION_MESSAGE_BYTES);
+                assert!(!failure.2.contains("SECRET"));
+                let resources = ComponentObservationResources {
+                    deployments: &[],
+                    stateful_sets: std::slice::from_ref(&fixture.workload),
+                    persistent_volume_claims: &[],
+                    services: &[],
+                    endpoint_slices: &[],
+                    pods: std::slice::from_ref(&pod),
+                };
+                assert_eq!(workload_observation(plan, &resources).1, expected);
+                pod.metadata
+                    .annotations
+                    .as_mut()
+                    .unwrap()
+                    .insert(ROLLOUT_DIGEST_ANNOTATION.into(), "old-rollout".into());
+                assert!(pod_startup_failure(plan, &[pod]).is_none());
+            }
+        }
+        let pod: Pod = serde_json::from_value(json!({
+            "metadata": {"labels": labels(&plan.instance_key, Some(&plan.component_id)), "annotations": rollout_annotations(plan)},
+            "status": {"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"SECRET node detail"}]}
+        })).unwrap();
+        assert_eq!(
+            pod_startup_failure(plan, &[pod]).unwrap().1,
+            ComponentConditionReason::PodUnschedulable
+        );
     }
 
     fn protocol_prober_pod(

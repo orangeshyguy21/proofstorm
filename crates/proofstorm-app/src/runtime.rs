@@ -21,6 +21,31 @@ pub struct Runtime {
     pub control_namespace: String,
 }
 impl Runtime {
+    /// Current cluster inventory; a failed list must never look like an empty cluster.
+    pub(crate) async fn current_instance_ids(
+        &self,
+        workspace: &str,
+    ) -> Result<std::collections::BTreeSet<String>, Error> {
+        let api = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
+        let resources = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            api.list(&kube::api::ListParams::default()),
+        )
+        .await
+        .map_err(|_| {
+            Error::failure(
+                "cluster inventory timed out",
+                Some(serde_json::json!({"code":"runtime_failure"})),
+            )
+        })??;
+        Ok(resources
+            .items
+            .into_iter()
+            .filter(|lab| lab.spec.workspace_id == workspace)
+            .map(|lab| lab.spec.instance_id)
+            .collect())
+    }
+
     #[must_use]
     pub fn new(client: Client, control_namespace: String) -> Self {
         Self {

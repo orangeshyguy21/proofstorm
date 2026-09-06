@@ -26,7 +26,14 @@ impl Labs {
                 .authorize(&self.workspace, &self.principal, cap)?;
         }
         let started = now();
+        let live = self.runtime.current_instance_ids(&self.workspace).await?;
         let (entries, next_cursor) = if let Some(id) = &query.instance_id {
+            if !live.contains(id) {
+                return Err(Error::missing(
+                    "lab is not present in the current cluster",
+                    Some(serde_json::json!({"code":"lab_not_in_cluster"})),
+                ));
+            }
             (
                 vec![
                     self.store
@@ -35,16 +42,41 @@ impl Labs {
                 None,
             )
         } else {
-            self.store.environment_entries(
-                &self.workspace,
-                &self.principal,
-                &query.cursor,
-                query.limit,
-            )?
+            let mut entries = Vec::new();
+            for id in live.iter().filter(|id| *id > &query.cursor) {
+                match self
+                    .store
+                    .environment_entry(&self.workspace, &self.principal, id)
+                {
+                    Ok(entry) => entries.push(entry),
+                    Err(StoreError::NotFound { .. }) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+                if entries.len() > query.limit as usize {
+                    break;
+                }
+            }
+            let next = (entries.len() > query.limit as usize)
+                .then(|| entries[query.limit as usize - 1].id.clone());
+            entries.truncate(query.limit as usize);
+            (entries, next)
         };
-        // Bounded concurrency and per-lab timeouts keep an unavailable cluster from hiding history.
+        // Decode only records belonging to labs still present in the selected cluster.
         let labs = stream::iter(entries)
-            .map(|entry| self.environment_lab(entry, query))
+            .map(|entry| async {
+                let id = entry.id.clone();
+                let handle = entry.handle.clone();
+                match self.environment_lab(entry, query).await {
+                    Err(error)
+                        if error.details.as_ref().is_some_and(|details| {
+                            details["code"] == "stored_record_incompatible"
+                        }) =>
+                    {
+                        Ok(unreadable_lab(id, handle))
+                    }
+                    result => result,
+                }
+            })
             .buffered(8)
             .collect::<Vec<_>>()
             .await
@@ -52,7 +84,7 @@ impl Labs {
             .collect::<Result<Vec<_>, _>>()?;
         let mut view = EnvironmentView {
             api_version:"proofstorm/environment/v1alpha1".into(),workspace_id:self.workspace.clone(),
-            scope:"instances retained in this database and workspace, including historical generations; runtime-only labs in other databases are outside this inventory".into(),
+            scope:"labs present in the selected cluster and tracked in this database and workspace; deleted and unmaterialized labs are excluded".into(),
             observation_started_at_unix:started,observation_finished_at_unix:now(),labs:Page {items:labs,next_cursor},
             coverage:Coverage {
                 topology:"declared links, not measured reachability or payment flows".into(),
@@ -140,6 +172,7 @@ impl Labs {
         Ok(EnvironmentLab {
             id: entry.id,
             handle: entry.handle,
+            read_error: None,
             revision_digest: revision.map(|r| r.digest),
             journal_read_at_unix: now(),
             last_recorded_activity_at_unix: last_activity,
@@ -264,6 +297,36 @@ impl Labs {
         (observation, Some(resource))
     }
 }
+fn unreadable_lab(id: String, handle: Option<proofstorm_store::LabHandle>) -> EnvironmentLab {
+    EnvironmentLab {
+        id,
+        handle,
+        read_error: Some("stored_record_incompatible".into()),
+        revision_digest: None,
+        journal_read_at_unix: now(),
+        last_recorded_activity_at_unix: None,
+        runtime: empty_runtime(ObservationState::Unavailable, None),
+        components: Page {
+            items: vec![],
+            next_cursor: None,
+        },
+        links: Page {
+            items: vec![],
+            next_cursor: None,
+        },
+        resources: None,
+        resource_error: None,
+        sessions: Page {
+            items: vec![],
+            next_cursor: None,
+        },
+        activity: Page {
+            items: vec![],
+            next_cursor: None,
+        },
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -360,6 +423,7 @@ fn topology(
                                 s.conditions
                                     .iter()
                                     .map(|c| ConditionView {
+                                        message: c.message.clone(),
                                         condition_type: c.condition_type,
                                         state: c.state,
                                         reason: c.reason,
