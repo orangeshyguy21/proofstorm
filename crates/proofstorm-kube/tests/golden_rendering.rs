@@ -1123,6 +1123,10 @@ fn every_registered_backend_matches_its_golden_contract() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the complete baseline is one golden rendering contract"
+)]
 fn full_baseline_lab_matches_its_golden_contract() {
     let spec = full_baseline_lab();
     let lock = resolve_lock(&spec, default_catalog()).expect("full baseline lock");
@@ -1156,6 +1160,7 @@ fn full_baseline_lab_matches_its_golden_contract() {
     let action = ProofstormLabAction::new(
         "golden-native-exec",
         ProofstormLabActionSpec {
+            lease_scope: None,
             lab_name: "golden-lab".into(),
             workspace_id: "workspace-golden".into(),
             instance_id: "instance-golden".into(),

@@ -79,6 +79,7 @@ fn enforces_bounded_explicit_output_contract() {
     );
     for mode in [OutputMode::Bolt11, OutputMode::LndInvoice] {
         let mut command = NativeCommand {
+            private_io: None,
             script: String::new(),
             argv: vec!["native".into()],
             timeout_seconds: 30,

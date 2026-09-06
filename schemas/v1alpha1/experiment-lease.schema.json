@@ -7,6 +7,35 @@
         "expired"
       ],
       "type": "string"
+    },
+    "PrivateTransferLeaseScope": {
+      "additionalProperties": false,
+      "description": "A recipient may inspect and consume one private transfer in one wallet.\nThe parent remains the exclusive lab lease; this scope grants no global capability.",
+      "properties": {
+        "component": {
+          "type": "string"
+        },
+        "mint": {
+          "type": "string"
+        },
+        "parent_lease_id": {
+          "type": "string"
+        },
+        "receive_command_digest": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "receive_command_digest",
+        "parent_lease_id",
+        "component",
+        "mint",
+        "reference"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -15,6 +44,16 @@
     "acquired_at_unix": {
       "format": "int64",
       "type": "integer"
+    },
+    "delegation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PrivateTransferLeaseScope"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "experiment_id": {
       "type": "string"

@@ -30,14 +30,14 @@ PLATFORM_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 PLATFORM_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 
 # Every gate the acceptance runner knows, in the plan's port order.
-GATES := slice2 slice4 slice5 native-exec cross-lab-scheduler \
+GATES := private-transfer slice2 slice4 slice5 native-exec cross-lab-scheduler \
 	cross-implementation-wallet nutshell-mint nutshell-cln nutshell-postgres \
 	cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres \
 	failed-melt quote-composition
 # Excluded from `make e2e`: fails on a known upstream Nutshell defect.
 EXPECTED_FAIL_GATES := nutshell-oidc
 # Development checkpoints needing an image provisioned in the local registry.
-LOCAL_IMAGE_GATES := cdk-wallet cdk-wallet-fees reliable-exec cocod-wallet cocod-projection
+LOCAL_IMAGE_GATES := private-handoff private-transfer cdk-wallet cdk-wallet-fees reliable-exec cocod-wallet cocod-projection
 
 .PHONY: help build test lint tools cluster-up docker-build docker-push install \
 	deploy setup doctor cluster-schema e2e build-installer down clean-tools \

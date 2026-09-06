@@ -1,18 +1,23 @@
 # CDK CLI and cocod wallet expansion
 
-Status updated 2026-09-05: CDK phase 1 and its deterministic hardening baseline
+Status updated 2026-09-06: CDK phase 1 and its deterministic hardening baseline
 passed. Cocod phase 2 also passed its deterministic money/lifecycle checkpoint;
 focused agent checkpoints verified restart/unlock and funding/payment behavior,
 while overall privacy/reporting gates remain failed. The initial
 [cocod fuzzer handoff](cocod-wallet-fuzzer-handoff.md) retains its original scope.
 See [cocod execution hardening](cocod-execution-hardening-2026-09-05.md) and the
 [CDK hardening results and agent-usability limits](cdk-wallet-hardening-2026-09-05.md).
-The funded CDK agent benchmark has not passed all gates together. Private ecash
-exchange and mixed-wallet laboratories remain subsequent phases.
+The funded CDK agent benchmark has not passed all gates together. Private ecash exchange now has passing deterministic mixed-wallet evidence and a technically successful single-principal Kimi K2.5 run; that run still failed report proficiency.
 [Structured invoice relay](structured-invoice-relay.md) is implemented for native
 cocod invoice text and LND invoice JSON; its deterministic money/restart gate
 passed. It deliberately exposes small validated Lightning invoices and does not
 implement the private bearer-note exchange below.
+The [private ecash transport foundation](private-ecash-transfer-protocol.md) now
+implements durable custody and execution fences and is connected to controller,
+native runner and MCP under the exclusive lab lease. The native capability audit
+defines its wallet bindings; deterministic mixed-wallet validation is tracked in
+the [private transport checkpoint report](private-ecash-runtime-checkpoint.md).
+[Cross-principal recipient handoff](private-ecash-cross-principal-handoff.md) passed its [deterministic live gate](private-ecash-cross-principal-checkpoint-20260906.md); separate-agent dispatch is the next checkpoint.
 The focused agent relay execution was valid and its target held; report
 accounting still failed review, with an independent correction retained.
 Reviewed 2026-09-04 against Proofstorm commit

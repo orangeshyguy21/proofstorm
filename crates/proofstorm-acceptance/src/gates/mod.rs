@@ -18,6 +18,8 @@ pub mod nutshell_cln;
 pub mod nutshell_mint;
 pub mod nutshell_oidc;
 pub mod nutshell_postgres;
+pub mod private_handoff;
+pub mod private_transfer;
 pub mod quote_composition;
 pub mod reliable_exec;
 pub mod slice2;
@@ -30,6 +32,8 @@ pub const NAMES: &[&str] = &[
     "cdk-cln",
     "cdk-wallet",
     "cocod-wallet",
+    "private-transfer",
+    "private-handoff",
     "cocod-projection",
     "cdk-wallet-fees",
     "slice4",
@@ -57,6 +61,8 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "nutshell-mint" => nutshell_mint::run(context),
         "cdk-cln" => cdk_cln::run(context),
         "cdk-wallet" => cdk_wallet::run(context),
+        "private-transfer" => cocod_wallet::run_transfer(context),
+        "private-handoff" => cocod_wallet::run_handoff(context),
         "cocod-wallet" => cocod_wallet::run(context),
         "cocod-projection" => cocod_wallet::run_projection(context),
         "cdk-wallet-fees" => cdk_wallet::run_with_fee(context, 100),

@@ -3,6 +3,8 @@
     reason = "all public store operations return the documented StoreError contract"
 )]
 
+mod delegation;
+
 use std::{
     collections::BTreeSet,
     path::Path,
@@ -251,7 +253,8 @@ impl Store {
         clippy::too_many_lines,
         reason = "the complete SQLite schema is intentionally visible as one atomic initialization contract"
     )]
-    fn from_connection(connection: Connection) -> Result<Self, StoreError> {
+    fn from_connection(mut connection: Connection) -> Result<Self, StoreError> {
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
@@ -339,9 +342,6 @@ impl Store {
                FOREIGN KEY (workspace_id, experiment_id) REFERENCES experiments(workspace_id, id),
                FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id)
              );
-             CREATE UNIQUE INDEX IF NOT EXISTS one_active_lease_per_instance
-               ON experiment_leases(workspace_id, instance_id)
-               WHERE phase_json = '\"active\"';
              CREATE TABLE IF NOT EXISTS actions (
                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
                id TEXT NOT NULL,
@@ -435,6 +435,7 @@ impl Store {
                PRIMARY KEY (workspace_id, principal_id, key)
              );",
         )?;
+        delegation::migrate(&mut connection)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -1088,7 +1089,7 @@ impl Store {
         let active = transaction
             .query_row(
                 "SELECT id FROM experiment_leases
-                 WHERE workspace_id = ?1 AND instance_id = ?2 AND phase_json = '\"active\"' LIMIT 1",
+                 WHERE workspace_id = ?1 AND instance_id = ?2 AND phase_json = '\"active\"' AND delegation_json IS NULL LIMIT 1",
                 params![workspace, id],
                 |row| row.get::<_, String>(0),
             )
@@ -1314,6 +1315,7 @@ impl Store {
         let acquired_at = now_unix();
         let expires_at = acquired_at + i64::from(duration_seconds);
         let lease = ExperimentLease {
+            delegation: None,
             id: lease_id.to_owned(),
             workspace_id: workspace.to_owned(),
             experiment_id: experiment_id.to_owned(),
@@ -1379,7 +1381,7 @@ impl Store {
         lease_id: &str,
         idempotency_key: &str,
     ) -> Result<ExperimentLease, StoreError> {
-        self.authorize(workspace, principal, Capability::LeaseRelease)?;
+        let lease = self.lease_for_release(workspace, principal, lease_id)?;
         let request = serde_json::json!({"leaseId": lease_id});
         if let Some(response) = self.idempotent_response(
             workspace,
@@ -1389,14 +1391,6 @@ impl Store {
             &request,
         )? {
             return Ok(response);
-        }
-        let lease = self.refresh_lease(workspace, lease_id)?;
-        if lease.principal_id != principal {
-            return Err(StoreError::LeaseOwnerMismatch {
-                lease: lease_id.to_owned(),
-                owner: lease.principal_id,
-                principal: principal.to_owned(),
-            });
         }
         if lease.phase == LeasePhase::Active {
             let now = now_unix();
@@ -1411,7 +1405,7 @@ impl Store {
                 ],
             )?;
         }
-        let lease = self.lease_unchecked(workspace, lease_id)?;
+        let lease = self.refresh_lease(workspace, lease_id)?;
         self.record_idempotency(
             workspace,
             principal,
@@ -1578,7 +1572,7 @@ impl Store {
         expire_leases(&transaction, workspace, accepted_at)?;
         let lease = transaction
             .query_row(
-                "SELECT experiment_id, instance_id, principal_id, phase_json, max_actions
+                "SELECT experiment_id, instance_id, principal_id, phase_json, max_actions, delegation_json
                  FROM experiment_leases WHERE workspace_id = ?1 AND id = ?2",
                 params![workspace, lease_id],
                 |row| {
@@ -1588,6 +1582,7 @@ impl Store {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, u32>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                     ))
                 },
             )
@@ -1611,6 +1606,30 @@ impl Store {
                 lease: lease_id.to_owned(),
                 owner: lease.2,
                 principal: principal.to_owned(),
+            });
+        }
+        let lease_scope: Option<proofstorm_core::PrivateTransferLeaseScope> =
+            lease.5.as_deref().map(serde_json::from_str).transpose()?;
+        let (root_id, root_maximum) = if let Some(scope) = &lease_scope {
+            if !scope.permits(kind, request) {
+                return Err(StoreError::Validation("recipient lease does not authorize this operation or binding; no operation was created".into()));
+            }
+            let maximum: Option<u32> = transaction.query_row("SELECT max_actions FROM experiment_leases WHERE workspace_id=?1 AND id=?2
+                AND phase_json='\"active\"' AND delegation_json IS NULL AND instance_id=?3 AND experiment_id=?4",
+                params![workspace,scope.parent_lease_id,instance_id,experiment_id], |r| r.get(0)).optional()?;
+            (
+                scope.parent_lease_id.as_str(),
+                maximum.ok_or_else(|| StoreError::LeaseInactive {
+                    lease: scope.parent_lease_id.clone(),
+                })?,
+            )
+        } else {
+            (lease_id, lease.4)
+        };
+        if delegation::parent_action_count(&transaction, workspace, root_id)? >= root_maximum {
+            return Err(StoreError::ActionBudgetExceeded {
+                lease: root_id.into(),
+                maximum: root_maximum,
             });
         }
         let last_sequence = transaction.query_row(
@@ -2393,7 +2412,7 @@ impl Store {
         self.lock()?
             .query_row(
                 "SELECT experiment_id, instance_id, principal_id, phase_json, acquired_at,
-                        expires_at, max_actions, released_at
+                        expires_at, max_actions, released_at, delegation_json
                  FROM experiment_leases WHERE workspace_id = ?1 AND id = ?2",
                 params![workspace, id],
                 |row| {
@@ -2406,6 +2425,7 @@ impl Store {
                         row.get::<_, i64>(5)?,
                         row.get::<_, u32>(6)?,
                         row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -2420,8 +2440,10 @@ impl Store {
                     expires_at_unix,
                     max_actions,
                     released_at_unix,
+                    delegation,
                 )| {
                     Ok::<ExperimentLease, StoreError>(ExperimentLease {
+                        delegation: delegation.map(|s| serde_json::from_str(&s)).transpose()?,
                         id: id.to_owned(),
                         workspace_id: workspace.to_owned(),
                         experiment_id,
@@ -2447,12 +2469,11 @@ impl Store {
         workspace: &str,
         lease_id: &str,
     ) -> Result<ExperimentLease, StoreError> {
-        let now = now_unix();
-        self.lock()?.execute(
-            "UPDATE experiment_leases SET phase_json = ?1
-             WHERE workspace_id = ?2 AND id = ?3 AND phase_json = '\"active\"' AND expires_at <= ?4",
-            params![serde_json::to_string(&LeasePhase::Expired)?, workspace, lease_id, now],
-        )?;
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        expire_leases(&tx, workspace, now_unix())?;
+        tx.commit()?;
+        drop(connection);
         self.lease_unchecked(workspace, lease_id)
     }
 
@@ -2542,6 +2563,12 @@ fn expire_leases(
          WHERE workspace_id = ?2 AND phase_json = '\"active\"' AND expires_at <= ?3",
         params![serde_json::to_string(&LeasePhase::Expired)?, workspace, now],
     )?;
+    transaction.execute("UPDATE experiment_leases AS child SET phase_json=COALESCE(
+        (SELECT parent.phase_json FROM experiment_leases parent WHERE parent.workspace_id=child.workspace_id
+        AND parent.id=json_extract(child.delegation_json,'$.parent_lease_id')), '\"expired\"')
+        WHERE child.workspace_id=?1 AND child.phase_json='\"active\"' AND child.delegation_json IS NOT NULL
+        AND NOT EXISTS(SELECT 1 FROM experiment_leases parent WHERE parent.workspace_id=child.workspace_id
+        AND parent.id=json_extract(child.delegation_json,'$.parent_lease_id') AND parent.phase_json='\"active\"')", [workspace])?;
     Ok(())
 }
 

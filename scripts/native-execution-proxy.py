@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark-only MCP admission gate. Cleanup is latched and survives reconnects."""
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -22,6 +23,55 @@ proofstorm_candidate_cancel proofstorm_candidate_read proofstorm_candidate_list
 proofstorm_candidate_wait'''.split())
 WAIT_TOOLS = frozenset('''proofstorm_lab_wait
 proofstorm_operation_wait proofstorm_operation_wait_many proofstorm_candidate_wait'''.split())
+
+CDK_PREFIX = ('cdk-cli', '--work-dir', '/wallet/cdk', '--unit', 'sat', '--non-interactive')
+SAFE_PUBLIC_ARGV = frozenset([
+    ('cocod', '--help'), ('cocod', '--version'), ('cocod', 'help'),
+    ('cocod', 'send', '--help'), ('cocod', 'send', 'cashu', '--help'),
+    ('cocod', 'receive', 'cashu', '--help'),
+    ('cdk-cli', '--help'), ('cdk-cli', '--version'), ('cdk-cli', 'help'),
+    CDK_PREFIX + ('--help',), CDK_PREFIX + ('--version',),
+    CDK_PREFIX + ('send', '--help'), CDK_PREFIX + ('receive', '--help'),
+    CDK_PREFIX + ('check-pending', '--help'),
+])
+
+
+def public_output_allowed(message):
+    params = message.get('params', {})
+    if message.get('method') != 'tools/call' or not isinstance(params, dict) or params.get('name') != 'proofstorm_component_exec_live':
+        return True
+    args = params.get('arguments', {})
+    if not isinstance(args, dict) or not isinstance(args.get('output'), dict) or args['output'].get('mode') != 'public':
+        return True  # The MCP validates malformed requests; private native execution stays generic.
+    argv = args.get('argv')
+    return (not args.get('script') and isinstance(argv, list)
+            and all(isinstance(x, str) for x in argv) and tuple(argv) in SAFE_PUBLIC_ARGV)
+
+
+def argument_snapshot(message, boundary):
+    """Fixed custody metadata only; no native commands or arbitrary string values."""
+    params = message.get('params', {})
+    if message.get('method') != 'tools/call' or not isinstance(params, dict) or params.get('name') != 'proofstorm_private_transfer':
+        return None
+    args = params.get('arguments', {})
+    if not isinstance(args, dict):
+        return None
+    transfer = args.get('transfer', {})
+    transfer = transfer if isinstance(transfer, dict) else {}
+    fields = {}
+    for key in ['transferMethod', 'component', 'destinationComponent', 'maximumBytes', 'reference']:
+        value = transfer.get(key)
+        allowed = (value in ['prepare', 'status', 'deliver', 'release'] if key == 'transferMethod'
+                   else value in ['wallet-a', 'wallet-b'] if key in ['component', 'destinationComponent']
+                   else type(value) is int and 0 <= value <= 1048576 if key == 'maximumBytes'
+                   else isinstance(value, str) and value.startswith('payload-') and len(value) == 72
+                   and all(c in '0123456789abcdef' for c in value[8:]))
+        fields[key] = ({'state': 'missing'} if key not in transfer else {'state': 'null'} if value is None
+                       else {'state': 'allowed', 'value': value} if allowed else {'state': 'withheld'})
+    identity = args.get('operation_id')
+    return {'boundary': boundary, 'at_unix': time.time(),
+            'operation_id_sha256': hashlib.sha256(identity.encode()).hexdigest() if isinstance(identity, str) else None,
+            'fields': fields}
 
 
 def read_usage(events):
@@ -54,7 +104,7 @@ def token_limit_reason(usage, max_context_tokens=0, max_processed_tokens=0):
 
 class CleanupGate:
     def __init__(self, events, state, started_at, max_seconds, max_steps,
-                 max_context_tokens=0, max_processed_tokens=0):
+                 max_context_tokens=0, max_processed_tokens=0, stage_budget=None):
         self.events = Path(events)
         self.state = Path(state)
         self.started_at = started_at
@@ -63,6 +113,7 @@ class CleanupGate:
         self.max_seconds = max_seconds
         self.max_context_tokens = max_context_tokens
         self.max_processed_tokens = max_processed_tokens
+        self.stage_budget = Path(stage_budget) if stage_budget else None
 
     def cleanup(self, now=None):
         if self.state.exists():
@@ -93,12 +144,22 @@ class CleanupGate:
         if not self.cleanup():
             return True
         params = message.get('params')
-        return isinstance(params, dict) and params.get('name') in CLEANUP_TOOLS
+        if not isinstance(params, dict):
+            return False
+        if params.get('name') in CLEANUP_TOOLS:
+            return True
+        # Custody retirement is cleanup. Keep authorization in MCP and admit
+        # only these methods; delivery, handoff and reservation remain work.
+        if params.get('name') == 'proofstorm_private_transfer':
+            args = params.get('arguments')
+            transfer = args.get('transfer') if isinstance(args, dict) else None
+            return isinstance(transfer, dict) and transfer.get('transferMethod') in ('status', 'release')
+        return False
 
     def budget(self, now=None):
         now = time.time() if now is None else now
         cleanup = self.cleanup(now)
-        return {'phase': 'cleanup' if cleanup else 'work',
+        result = {'phase': 'cleanup' if cleanup else 'work',
                 'observed_usage': read_usage(self.events),
                 'max_context_tokens': self.max_context_tokens or None,
                 'max_processed_tokens': self.max_processed_tokens or None,
@@ -110,6 +171,12 @@ class CleanupGate:
                 'instruction': ('Cancel owned operations, release lease, close experiment, export evidence, '
                                 'close and verify lab absence, then report now.' if cleanup else
                                 'Finish experimental work before cleanup; reserve time for teardown and report.')}
+        if self.stage_budget:
+            stage = json.loads(self.stage_budget.read_text())
+            result['stage'] = stage
+            result['seconds_to_stage_stop'] = max(0, round(stage['stop_at_unix'] - now, 3))
+            result['report_margin_seconds'] = 30
+        return result
 
     def bound_wait(self, message):
         if not isinstance(message, dict) or message.get('method') != 'tools/call':
@@ -136,11 +203,26 @@ class CleanupGate:
             remaining = (min(10, budget['seconds_to_hard_stop']) if budget['phase'] == 'cleanup'
                          else budget['seconds_to_cleanup'])
             bound = max(1, math.ceil(remaining))
+        if 'seconds_to_stage_stop' in budget:
+            bound = min(bound, max(1, math.floor(budget['seconds_to_stage_stop'] - 30)))
         arguments['timeout_seconds'] = min(requested, bound)
         return message
 
     def decorate(self, reply):
-        budget = self.budget()
+        try:
+            budget = self.budget()
+        except (OSError, ValueError, TypeError, KeyError):
+            budget = {'phase': 'cleanup', 'budget_unavailable': True,
+                      'instruction': 'Budget unavailable: stop work and prioritize cleanup.'}
+        if isinstance(reply.get('error'), dict):
+            data = reply['error'].setdefault('data', {})
+            if isinstance(data, dict):
+                data['_benchmark_budget'] = budget
+            # Some clients surface only error.message, discarding data. Keep the
+            # same refusal diagnostic while making both deadlines visible there.
+            if self.stage_budget:
+                reply['error']['message'] = str(reply['error'].get('message', '')) + (
+                    ' [Benchmark budget: ' + json.dumps(budget) + ']')
         result = reply.get('result')
         if isinstance(result, dict):
             # Preserve the tool document so ordinary MCP clients and the
@@ -169,6 +251,9 @@ def main():
     parser.add_argument('--max-steps', type=int, required=True)
     parser.add_argument('--max-context-tokens', type=int, default=0)
     parser.add_argument('--max-processed-tokens', type=int, default=0)
+    parser.add_argument('--argument-audit')
+    parser.add_argument('--public-help-only', action='store_true')
+    parser.add_argument('--stage-budget')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
@@ -176,12 +261,21 @@ def main():
             or args.max_context_tokens < 0 or args.max_processed_tokens < 0):
         parser.error('positive limits and an MCP command are required')
     gate = CleanupGate(args.events, args.state, args.started_at, args.max_seconds, args.max_steps,
-                       args.max_context_tokens, args.max_processed_tokens)
+                       args.max_context_tokens, args.max_processed_tokens, args.stage_budget)
     child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              start_new_session=True, text=True, bufsize=1)
     lock = threading.Lock()
     pending_lock = threading.Lock()
     pending_tools = set()
+
+    def audit(message, boundary):
+        if not args.argument_audit:
+            return
+        record = argument_snapshot(message, boundary)
+        if record is not None:
+            fd = os.open(args.argument_audit, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, 'w') as stream:
+                stream.write(json.dumps(record) + '\n')
 
     def emit(line):
         with lock:
@@ -215,15 +309,29 @@ def main():
                 message = json.loads(line)
             except ValueError:
                 continue
+            audit(message, 'mcp_proxy_received')
+            if args.public_help_only and not public_output_allowed(message):
+                identity = message.get('params', {}).get('arguments', {}).get('operation_id')
+                if args.argument_audit:
+                    fd = os.open(args.argument_audit, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+                    with os.fdopen(fd, 'w') as stream:
+                        stream.write(json.dumps({'boundary': 'public_output_refused', 'at_unix': time.time(),
+                            'operation_id_sha256': hashlib.sha256(identity.encode()).hexdigest() if isinstance(identity, str) else None,
+                            'code': 'public_output_help_only'}) + '\n')
+                if 'id' in message:
+                    emit(json.dumps(gate.decorate({'jsonrpc': '2.0', 'id': message['id'], 'error': {
+                        'code': -32600, 'message': 'This scenario permits public output only for exact safe help/version argv. Use private output with no fields for native reconciliation; no command was forwarded.',
+                        'data': {'code': 'public_output_help_only'}}})) + '\n')
+                continue
             try:
                 allowed = gate.allows(message)
             except (OSError, TypeError):
                 allowed = False  # An unreadable budget must not reopen mutation authority.
             if not allowed:
                 if 'id' in message:
-                    emit(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'error': {
+                    emit(json.dumps(gate.decorate({'jsonrpc': '2.0', 'id': message['id'], 'error': {
                         'code': -32600, 'message': 'Cleanup phase: cancel or wait for owned operations, release the lease, close the experiment, export evidence, close the lab, then report. New experimental work is refused.',
-                        'data': {'code': 'cleanup_phase_only'}}}) + '\n')
+                        'data': {'code': 'cleanup_phase_only'}}})) + '\n')
                 continue
             if message.get('method') == 'tools/call':
                 message = gate.bound_wait(message)
@@ -233,6 +341,7 @@ def main():
                 line = json.dumps(message) + '\n'
             child.stdin.write(line)
             child.stdin.flush()
+            audit(message, 'mcp_proxy_forwarded')
         child.stdin.close()
         child.wait(timeout=5)
         worker.join(timeout=1)

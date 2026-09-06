@@ -1820,6 +1820,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "proofstorm-transfer"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "getrandom 0.3.4",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "proofstormd"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -1829,6 +1842,7 @@ dependencies = [
  "kube",
  "proofstorm-core",
  "proofstorm-kube",
+ "proofstorm-transfer",
  "serde",
  "serde_json",
  "sha2",

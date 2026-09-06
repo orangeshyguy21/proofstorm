@@ -87,6 +87,8 @@ pub struct NativeOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeCommand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_io: Option<crate::private_io::PrivateIo>,
     #[serde(default)]
     pub script: String,
     #[serde(default)]
@@ -123,6 +125,9 @@ impl NativeCommand {
     /// # Errors
     /// Returns a static diagnostic for an invalid execution contract.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if let Some(binding) = &self.private_io {
+            binding.validate(self)?;
+        }
         if self.script.is_empty() == self.argv.is_empty() {
             return Err("provide exactly one of script or argv");
         }
@@ -286,6 +291,7 @@ mod tests {
             .map(|field| (*field).to_owned())
             .collect::<Vec<_>>();
         let command = NativeCommand {
+            private_io: None,
             script: String::new(),
             argv: vec!["cocod".into(), "status".into()],
             timeout_seconds: 30,

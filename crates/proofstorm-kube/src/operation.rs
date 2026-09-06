@@ -620,6 +620,7 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
         LabAction::ComponentForensics(request) => {
             vec![(&request.component, Operation::NativeExec)]
         }
+        LabAction::PrivateTransfer(_) => vec![],
         LabAction::ComponentExecLive(request) => {
             vec![(&request.component, Operation::NativeExec)]
         }
@@ -669,7 +670,9 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         | LabAction::AuthenticationProtectedSpend(_)
         | LabAction::AuthenticationReplay(_) => "authentication",
         // Never rendered as a Job; the controller reads the log itself.
-        LabAction::ComponentLogs(_) | LabAction::ComponentExecLive(_) => "",
+        LabAction::ComponentLogs(_)
+        | LabAction::ComponentExecLive(_)
+        | LabAction::PrivateTransfer(_) => "",
     }
 }
 
@@ -690,6 +693,7 @@ pub fn render_lab_action_job(
         | LabAction::NodeRestart(_)
         | LabAction::ComponentRestart(_)
         | LabAction::ComponentExecLive(_)
+        | LabAction::PrivateTransfer(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_) => {
             return Err(ActionRenderError::Bounds(
@@ -3601,6 +3605,7 @@ mod tests {
         let action = ProofstormLabAction::new(
             "action-123",
             crate::ProofstormLabActionSpec {
+                lease_scope: None,
                 lab_name: "lab-resource".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),

@@ -129,3 +129,159 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         .expect("lab create must be refused");
     expect::equals(&refused, "/message", &Value::from("tool not found")).expect("refusal message");
 }
+
+#[test]
+fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let database = directory.path().join("proofstorm.sqlite3");
+    let mut client = McpClient::spawn(
+        binary(),
+        "private-transfer-contract",
+        &[
+            ("PROOFSTORM_DB", database.as_os_str()),
+            ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
+            ("PROOFSTORM_PRINCIPAL", "agent".as_ref()),
+            (
+                "PROOFSTORM_CAPABILITIES",
+                "component.exec_live,artifact.read".as_ref(),
+            ),
+            ("PROOFSTORM_TOOLSET", "experiment".as_ref()),
+        ],
+    )
+    .expect("spawn configured MCP without Kubernetes");
+    let listed = client.request("tools/list", json!({})).unwrap();
+    let tool = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "proofstorm_private_transfer")
+        .unwrap();
+    assert_private_transfer_schema(tool);
+    let request = |transfer| {
+        json!({"instance_id":"unmaterialized", "experiment_id":"test",
+        "lease_id":"test", "operation_id":"must-not-exist", "idempotency_key":"test", "transfer":transfer})
+    };
+    for (transfer, field) in invalid_private_transfer_requests() {
+        let response = client
+            .call_response("proofstorm_private_transfer", request(transfer))
+            .unwrap();
+        // rmcp returns parameter decoding failures as a textual tool error.
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains(field),
+            "{response}"
+        );
+    }
+    for size in [0, 1_048_577] {
+        let error = client.call_error("proofstorm_private_transfer", request(json!({
+            "transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":size
+        }))).unwrap();
+        assert!(
+            error["message"].as_str().unwrap().contains("maximumBytes"),
+            "{error}"
+        );
+    }
+    // A complete synthetic request passes decoding and static validation, then
+    // reaches the expected missing-instance boundary without a live cluster.
+    let error = client.call_error("proofstorm_private_transfer", request(json!({
+        "transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536
+    }))).unwrap();
+    assert_eq!(error["data"]["code"], "not_found", "{error}");
+    let store = proofstorm_store::Store::open(&database).unwrap();
+    assert!(matches!(
+        store.operation("alpha", "agent", "must-not-exist"),
+        Err(proofstorm_store::StoreError::NotFound {
+            resource: "operation",
+            ..
+        })
+    ));
+}
+
+fn assert_private_transfer_schema(tool: &Value) {
+    let schema = &tool["inputSchema"];
+    let reference = schema["properties"]["transfer"]["$ref"].as_str().unwrap();
+    let transfer = schema
+        .pointer(reference.strip_prefix('#').unwrap())
+        .unwrap();
+    let branches = transfer["oneOf"]
+        .as_array()
+        .expect("method-specific schema");
+    assert_eq!(branches.len(), 5);
+    for branch in branches {
+        let method = branch["properties"]["transferMethod"]["const"]
+            .as_str()
+            .unwrap();
+        let required = branch["required"].as_array().unwrap();
+        for field in if method == "prepare" {
+            vec![
+                "transferMethod",
+                "component",
+                "destinationComponent",
+                "maximumBytes",
+            ]
+        } else if method == "handoff" {
+            vec![
+                "transferMethod",
+                "component",
+                "reference",
+                "recipientLeaseId",
+            ]
+        } else {
+            vec!["transferMethod", "component", "reference"]
+        } {
+            assert!(
+                required.contains(&json!(field)),
+                "{method} must require {field}"
+            );
+        }
+        assert_eq!(branch["additionalProperties"], false);
+    }
+}
+
+fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
+    vec![
+        (
+            json!({"transferMethod":"prepare","component":"wallet-a"}),
+            "destinationComponent",
+        ),
+        (
+            json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b"}),
+            "maximumBytes",
+        ),
+        (
+            json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":null,"maximumBytes":65536}),
+            "string",
+        ),
+        (
+            json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":null}),
+            "u32",
+        ),
+        (
+            json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536,"reference":"wrong-method"}),
+            "reference",
+        ),
+        (
+            json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque"}),
+            "recipientLeaseId",
+        ),
+        (
+            json!({"transferMethod":"status","component":"wallet-a"}),
+            "reference",
+        ),
+        (
+            json!({"transferMethod":"deliver","component":"wallet-a"}),
+            "reference",
+        ),
+        (
+            json!({"transferMethod":"release","component":"wallet-a"}),
+            "reference",
+        ),
+        (
+            json!({"transferMethod":"deliver","component":"wallet-a","reference":"opaque","maximumBytes":1}),
+            "maximumBytes",
+        ),
+    ]
+}

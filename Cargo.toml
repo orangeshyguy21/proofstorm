@@ -6,6 +6,7 @@ members = [
     "crates/proofstorm-kube",
     "crates/proofstorm-mcp",
     "crates/proofstorm-store",
+    "crates/proofstorm-transfer",
     "crates/proofstormd",
 ]
 resolver = "2"

@@ -1,4 +1,5 @@
 """Run inside Linux with the static runner on PATH; never uses live funds."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,13 +23,15 @@ class SupervisorContract(unittest.TestCase):
             self.receipt(directory)
         shutil.rmtree(self.root)
 
-    def start(self, argv=None, script='', timeout=2, output=None):
+    def start(self, argv=None, script='', timeout=2, output=None, private_io=None, private_input=None):
         directory = self.root / str(len(self.handles))
         directory.mkdir(mode=0o700)
+        if private_input is not None:
+            subprocess.run([RUNNER,'input',str(directory),str(len(private_input)), hashlib.sha256(private_input).hexdigest()], input=private_input, capture_output=True,check=True,timeout=5)
         self.handles.append(directory)
         result = subprocess.run([RUNNER, 'start', str(directory)], input=json.dumps({
             'argv': argv or [], 'script': script, 'timeout_seconds':timeout,
-            'output': output or {'mode':'private'}}), text=True,capture_output=True,check=True,timeout=5)
+            'output': output or {'mode':'private'}, 'private_io': private_io}), text=True,capture_output=True,check=True,timeout=5)
         self.assertEqual(json.loads(result.stdout), {'started':True})
         return directory
 
@@ -41,6 +44,53 @@ class SupervisorContract(unittest.TestCase):
                 return data
             time.sleep(0.03)
         self.fail('supervisor failed to produce bounded cleanup receipt')
+
+    def test_large_private_source_manifest_and_stdin_consumption(self):
+        body=b'private-transfer-canary-'*24000
+        source=self.start(['python3','-c','import sys;sys.stdout.write("private-transfer-canary-"*24000)'],
+            private_io={'kind':'capture','maximum_bytes':600000,'format':'bytes'})
+        receipt=self.receipt(source)
+        self.assertEqual(receipt['payload_manifest'],{'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()})
+        self.assertEqual((receipt['stdout'],receipt['stderr']),('',''))
+        self.assertNotIn('private-transfer-canary',json.dumps(receipt))
+        self.assertEqual(subprocess.check_output([RUNNER,'payload',str(source)]),body)
+        consumer=self.start(['python3','-c','import sys;assert sys.stdin.buffer.read()==b"private-transfer-canary-"*24000'],
+            private_io={'kind':'consume','bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'input':{'kind':'stdin'}},private_input=body)
+        self.assertEqual(self.receipt(consumer)['exit_code'],0)
+        for directory in (source,consumer):
+            subprocess.run([RUNNER,'retire',str(directory)],check=True,capture_output=True)
+            self.assertFalse((directory/'input').exists())
+            self.assertFalse((directory/'payload').exists())
+            self.assertFalse((directory/'stdout').exists())
+
+    def test_private_argv_binding_and_capture_failures(self):
+        body=b'cashuBprivate_test_token'
+        directory=self.start(['python3','-c','import sys;assert sys.argv[1]=="cashuBprivate_test_token"','@proofstorm-private-input'],
+            private_io={'kind':'consume','bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'input':{'kind':'argv','index':3}},private_input=body)
+        receipt=self.receipt(directory)
+        self.assertEqual(receipt['exit_code'],0)
+        self.assertNotIn(body.decode(),json.dumps(receipt))
+        for code, maximum in [('print("cashuBfirst\\ncashuBsecond")',100),('print("cashuB"+"x"*100)',10),('import sys;print("cashuBabcdef");sys.exit(3)',100)]:
+            directory=self.start(['python3','-c',code],private_io={'kind':'capture','maximum_bytes':maximum,'format':'cashu_token'})
+            receipt=self.receipt(directory)
+            self.assertNotIn('payload_manifest',receipt)
+            self.assertIn('payload_error',receipt)
+            self.assertFalse((directory/'payload').exists())
+
+    def test_private_helper_rejects_tampered_payload_and_duplicate_input(self):
+        directory=self.start(['printf','cashuBabcdef'],private_io={'kind':'capture','maximum_bytes':100,'format':'cashu_token'})
+        self.receipt(directory)
+        (directory/'payload').write_bytes(b'cashuBtampered')
+        result=subprocess.run([RUNNER,'payload',str(directory)],capture_output=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(result.stdout,b'')
+        self.assertNotIn(b'tampered',result.stderr)
+        target=self.root/'input-target'
+        target.mkdir(mode=0o700)
+        args=[RUNNER,'input',str(target),'3',hashlib.sha256(b'abc').hexdigest()]
+        subprocess.run(args,input=b'abc',check=True,capture_output=True)
+        self.assertNotEqual(subprocess.run(args,input=b'abc',capture_output=True).returncode,0)
+        self.assertEqual((target/'input').read_bytes(),b'abc')
 
     def test_private_capture_and_allowlisted_projection(self):
         canary = 'private-preimage-canary'

@@ -1075,6 +1075,9 @@ pub struct ComponentExecRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentExecLiveRequest {
+    /// Opaque custody reference; token bytes never belong in this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_payload: Option<proofstorm_core::private_io::PayloadBinding>,
     pub instance_id: String,
     pub experiment_id: String,
     pub lease_id: String,
@@ -1096,6 +1099,178 @@ pub struct ComponentExecLiveRequest {
     #[serde(default)]
     pub output: proofstorm_core::native::NativeOutput,
     pub timeout_seconds: u32,
+    pub idempotency_key: String,
+}
+
+// Method-specific public input. Keep the flat Kubernetes action an internal wire type.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "transferMethod", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrivateTransferInput {
+    Prepare {
+        component: String,
+        #[serde(rename = "destinationComponent")]
+        destination_component: String,
+        /// Reserve before export: 1..=1048576 bytes; CDK recipients allow at most 65536.
+        #[serde(rename = "maximumBytes")]
+        #[schemars(range(min = 1, max = 1_048_576))]
+        maximum_bytes: u32,
+    },
+    Handoff {
+        component: String,
+        reference: String,
+        #[serde(rename = "recipientLeaseId")]
+        recipient_lease_id: String,
+    },
+    Status {
+        component: String,
+        reference: String,
+    },
+    Deliver {
+        component: String,
+        reference: String,
+    },
+    Release {
+        component: String,
+        reference: String,
+    },
+}
+
+impl PrivateTransferInput {
+    fn action(&self) -> Result<proofstorm_kube::PrivateTransferAction, ErrorData> {
+        use proofstorm_core::private_io::MAX_PRIVATE_BYTES;
+        use proofstorm_kube::{PrivateTransferAction, TransferMethod};
+        let recipient_lease_id = if let Self::Handoff {
+            recipient_lease_id, ..
+        } = self
+        {
+            if recipient_lease_id.trim().is_empty() {
+                return Err(invalid_operation(
+                    "handoff.recipientLeaseId must be nonempty",
+                ));
+            }
+            Some(recipient_lease_id.clone())
+        } else {
+            None
+        };
+        let (method, component, destination, reference, maximum) = match self {
+            Self::Prepare {
+                component,
+                destination_component,
+                maximum_bytes,
+            } => {
+                if !(1..=MAX_PRIVATE_BYTES).contains(maximum_bytes) {
+                    return Err(invalid_operation(
+                        "prepare.maximumBytes must be between 1 and 1048576; no operation was created",
+                    ));
+                }
+                if component == destination_component {
+                    return Err(invalid_operation(
+                        "prepare.destinationComponent must differ from component; no operation was created",
+                    ));
+                }
+                (
+                    TransferMethod::Prepare,
+                    component,
+                    Some(destination_component.clone()),
+                    None,
+                    Some(*maximum_bytes),
+                )
+            }
+            Self::Handoff {
+                component,
+                reference,
+                ..
+            } => (
+                TransferMethod::Handoff,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+            Self::Status {
+                component,
+                reference,
+            } => (
+                TransferMethod::Status,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+            Self::Deliver {
+                component,
+                reference,
+            } => (
+                TransferMethod::Deliver,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+            Self::Release {
+                component,
+                reference,
+            } => (
+                TransferMethod::Release,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+        };
+        if component.trim().is_empty()
+            || destination.as_ref().is_some_and(|id| id.trim().is_empty())
+            || reference.as_ref().is_some_and(|id| id.trim().is_empty())
+        {
+            return Err(invalid_operation(
+                "private transfer component, destinationComponent and reference must be nonempty when required; no operation was created",
+            ));
+        }
+        Ok(PrivateTransferAction {
+            recipient_lease_id,
+            transfer_method: method,
+            component: component.clone(),
+            destination_component: destination,
+            reference,
+            maximum_bytes: maximum,
+        })
+    }
+}
+
+fn validate_private_transfer_endpoints(
+    transfer: &proofstorm_kube::PrivateTransferAction,
+    revision: &PublishedRevision,
+) -> Result<(), ErrorData> {
+    for id in std::iter::once(&transfer.component).chain(transfer.destination_component.iter()) {
+        component_image_any(revision, id, ComponentKind::Wallet)?;
+    }
+    if let Some(destination) = &transfer.destination_component {
+        let is_cdk = revision
+            .lab
+            .components
+            .iter()
+            .any(|c| &c.id == destination && c.implementation == "cdk-cli-wallet");
+        if is_cdk
+            && transfer
+                .maximum_bytes
+                .is_some_and(|maximum| maximum > proofstorm_core::private_io::MAX_PRIVATE_ARG_BYTES)
+        {
+            return Err(invalid_operation(
+                "prepare.maximumBytes must be at most 65536 for a CDK CLI recipient's native argv input; no operation was created",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateTransferRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub transfer: PrivateTransferInput,
     pub idempotency_key: String,
 }
 
@@ -1599,6 +1774,23 @@ pub struct AcquireLeaseRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct DelegatePrivateTransferLeaseRequest {
+    pub receive: proofstorm_core::PrivateReceiveCommand,
+    pub parent_lease_id: String,
+    pub recipient_principal_id: String,
+    pub recipient_lease_id: String,
+    pub component: String,
+    pub mint: String,
+    pub reference: String,
+    #[schemars(range(min = 1, max = 900))]
+    pub duration_seconds: u32,
+    #[schemars(range(min = 1, max = 32))]
+    pub max_actions: u32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LeaseRequest {
     pub lease_id: String,
 }
@@ -1996,11 +2188,13 @@ fn experiment_tool(tool: &str) -> bool {
             | "proofstorm_experiment_read"
             | "proofstorm_experiment_close"
             | "proofstorm_lease_acquire"
+            | "proofstorm_lease_delegate"
             | "proofstorm_lease_read"
             | "proofstorm_lease_release"
             | "proofstorm_node_restart"
             | "proofstorm_component_restart"
             | "proofstorm_component_exec_live"
+            | "proofstorm_private_transfer"
             | "proofstorm_component_forensics"
             | "proofstorm_component_logs"
             | "proofstorm_liquidity_bootstrap"
@@ -3429,7 +3623,8 @@ impl ProofstormMcp {
                 ),
             ));
         }
-        self.store
+        let lease = self
+            .store
             .acquire_lease(
                 &self.workspace,
                 &self.principal,
@@ -3439,8 +3634,41 @@ impl ProofstormMcp {
                 request.max_actions,
                 &request.idempotency_key,
             )
-            .map(Json)
-            .map_err(store_error)
+            .map_err(store_error)?;
+        self.runtime()?.private_lease(&lease, false).await?;
+        Ok(Json(lease))
+    }
+
+    #[tool(
+        description = "Delegate recipient access to an existing different principal under your exclusive parent lab lease. Scope permits only the source-approved receive command/input/timeout for one reference, its status/delivery, and passive balance for one wallet/mint. Requires a subsequent source private_transfer handoff to bind custody. No global capabilities are granted; the child shares the parent action budget and cannot outlive it. Release the child lease to revoke new admission; accepted native work may finish."
+    )]
+    async fn proofstorm_lease_delegate(
+        &self,
+        Parameters(request): Parameters<DelegatePrivateTransferLeaseRequest>,
+    ) -> Result<Json<ExperimentLease>, ErrorData> {
+        request.receive.validate().map_err(invalid_operation)?;
+        let scope = proofstorm_core::PrivateTransferLeaseScope {
+            receive_command_digest: request.receive.digest(),
+            parent_lease_id: request.parent_lease_id,
+            component: request.component,
+            mint: request.mint,
+            reference: request.reference,
+        };
+        let lease = self
+            .store
+            .delegate_private_transfer_lease(
+                &self.workspace,
+                &self.principal,
+                &request.recipient_principal_id,
+                &request.recipient_lease_id,
+                &scope,
+                request.duration_seconds,
+                request.max_actions,
+                &request.idempotency_key,
+            )
+            .map_err(store_error)?;
+        self.runtime()?.private_lease(&lease, false).await?;
+        Ok(Json(lease))
     }
 
     #[tool(description = "Read an experiment lease and refresh its expiry state")]
@@ -3456,13 +3684,18 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Release an experiment lease owned by the current principal. At finalization, first wait for submitted operations, then call lease_release, experiment_close, and artifact_export in that order"
+        description = "Release a lease owned by the current principal or a recipient lease delegated by their root lease. At finalization, first wait for submitted operations, then call lease_release, experiment_close, and artifact_export in that order"
     )]
-    fn proofstorm_lease_release(
+    async fn proofstorm_lease_release(
         &self,
         Parameters(request): Parameters<ReleaseLeaseRequest>,
     ) -> Result<Json<ExperimentLease>, ErrorData> {
         self.authorize(Capability::LeaseRelease)?;
+        let lease = self
+            .store
+            .lease_for_release(&self.workspace, &self.principal, &request.lease_id)
+            .map_err(store_error)?;
+        self.runtime()?.private_lease(&lease, true).await?;
         self.store
             .release_lease(
                 &self.workspace,
@@ -3859,6 +4092,55 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        description = "Reserve, inspect, deliver or release private byte custody between wallets under the current exclusive lab lease. prepare requires component, destinationComponent and maximumBytes; status/deliver/release require component and reference; handoff also requires recipientLeaseId from lease_delegate, and binds a completed capture before delivery. Invalid input creates no operation. Returns an operation whose artifact contains metadata and an opaque reference. Use component_exec_live.private_payload for native export/import. Delivery and native exit do not establish redemption."
+    )]
+    async fn proofstorm_private_transfer(
+        &self,
+        Parameters(request): Parameters<PrivateTransferRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ComponentExecLive)?;
+        let transfer = request.transfer.action()?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ComponentExecLive,
+            )
+            .map_err(store_error)?;
+        validate_private_transfer_endpoints(&transfer, &revision)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::PrivateTransfer,
+            &request,
+            &request.idempotency_key,
+            Capability::ComponentExecLive,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let mut action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::PrivateTransfer(transfer),
+        );
+        action.spec.lease_scope = self
+            .store
+            .operation_lease_scope(&operation)
+            .map_err(store_error)?;
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
         description = "Run argv (command exit) or script (shell exit) in the live component. Wait/cancel the operation ID. Check exit_code/exit_signal, timed_out, cancelled, cleanup_verified and projection_succeeded separately from phase. Cancellation does not undo mutations."
     )]
     async fn proofstorm_component_exec_live(
@@ -3867,6 +4149,7 @@ impl ProofstormMcp {
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize(Capability::ComponentExecLive)?;
         proofstorm_core::native::NativeCommand {
+            private_io: None,
             script: request.script.clone(),
             argv: request.argv.clone(),
             timeout_seconds: request.timeout_seconds,
@@ -3903,11 +4186,12 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        let action = runtime_action_resource(
+        let mut action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
             LabAction::ComponentExecLive(ComponentExecLiveAction {
+                private_payload: request.private_payload,
                 component: request.component,
                 script: request.script,
                 argv: request.argv,
@@ -3915,6 +4199,10 @@ impl ProofstormMcp {
                 output: request.output,
             }),
         );
+        action.spec.lease_scope = self
+            .store
+            .operation_lease_scope(&operation)
+            .map_err(store_error)?;
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4801,7 +5089,7 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        let action = runtime_action_resource(
+        let mut action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
@@ -4810,6 +5098,10 @@ impl ProofstormMcp {
                 mint: request.mint.clone(),
             }),
         );
+        action.spec.lease_scope = self
+            .store
+            .operation_lease_scope(&operation)
+            .map_err(store_error)?;
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -7390,6 +7682,10 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             &[Capability::ExperimentClose],
         ),
         ("proofstorm_lease_acquire", &[Capability::LeaseAcquire]),
+        (
+            "proofstorm_lease_delegate",
+            &[Capability::LeaseAcquire, Capability::ComponentExecLive],
+        ),
         ("proofstorm_lease_read", &[Capability::ExperimentRead]),
         ("proofstorm_lease_release", &[Capability::LeaseRelease]),
     ]
@@ -7407,6 +7703,10 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         (
             "proofstorm_component_restart",
             &[Capability::ComponentControl],
+        ),
+        (
+            "proofstorm_private_transfer",
+            &[Capability::ComponentExecLive],
         ),
         (
             "proofstorm_component_exec_live",
@@ -8085,6 +8385,7 @@ fn runtime_action_resource(
     let mut resource = ProofstormLabAction::new(
         &operation.resource_name,
         ProofstormLabActionSpec {
+            lease_scope: None,
             lab_name: instance.resource_name.clone(),
             workspace_id: operation.workspace_id.clone(),
             instance_id: operation.instance_id.clone(),
@@ -9281,6 +9582,152 @@ fn unix_now() -> i64 {
 }
 
 impl KubernetesRuntime {
+    async fn private_lease(&self, lease: &ExperimentLease, release: bool) -> Result<(), ErrorData> {
+        use proofstorm_core::private_io::{
+            PRIVATE_DELEGATIONS_ANNOTATION, PRIVATE_LEASE_ANNOTATION,
+        };
+        if lease.delegation.is_some() {
+            return self.private_recipient_lease(lease, release).await;
+        }
+        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
+        let matches = labs
+            .list(&kube::api::ListParams::default())
+            .await
+            .map_err(kube_error)?
+            .items
+            .into_iter()
+            .filter(|lab| {
+                lab.spec.workspace_id == lease.workspace_id
+                    && lab.spec.instance_id == lease.instance_id
+            })
+            .collect::<Vec<_>>();
+        let [lab] = matches.as_slice() else {
+            return Err(invalid_operation("lease lab unavailable"));
+        };
+        let current = lab
+            .annotations()
+            .get(PRIVATE_LEASE_ANNOTATION)
+            .map(|text| serde_json::from_str::<ExperimentLease>(text))
+            .transpose()
+            .map_err(|_| invalid_operation("runtime lease invalid"))?;
+        if let Some(current) = current {
+            let same = current.id == lease.id
+                && current.principal_id == lease.principal_id
+                && current.experiment_id == lease.experiment_id
+                && current.workspace_id == lease.workspace_id;
+            if release && !same {
+                return Ok(());
+            }
+            if !release && !same && current.expires_at_unix > unix_now() {
+                return Err(invalid_operation("another runtime lab lease is active"));
+            }
+            if !release && current == *lease {
+                return Ok(());
+            }
+        } else if release {
+            return Ok(());
+        }
+        let value = if release {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(
+                serde_json::to_string(lease)
+                    .map_err(|_| invalid_operation("lease serialization failed"))?
+            )
+        };
+        // A root change/release atomically removes admission for its recipients.
+        labs.patch(&lab.name_any(),&PatchParams::default(),&Patch::Merge(serde_json::json!({"metadata":{"resourceVersion":lab.resource_version(),"annotations":{PRIVATE_LEASE_ANNOTATION:value,PRIVATE_DELEGATIONS_ANNOTATION:serde_json::Value::Null}}}))).await.map_err(kube_error)?;
+        Ok(())
+    }
+
+    async fn private_recipient_lease(
+        &self,
+        lease: &ExperimentLease,
+        release: bool,
+    ) -> Result<(), ErrorData> {
+        use proofstorm_core::private_io::{
+            PRIVATE_DELEGATIONS_ANNOTATION, PRIVATE_LEASE_ANNOTATION,
+        };
+        let scope = lease
+            .delegation
+            .as_ref()
+            .ok_or_else(|| invalid_operation("recipient scope missing"))?;
+        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
+        let matches = labs
+            .list(&kube::api::ListParams::default())
+            .await
+            .map_err(kube_error)?
+            .items
+            .into_iter()
+            .filter(|lab| {
+                lab.spec.workspace_id == lease.workspace_id
+                    && lab.spec.instance_id == lease.instance_id
+            })
+            .collect::<Vec<_>>();
+        let [lab] = matches.as_slice() else {
+            return Err(invalid_operation("recipient lease lab unavailable"));
+        };
+        let mut children: BTreeMap<String, ExperimentLease> = lab
+            .annotations()
+            .get(PRIVATE_DELEGATIONS_ANNOTATION)
+            .map(|s| serde_json::from_str(s))
+            .transpose()
+            .map_err(|_| invalid_operation("runtime recipient leases invalid"))?
+            .unwrap_or_default();
+        if children.len() > 32 {
+            return Err(invalid_operation("runtime recipient lease limit exceeded"));
+        }
+        if release {
+            let Some(current) = children.get(&lease.id) else {
+                return Ok(());
+            };
+            if current.principal_id != lease.principal_id || current.delegation != lease.delegation
+            {
+                return Err(invalid_operation("recipient lease identity conflict"));
+            }
+            children.remove(&lease.id);
+        } else {
+            let root: ExperimentLease = lab
+                .annotations()
+                .get(PRIVATE_LEASE_ANNOTATION)
+                .and_then(|s| serde_json::from_str(s).ok())
+                .ok_or_else(|| invalid_operation("active parent lease required"))?;
+            if root.id != scope.parent_lease_id
+                || root.delegation.is_some()
+                || root.phase != proofstorm_core::LeasePhase::Active
+                || root.expires_at_unix <= unix_now()
+                || root.workspace_id != lease.workspace_id
+                || root.instance_id != lease.instance_id
+                || root.experiment_id != lease.experiment_id
+                || root.principal_id == lease.principal_id
+                || lease.phase != proofstorm_core::LeasePhase::Active
+                || lease.expires_at_unix <= unix_now()
+                || lease.expires_at_unix > root.expires_at_unix
+            {
+                return Err(invalid_operation(
+                    "recipient lease exceeds its active parent authority",
+                ));
+            }
+            if let Some(current) = children.get(&lease.id) {
+                return if current == lease {
+                    Ok(())
+                } else {
+                    Err(invalid_operation("recipient lease identity conflict"))
+                };
+            }
+            if children.len() >= 32 {
+                return Err(invalid_operation("runtime recipient lease limit reached"));
+            }
+            children.insert(lease.id.clone(), lease.clone());
+        }
+        let value = serde_json::to_string(&children)
+            .map_err(|_| invalid_operation("recipient lease serialization failed"))?;
+        labs.patch(&lab.name_any(), &PatchParams::default(), &Patch::Merge(serde_json::json!({"metadata": {
+            "resourceVersion":lab.resource_version(), "annotations":{PRIVATE_DELEGATIONS_ANNOTATION:value}
+        }}))).await.map_err(kube_error)?;
+        Ok(())
+    }
+
     async fn apply_candidate_build(&self, candidate: &CandidateBuild) -> Result<(), ErrorData> {
         let builds = Api::<ProofstormCandidateBuild>::namespaced(
             self.client.clone(),
@@ -9712,6 +10159,112 @@ fn store_error(error: StoreError) -> ErrorData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_transfer_methods_preserve_the_controller_wire_contract() {
+        for input in [
+            serde_json::json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536}),
+            serde_json::json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque-ref","recipientLeaseId":"child"}),
+            serde_json::json!({"transferMethod":"status","component":"wallet-a","reference":"opaque-ref"}),
+            serde_json::json!({"transferMethod":"deliver","component":"wallet-a","reference":"opaque-ref"}),
+            serde_json::json!({"transferMethod":"release","component":"wallet-a","reference":"opaque-ref"}),
+        ] {
+            let old: proofstorm_kube::PrivateTransferAction =
+                serde_json::from_value(input.clone()).unwrap();
+            let public: PrivateTransferInput = serde_json::from_value(input.clone()).unwrap();
+            assert_eq!(public.action().unwrap(), old);
+            assert_eq!(serde_json::to_value(public).unwrap(), input);
+        }
+    }
+
+    #[test]
+    fn private_transfer_preflight_enforces_native_input_limits_and_endpoints() {
+        let prepare = |size, destination: &str| PrivateTransferInput::Prepare {
+            component: "wallet-a".into(),
+            destination_component: destination.into(),
+            maximum_bytes: size,
+        };
+        for size in [0, 1_048_577, u32::MAX] {
+            assert!(
+                prepare(size, "wallet-b")
+                    .action()
+                    .unwrap_err()
+                    .message
+                    .contains("maximumBytes")
+            );
+        }
+        assert!(
+            prepare(65536, "wallet-a")
+                .action()
+                .unwrap_err()
+                .message
+                .contains("must differ")
+        );
+        assert!(prepare(65536, " ").action().is_err());
+        let recipient = |implementation: &str| {
+            let mut revision = component_reference_revision();
+            let entry = default_catalog()
+                .entries
+                .iter()
+                .find(|e| e.id == implementation)
+                .unwrap();
+            let component = revision
+                .lab
+                .components
+                .iter_mut()
+                .find(|c| c.id == "wallet-b")
+                .unwrap();
+            component.implementation = entry.id.clone();
+            component.version = Some(entry.version.clone());
+            component.config_version = entry.config_version.clone();
+            component.control = entry.allowed_control[0];
+            revision.lock =
+                proofstorm_core::resolve_lock(&revision.lab, default_catalog()).unwrap();
+            revision
+        };
+        let revision = recipient("cdk-cli-wallet");
+        for size in [1, 65536] {
+            validate_private_transfer_endpoints(
+                &prepare(size, "wallet-b").action().unwrap(),
+                &revision,
+            )
+            .unwrap();
+        }
+        for size in [65537, 1_048_576] {
+            let error = validate_private_transfer_endpoints(
+                &prepare(size, "wallet-b").action().unwrap(),
+                &revision,
+            )
+            .unwrap_err();
+            assert!(
+                error.message.contains("65536")
+                    && error.message.contains("no operation was created")
+            );
+        }
+        for destination in ["missing", "chain"] {
+            assert!(
+                validate_private_transfer_endpoints(
+                    &prepare(1, destination).action().unwrap(),
+                    &revision
+                )
+                .is_err()
+            );
+        }
+        let revision = recipient("cocod-wallet");
+        validate_private_transfer_endpoints(
+            &prepare(1_048_576, "wallet-b").action().unwrap(),
+            &revision,
+        )
+        .unwrap();
+        assert!(
+            PrivateTransferInput::Status {
+                component: "wallet-a".into(),
+                reference: String::new()
+            }
+            .action()
+            .is_err()
+        );
+    }
+
     #[test]
     fn experimental_wallet_requires_exact_selection_and_retains_source_identity() {
         let mut input = LabPlanComponentInput {
@@ -11476,7 +12029,7 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 80);
+        assert_eq!(service.tool_names().len(), 82);
         assert!(
             !service
                 .tool_names()
@@ -11513,16 +12066,16 @@ mod tests {
             "routing policy is a first-class typed runtime operation"
         );
         assert!(
-            encoded.len() < 248 * 1024,
+            encoded.len() < 256 * 1024,
             "fully authorized tool discovery is {} bytes",
             encoded.len()
         );
         for (toolset, maximum) in [
-            // Supervised argv/output options add one KiB to this profile.
-            (ProofstormToolset::Experiment, 146 * 1024),
-            (ProofstormToolset::Native, 120 * 1024),
+            // Custody, delegation, and approved-command metadata have bounded budgets.
+            (ProofstormToolset::Experiment, 160 * 1024),
+            (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 200 * 1024),
+            (ProofstormToolset::Runtime, 214 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);

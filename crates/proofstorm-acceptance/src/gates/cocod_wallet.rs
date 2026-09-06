@@ -8,7 +8,7 @@ const INSTANCE: &str = "cocod-wallet-instance";
 const EXPERIMENT: &str = "cocod-wallet-experiment";
 const LEASE: &str = "cocod-wallet-lease";
 
-fn relay_invoice(receipt: &Value, amount_sat: u64) -> Result<&str> {
+pub(super) fn relay_invoice(receipt: &Value, amount_sat: u64) -> Result<&str> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
@@ -72,7 +72,7 @@ fn save(directory: &Path, name: &str, value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn operation(
+pub(super) fn operation(
     client: &mut McpClient,
     directory: &Path,
     tool: &str,
@@ -95,7 +95,7 @@ fn operation(
     Ok(lab::artifact_content(&result)?.clone())
 }
 
-fn native(
+pub(super) fn native(
     client: &mut McpClient,
     directory: &Path,
     id: &str,
@@ -139,11 +139,11 @@ def session(expected):
  raise RuntimeError('native_session_deadline')
 ";
 
-fn python(code: &str) -> String {
+pub(super) fn python(code: &str) -> String {
     format!("python3 - <<'PY'\n{API}\n{code}\nPY")
 }
 
-fn private(
+pub(super) fn private(
     client: &mut McpClient,
     directory: &Path,
     id: &str,
@@ -174,7 +174,7 @@ fn private(
     Ok(receipt)
 }
 
-fn balance(
+pub(super) fn balance(
     client: &mut McpClient,
     directory: &Path,
     id: &str,
@@ -198,7 +198,7 @@ fn balance(
     Ok(())
 }
 
-fn restart(
+pub(super) fn restart(
     context: &GateContext,
     client: &mut McpClient,
     directory: &Path,
@@ -239,7 +239,12 @@ fn restart(
     )
 }
 
-fn start_session(client: &mut McpClient, directory: &Path, wallet: &str, id: &str) -> Result<()> {
+pub(super) fn start_session(
+    client: &mut McpClient,
+    directory: &Path,
+    wallet: &str,
+    id: &str,
+) -> Result<()> {
     private(
         client,
         directory,
@@ -589,14 +594,27 @@ fn check_projection(receipt: &Value, exit: i64, selected: &Value) -> Result<()> 
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    run_scoped(context, false)
+    run_scoped(context, false, false, false)
 }
 
 pub fn run_projection(context: &GateContext) -> Result<()> {
-    run_scoped(context, true)
+    run_scoped(context, true, false, false)
 }
 
-fn run_scoped(context: &GateContext, projection_only: bool) -> Result<()> {
+pub fn run_transfer(context: &GateContext) -> Result<()> {
+    run_scoped(context, false, true, false)
+}
+
+pub fn run_handoff(context: &GateContext) -> Result<()> {
+    run_scoped(context, false, true, true)
+}
+
+fn run_scoped(
+    context: &GateContext,
+    projection_only: bool,
+    transfer: bool,
+    handoff: bool,
+) -> Result<()> {
     let directory = context
         .root
         .join("dev/wallet-integration-runs")
@@ -610,6 +628,9 @@ fn run_scoped(context: &GateContext, projection_only: bool) -> Result<()> {
         &capabilities,
     )?;
     let mut document = document();
+    if transfer {
+        document["components"][5] = json!({"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}});
+    }
     if projection_only {
         document["components"]
             .as_array_mut()
@@ -635,6 +656,18 @@ fn run_scoped(context: &GateContext, projection_only: bool) -> Result<()> {
         save(&directory, "ready", &ready)?;
         client.call("proofstorm_experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call("proofstorm_lease_acquire",json!({"experiment_id":EXPERIMENT,"lease_id":LEASE,"duration_seconds":1200,"max_actions":64,"idempotency_key":"lease"}))?;
+        if transfer {
+            super::private_transfer::exercise(
+                context,
+                &mut client,
+                &directory,
+                expect::string(&ready, "/instance_namespace")?,
+            )?;
+            if handoff {
+                super::private_handoff::exercise(context, &mut client, &directory)?;
+            }
+            return Ok(());
+        }
         if projection_only {
             return projection_checkpoint(&mut client, &directory);
         }

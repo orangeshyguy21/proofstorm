@@ -818,6 +818,7 @@
         "reachability_oracle",
         "component_forensics",
         "component_exec_live",
+        "private_transfer",
         "component_logs",
         "authentication_conformance",
         "authentication_protected_spend",

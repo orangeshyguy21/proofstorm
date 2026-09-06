@@ -11,14 +11,15 @@ use proofstorm_core::native::{NativeCommand, cap_public_streams};
 use proofstorm_kube::NativeExecutionRef;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn exec(
+async fn exec_bounded(
     pods: &Api<Pod>,
     pod: &str,
     container: &str,
     args: Vec<String>,
     input: Option<&[u8]>,
+    maximum: usize,
 ) -> Result<Vec<u8>, Error> {
     let run = async {
         let attach = AttachParams::default()
@@ -52,7 +53,16 @@ async fn exec(
         };
         let (uploaded, out, err, status) = tokio::join!(
             upload,
-            read_bounded_output(stdout),
+            async {
+                let mut out = Vec::new();
+                stdout
+                    .take(maximum as u64 + 1)
+                    .read_to_end(&mut out)
+                    .await
+                    .map_err(|_| Error::LiveExec("private transport interrupted".into()))?;
+                let truncated = out.len() > maximum;
+                Ok::<_, Error>((out, truncated))
+            },
             read_bounded_output(stderr),
             status
         );
@@ -71,6 +81,50 @@ async fn exec(
     tokio::time::timeout(Duration::from_secs(20), run)
         .await
         .map_err(|_| Error::LiveExec("native supervisor transport timed out".into()))?
+}
+
+async fn exec(
+    pods: &Api<Pod>,
+    pod: &str,
+    container: &str,
+    args: Vec<String>,
+    input: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
+    exec_bounded(pods, pod, container, args, input, 65536).await
+}
+
+pub(super) async fn private_payload(
+    pods: &Api<Pod>,
+    reference: &NativeExecutionRef,
+) -> Result<Vec<u8>, Error> {
+    let pod = pods.get(&reference.pod).await?;
+    if pod.metadata.uid.as_deref() != Some(&reference.pod_uid) {
+        return Err(Error::LiveExec("private source pod changed".into()));
+    }
+    exec_bounded(
+        pods,
+        &reference.pod,
+        &reference.container,
+        helper_args(reference, "payload"),
+        None,
+        proofstorm_core::private_io::MAX_PRIVATE_BYTES as usize,
+    )
+    .await
+}
+
+fn cached_native_receipt(
+    artifact: Option<&std::collections::BTreeMap<String, Value>>,
+) -> Option<Value> {
+    let mut receipt = serde_json::to_value(artifact?).ok()?;
+    if receipt.get("supervisor_version") != Some(&json!("proofstorm-exec/v1")) {
+        return None;
+    }
+    // Retain supervisor facts, retry only custody. Previous attempt diagnostics
+    // must not make a subsequently successful collection permanently pending.
+    for key in ["transfer_error", "private_files_retired", "transfer"] {
+        receipt.as_object_mut()?.remove(key);
+    }
+    Some(receipt)
 }
 
 fn helper_args(reference: &NativeExecutionRef, mode: &str) -> Vec<String> {
@@ -96,7 +150,8 @@ pub async fn reconcile(
     if action.spec.capability != proofstorm_core::Capability::ComponentExecLive {
         return patch_invalid_action(action, context, "native execution capability required").await;
     }
-    let command = NativeCommand {
+    let mut command = NativeCommand {
+        private_io: None,
         script: request.script.clone(),
         argv: request.argv.clone(),
         timeout_seconds: request.timeout_seconds,
@@ -126,11 +181,19 @@ pub async fn reconcile(
         .as_ref()
         .and_then(|status| status.native_execution.as_ref());
     if let Some(reference) = reference {
+        let cached = cached_native_receipt(
+            action
+                .status
+                .as_ref()
+                .and_then(|status| status.artifact.as_ref()),
+        );
         let pod = pods.get_opt(&reference.pod).await?;
-        if pod.as_ref().and_then(|pod| pod.metadata.uid.as_ref()) != Some(&reference.pod_uid) {
+        let same_pod =
+            pod.as_ref().and_then(|pod| pod.metadata.uid.as_ref()) == Some(&reference.pod_uid);
+        if !same_pod && cached.is_none() {
             return patch_action_failure(action, context, "native_execution_lost", "execution pod changed; process and mutation outcome are unknown; command was not replayed").await;
         }
-        if action.annotations().contains_key(ACTION_CANCEL_ANNOTATION) {
+        if cached.is_none() && action.annotations().contains_key(ACTION_CANCEL_ANNOTATION) {
             let _ = exec(
                 &pods,
                 &reference.pod,
@@ -140,17 +203,74 @@ pub async fn reconcile(
             )
             .await;
         }
-        let reply = exec(
-            &pods,
-            &reference.pod,
-            &reference.container,
-            helper_args(reference, "status"),
-            None,
-        )
-        .await;
+        let reply = if let Some(cached) = cached {
+            serde_json::to_vec(&cached)
+                .map_err(|_| Error::LiveExec("native receipt serialization failed".into()))
+        } else {
+            exec(
+                &pods,
+                &reference.pod,
+                &reference.container,
+                helper_args(reference, "status"),
+                None,
+            )
+            .await
+        };
         if let Ok(bytes) = reply {
             if let Ok(mut receipt) = serde_json::from_slice::<Value>(&bytes) {
                 if receipt.get("supervisor_version") == Some(&json!("proofstorm-exec/v1")) {
+                    if request.private_payload.is_some() {
+                        match super::private_transfer::complete(action, context, &receipt).await {
+                            Ok(Some(transfer)) => {
+                                receipt["transfer"] = json!(transfer);
+                                if transfer.capture == proofstorm_transfer::CapturePhase::Ready
+                                    || transfer.receiver.receipt.is_some()
+                                {
+                                    let retired = !same_pod
+                                        || exec(
+                                            &pods,
+                                            &reference.pod,
+                                            &reference.container,
+                                            helper_args(reference, "retire"),
+                                            None,
+                                        )
+                                        .await
+                                        .is_ok();
+                                    receipt["private_files_retired"] = json!(retired);
+                                }
+                            }
+                            Ok(None) => (),
+                            Err(_) => {
+                                receipt["transfer_error"] = json!(
+                                    "private_custody_incomplete; reconcile original operation without replay"
+                                );
+                            }
+                        }
+                    }
+                    let custody_pending = receipt.get("transfer_error").is_some()
+                        || receipt.get("private_files_retired") == Some(&json!(false));
+                    let started = action
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.started_at_unix)
+                        .unwrap_or(action.spec.accepted_at_unix);
+                    if custody_pending
+                        && now_unix() <= started + i64::from(request.timeout_seconds) + 60
+                    {
+                        patch_action_status(
+                            action,
+                            context,
+                            ProofstormLabActionStatus {
+                                phase: ActionPhase::Running,
+                                native_execution: Some(reference.clone()),
+                                started_at_unix: Some(started),
+                                artifact: Some(status_object(cap_public_streams(receipt))),
+                                ..ProofstormLabActionStatus::default()
+                            },
+                        )
+                        .await?;
+                        return Ok(Action::requeue(Duration::from_secs(1)));
+                    }
                     receipt = cap_public_streams(receipt);
                     receipt["component"] = json!(request.component);
                     receipt["kind"] = json!(component.kind);
@@ -165,7 +285,7 @@ pub async fn reconcile(
                         action,
                         context,
                         ProofstormLabActionStatus {
-                            phase: if !clean {
+                            phase: if !clean || custody_pending {
                                 ActionPhase::Failed
                             } else if cancelled {
                                 ActionPhase::Cancelled
@@ -253,6 +373,21 @@ pub async fn reconcile(
         .ok_or(Error::ControllerInvariant("container missing"))?
         .name
         .clone();
+    match super::private_transfer::configure(action, context).await {
+        Ok(binding) => command.private_io = binding,
+        Err(_) => {
+            return patch_action_failure(
+                action,
+                context,
+                "private_transfer_refused",
+                "private payload binding or current lease refused; command not started",
+            )
+            .await;
+        }
+    }
+    if let Err(message) = command.validate() {
+        return patch_invalid_action(action, context, message).await;
+    }
     let binary = std::fs::read(
         std::env::var("PROOFSTORM_NATIVE_RUNNER")
             .unwrap_or_else(|_| "/usr/local/lib/proofstorm-exec".into()),
@@ -313,6 +448,36 @@ pub async fn reconcile(
             })),
         )
         .await?;
+    let Ok(private_input) = super::private_transfer::start(action, context).await else {
+        return patch_action_failure(
+            action,
+            context,
+            "private_transfer_refused",
+            "private custody admission refused; native command not started",
+        )
+        .await;
+    };
+    if let Some(input) = private_input {
+        let Some(proofstorm_core::private_io::PrivateIo::Consume { bytes, sha256, .. }) =
+            &command.private_io
+        else {
+            return Err(Error::ControllerInvariant("private input contract missing"));
+        };
+        let mut args = helper_args(&reference, "input");
+        args.extend([bytes.to_string(), sha256.clone()]);
+        if exec(
+            &pods,
+            &reference.pod,
+            &reference.container,
+            args,
+            Some(&input),
+        )
+        .await
+        .is_err()
+        {
+            return patch_action_failure(action,context,"private_input_interrupted","private input transport interrupted; input was not replayed and native command was not started").await;
+        }
+    }
     // An uncertain start is polled through the persisted handle, never retried.
     let input = serde_json::to_vec(&command)
         .map_err(|_| Error::LiveExec("invalid native request".into()))?;
@@ -325,4 +490,20 @@ pub async fn reconcile(
     )
     .await;
     Ok(Action::requeue(Duration::from_secs(1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn known_native_completion_survives_failed_collection_and_status_loss() {
+        let first = json!({"supervisor_version":"proofstorm-exec/v1","exit_code":0,"exit_signal":null,"cleanup_verified":true,"payload_manifest":{"bytes":3,"sha256":"source-hash"},"transfer_error":"temporary collection failure","private_files_retired":false});
+        let saved = status_object(first);
+        let retried = cached_native_receipt(Some(&saved)).unwrap();
+        assert_eq!(retried["exit_code"], 0);
+        assert_eq!(retried["payload_manifest"]["sha256"], "source-hash");
+        assert!(retried.get("transfer_error").is_none());
+        assert!(retried.get("private_files_retired").is_none());
+        assert!(cached_native_receipt(Some(&status_object(json!({"running":true})))).is_none());
+    }
 }

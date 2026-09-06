@@ -8,6 +8,7 @@ use nix::{
     unistd::Pid,
 };
 use proofstorm_core::native::{NativeCommand, OutputMode, project_invoice, project_receipt};
+use proofstorm_core::private_io::{InputBinding, MAX_PRIVATE_BYTES, PrivateIo, select_capture};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -53,15 +54,15 @@ fn finish(directory: &Path, receipt: &Value) -> Result<()> {
 
 fn spec(directory: &Path) -> Result<NativeCommand> {
     let command: NativeCommand =
-        serde_json::from_slice(&fs::read(directory.join("request.json"))?)?;
+        serde_json::from_slice(&bounded_file(&directory.join("request.json"), 65536)?)?;
     command.validate()?;
     Ok(command)
 }
 
 pub fn entry() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let mode = args.next().ok_or("mode missing")?;
-    let directory = PathBuf::from(args.next().ok_or("directory missing")?);
+    let mut arguments = std::env::args().skip(1);
+    let mode = arguments.next().ok_or("mode missing")?;
+    let directory = PathBuf::from(arguments.next().ok_or("directory missing")?);
     match mode.as_str() {
         "start" => {
             let mut bytes = Vec::new();
@@ -94,21 +95,41 @@ pub fn entry() -> Result<()> {
         "child" => {
             let command = spec(&directory)?;
             pthread_sigmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)?;
-            let argv = if command.argv.is_empty() {
+            let mut argv = if command.argv.is_empty() {
                 vec!["/bin/sh".into(), "-c".into(), command.script]
             } else {
                 command.argv
             };
+            if let Some(PrivateIo::Consume {
+                bytes,
+                sha256,
+                input: InputBinding::Argv { index },
+            }) = &command.private_io
+            {
+                let input = read_input(&directory, *bytes, sha256)?;
+                let text = String::from_utf8(input)?;
+                if text.contains('\0') {
+                    return Err("private input invalid".into());
+                }
+                argv[*index as usize] = text;
+            }
             let error = Command::new(&argv[0]).args(&argv[1..]).exec();
             return Err(error.into());
         }
         "status" => match fs::read(directory.join("receipt.json")) {
             Ok(bytes) => std::io::stdout().write_all(&bytes)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                println!("{{\"running\":true}}")
+                println!("{{\"running\":true}}");
             }
             Err(error) => return Err(error.into()),
         },
+        "input" => {
+            let expected: u32 = arguments.next().ok_or("input length missing")?.parse()?;
+            let digest = arguments.next().ok_or("input digest missing")?;
+            store_input(&directory, expected, &digest)?;
+        }
+        "payload" => emit_payload(&directory)?,
+        "retire" => retire(&directory)?,
         "cancel" => {
             match write_private(&directory.join("cancel"), b"cancel") {
                 Ok(()) => (),
@@ -122,9 +143,65 @@ pub fn entry() -> Result<()> {
     Ok(())
 }
 
+fn bounded_file(path: &Path, maximum: usize) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(maximum as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        return Err("private file bounds".into());
+    }
+    Ok(bytes)
+}
+fn store_input(directory: &Path, expected: u32, digest: &str) -> Result<()> {
+    if !(1..=MAX_PRIVATE_BYTES).contains(&expected) {
+        return Err("input bounds".into());
+    }
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take(u64::from(expected) + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() != expected as usize || format!("{:x}", Sha256::digest(&bytes)) != digest {
+        return Err("input integrity".into());
+    }
+    write_private(&directory.join("input"), &bytes)?;
+    println!("{{\"input_stored\":true}}");
+    Ok(())
+}
+fn emit_payload(directory: &Path) -> Result<()> {
+    let receipt: Value =
+        serde_json::from_slice(&bounded_file(&directory.join("receipt.json"), 65536)?)?;
+    let manifest = &receipt["payload_manifest"];
+    let bytes = bounded_file(&directory.join("payload"), MAX_PRIVATE_BYTES as usize)?;
+    if manifest["bytes"].as_u64() != Some(bytes.len() as u64)
+        || manifest["sha256"].as_str() != Some(format!("{:x}", Sha256::digest(&bytes)).as_str())
+    {
+        return Err("payload integrity".into());
+    }
+    std::io::stdout().write_all(&bytes)?;
+    Ok(())
+}
+fn retire(directory: &Path) -> Result<()> {
+    let receipt: Value =
+        serde_json::from_slice(&bounded_file(&directory.join("receipt.json"), 65536)?)?;
+    if receipt["cleanup_verified"] != json!(true) {
+        return Err("cleanup unverified".into());
+    }
+    for name in ["input", "payload", "stdout", "stderr"] {
+        match fs::remove_file(directory.join(name)) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    println!("{{\"private_files_retired\":true}}");
+    Ok(())
+}
+
 fn capture(
     mut reader: impl Read + Send + 'static,
     path: PathBuf,
+    limit: usize,
 ) -> mpsc::Receiver<(Vec<u8>, usize)> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -143,7 +220,7 @@ fn capture(
                     break;
                 }
                 total = total.saturating_add(count);
-                let keep = count.min(CAPTURE_LIMIT.saturating_sub(retained.len()));
+                let keep = count.min(limit.saturating_sub(retained.len()));
                 file.write_all(&buffer[..keep])?;
                 retained.extend_from_slice(&buffer[..keep]);
             }
@@ -171,6 +248,14 @@ fn signal_children(signal: Signal) -> Result<()> {
     Ok(())
 }
 
+fn read_input(directory: &Path, expected: u32, digest: &str) -> Result<Vec<u8>> {
+    let bytes = bounded_file(&directory.join("input"), MAX_PRIVATE_BYTES as usize)?;
+    if bytes.len() != expected as usize || format!("{:x}", Sha256::digest(&bytes)) != digest {
+        return Err("private input integrity".into());
+    }
+    Ok(bytes)
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "supervision keeps process ownership, cleanup and receipt construction together"
@@ -190,10 +275,29 @@ fn supervise(directory: &Path) -> Result<()> {
         }
     });
     let started = Instant::now();
+    let input = if let Some(PrivateIo::Consume {
+        bytes,
+        sha256,
+        input,
+    }) = &command.private_io
+    {
+        read_input(directory, *bytes, sha256)?;
+        if *input == InputBinding::Stdin {
+            Stdio::from(fs::File::open(directory.join("input"))?)
+        } else {
+            Stdio::null()
+        }
+    } else {
+        Stdio::null()
+    };
+    let capture_limit = match &command.private_io {
+        Some(PrivateIo::Capture { maximum_bytes, .. }) => *maximum_bytes as usize + CAPTURE_LIMIT,
+        _ => CAPTURE_LIMIT,
+    };
     let mut child = Command::new(std::env::current_exe()?)
         .arg("child")
         .arg(directory)
-        .stdin(Stdio::null())
+        .stdin(input)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -202,10 +306,12 @@ fn supervise(directory: &Path) -> Result<()> {
     let stdout = capture(
         child.stdout.take().ok_or("stdout unavailable")?,
         directory.join("stdout"),
+        capture_limit,
     );
     let stderr = capture(
         child.stderr.take().ok_or("stderr unavailable")?,
         directory.join("stderr"),
+        CAPTURE_LIMIT,
     );
     let mut exit_code = None;
     let mut exit_signal = None;
@@ -237,9 +343,8 @@ fn supervise(directory: &Path) -> Result<()> {
                     break;
                 }
                 Ok(WaitStatus::StillAlive) => break,
-                Err(Errno::EINTR) => (),
+                Err(Errno::EINTR) | Ok(_) => (),
                 Err(error) => return Err(error.into()),
-                Ok(_) => (),
             }
         }
         if cleanup_verified {
@@ -312,6 +417,32 @@ fn supervise(directory: &Path) -> Result<()> {
             }
         }
         _ => (),
+    }
+    if let Some(PrivateIo::Capture {
+        maximum_bytes,
+        format,
+    }) = &command.private_io
+    {
+        let selected =
+            if exit_code == Some(0) && !timed_out && !cancelled && cleanup_verified && !truncated {
+                select_capture(&out, *format).and_then(|bytes| {
+                    if !bytes.is_empty() && bytes.len() <= *maximum_bytes as usize {
+                        Ok(bytes)
+                    } else {
+                        Err("private_capture_bounds")
+                    }
+                })
+            } else {
+                Err("private_capture_unsuccessful")
+            };
+        match selected {
+            Ok(bytes) => {
+                write_private(&directory.join("payload"), &bytes)?;
+                receipt["payload_manifest"] =
+                    json!({"bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes))});
+            }
+            Err(error) => receipt["payload_error"] = json!(error),
+        }
     }
     finish(directory, &receipt)
 }

@@ -65,3 +65,5 @@ pub use scheduler::{
     MAX_ACTIVE_PROTOCOL_PROBER_LABS, MAX_GLOBAL_PROTOCOL_PROBES, MAX_PROTOCOL_PROBES_PER_LAB,
     PROTOCOL_PROBE_LEASE_SECONDS, ProtocolProbeSchedule, schedule_protocol_probers,
 };
+
+pub use api::{PrivateTransferAction, TransferMethod};

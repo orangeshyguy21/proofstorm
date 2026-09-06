@@ -273,6 +273,17 @@ if [[ -n "$SEED_PLAN" ]]; then
   PROMPT="$PROMPT Operator-provided verified plan (apply directly; do not replan): $SEED_RECEIPT"
 fi
 
+if [[ "$(jq -r '.prefunded_fixture // ""' <<<"$SCENARIO_JSON")" == "private-ecash-v1" ]]; then
+  cp "$ROOT/scripts/private-transfer-argument-audit.mjs" "$RUN_ROOT/argument-audit-plugin.mjs"
+  jq --arg plugin "file://$RUN_ROOT/argument-audit-plugin.mjs" \
+    '.plugin = ((.plugin // []) + [$plugin])' "$CONFIG" > "$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+  cp "$ROOT/scripts/prepare-private-ecash-benchmark.py" "$RUN_ROOT/setup-client.py"
+  python3 "$ROOT/scripts/prepare-private-ecash-benchmark.py" "$CONFIG" "$RUN_ID"
+  SETUP_RECEIPT="$(jq -c . "$RUN_ROOT/setup-handoff.json")"
+  PROMPT="$PROMPT Operator-prefunded setup (already applied; do not apply the plan or acquire another lease): $SETUP_RECEIPT"
+fi
+
 SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 SOURCE_DIRTY="$(git -C "$ROOT" status --porcelain=v1 | wc -l | tr -d '[:space:]')"
 BINARY_DIGEST="$(shasum -a 256 "$ROOT/target/release/proofstorm-mcp" | awk '{print $1}')"
@@ -282,12 +293,16 @@ PROMPT="$PROMPT Absolute budget (Unix seconds): start=$STARTED_EPOCH, cleanup=$(
 
 # Enforce the cleanup boundary at every MCP tool call, including reconnects.
 jq --arg proxy "$ROOT/scripts/native-execution-proxy.py" \
+  --arg argument_audit "$RUN_ROOT/mcp-arguments.jsonl" \
+  --argjson public_help_only "$(jq '.prefunded_fixture == "private-ecash-v1"' <<<"$SCENARIO_JSON")" \
   --arg events "$EVENTS" --arg state "$RUN_ROOT/cleanup-phase.json" \
   --arg started "$STARTED_EPOCH" --arg seconds "$MAX_SECONDS" --arg steps "$MAX_STEPS" \
   --arg context_tokens "$MAX_CONTEXT_TOKENS" --arg processed_tokens "$MAX_PROCESSED_TOKENS" \
   '.mcp.proofstorm.command = (["python3", $proxy, "--events", $events, "--state", $state,
     "--started-at", $started, "--max-seconds", $seconds, "--max-steps", $steps,
-    "--max-context-tokens", $context_tokens, "--max-processed-tokens", $processed_tokens, "--"] + .mcp.proofstorm.command)' \
+    "--max-context-tokens", $context_tokens, "--max-processed-tokens", $processed_tokens,
+    "--argument-audit", $argument_audit] + (if $public_help_only then ["--public-help-only"] else [] end)
+    + ["--"] + .mcp.proofstorm.command)' \
   "$CONFIG" > "$CONFIG.next"
 mv "$CONFIG.next" "$CONFIG"
 
@@ -340,7 +355,7 @@ print(contract['token_limit_reason'](contract['read_usage'](sys.argv[2]), int(sy
 PY
 }
 set +e
-OPENCODE_CONFIG="$CONFIG" "$OPENCODE_BIN" run \
+PROOFSTORM_ARGUMENT_AUDIT="$RUN_ROOT/opencode-arguments.jsonl" OPENCODE_CONFIG="$CONFIG" "$OPENCODE_BIN" run \
   --model "$MODEL" \
   --format json \
   --print-logs \

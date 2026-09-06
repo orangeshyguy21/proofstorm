@@ -429,6 +429,30 @@ async fn reconcile_action(
     }
     let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
     let lab = labs.get(&action.spec.lab_name).await?;
+    // Existing native handles only reconcile owned work; changed readiness must
+    // not discard a completed native receipt or turn collection into a new start.
+    if matches!(action.spec.action, LabAction::ComponentExecLive(_))
+        && action
+            .status
+            .as_ref()
+            .is_some_and(|status| status.native_execution.is_some())
+    {
+        return native_exec::reconcile(action.as_ref(), &lab, &context).await;
+    }
+    if !action
+        .status
+        .as_ref()
+        .is_some_and(|status| status.phase == ActionPhase::Running)
+        && private_transfer::validate_delegated_action(action.as_ref(), &lab).is_err()
+    {
+        return patch_action_failure(
+            action.as_ref(),
+            &context,
+            "recipient_lease_refused",
+            "recipient lease unavailable or action outside its scope; no new command started",
+        )
+        .await;
+    }
     if let Err(error) = evaluate_action_admission(action.as_ref(), &lab) {
         patch_action_status(
             action.as_ref(),
@@ -461,6 +485,9 @@ async fn reconcile_action(
     }
     if matches!(action.spec.action, LabAction::ComponentLogs(_)) {
         return reconcile_component_logs(action.as_ref(), &lab, &context).await;
+    }
+    if matches!(action.spec.action, LabAction::PrivateTransfer(_)) {
+        return private_transfer::reconcile(action.as_ref(), &context).await;
     }
     if matches!(action.spec.action, LabAction::ComponentExecLive(_)) {
         return reconcile_component_exec_live(action.as_ref(), &lab, &context).await;
@@ -1125,6 +1152,7 @@ async fn reconcile_component_restart(
 }
 
 mod native_exec;
+mod private_transfer;
 const LIVE_EXEC_OUTPUT_LIMIT: usize = 256 * 1024;
 
 async fn reconcile_component_exec_live(
@@ -2217,6 +2245,7 @@ async fn ensure_generated_keycloak_secret(
 )]
 async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
     validate_instance_key(&lab.spec.instance_key)?;
+    private_transfer::expire(&lab)?;
     let workloads = render_lab(
         &lab.spec.instance_key,
         &lab.spec.revision_digest,
@@ -2602,6 +2631,7 @@ fn deployment_matches_plan(
 }
 
 async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
+    private_transfer::close(&lab)?;
     let instance_namespace = instance_namespace(&lab.spec.instance_key);
     patch_status(
         lab.as_ref(),
@@ -2672,6 +2702,7 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
         }
     }
 
+    private_transfer::remove_closed(&lab)?;
     write_teardown_receipt(lab.as_ref(), context, &instance_namespace).await?;
     Ok(Action::await_change())
 }
@@ -3378,6 +3409,7 @@ mod tests {
         ProofstormLabAction::new(
             "op-auth-spend-resource",
             proofstorm_kube::ProofstormLabActionSpec {
+                lease_scope: None,
                 lab_name: "lab-auth".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
@@ -3896,6 +3928,7 @@ mod tests {
         let mut resource = ProofstormLabAction::new(
             &format!("action-{sequence}"),
             proofstorm_kube::ProofstormLabActionSpec {
+                lease_scope: None,
                 lab_name: "lab-1".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),

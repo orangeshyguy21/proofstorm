@@ -15,6 +15,99 @@ SPEC.loader.exec_module(proxy)
 
 
 class CleanupAdmissionTests(unittest.TestCase):
+    def test_campaign_stage_margin_is_visible_on_success_and_refusal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage = root/'stage.json'
+            stage.write_text(json.dumps({'id':'recipient-receive','role':'recipient','stop_at_unix':1100}))
+            gate = proxy.CleanupGate(root/'events', root/'state', 1000, 600, 50, stage_budget=stage)
+            with patch.object(proxy.time, 'time', return_value=1080):
+                reply = gate.decorate({'result':{'structuredContent':{'phase':'succeeded'}}})
+                b = reply['result']['structuredContent']['_benchmark_budget']
+                self.assertEqual(b['seconds_to_stage_stop'],20)
+                self.assertEqual(b['hard_stop_at_unix'],1600)
+                self.assertEqual(b['report_margin_seconds'],30)
+                refused = gate.decorate({'error':{'code':-32600,'message':'lease_owner_mismatch'}})
+                self.assertIn('1600',refused['error']['message'])
+                self.assertIn('recipient-receive',refused['error']['message'])
+                self.assertIn('lease_owner_mismatch',refused['error']['message'])
+                bounded = gate.bound_wait({'method':'tools/call','params':{'name':'proofstorm_operation_wait_many',
+                    'arguments':{'timeout_seconds':60}}})
+                self.assertEqual(bounded['params']['arguments']['timeout_seconds'],1)
+                stage.unlink()
+                self.assertTrue(gate.decorate({'error':{'message':'original refusal'}})['error']['data']['_benchmark_budget']['budget_unavailable'])
+
+    def test_cleanup_custody_methods_forward_only_status_and_release(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server = root / 'server.py'
+            server.write_text('import sys,json\nfor line in sys.stdin:\n m=json.loads(line);print(json.dumps({"jsonrpc":"2.0","id":m["id"],"result":{"forwarded":True}}),flush=True)\n')
+            methods = ['status', 'release', 'prepare', 'deliver', 'handoff', None, ['release']]
+            requests = [{'jsonrpc': '2.0', 'id': i, 'method': 'tools/call', 'params': {
+                'name': 'proofstorm_private_transfer', 'arguments': {'transfer': {'transferMethod': method}}}}
+                for i, method in enumerate(methods)]
+            result = subprocess.run([sys.executable, str(ROOT/'scripts/native-execution-proxy.py'),
+                '--events', str(root/'events'), '--state', str(root/'state'), '--started-at', '0',
+                '--max-seconds', '600', '--max-steps', '50', '--', sys.executable, str(server)],
+                input=''.join(json.dumps(x)+'\n' for x in requests), text=True,
+                capture_output=True, timeout=10, check=True)
+            replies = {r['id']: r for r in map(json.loads, result.stdout.splitlines())}
+            for i in [0, 1]:
+                self.assertTrue(replies[i]['result']['forwarded'])
+            for i in range(2, len(methods)):
+                self.assertEqual(replies[i]['error']['data']['code'], 'cleanup_phase_only')
+
+    def test_scoped_public_guard_allows_exact_help_and_private_only(self):
+        def request(args):
+            return {'method': 'tools/call', 'params': {'name': 'proofstorm_component_exec_live', 'arguments': args}}
+        for argv in [['cocod', 'send', 'cashu', '--help'], list(proxy.CDK_PREFIX) + ['send', '--help']]:
+            self.assertTrue(proxy.public_output_allowed(request({'argv': argv, 'output': {'mode': 'public'}})))
+        self.assertTrue(proxy.public_output_allowed(request({'script': 'arbitrary native operation', 'output': {'mode': 'private'}})))
+        for args in [
+            {'argv': list(proxy.CDK_PREFIX) + ['check-pending']},
+            {'script': 'echo secret --help'},
+            {'argv': ['python3', '-c', 'print("secret")', '--help']},
+        ]:
+            self.assertFalse(proxy.public_output_allowed(request({**args, 'output': {'mode': 'public'}})))
+
+    def test_public_guard_refuses_before_child_and_logs_no_command_body(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server = root/'server.py'
+            server.write_text('import sys,json\nfor line in sys.stdin:\n m=json.loads(line);print(json.dumps({"jsonrpc":"2.0","id":m["id"],"result":{"forwarded":True}}),flush=True)\n')
+            requests = [{'jsonrpc':'2.0','id':i,'method':'tools/call','params':{'name':'proofstorm_component_exec_live','arguments':args}}
+                        for i,args in enumerate([
+                            {'argv':list(proxy.CDK_PREFIX)+['check-pending'],'output':{'mode':'public'}},
+                            {'script':'secret-test-canary','output':{'mode':'public'}},
+                            {'argv':['cocod','--help'],'output':{'mode':'public'}},
+                            {'script':'native-private','output':{'mode':'private'}},
+                        ],1)]
+            result = subprocess.run([sys.executable,str(ROOT/'scripts/native-execution-proxy.py'),
+                '--events',str(root/'events'),'--state',str(root/'state'),'--started-at',str(proxy.time.time()),
+                '--max-seconds','600','--max-steps','50','--public-help-only','--argument-audit',str(root/'audit'),
+                '--',sys.executable,str(server)],input=''.join(json.dumps(x)+'\n' for x in requests),text=True,capture_output=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stderr)
+            replies={r['id']:r for r in map(json.loads,result.stdout.splitlines())}
+            for i in [1,2]:self.assertEqual(replies[i]['error']['data']['code'],'public_output_help_only')
+            for i in [3,4]:self.assertTrue(replies[i]['result']['forwarded'])
+            self.assertNotIn('secret-test-canary',(root/'audit').read_text())
+
+    def test_argument_audit_records_only_known_custody_metadata(self):
+        args = {'operation_id': 'agent-prepare', 'transfer': {'transferMethod': 'prepare',
+                'component': 'wallet-a', 'destinationComponent': 'wallet-b', 'maximumBytes': 65536}}
+        message = {'method': 'tools/call', 'params': {'name': 'proofstorm_private_transfer', 'arguments': args}}
+        record = proxy.argument_snapshot(message, 'test')
+        self.assertEqual(record['fields']['destinationComponent'], {'state': 'allowed', 'value': 'wallet-b'})
+        self.assertEqual(record['fields']['reference'], {'state': 'missing'})
+        args['transfer'].update(component='cashuAsecretcanary', reference='credential-secret-canary',
+                                extra='never-record-this')
+        args['script'] = 'preimage-secret-canary'
+        text = json.dumps(proxy.argument_snapshot(message, 'test'))
+        for secret in ['cashuAsecretcanary', 'credential-secret-canary', 'never-record-this', 'preimage-secret-canary']:
+            self.assertNotIn(secret, text)
+        message['params']['name'] = 'proofstorm_component_exec_live'
+        self.assertIsNone(proxy.argument_snapshot(message, 'test'))
+
     def test_boundary_latches_and_permits_only_cleanup_tools(self):
         with tempfile.TemporaryDirectory() as temp:
             events, state = Path(temp)/'events', Path(temp)/'state'

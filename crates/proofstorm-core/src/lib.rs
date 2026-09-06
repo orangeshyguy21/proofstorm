@@ -48,7 +48,10 @@ pub use evidence::{
     EVIDENCE_API_VERSION, EVIDENCE_MEDIA_TYPE, EvidenceAction, EvidenceArtifact, EvidenceBundle,
     EvidenceBundleContent, EvidenceInstance,
 };
-pub use experiment::{Experiment, ExperimentLease, ExperimentPhase, LeasePhase};
+pub use experiment::{
+    Experiment, ExperimentLease, ExperimentPhase, LeasePhase, PrivateReceiveCommand,
+    PrivateTransferLeaseScope,
+};
 pub use instance::{
     ComponentCondition, ComponentStatus, InstancePhase, InventoryEntry, LabInstance,
     LabInstanceStatus, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, TeardownReceipt,
@@ -77,3 +80,5 @@ pub use quote::{
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, validate_lab};
 pub mod native;
+
+pub mod private_io;

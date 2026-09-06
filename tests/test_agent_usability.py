@@ -123,6 +123,22 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(state['verified_idle'])
         self.assertEqual(len(state['blockers']), 2)
 
+    def test_bound_controller_custody_is_infrastructure_but_unmounted_claim_blocks(self):
+        items = [
+            {'kind': 'Pod', 'metadata': {'name': 'controller', 'namespace': 'proofstorm-system',
+             'labels': {'app.kubernetes.io/name': 'proofstormd'}},
+             'spec': {'volumes': [{'persistentVolumeClaim': {'claimName': 'proofstormd-private'}}]}},
+            {'kind': 'PersistentVolumeClaim', 'metadata': {'name': 'proofstormd-private',
+             'namespace': 'proofstorm-system'}, 'status': {'phase': 'Bound'}},
+        ]
+        with patch.object(cluster, 'resources', return_value=items):
+            self.assertTrue(cluster.snapshot()['verified_idle'])
+        items.append({'kind': 'PersistentVolumeClaim', 'metadata': {'name': 'unowned',
+                      'namespace': 'proofstorm-system'}, 'status': {'phase': 'Bound'}})
+        with patch.object(cluster, 'resources', return_value=items):
+            state = cluster.snapshot()
+        self.assertEqual([x['name'] for x in state['blockers']], ['unowned'])
+
 
 if __name__ == '__main__':
     unittest.main()
