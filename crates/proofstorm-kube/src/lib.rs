@@ -57,6 +57,7 @@ pub use operation::{
     render_peer_connect_job, render_peer_disconnect_job, render_wallet_balance_job,
     render_wallet_fund_job, render_wallet_initialize_job, render_wallet_invoice_job,
     render_wallet_melt_quote_refresh_job, render_wallet_pay_job, render_wallet_round_trip_job,
+    require_open_lab,
 };
 pub use render::{
     INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_security_spine,
@@ -66,4 +67,5 @@ pub use scheduler::{
     PROTOCOL_PROBE_LEASE_SECONDS, ProtocolProbeSchedule, schedule_protocol_probers,
 };
 
+pub use adapter::{RPC_PASSWORD as BITCOIN_RPC_PASSWORD, RPC_USER as BITCOIN_RPC_USER};
 pub use api::{PrivateTransferAction, TransferMethod};

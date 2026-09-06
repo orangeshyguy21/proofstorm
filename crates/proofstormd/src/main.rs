@@ -448,8 +448,8 @@ async fn reconcile_action(
         return patch_action_failure(
             action.as_ref(),
             &context,
-            "recipient_lease_refused",
-            "recipient lease unavailable or action outside its scope; no new command started",
+            "private_access_refused",
+            "private access unavailable or action outside its scope; no new command started",
         )
         .await;
     }
@@ -3409,13 +3409,13 @@ mod tests {
         ProofstormLabAction::new(
             "op-auth-spend-resource",
             proofstorm_kube::ProofstormLabActionSpec {
-                lease_scope: None,
+                access_scope: None,
                 lab_name: "lab-auth".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
                 experiment_id: "experiment".into(),
-                lease_id: "lease".into(),
+                session_id: "session".into(),
                 principal_id: "principal".into(),
                 sequence: 1,
                 operation_id: "auth-spend".into(),
@@ -3928,13 +3928,13 @@ mod tests {
         let mut resource = ProofstormLabAction::new(
             &format!("action-{sequence}"),
             proofstorm_kube::ProofstormLabActionSpec {
-                lease_scope: None,
+                access_scope: None,
                 lab_name: "lab-1".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
                 experiment_id: "experiment".into(),
-                lease_id: "lease".into(),
+                session_id: "session".into(),
                 principal_id: "principal".into(),
                 sequence,
                 operation_id: operation_id.into(),

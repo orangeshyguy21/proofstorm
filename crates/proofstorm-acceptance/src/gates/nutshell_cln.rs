@@ -13,7 +13,7 @@ const RUNE_PROBE: &str = include_str!("../../drivers/cln_rune_probe.py");
 
 const INSTANCE: &str = "nutshell-cln-instance";
 const EXPERIMENT: &str = "nutshell-cln-experiment";
-const LEASE: &str = "nutshell-cln-lease";
+const LEASE: &str = "nutshell-cln-session";
 const DRAFT: &str = "nutshell-cln";
 
 fn lab_document() -> Value {
@@ -42,7 +42,7 @@ fn common(operation: &str) -> Value {
     json!({
         "instance_id": INSTANCE,
         "experiment_id": EXPERIMENT,
-        "lease_id": LEASE,
+        "session_id": LEASE,
         "operation_id": operation
     })
 }
@@ -205,8 +205,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-nutshell-cln-experiment"}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 8, "idempotency_key": "acquire-nutshell-cln-lease"}),
+        "proofstorm_session_start",
+        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-nutshell-cln-session"}),
     )?;
 
     client.call(
@@ -333,8 +333,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": LEASE, "idempotency_key": "release-nutshell-cln-lease"}),
+        "proofstorm_session_finish",
+        json!({"session_id": LEASE, "idempotency_key": "release-nutshell-cln-session"}),
     )?;
     let closed_experiment = client.call(
         "proofstorm_experiment_close",

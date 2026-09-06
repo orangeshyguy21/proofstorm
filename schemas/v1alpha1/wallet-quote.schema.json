@@ -53,9 +53,6 @@
     "instance_id": {
       "type": "string"
     },
-    "lease_id": {
-      "type": "string"
-    },
     "mint_id": {
       "type": "string"
     },
@@ -79,6 +76,9 @@
     },
     "role": {
       "$ref": "#/$defs/WalletQuoteObservationRole"
+    },
+    "session_id": {
+      "type": "string"
     },
     "state": {
       "type": "string"
@@ -116,7 +116,7 @@
     "workspace_id",
     "instance_id",
     "experiment_id",
-    "lease_id",
+    "session_id",
     "principal_id",
     "observed_by_operation",
     "role",

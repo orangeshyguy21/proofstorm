@@ -1,5 +1,8 @@
 # Offline cross-principal fuzzer campaign
 
+> Superseded coordination design: leases are replaced by nonblocking [session tracking](session-tracking-2026-09-06.md); private-transfer permissions are separate. Historical results below describe their recorded version.
+
+
 Status: **serial runner and offline validation completed; exactly one campaign authorized after gate02 and cluster handback**. The dedicated runner checks passing deterministic evidence and immutable pins, then consumes a one-campaign authorization record. Generated proposal configs remain disabled; default runner invocation does not launch. The existing single-session benchmark runner is not used for this campaign.
 
 The first campaign transfers **70 sats cocod→CDK once**, from assisted initial balances 5,000/0 to 4,930/70. Deterministic coverage owns the reverse direction, controller restart and revocation before input. Run04's technical result stands, and its report-proficiency failure remains retained. No funded replay is planned merely to fix that report.
@@ -12,7 +15,7 @@ Both MCP processes use the same **canonical absolute authority SQLite path** and
 
 After pins and cluster handoff, initialize both configured MCP identities before delegation, so the recipient's independent grants actually exist. MCP startup performs principal/grant provisioning; naming a recipient in a request does not. Keep recipient grants unchanged across reconnects. The seeder's temporary capability profile must be replaced by source startup before setup. Reuse the verified exact topology and private protected setup/prefunding fixture under the source identity. The setup handoff now derives its principal from configuration instead of hard-coding `benchmark-agent`.
 
-The source owns the exclusive root lease created by setup (1,800 seconds, 100 actions, including setup). Delegate one child for `wallet-b`, mint `mint`, and the exact ready reference, **600 seconds / 8 actions**, bounded by the root's actual remaining expiry and budget. The approved native contract is CDK receive with private **argv index 8**, 60-second timeout, and private output. It is explicitly supplied as tested assistance and approved by the source through `lease_delegate`. The child may not substitute command, binding, timeout, target or reference. The source remains a trusted owner of the entire lab; do not claim mutual sender-wallet isolation.
+The source owns the exclusive root lease created by setup. Delegate one child for `wallet-b`, mint `mint`, and the exact ready reference. Neither lease has a time limit or action quota; explicitly release authority at cleanup. The approved native contract is CDK receive with private **argv index 8**, 60-second timeout, and private output. It is explicitly supplied as tested assistance and approved by the source through `lease_delegate`. The child may not substitute command, binding, timeout, target or reference. The source remains a trusted owner of the entire lab; do not claim mutual sender-wallet isolation.
 
 ## Fixed budget
 

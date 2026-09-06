@@ -66,6 +66,7 @@ impl GateContext {
             workspace,
             &[
                 ("PROOFSTORM_DB", database.as_str()),
+                ("PROOFSTORM_TOOLSET", "all"),
                 ("PROOFSTORM_WORKSPACE", workspace),
                 ("PROOFSTORM_PRINCIPAL", principal),
                 ("PROOFSTORM_CAPABILITIES", joined.as_str()),
@@ -93,8 +94,7 @@ pub const EXPERIMENT_CAPABILITIES: &[&str] = &[
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lease.acquire",
-    "lease.release",
+    "lab.operate",
     "wallet.create",
     "wallet.control",
     "wallet.fund",

@@ -2,12 +2,14 @@
 //! mint, or infer whether proofs are spent. Native wallet observations own that.
 //!
 //! Runtime-only API: grants must be constructed from freshly checked existing
-//! workspace capabilities and active endpoint leases, never from agent JSON.
+//! workspace capabilities and explicit private access grants, never from agent JSON.
 //! Native completion callbacks must come from the owned supervisor operation.
 #![allow(
     clippy::missing_errors_doc,
     reason = "all APIs return static, non-payload Error diagnostics"
 )]
+
+mod migration;
 
 use std::{
     fs::{self, OpenOptions},
@@ -52,8 +54,7 @@ pub struct Grant {
     pub lab: String,
     pub principal: String,
     pub wallet: String,
-    pub lease: String,
-    pub expires_at_unix: u64,
+    pub authority: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -142,12 +143,11 @@ pub struct NativeStage {
     pub interrupted: bool,
 }
 
-/// Immutable recipient binding, not a claim that the lease is still active.
+/// Immutable recipient binding, not a claim that the session is still active.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecipientAuthority {
     pub principal: String,
-    pub lease: String,
-    pub expires_at_unix: u64,
+    pub authority: String,
 }
 
 /// Metadata only. No payload, private path, proof list or inferred spent state.
@@ -251,7 +251,7 @@ impl Vault {
             }
             Err(_) => return Err(Error::Storage),
         }
-        let db = Connection::open(path).map_err(|_| Error::Storage)?;
+        let mut db = Connection::open(path).map_err(|_| Error::Storage)?;
         db.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|_| Error::Storage)?;
         db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;
@@ -274,6 +274,7 @@ impl Vault {
         if identity != (workspace.to_owned(), lab.to_owned()) {
             return Err(Error::Access);
         }
+        migration::upgrade(&mut db)?;
         Ok(Self {
             db,
             workspace: workspace.into(),
@@ -290,11 +291,10 @@ impl Vault {
                 &grant.lab,
                 &grant.principal,
                 &grant.wallet,
-                &grant.lease,
+                &grant.authority,
             ]
             .iter()
             .all(|s| ident(s))
-            || grant.expires_at_unix <= now()?
         {
             return Err(Error::Access);
         }
@@ -323,16 +323,12 @@ impl Vault {
             maximum_bytes,
         ))
         .map_err(|_| Error::Invalid)?;
-        // Scope deduplication to the authorized source principal and lease.
-        let key = format!("{}/{}/{}", source.principal, source.lease, key);
+        // Scope deduplication to the authorized source principal and authority.
+        let key = format!("{}/{}/{}", source.principal, source.authority, key);
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| Error::Storage)?;
-        let timestamp = now()?;
-        if source.expires_at_unix <= timestamp || destination.expires_at_unix <= timestamp {
-            return Err(Error::Access);
-        }
         let closed: bool = tx
             .query_row("SELECT closed FROM identity WHERE singleton=1", [], |r| {
                 r.get(0)
@@ -430,11 +426,11 @@ impl Vault {
     }
 
     /// Transfer the fixed recipient role once, before inbox delivery or native import.
-    /// The runtime must first authenticate the child lease and its parent/scope.
+    /// The runtime must first authenticate the recipient grant and its scope.
     pub fn handoff(&mut self, source: &Grant, destination: &Grant, id: &str) -> Result<Transfer> {
         self.grant(source)?;
         self.grant(destination)?;
-        if source.principal == destination.principal || source.lease == destination.lease {
+        if source.principal == destination.principal {
             return Err(Error::Invalid);
         }
         let identity = grant_identity(destination)?;
@@ -448,9 +444,6 @@ impl Vault {
             return Err(Error::Access);
         }
         admission(&tx, source, &t)?;
-        if destination.expires_at_unix <= now()? {
-            return Err(Error::Access);
-        }
         if t.recipient.is_some() {
             return if original_destination == identity {
                 Ok(t)
@@ -463,8 +456,7 @@ impl Vault {
         }
         t.recipient = Some(RecipientAuthority {
             principal: destination.principal.clone(),
-            lease: destination.lease.clone(),
-            expires_at_unix: destination.expires_at_unix,
+            authority: destination.authority.clone(),
         });
         tx.execute(
             "UPDATE transfers SET destination_json=?1 WHERE handle=?2",
@@ -503,7 +495,7 @@ impl Vault {
     }
 
     /// Trusted supervisor callback for an accepted producer, including callbacks
-    /// after access/retention expired. This grants no byte access.
+    /// after access was revoked or payload retention expired. This grants no byte access.
     pub fn finish_source(
         &mut self,
         id: &str,
@@ -745,7 +737,7 @@ impl Vault {
         Ok(())
     }
 
-    /// Runtime completion, bound to the accepted operation even if its lease expired.
+    /// Runtime completion, bound to the accepted operation even if its session has finished.
     pub fn finish_receive(
         &mut self,
         id: &str,
@@ -874,7 +866,7 @@ impl Vault {
             .map_err(|_| Error::Storage)?;
         let (index, mut t, source, _) = row(&tx, id)?;
         if let Some(grant) = grant {
-            if grant.expires_at_unix <= now()? || grant_identity(grant)? != source {
+            if grant_identity(grant)? != source {
                 return Err(Error::Access);
             }
             if t.capture == CapturePhase::Started
@@ -905,7 +897,7 @@ fn admission(db: &Connection, grant: &Grant, t: &Transfer) -> Result<()> {
             r.get(0)
         })
         .map_err(|_| Error::Storage)?;
-    if closed || grant.expires_at_unix <= now()? {
+    if closed {
         return Err(Error::Access);
     }
     // Recheck identity after acquiring the write lock: a handoff may have
@@ -962,7 +954,7 @@ fn grant_identity(grant: &Grant) -> Result<String> {
         &grant.lab,
         &grant.principal,
         &grant.wallet,
-        &grant.lease,
+        &grant.authority,
     ))
     .map_err(|_| Error::Invalid)
 }

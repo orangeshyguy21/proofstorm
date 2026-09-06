@@ -87,9 +87,9 @@ fn recipient_scope_and_handoff_survive_structural_schema() {
     let spec = crd
         .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties")
         .unwrap();
-    let scope = &spec["leaseScope"];
+    let scope = &spec["accessScope"]["properties"]["scope"];
     for field in [
-        "parent_lease_id",
+        "issuer_principal_id",
         "component",
         "mint",
         "reference",
@@ -104,7 +104,7 @@ fn recipient_scope_and_handoff_survive_structural_schema() {
         );
     }
     let parameters = &spec["action"]["properties"]["parameters"]["properties"];
-    assert!(parameters.get("recipientLeaseId").is_some());
+    assert!(parameters.get("recipientGrantId").is_some());
     assert!(
         parameters["transferMethod"]["enum"]
             .as_array()

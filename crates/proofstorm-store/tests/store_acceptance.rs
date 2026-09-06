@@ -312,7 +312,8 @@ fn revisions_and_grants_survive_reopen() {
         seed(&store);
         for capability in [
             Capability::ExperimentCreate,
-            Capability::LeaseAcquire,
+            Capability::LabOperate,
+            Capability::ExperimentRead,
             Capability::WalletFund,
             Capability::ArtifactRead,
         ] {
@@ -351,16 +352,14 @@ fn revisions_and_grants_survive_reopen() {
             )
             .expect("experiment");
         store
-            .acquire_lease(
+            .start_session(
                 "alpha",
                 "designer",
                 "durable-experiment",
-                "durable-lease",
-                300,
-                1,
-                "acquire-durable-lease",
+                "durable-session",
+                "acquire-durable-session",
             )
-            .expect("lease");
+            .expect("session");
         (revision.digest, instance)
     };
     let reopened = Store::open(&path).expect("reopen");
@@ -388,7 +387,7 @@ fn revisions_and_grants_survive_reopen() {
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "one acceptance scenario keeps lease admission, sequencing, quota, and artifact bounds visible"
+    reason = "one acceptance scenario keeps session admission, sequencing, quota, and artifact bounds visible"
 )]
 fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
     let store = Store::memory().expect("store");
@@ -399,7 +398,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
         Capability::ArtifactRead,
         Capability::ExperimentCreate,
         Capability::ExperimentRead,
-        Capability::LeaseAcquire,
+        Capability::LabOperate,
         Capability::ActionCancel,
     ] {
         store
@@ -443,16 +442,14 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
         )
         .expect("experiment");
     store
-        .acquire_lease(
+        .start_session(
             "alpha",
             "designer",
             "operations-experiment",
-            "operations-lease",
-            300,
-            10,
-            "acquire-operations-lease",
+            "operations-session",
+            "acquire-operations-session",
         )
-        .expect("lease");
+        .expect("session");
     for index in 0..8 {
         let operation = store
             .create_operation(
@@ -460,7 +457,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
                 "designer",
                 "operations-instance",
                 "operations-experiment",
-                "operations-lease",
+                "operations-session",
                 &format!("operation-{index}"),
                 OperationKind::BootstrapLiquidity,
                 &serde_json::json!({"index": index}),
@@ -487,7 +484,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "designer",
             "operations-instance",
             "operations-experiment",
-            "operations-lease",
+            "operations-session",
             "operation-nine",
             OperationKind::BootstrapLiquidity,
             &serde_json::json!({"index": 9}),
@@ -581,7 +578,7 @@ fn quote_observation_store() -> Store {
         Capability::ArtifactRead,
         Capability::ExperimentCreate,
         Capability::ExperimentRead,
-        Capability::LeaseAcquire,
+        Capability::LabOperate,
     ] {
         store
             .grant("alpha", "designer", capability)
@@ -624,16 +621,14 @@ fn quote_observation_store() -> Store {
         )
         .expect("experiment");
     store
-        .acquire_lease(
+        .start_session(
             "alpha",
             "designer",
             "quote-observation-experiment",
-            "quote-observation-lease",
-            300,
-            10,
-            "acquire-quote-observation-lease",
+            "quote-observation-session",
+            "acquire-quote-observation-session",
         )
-        .expect("lease");
+        .expect("session");
     store
 }
 
@@ -649,7 +644,7 @@ fn quote_operation(store: &Store, id: &str, kind: OperationKind, key: &str) {
             "designer",
             "quote-observation-instance",
             "quote-observation-experiment",
-            "quote-observation-lease",
+            "quote-observation-session",
             id,
             kind,
             &serde_json::json!({"fixture": id}),
@@ -854,7 +849,7 @@ fn payment_claims_are_idempotent_and_single_flight() {
             "designer",
             "quote-observation-instance",
             "quote-observation-experiment",
-            "quote-observation-lease",
+            "quote-observation-session",
             operation,
             &serde_json::json!({"mint_quote_id": quote}),
             &format!("create-{operation}"),
@@ -930,7 +925,7 @@ fn payment_claims_are_idempotent_and_single_flight() {
                 "designer",
                 "quote-observation-instance",
                 "quote-observation-experiment",
-                "quote-observation-lease",
+                "quote-observation-session",
                 operation,
                 &serde_json::json!({"mint_quote_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}),
                 &format!("create-{operation}"),
@@ -961,9 +956,9 @@ fn payment_claims_are_idempotent_and_single_flight() {
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "one lifecycle acceptance test keeps the conflicting lease and close sequence visible"
+    reason = "one lifecycle acceptance test keeps the conflicting session and close sequence visible"
 )]
-fn exclusive_leases_block_conflicting_control_and_close() {
+fn overlapping_sessions_do_not_block_control_or_close() {
     let store = Store::memory().expect("store");
     seed(&store);
     for principal in ["designer", "reader"] {
@@ -971,8 +966,8 @@ fn exclusive_leases_block_conflicting_control_and_close() {
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
             Capability::ExperimentClose,
-            Capability::LeaseAcquire,
-            Capability::LeaseRelease,
+            Capability::LabOperate,
+            Capability::ExperimentRead,
         ] {
             store
                 .grant("alpha", principal, capability)
@@ -1021,26 +1016,19 @@ fn exclusive_leases_block_conflicting_control_and_close() {
             .expect("idempotent experiment"),
         experiment
     );
-    let lease = store
-        .acquire_lease(
+    let session = store
+        .start_session(
             "alpha",
             "designer",
             "experiment-a",
-            "lease-a",
-            300,
-            10,
-            "acquire-lease-a",
+            "session-a",
+            "acquire-session-a",
         )
-        .expect("lease");
-    assert_eq!(lease.phase, proofstorm_core::LeasePhase::Active);
-    assert!(matches!(
-        store.instance_for_close("alpha", "designer", "leased-instance"),
-        Err(StoreError::InstanceLeased { .. })
-    ));
-    assert!(matches!(
-        store.close_experiment("alpha", "designer", "experiment-a", "close-leased"),
-        Err(StoreError::ExperimentLeased { .. })
-    ));
+        .expect("session");
+    assert_eq!(session.phase, proofstorm_core::SessionPhase::Active);
+    store
+        .instance_for_close("alpha", "designer", "leased-instance")
+        .unwrap();
     store
         .create_experiment(
             "alpha",
@@ -1050,22 +1038,18 @@ fn exclusive_leases_block_conflicting_control_and_close() {
             "create-experiment-b",
         )
         .expect("second experiment");
-    assert!(matches!(
-        store.acquire_lease(
-            "alpha",
-            "reader",
-            "experiment-b",
-            "lease-b",
-            300,
-            10,
-            "acquire-lease-b",
-        ),
-        Err(StoreError::InstanceLeased { .. })
-    ));
+    store
+        .start_session("alpha", "reader", "experiment-b", "session-b", "start-b")
+        .unwrap();
+    let overlap = store
+        .overlapping_sessions("alpha", "reader", "session-a", "", 20)
+        .unwrap();
+    assert_eq!(overlap.sessions.len(), 1);
+    assert_eq!(overlap.sessions[0].id, "session-b");
     let released = store
-        .release_lease("alpha", "designer", "lease-a", "release-lease-a")
+        .finish_session("alpha", "designer", "session-a", "release-session-a")
         .expect("release");
-    assert_eq!(released.phase, proofstorm_core::LeasePhase::Released);
+    assert_eq!(released.phase, proofstorm_core::SessionPhase::Finished);
     let closed = store
         .close_experiment("alpha", "designer", "experiment-a", "close-experiment-a")
         .expect("close experiment");

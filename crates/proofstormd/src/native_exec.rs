@@ -380,7 +380,7 @@ pub async fn reconcile(
                 action,
                 context,
                 "private_transfer_refused",
-                "private payload binding or current lease refused; command not started",
+                "private payload binding or private access permission refused; command not started",
             )
             .await;
         }

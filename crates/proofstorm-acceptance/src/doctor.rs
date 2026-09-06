@@ -41,6 +41,23 @@ const REQUIRED_TOOLS: &[&str] = &[
     "proofstorm_wallet_pay",
 ];
 
+/// Ordinary lab workflow, without exposing manual run/session coordination.
+const REQUIRED_DEVELOPER_TOOLS: &[&str] = &[
+    "proofstorm_catalog_list",
+    "proofstorm_catalog_entry_read",
+    "proofstorm_catalog_config_schema_read",
+    "proofstorm_lab_up",
+    "proofstorm_lab_inspect",
+    "proofstorm_session_list",
+    "proofstorm_lab_exec",
+    "proofstorm_lab_sync",
+    "proofstorm_lab_finish",
+    "proofstorm_lab_component_status_list",
+    "proofstorm_operation_status",
+    "proofstorm_operation_wait_many",
+    "proofstorm_action_cancel",
+];
+
 /// Native operation replaces the wallet and bootstrap-dependent mutations.
 const REQUIRED_NATIVE_TOOLS: &[&str] = &[
     "proofstorm_catalog_list",
@@ -54,8 +71,8 @@ const REQUIRED_NATIVE_TOOLS: &[&str] = &[
     "proofstorm_lab_close",
     "proofstorm_experiment_create",
     "proofstorm_experiment_close",
-    "proofstorm_lease_acquire",
-    "proofstorm_lease_release",
+    "proofstorm_session_start",
+    "proofstorm_session_finish",
     "proofstorm_component_exec_live",
     "proofstorm_component_forensics",
     "proofstorm_component_restart",
@@ -108,14 +125,13 @@ pub fn run(mcp_binary: &Path, config_path: &Path) -> Result<()> {
         .map(|tool| expect::string(tool, "/name"))
         .collect::<Result<_>>()?;
 
-    let required = if environment
+    let required = match environment
         .get("PROOFSTORM_TOOLSET")
         .and_then(Value::as_str)
-        == Some("native")
     {
-        REQUIRED_NATIVE_TOOLS
-    } else {
-        REQUIRED_TOOLS
+        None | Some("developer") => REQUIRED_DEVELOPER_TOOLS,
+        Some("native") => REQUIRED_NATIVE_TOOLS,
+        _ => REQUIRED_TOOLS,
     };
     let missing: Vec<&&str> = required
         .iter()

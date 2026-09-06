@@ -1,10 +1,103 @@
 # proofstorm
 
-Proofstorm is an MCP-native, Kubernetes-backed protocol laboratory for
-Bitcoin, Lightning, Cashu mints, wallets, adversarial clients, and network
-faults. Everything host-side is Rust, and `make` is the only entrypoint you
-need. The legacy Docker Compose harness is quarantined in
-[`docs/compose-harness.md`](docs/compose-harness.md).
+Proofstorm spins up Bitcoin, Lightning, and Cashu test labs so you can connect
+your app, test failures, and see what happened.
+
+The runtime uses Kubernetes. The developer CLI and MCP share the same Rust
+application layer. Start here; the advanced agent workflows remain below.
+
+## Developer quick start
+
+With Docker running and Rust installed:
+
+```bash
+make setup
+target/debug/proofstorm init
+target/debug/proofstorm up examples/developer-lab.json
+target/debug/proofstorm status demo
+```
+
+The example starts Bitcoin Core and a Cashu mint with an embedded BDK backend.
+It uses Bitcoin regtest and the mint's on-chain NUT-30 support. It does not
+create a Lightning channel or fund a wallet automatically.
+
+Run a native command, then connect your application in another terminal:
+
+```bash
+target/debug/proofstorm exec demo chain --public-output -- bitcoin-cli -regtest -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only getblockchaininfo
+target/debug/proofstorm connect demo mint http --config /tmp/proofstorm-mint.json
+```
+
+Keep `connect` running. Your application reads the generated JSON `url` and
+uses the mint's normal HTTP API, such as `GET /v1/info`. It needs no MCP or
+Kubernetes credentials. For authenticated Bitcoin RPC, use:
+
+```bash
+target/debug/proofstorm connect demo chain rpc --config /tmp/proofstorm-bitcoin.json
+```
+
+The new configuration file contains the URL and authentication fields, uses
+owner-only permissions, and is removed on normal disconnect. Existing files
+are never overwritten. A forced process kill can leave the file behind;
+remove it before reconnecting. Connection metadata printed to the terminal
+contains no credentials. Tunnels bind only to loopback, bypass lab network
+policies, and stop when their process stops or the lab closes. Existing TCP
+sessions can fail when a component restarts; new sessions resolve its new pod.
+Only mint HTTP and Bitcoin Core RPC are supported in this first increment.
+
+Inspect, collect receipts, and finish:
+
+```bash
+target/debug/proofstorm sync demo
+target/debug/proofstorm down demo
+```
+
+`status` is a pure observation of current infrastructure and cached activity;
+`sync` records completed runtime results. Use `sync demo --watch` for ongoing
+collection while that process runs. `result <request-id>` reads a retained
+operation, including after teardown. `down` revokes managed actions, collects
+or cancels outstanding work, and waits for verified absence. Repeat it after
+a timeout to finish cleanup. External application requests use native
+protocols and are not individually journaled.
+
+Labs and their managed runs have **no expiry or action-count quota**. They stay
+available until explicitly closed. Individual commands still have
+timeouts, and temporary private payloads retain their storage cleanup policy.
+The CLI prints a request ID
+before submission; reuse `exec --request-id <id>` with the same command after
+an interrupted submission. Command output defaults to private; only use
+`--public-output` for output suitable for durable public artifacts.
+
+Sessions are created automatically for CLI/MCP clients. `status` includes session
+records and attributes activity to each actor. Clean disconnects finish tracking;
+a crash leaves an unfinished record with its last activity time. Finishing a
+session never cancels work or revokes access. See [session tracking](docs/session-tracking-2026-09-06.md)
+for the read API and upgrade notes.
+
+State survives in `.proofstorm/proofstorm.sqlite3`. Cluster selection defaults
+to `k3d-proofstorm`; `--database`, `--workspace`, `--principal`, `--context`,
+and `--namespace` select another environment explicitly. Only `init` changes
+CLI permissions. Configuration changes require closing the current lab, then
+calling `up` again; the name is reused with a fresh instance and history.
+`make down` deletes the entire local cluster, while `proofstorm down demo`
+closes just that lab.
+
+## See the environment
+
+```bash
+target/debug/proofstorm environment
+target/debug/proofstorm serve --port 8787
+# From another terminal:
+curl http://127.0.0.1:8787/v1/environment
+```
+
+The same read-only view is available through MCP `proofstorm_environment_read`.
+It includes topology, endpoint metadata, desired resources, session overlaps,
+and recorded activity across retained labs. Each source reports its freshness;
+protocol traffic and external clients are explicitly unobserved. Results are
+paged, and reads never start commands or collect receipts. See the
+[environment API contract](docs/environment-api-2026-09-06.md) for scope,
+pagination, local HTTP access, and the JSON Schema.
 
 ## Agent quick start
 
@@ -75,19 +168,21 @@ Run a durable, capability-scoped local MCP session:
 PROOFSTORM_DB=.proofstorm/proofstorm.sqlite3 \
 PROOFSTORM_WORKSPACE=local-lab \
 PROOFSTORM_PRINCIPAL=designer \
+PROOFSTORM_TOOLSET=design \
 PROOFSTORM_CAPABILITIES=catalog.read,lab.read,lab.create,lab.edit,lab.clone,lab.validate,lab.publish \
 cargo run -p proofstorm-mcp
 ```
 
 The configured capability list replaces that principal's grants in the selected
 workspace. It is trusted operator configuration, never model-supplied input.
-Set `PROOFSTORM_TOOLSET=native` for a slim cross-phase experiment surface:
+Set `PROOFSTORM_TOOLSET=all` to retain the full compatibility surface.
+Set `PROOFSTORM_TOOLSET=native` for a cross-phase experiment surface:
 native CLIs handle wallet operations and routing policy, while Proofstorm keeps
 provisioning, coordination, lifecycle, faults, and observations such as wallet
 balance and reachability. The `experiment` profile retains typed contracts for
 regression testing and comparison. Set `PROOFSTORM_TOOLSET=design`, `runtime`, or
 `evidence` to expose only the
-agent-facing tools for that phase; the default is `all`. A toolset only removes
+agent-facing tools for that phase; the default is `developer` (named lab lifecycle, native commands, and bounded observation). A toolset only removes
 routes and is always intersected with the principal's durable capabilities, so
 it cannot grant authority. Focused toolsets reduce the MCP discovery schema
 loaded into an agent's context.
@@ -236,10 +331,10 @@ controllers before distributed labs are claimed as supported. A component
 controller is a deterministic, component-local capability gateway—not an AI
 agent.
 
-Slice 6 lifecycle work is complete. Experiments and exclusive leases are
-durable SQLite records with dedicated capabilities. Leases expire, carry a
-bounded action budget, and block conflicting leases, experiment close, and lab
-close. Slice 5 runtime operations now require a matching lease and are assigned
+Activity is attributed to automatic, nonexclusive sessions in SQLite. Sessions
+record the actor, lab, start, last activity and finish. Multiple agents may work
+in the same lab; overlapping sessions never block actions or lab closure.
+`proofstorm_session_list` lists intervals and their temporal overlaps. Actions retain
 an atomic experiment-wide sequence; `proofstorm_action_list` exposes bounded
 pages of compact canonical summaries in an object envelope with an explicit
 next sequence cursor. Summaries contain request and artifact digests, but omit
@@ -257,7 +352,7 @@ action records that execution began, a missing Job fails closed as
 effect may have completed before its receipt disappeared. The
 Slice 5 live test retries all three calls, restarts `proofstormd` while
 bootstrap is active, proves that exactly one Job ran for each accepted action,
-rejects malformed actions and exhausted lease budgets before Job creation,
+rejects malformed actions before Job creation,
 deletes a running action Job across controller downtime to prove the no-replay
 fence, and confirms that lab close removed the ephemeral action resources. MCP no
 longer renders runtime Jobs or reads pod termination state directly. An
@@ -330,8 +425,7 @@ The live path forms a real three-node cycle and rebalances 100,000 sat through
 it, closes the temporary bridge, then cooperatively and forcibly closes the LND
 and mixed CLN/LND channels while exercising peer disconnect/reconnect. These
 actions remain canonically ordered alongside the network observations described
-below, and the first request beyond the lease budget is refused before any
-runtime action is created.
+below.
 
 Slice 8 begins with `proofstorm_network_partition` and
 `proofstorm_network_heal`. An agent partitions two logical components and later
@@ -367,12 +461,10 @@ heal; it does not pretend to support traffic shaping. The typed
 `bidirectional` direction, 1–60,000 ms delay, and at most 10,000 ms jitter that
 cannot exceed the delay. `proofstorm_network_loss` accepts 1–10,000 basis points
 of packet loss. With the current backend, both return
-`network_fault_unsupported` before operation admission, lease-budget
-consumption, or journal sequencing. The MCP surface now exposes 61 tools. The
+`network_fault_unsupported` before operation admission or journal sequencing. The MCP surface now exposes 61 tools. The
 live workflow records nine reachability observations spanning baseline,
 overlapping faults, controller reconstruction, and targeted heals, for a
-47-action canonical journal; the forty-eighth request is refused by the lease
-budget.
+47-action canonical journal.
 
 `proofstorm_artifact_export` turns a closed experiment into a deterministic,
 content-hashed evidence bundle without consulting Kubernetes. The default
@@ -388,10 +480,9 @@ artifact bodies by default, and up to 16 explicitly selected sanitized
 artifacts. The content is capped at 512 KiB and omits runtime resource names,
 instance keys, component credentials, private payment material, and unbounded
 logs. Export requires both `experiment.read` and `artifact.read`; it does not
-consume a lease action.
+submit a runtime action.
 
-The live k3d workflow exported the complete 47-action experiment after lease
-release and experiment close. The bundle contained the seven-component lab and
+The live k3d workflow exported the complete 47-action experiment after experiment close. The bundle contained the seven-component lab and
 resolved content lock, the ordered terminal journal, all twelve conservation
 and reachability artifacts, and the explicitly selected wallet-payment artifact.
 Acceptance verified the 512 KiB ceiling and scanned the result for runtime

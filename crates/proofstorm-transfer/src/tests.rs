@@ -13,13 +13,12 @@ fn grants() -> (Grant, Grant) {
         lab: "lab".into(),
         principal: "alice".into(),
         wallet: "cdk".into(),
-        lease: "source-lease".into(),
-        expires_at_unix: now().unwrap() + 3600,
+        authority: "source-session".into(),
     };
     let mut b = a.clone();
     b.principal = "bob".into();
     b.wallet = "cocod".into();
-    b.lease = "destination-lease".into();
+    b.authority = "destination-session".into();
     (a, b)
 }
 fn native() -> NativeReceipt {
@@ -121,7 +120,7 @@ fn large_private_transfer_survives_restart_and_separates_native_receipts() {
 }
 
 #[test]
-fn handles_do_not_authorize_other_principals_wallets_labs_or_leases() {
+fn handles_do_not_authorize_other_principals_wallets_labs_or_authorities() {
     let root = tempdir();
     let mut v = vault(root.path());
     let (a, b) = grants();
@@ -132,8 +131,8 @@ fn handles_do_not_authorize_other_principals_wallets_labs_or_leases() {
             0 => wrong.principal = "mallory".into(),
             1 => wrong.wallet = "other".into(),
             2 => wrong.lab = "other".into(),
-            3 => wrong.lease = "other".into(),
-            _ => wrong.expires_at_unix = 0,
+            3 => wrong.authority = "other".into(),
+            _ => wrong.workspace = "other".into(),
         }
         assert_eq!(v.status(&wrong, &t.id), Err(Error::Access));
         assert_eq!(v.deliver(&wrong, &t.id), Err(Error::Access));
@@ -148,7 +147,7 @@ fn handles_do_not_authorize_other_principals_wallets_labs_or_leases() {
 }
 
 #[test]
-fn capacity_is_reserved_before_producer_and_idempotency_survives_lease_renewal() {
+fn capacity_is_reserved_before_producer_and_idempotency_survives_reconnection() {
     let root = tempdir();
     let limits = Limits {
         payload_bytes: 100,
@@ -159,9 +158,7 @@ fn capacity_is_reserved_before_producer_and_idempotency_survives_lease_renewal()
     let mut v = Vault::open(root.path(), "workspace", "lab", limits).unwrap();
     let (a, b) = grants();
     let t = v.prepare(&a, &b, "same", 100).unwrap();
-    let mut renewed = a.clone();
-    renewed.expires_at_unix += 100;
-    assert_eq!(v.prepare(&renewed, &b, "same", 100).unwrap(), t);
+    assert_eq!(v.prepare(&a, &b, "same", 100).unwrap(), t);
     assert_eq!(v.prepare(&a, &b, "same", 99), Err(Error::Conflict));
     assert_eq!(v.prepare(&a, &b, "second", 100), Err(Error::Capacity));
     assert_eq!(
@@ -289,7 +286,7 @@ fn native_interruption_is_unknown_and_expiry_does_not_mean_spent() {
     let expired = v.status(&a, &t.id).unwrap();
     assert_eq!(expired.capture, CapturePhase::Expired);
     assert!(expired.receiver.receipt.is_none());
-    // The accepted native operation may report after retention/lease expiry.
+    // The accepted native operation may report after payload retention expiry.
     assert_eq!(
         v.finish_receive(&t.id, "receive", native())
             .unwrap()
@@ -844,10 +841,10 @@ fn handoff_rebinds_only_the_recipient_without_resetting_native_fences() {
     let root = tempdir();
     let (a, mut original) = grants();
     original.principal = a.principal.clone();
-    original.lease = a.lease.clone();
+    original.authority = a.authority.clone();
     let mut child = original.clone();
     child.principal = "bob".into();
-    child.lease = "child".into();
+    child.authority = "child".into();
     let payload = b"private-handoff-fixture";
     let mut v = vault(root.path());
     let t = captured(&mut v, &a, &original, "handoff", payload);
@@ -881,7 +878,7 @@ fn handoff_requires_completed_capture_and_fixed_destination() {
     let root = tempdir();
     let (a, original) = grants();
     let mut child = original.clone();
-    child.lease = "child".into();
+    child.authority = "child".into();
     let mut v = vault(root.path());
     let t = v.prepare(&a, &original, "pending", 32).unwrap();
     assert!(v.handoff(&a, &child, &t.id).is_err());
@@ -891,9 +888,6 @@ fn handoff_requires_completed_capture_and_fixed_destination() {
     assert!(v.handoff(&a, &wrong, &t.id).is_err());
     wrong = child.clone();
     wrong.workspace = "other".into();
-    assert!(v.handoff(&a, &wrong, &t.id).is_err());
-    wrong = child.clone();
-    wrong.expires_at_unix = 0;
     assert!(v.handoff(&a, &wrong, &t.id).is_err());
     assert!(v.handoff(&original, &child, &t.id).is_err());
     v.deliver(&original, &t.id).unwrap();
@@ -905,7 +899,7 @@ fn stale_recipient_grant_is_rechecked_inside_the_admission_transaction() {
     let root = tempdir();
     let (a, original) = grants();
     let mut child = original.clone();
-    child.lease = "child".into();
+    child.authority = "child".into();
     let mut v = vault(root.path());
     let t = captured(&mut v, &a, &original, "stale", b"fixture");
     let (_, before) = v.authorized(&original, &t.id, Some(true)).unwrap();
@@ -915,4 +909,26 @@ fn stale_recipient_grant_is_rechecked_inside_the_admission_transaction() {
             .unwrap();
     assert!(admission(&tx, &original, &before).is_err());
     assert!(admission(&tx, &child, &before).is_ok());
+}
+
+#[test]
+fn legacy_custody_keeps_bytes_handles_and_prepare_replay_after_session_removal() {
+    let root = tempdir();
+    let (mut a, mut b) = grants();
+    let mut v = vault(root.path());
+    let original = captured(&mut v, &a, &b, "original", b"retained-private-payload");
+    v.db.pragma_update(None, "user_version", 0).unwrap();
+    drop(v);
+    a.authority = "owner".into();
+    b.authority = "owner".into();
+    let mut reopened = vault(root.path());
+    let replay = reopened
+        .prepare(&a, &b, "original", original.maximum_bytes)
+        .unwrap();
+    assert_eq!(replay.id, original.id);
+    assert_eq!(
+        reopened.status(&a, &original.id).unwrap().sha256,
+        original.sha256
+    );
+    reopened.deliver(&b, &original.id).unwrap();
 }

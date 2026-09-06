@@ -21,8 +21,7 @@ const CAPABILITIES: &[&str] = &[
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lease.acquire",
-    "lease.release",
+    "lab.operate",
     "wallet.create",
     "wallet.control",
     "wallet.fund",
@@ -80,11 +79,11 @@ fn invoice_from(output: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("native output contains no regtest invoice"))
 }
 
-fn scoped(instance: &str, experiment: &str, lease: &str, operation: &str, extra: Value) -> Value {
+fn scoped(instance: &str, experiment: &str, session: &str, operation: &str, extra: Value) -> Value {
     let mut request = json!({
         "instance_id": instance,
         "experiment_id": experiment,
-        "lease_id": lease,
+        "session_id": session,
         "operation_id": operation
     });
     let Value::Object(fields) = extra else {
@@ -111,7 +110,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let draft = format!("quote-composition-{run}");
     let instance = format!("quote-composition-instance-{run}");
     let experiment = format!("quote-composition-experiment-{run}");
-    let lease = format!("quote-composition-lease-{run}");
+    let session = format!("quote-composition-session-{run}");
     let mut client = context.session(&workspace, "quote-agent", CAPABILITIES)?;
 
     client.call(
@@ -135,15 +134,15 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"experiment_id": experiment, "instance_id": instance, "idempotency_key": format!("experiment-{run}")}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": experiment, "lease_id": lease, "duration_seconds": 1200, "max_actions": 12, "idempotency_key": format!("lease-{run}")}),
+        "proofstorm_session_start",
+        json!({"experiment_id": experiment, "session_id": session, "idempotency_key": format!("session-{run}")}),
     )?;
     client.call(
         "proofstorm_liquidity_bootstrap",
         scoped(
             &instance,
             &experiment,
-            &lease,
+            &session,
             "bootstrap",
             json!({
                 "chain": "chain", "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
@@ -160,7 +159,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     ] {
         client.call(
             "proofstorm_wallet_initialize",
-            scoped(&instance, &experiment, &lease, operation, json!({
+            scoped(&instance, &experiment, &session, operation, json!({
                 "wallet": wallet, "mint": "mint", "idempotency_key": format!("{operation}-{run}")
             })),
         )?;
@@ -171,7 +170,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &lease,
+            &session,
             "fund-payer",
             json!({
                 "wallet": "payer-wallet", "mint": "mint", "payer_lightning": "payer-lnd",
@@ -184,7 +183,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
     client.call(
         "proofstorm_component_forensics",
-        scoped(&instance, &experiment, &lease, "compose-invoice", json!({
+        scoped(&instance, &experiment, &session, "compose-invoice", json!({
             "component": "recipient-wallet", "target_component": "mint", "script": compose_script,
             "timeout_seconds": 60, "idempotency_key": format!("compose-{run}")
         })),
@@ -195,7 +194,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let pay_request = scoped(
         &instance,
         &experiment,
-        &lease,
+        &session,
         "compose-pay",
         json!({
             "wallet": "payer-wallet", "mint": "mint", "recipient_wallet": "recipient-wallet",
@@ -209,7 +208,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &lease,
+            &session,
             "compose-pay-racer",
             json!({
                 "wallet": "payer-wallet", "mint": "mint", "recipient_wallet": "recipient-wallet",
@@ -245,7 +244,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &lease,
+            &session,
             "external-invoice",
             json!({
                 "wallet": "recipient-wallet", "mint": "mint", "amount_sat": 200,
@@ -266,7 +265,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &lease,
+            &session,
             "read-private-invoice",
             json!({
                 "component": "recipient-wallet", "script": read_script, "timeout_seconds": 30,
@@ -287,7 +286,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &lease,
+            &session,
             "external-lightning-pay",
             json!({
                 "component": "payer-lnd", "script": pay_invoice_script, "timeout_seconds": 60,
@@ -305,7 +304,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &lease,
+            &session,
             "external-claim",
             json!({
                 "wallet": "recipient-wallet", "mint": "mint", "mint_quote_id": external_quote,
@@ -369,8 +368,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": lease, "idempotency_key": format!("release-{run}")}),
+        "proofstorm_session_finish",
+        json!({"session_id": session, "idempotency_key": format!("release-{run}")}),
     )?;
     client.call(
         "proofstorm_experiment_close",

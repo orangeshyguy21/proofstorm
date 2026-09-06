@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+proofstorm-app = { path = "../proofstorm-app" }
 anyhow.workspace = true
 futures.workspace = true
 k8s-openapi.workspace = true
@@ -23,6 +24,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]
+http = "1"
+tower = { version = "0.5", features = ["util"] }
 proofstorm-acceptance = { path = "../proofstorm-acceptance" }
 tempfile = "3.20"
 

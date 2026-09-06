@@ -18,7 +18,7 @@ proofstorm_lab_component_status_list proofstorm_lab_component_status_read
 proofstorm_lab_inventory_list proofstorm_operation_status proofstorm_operation_wait
 proofstorm_operation_wait_many proofstorm_action_list proofstorm_action_cancel
 proofstorm_artifact_read proofstorm_artifact_export proofstorm_artifact_list
-proofstorm_lease_release proofstorm_experiment_close proofstorm_experiment_read
+proofstorm_private_access_revoke proofstorm_private_access_read proofstorm_session_list proofstorm_session_finish proofstorm_experiment_close proofstorm_experiment_read
 proofstorm_candidate_cancel proofstorm_candidate_read proofstorm_candidate_list
 proofstorm_candidate_wait'''.split())
 WAIT_TOOLS = frozenset('''proofstorm_lab_wait
@@ -168,7 +168,7 @@ class CleanupGate:
                 'hard_stop_at_unix': self.started_at + self.max_seconds,
                 'seconds_to_cleanup': max(0, round(self.started_at + self.seconds - now, 3)),
                 'seconds_to_hard_stop': max(0, round(self.started_at + self.max_seconds - now, 3)),
-                'instruction': ('Cancel owned operations, release lease, close experiment, export evidence, '
+                'instruction': ('Cancel owned operations, release session, close experiment, export evidence, '
                                 'close and verify lab absence, then report now.' if cleanup else
                                 'Finish experimental work before cleanup; reserve time for teardown and report.')}
         if self.stage_budget:
@@ -330,7 +330,7 @@ def main():
             if not allowed:
                 if 'id' in message:
                     emit(json.dumps(gate.decorate({'jsonrpc': '2.0', 'id': message['id'], 'error': {
-                        'code': -32600, 'message': 'Cleanup phase: cancel or wait for owned operations, release the lease, close the experiment, export evidence, close the lab, then report. New experimental work is refused.',
+                        'code': -32600, 'message': 'Cleanup phase: cancel or wait for owned operations, release the session, close the experiment, export evidence, close the lab, then report. New experimental work is refused.',
                         'data': {'code': 'cleanup_phase_only'}}})) + '\n')
                 continue
             if message.get('method') == 'tools/call':

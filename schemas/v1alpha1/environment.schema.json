@@ -1,0 +1,900 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EnvironmentView",
+  "type": "object",
+  "properties": {
+    "api_version": {
+      "type": "string"
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    },
+    "labs": {
+      "$ref": "#/$defs/Page"
+    },
+    "observation_finished_at_unix": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "observation_started_at_unix": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "workspace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "api_version",
+    "workspace_id",
+    "scope",
+    "observation_started_at_unix",
+    "observation_finished_at_unix",
+    "labs",
+    "coverage"
+  ],
+  "$defs": {
+    "Activity": {
+      "type": "object",
+      "properties": {
+        "accepted_at_unix": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "artifact_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cleanup_verified": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "completed_at_unix": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/OperationKind"
+        },
+        "native_exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "native_timed_out": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/OperationPhase"
+        },
+        "principal_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sequence",
+        "kind",
+        "phase",
+        "accepted_at_unix",
+        "session_id",
+        "run_id",
+        "principal_id",
+        "components"
+      ]
+    },
+    "Authentication": {
+      "type": "string",
+      "enum": [
+        "none",
+        "basic"
+      ]
+    },
+    "ComponentConditionReason": {
+      "type": "string",
+      "enum": [
+        "observed",
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "storage_bound",
+        "storage_pending",
+        "credentials_projected",
+        "credentials_missing",
+        "endpoints_ready",
+        "endpoints_missing",
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped",
+        "control_available",
+        "control_unavailable"
+      ]
+    },
+    "ComponentConditionState": {
+      "type": "string",
+      "enum": [
+        "true",
+        "false",
+        "unknown"
+      ]
+    },
+    "ComponentConditionType": {
+      "type": "string",
+      "enum": [
+        "workload_ready",
+        "storage_ready",
+        "credentials_ready",
+        "service_ready",
+        "protocol_ready",
+        "dependencies_ready",
+        "component_ready",
+        "experiment_controllable"
+      ]
+    },
+    "ComponentKind": {
+      "type": "string",
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "database",
+        "identity_provider",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ]
+    },
+    "ComponentView": {
+      "type": "object",
+      "properties": {
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConditionView"
+          }
+        },
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "ready": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "implementation",
+        "conditions",
+        "endpoints"
+      ]
+    },
+    "ConditionView": {
+      "type": "object",
+      "properties": {
+        "condition_type": {
+          "$ref": "#/$defs/ComponentConditionType"
+        },
+        "last_transition_unix": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "reason": {
+          "$ref": "#/$defs/ComponentConditionReason"
+        },
+        "state": {
+          "$ref": "#/$defs/ComponentConditionState"
+        }
+      },
+      "required": [
+        "condition_type",
+        "state",
+        "reason",
+        "last_transition_unix"
+      ]
+    },
+    "ContainerDemand": {
+      "type": "object",
+      "properties": {
+        "init": {
+          "type": "boolean"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "requests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "init",
+        "requests",
+        "limits"
+      ]
+    },
+    "Coverage": {
+      "type": "object",
+      "properties": {
+        "activity": {
+          "type": "string"
+        },
+        "attached_clients": {
+          "type": "string"
+        },
+        "protocol_traffic": {
+          "type": "string"
+        },
+        "resource_demand": {
+          "type": "string"
+        },
+        "resource_usage": {
+          "type": "string"
+        },
+        "topology": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "topology",
+        "activity",
+        "resource_demand",
+        "resource_usage",
+        "protocol_traffic",
+        "attached_clients"
+      ]
+    },
+    "Endpoint": {
+      "type": "object",
+      "properties": {
+        "access_context": {
+          "type": "string"
+        },
+        "cluster_host": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "local_authentication": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Authentication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "local_connection_supported": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "transport": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "name",
+        "transport",
+        "cluster_host",
+        "port",
+        "local_connection_supported",
+        "access_context"
+      ]
+    },
+    "EnvironmentLab": {
+      "type": "object",
+      "properties": {
+        "activity": {
+          "$ref": "#/$defs/Page5"
+        },
+        "components": {
+          "$ref": "#/$defs/Page2"
+        },
+        "handle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LabHandle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "journal_read_at_unix": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "last_recorded_activity_at_unix": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "links": {
+          "$ref": "#/$defs/Page3"
+        },
+        "resource_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resources": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceDemand"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeObservation"
+        },
+        "sessions": {
+          "$ref": "#/$defs/Page4"
+        }
+      },
+      "required": [
+        "id",
+        "journal_read_at_unix",
+        "runtime",
+        "components",
+        "links",
+        "sessions",
+        "activity"
+      ]
+    },
+    "InstancePhase": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "ready",
+        "closing",
+        "closed",
+        "cleanup_blocked"
+      ]
+    },
+    "LabHandle": {
+      "type": "object",
+      "properties": {
+        "config_digest": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/LabHandlePhase"
+        }
+      },
+      "required": [
+        "name",
+        "generation",
+        "owner",
+        "config_digest",
+        "phase",
+        "instance_id"
+      ]
+    },
+    "LabHandlePhase": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closing",
+        "closed"
+      ]
+    },
+    "LinkKind": {
+      "type": "string",
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "payment_backend",
+        "database_backend",
+        "authentication_backend",
+        "network_path"
+      ]
+    },
+    "LinkView": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkKind"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "from",
+        "to"
+      ]
+    },
+    "ObservationState": {
+      "type": "string",
+      "enum": [
+        "available",
+        "stale",
+        "missing",
+        "unavailable",
+        "not_materialized"
+      ]
+    },
+    "OperationKind": {
+      "type": "string",
+      "enum": [
+        "node_start",
+        "node_stop",
+        "node_restart",
+        "component_restart",
+        "bootstrap_liquidity",
+        "peer_connect",
+        "peer_disconnect",
+        "channel_open",
+        "channel_policy_set",
+        "channel_close",
+        "channel_force_close",
+        "channel_rebalance",
+        "network_partition",
+        "network_delay",
+        "network_loss",
+        "network_heal",
+        "wallet_initialize",
+        "wallet_balance",
+        "wallet_fund",
+        "wallet_invoice",
+        "wallet_pay",
+        "wallet_quote_claim",
+        "wallet_melt_quote_refresh",
+        "wallet_round_trip",
+        "conservation_oracle",
+        "reachability_oracle",
+        "component_forensics",
+        "component_exec_live",
+        "private_transfer",
+        "component_logs",
+        "authentication_conformance",
+        "authentication_protected_spend",
+        "authentication_replay"
+      ]
+    },
+    "OperationPhase": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "Page": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EnvironmentLab"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "Page2": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComponentView"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "Page3": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LinkView"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "Page4": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionView"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "Page5": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Activity"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "ResourceDemand": {
+      "type": "object",
+      "properties": {
+        "storage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StorageDemand"
+          }
+        },
+        "workloads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkloadDemand"
+          }
+        }
+      },
+      "required": [
+        "workloads",
+        "storage"
+      ]
+    },
+    "RuntimeObservation": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fetched_at_unix": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "observed_generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstancePhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_updated_at_unix": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "state": {
+          "$ref": "#/$defs/ObservationState"
+        }
+      },
+      "required": [
+        "state",
+        "fetched_at_unix"
+      ]
+    },
+    "Session": {
+      "type": "object",
+      "properties": {
+        "experiment_id": {
+          "type": "string"
+        },
+        "finished_at_unix": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "last_activity_at_unix": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "phase": {
+          "$ref": "#/$defs/SessionPhase"
+        },
+        "principal_id": {
+          "type": "string"
+        },
+        "started_at_unix": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "workspace_id",
+        "experiment_id",
+        "instance_id",
+        "principal_id",
+        "phase",
+        "started_at_unix",
+        "last_activity_at_unix"
+      ]
+    },
+    "SessionPhase": {
+      "type": "string",
+      "enum": [
+        "active",
+        "finished"
+      ]
+    },
+    "SessionView": {
+      "type": "object",
+      "properties": {
+        "overlapping_session_count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "session": {
+          "$ref": "#/$defs/Session"
+        }
+      },
+      "required": [
+        "session",
+        "overlapping_session_count"
+      ]
+    },
+    "StorageDemand": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "replicas": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "requests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workload": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "replicas",
+        "requests"
+      ]
+    },
+    "WorkloadDemand": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "containers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContainerDemand"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "replicas": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "name",
+        "replicas",
+        "containers"
+      ]
+    }
+  }
+}

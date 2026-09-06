@@ -1160,13 +1160,13 @@ fn full_baseline_lab_matches_its_golden_contract() {
     let action = ProofstormLabAction::new(
         "golden-native-exec",
         ProofstormLabActionSpec {
-            lease_scope: None,
+            access_scope: None,
             lab_name: "golden-lab".into(),
             workspace_id: "workspace-golden".into(),
             instance_id: "instance-golden".into(),
             instance_key: INSTANCE_KEY.into(),
             experiment_id: "experiment-golden".into(),
-            lease_id: "lease-golden".into(),
+            session_id: "session-golden".into(),
             principal_id: "principal-golden".into(),
             sequence: 1,
             operation_id: "operation-golden".into(),

@@ -49,8 +49,8 @@ pub use evidence::{
     EvidenceBundleContent, EvidenceInstance,
 };
 pub use experiment::{
-    Experiment, ExperimentLease, ExperimentPhase, LeasePhase, PrivateReceiveCommand,
-    PrivateTransferLeaseScope,
+    Experiment, ExperimentPhase, PrivateAccessGrant, PrivateReceiveCommand, PrivateTransferScope,
+    Session, SessionPhase,
 };
 pub use instance::{
     ComponentCondition, ComponentStatus, InstancePhase, InventoryEntry, LabInstance,

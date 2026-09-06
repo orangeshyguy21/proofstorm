@@ -6,7 +6,7 @@ use std::{fs, path::Path};
 
 const INSTANCE: &str = "cocod-wallet-instance";
 const EXPERIMENT: &str = "cocod-wallet-experiment";
-const LEASE: &str = "cocod-wallet-lease";
+const LEASE: &str = "cocod-wallet-session";
 
 pub(super) fn relay_invoice(receipt: &Value, amount_sat: u64) -> Result<&str> {
     let now = std::time::SystemTime::now()
@@ -55,7 +55,7 @@ fn scoped(operation: &str, parameters: Value) -> Value {
         panic!("parameters must be an object")
     };
     request.extend(
-        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"lease_id":LEASE,
+        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":LEASE,
         "operation_id":operation,"idempotency_key":operation})
         .as_object()
         .expect("scope")
@@ -655,7 +655,10 @@ fn run_scoped(
         let ready = lab::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
         client.call("proofstorm_experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
-        client.call("proofstorm_lease_acquire",json!({"experiment_id":EXPERIMENT,"lease_id":LEASE,"duration_seconds":1200,"max_actions":64,"idempotency_key":"lease"}))?;
+        client.call(
+            "proofstorm_session_start",
+            json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
+        )?;
         if transfer {
             super::private_transfer::exercise(
                 context,
@@ -679,8 +682,8 @@ fn run_scoped(
         )
     })();
     let _ = client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id":LEASE,"idempotency_key":"release"}),
+        "proofstorm_session_finish",
+        json!({"session_id":LEASE,"idempotency_key":"release"}),
     );
     let _ = client.call(
         "proofstorm_experiment_close",

@@ -23,7 +23,7 @@ use crate::{GateContext, json as expect, lab};
 
 const INSTANCE: &str = "failed-melt-instance";
 const EXPERIMENT: &str = "failed-melt-experiment";
-const LEASE: &str = "failed-melt-lease";
+const LEASE: &str = "failed-melt-session";
 const DRAFT: &str = "failed-melt";
 const FUNDED_SAT: u64 = 2_000;
 const INVOICE_SAT: u64 = 1_000;
@@ -40,8 +40,7 @@ const CAPABILITIES: &[&str] = &[
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lease.acquire",
-    "lease.release",
+    "lab.operate",
     "action.cancel",
     "wallet.create",
     "wallet.control",
@@ -101,8 +100,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-failed-melt-experiment"}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 10, "idempotency_key": "acquire-failed-melt-lease"}),
+        "proofstorm_session_start",
+        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-failed-melt-session"}),
     )?;
 
     // Liquidity is opened between the funder and the payer only. The island
@@ -110,7 +109,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "proofstorm_liquidity_bootstrap",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-bootstrap", "chain": "chain",
             "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
             "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000,
@@ -133,7 +132,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         client.call(
             "proofstorm_wallet_initialize",
             json!({
-                "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+                "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
                 "operation_id": operation, "wallet": wallet, "mint": mint,
                 "idempotency_key": operation
             }),
@@ -150,7 +149,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "proofstorm_wallet_fund",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-fund", "wallet": "payer-wallet", "mint": "payer-mint",
             "payer_lightning": "mint-lnd", "amount_sat": FUNDED_SAT,
             "idempotency_key": "fund-failed-melt"
@@ -164,7 +163,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "proofstorm_wallet_balance",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-balance-before", "wallet": "payer-wallet", "mint": "payer-mint",
             "idempotency_key": "balance-before-failed-melt"
         }),
@@ -175,7 +174,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "proofstorm_wallet_invoice",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-invoice",
             "wallet": "recipient-wallet", "mint": "recipient-mint",
             "amount_sat": INVOICE_SAT, "timeout_seconds": 300,
@@ -195,7 +194,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "proofstorm_wallet_pay",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-pay", "mint_quote_id": mint_quote_id,
             "wallet": "payer-wallet", "mint": "payer-mint",
             "recipient_wallet": "recipient-wallet", "recipient_mint": "recipient-mint",
@@ -224,7 +223,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "proofstorm_wallet_balance",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-balance-after", "wallet": "payer-wallet", "mint": "payer-mint",
             "idempotency_key": "balance-after-failed-melt"
         }),
@@ -248,8 +247,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": LEASE, "idempotency_key": "release-failed-melt-lease"}),
+        "proofstorm_session_finish",
+        json!({"session_id": LEASE, "idempotency_key": "release-failed-melt-session"}),
     )?;
     let closed_experiment = client.call(
         "proofstorm_experiment_close",

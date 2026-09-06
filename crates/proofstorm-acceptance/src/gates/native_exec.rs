@@ -24,8 +24,7 @@ const CAPABILITIES: &[&str] = &[
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lease.acquire",
-    "lease.release",
+    "lab.operate",
     "component.exec_live",
     "component.logs",
     "artifact.read",
@@ -119,7 +118,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let draft = format!("native-exec-{run_id}");
     let instance = format!("native-exec-instance-{run_id}");
     let experiment = format!("native-exec-experiment-{run_id}");
-    let lease = format!("native-exec-lease-{run_id}");
+    let session = format!("native-exec-session-{run_id}");
 
     let mut client = context.session(&workspace, "experiment-agent", CAPABILITIES)?;
 
@@ -187,8 +186,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"experiment_id": experiment, "instance_id": instance, "idempotency_key": format!("create-experiment-{run_id}")}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": experiment, "lease_id": lease, "duration_seconds": 600, "max_actions": 7, "idempotency_key": format!("acquire-lease-{run_id}")}),
+        "proofstorm_session_start",
+        json!({"experiment_id": experiment, "session_id": session, "idempotency_key": format!("acquire-session-{run_id}")}),
     )?;
 
     let mut records = Vec::new();
@@ -197,7 +196,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         let request = json!({
             "instance_id": instance,
             "experiment_id": experiment,
-            "lease_id": lease,
+            "session_id": session,
             "operation_id": operation,
             "component": component,
             "script": script,
@@ -277,7 +276,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({
             "instance_id": instance,
             "experiment_id": experiment,
-            "lease_id": lease,
+            "session_id": session,
             "operation_id": logs_operation,
             "component": "chain",
             "tail_lines": 25,
@@ -361,8 +360,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": lease, "idempotency_key": format!("release-lease-{run_id}")}),
+        "proofstorm_session_finish",
+        json!({"session_id": session, "idempotency_key": format!("release-session-{run_id}")}),
     )?;
     let closed_experiment = client.call(
         "proofstorm_experiment_close",

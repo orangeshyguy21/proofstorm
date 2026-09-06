@@ -20,7 +20,7 @@ use crate::{GateContext, McpClient, gate::CONTROL_NAMESPACE, json as expect, lab
 
 const INSTANCE: &str = "slice5-instance";
 const EXPERIMENT: &str = "slice5-experiment";
-const LEASE: &str = "slice5-lease";
+const LEASE: &str = "slice5-session";
 const DRAFT: &str = "slice5";
 const WORKSPACE: &str = "slice5";
 const INVALID_ACTION: &str = "slice5-invalid-peer-action";
@@ -40,8 +40,7 @@ const CAPABILITIES: &[&str] = &[
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lease.acquire",
-    "lease.release",
+    "lab.operate",
     "action.cancel",
     "topology.mutate",
     "node.control",
@@ -95,12 +94,12 @@ fn empty_lab() -> Value {
     })
 }
 
-/// The instance, experiment and lease triple every runtime action carries.
+/// The instance, experiment and session triple every runtime action carries.
 fn scoped(operation: &str, extra: Value) -> Value {
     let mut base = json!({
         "instance_id": INSTANCE,
         "experiment_id": EXPERIMENT,
-        "lease_id": LEASE,
+        "session_id": LEASE,
         "operation_id": operation
     });
     if let (Some(target), Value::Object(source)) = (base.as_object_mut(), extra) {
@@ -386,7 +385,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "proofstorm_network_delay",
         json!({
             "instance_id": INSTANCE, "experiment_id": "unsupported-network-experiment",
-            "lease_id": "unsupported-network-lease", "operation_id": "unsupported-network-delay",
+            "session_id": "unsupported-network-session", "operation_id": "unsupported-network-delay",
             "from_component": "wallet", "to_component": "mint", "direction": "from_to",
             "delay_ms": 100, "jitter_ms": 10, "idempotency_key": "unsupported-network-delay-slice5"
         }),
@@ -396,7 +395,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "proofstorm_network_loss",
         json!({
             "instance_id": INSTANCE, "experiment_id": "unsupported-network-experiment",
-            "lease_id": "unsupported-network-lease", "operation_id": "unsupported-network-loss",
+            "session_id": "unsupported-network-session", "operation_id": "unsupported-network-loss",
             "from_component": "wallet", "to_component": "mint", "direction": "bidirectional",
             "loss_basis_points": 250, "idempotency_key": "unsupported-network-loss-slice5"
         }),
@@ -434,7 +433,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             "instanceId": INSTANCE,
             "instanceKey": instance_key,
             "experimentId": "controller-conformance",
-            "leaseId": "controller-conformance",
+            "sessionId": "controller-conformance",
             "principalId": "cluster-operator",
             "sequence": 1,
             "operationId": "invalid-peer-connect",
@@ -497,14 +496,14 @@ pub fn run(context: &GateContext) -> Result<()> {
         CONTROL_NAMESPACE,
     ])?;
 
-    // --- experiment and lease ----------------------------------------------
+    // --- experiment and session ----------------------------------------------
     client.call(
         "proofstorm_experiment_create",
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-slice5-experiment"}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 900, "max_actions": 46, "idempotency_key": "acquire-slice5-lease"}),
+        "proofstorm_session_start",
+        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-slice5-session"}),
     )?;
     client.call_refused(
         "proofstorm_lab_close",
@@ -1473,22 +1472,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("CLN force-close artifact is invalid: {cln_force_closed}");
     }
 
-    // --- the first request past the lease budget is refused ----------------
-    client.call_refused(
-        "proofstorm_wallet_balance",
-        scoped(
-            "over-budget",
-            json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "over-budget-slice5"}),
-        ),
-        "action_budget_exceeded",
-    )?;
-
     let runtime_items = action_kinds(context)?;
-    if expect::array(&runtime_items, "/items")?.iter().any(|item| {
-        item.pointer("/spec/operationId").and_then(Value::as_str) == Some("over-budget")
-    }) {
-        bail!("exhausted action budget created a runtime action");
-    }
     let kinds = kinds_by_operation(&runtime_items)?;
     let expect_kinds = |operations: &[&str], wanted: &[&str], label: &str| -> Result<()> {
         let actual: Vec<&str> = operations
@@ -1613,8 +1597,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": LEASE, "idempotency_key": "release-slice5-lease"}),
+        "proofstorm_session_finish",
+        json!({"session_id": LEASE, "idempotency_key": "release-slice5-session"}),
     )?;
     let closed_experiment = client.call(
         "proofstorm_experiment_close",

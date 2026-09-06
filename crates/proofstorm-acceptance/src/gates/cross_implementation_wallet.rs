@@ -16,7 +16,7 @@ const CACHE_DRIVER: &str = include_str!("../../drivers/nutshell_redis_settings.p
 
 const INSTANCE: &str = "cross-mint-wallet-instance";
 const EXPERIMENT: &str = "cross-mint-experiment";
-const LEASE: &str = "cross-mint-lease";
+const LEASE: &str = "cross-mint-session";
 const DRAFT: &str = "cross-mint-wallet";
 
 fn lab_document() -> Value {
@@ -66,8 +66,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         EXPERIMENT_CAPABILITIES,
     )?;
     let _ = client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id":LEASE,"idempotency_key":"release-cross-mint-lease"}),
+        "proofstorm_session_finish",
+        json!({"session_id":LEASE,"idempotency_key":"release-cross-mint-session"}),
     );
     let _ = client.call(
         "proofstorm_experiment_close",
@@ -238,14 +238,14 @@ fn exercise(context: &GateContext) -> Result<()> {
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-cross-mint-experiment"}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 24, "idempotency_key": "acquire-cross-mint-lease"}),
+        "proofstorm_session_start",
+        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-cross-mint-session"}),
     )?;
 
     client.call(
         "proofstorm_liquidity_bootstrap",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "cross-mint-bootstrap", "chain": "chain",
             "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
             "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000,
@@ -263,7 +263,7 @@ fn exercise(context: &GateContext) -> Result<()> {
     ] {
         let prefix = format!("{implementation}-wallet");
         let common = json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "wallet": wallet, "mint": mint
         });
         let merge = |extra: Value| -> Value {
@@ -437,8 +437,8 @@ fn exercise(context: &GateContext) -> Result<()> {
     lab::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": LEASE, "idempotency_key": "release-cross-mint-lease"}),
+        "proofstorm_session_finish",
+        json!({"session_id": LEASE, "idempotency_key": "release-cross-mint-session"}),
     )?;
     let closed_experiment = client.call(
         "proofstorm_experiment_close",

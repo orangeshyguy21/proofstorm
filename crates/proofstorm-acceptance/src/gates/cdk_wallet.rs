@@ -12,7 +12,7 @@ use crate::{GateContext, McpClient, json as expect, lab};
 
 const INSTANCE: &str = "cdk-wallet-instance";
 const EXPERIMENT: &str = "cdk-wallet-experiment";
-const LEASE: &str = "cdk-wallet-lease";
+const LEASE: &str = "cdk-wallet-session";
 const CLI: &str = "timeout -k 2 45 cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive";
 const LN: &str = "lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=127.0.0.1:10009";
 
@@ -41,7 +41,7 @@ fn scoped(operation: &str, parameters: Value) -> Value {
         panic!("parameters must be an object")
     };
     request.extend(
-        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"lease_id":LEASE,
+        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":LEASE,
         "operation_id":operation,"idempotency_key":operation})
         .as_object()
         .expect("scope")
@@ -558,7 +558,10 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         let ready = lab::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
         client.call("proofstorm_experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
-        client.call("proofstorm_lease_acquire",json!({"experiment_id":EXPERIMENT,"lease_id":LEASE,"duration_seconds":1200,"max_actions":64,"idempotency_key":"lease"}))?;
+        client.call(
+            "proofstorm_session_start",
+            json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
+        )?;
         exercise(
             context,
             &mut client,
@@ -568,8 +571,8 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         )
     })();
     let _ = client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id":LEASE,"idempotency_key":"release"}),
+        "proofstorm_session_finish",
+        json!({"session_id":LEASE,"idempotency_key":"release"}),
     );
     let _ = client.call(
         "proofstorm_experiment_close",

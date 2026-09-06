@@ -174,11 +174,11 @@ spec:
                           - lab.materialize
                           - lab.status
                           - lab.close
+                          - lab.connect
                           - experiment.create
                           - experiment.read
                           - experiment.close
-                          - lease.acquire
-                          - lease.release
+                          - lab.operate
                           - action.cancel
                           - topology.inspect
                           - topology.mutate

@@ -10,14 +10,13 @@ use std::{fs, path::Path};
 
 const INSTANCE: &str = "cocod-wallet-instance";
 const EXPERIMENT: &str = "cocod-wallet-experiment";
-const PARENT: &str = "cocod-wallet-lease";
+const PARENT: &str = "cocod-wallet-session";
 const RECIPIENT_CAPABILITIES: &[&str] = &[
     "catalog.read",
     "component.exec_live",
     "wallet.control",
     "experiment.read",
     "artifact.read",
-    "lease.release",
     "action.cancel",
 ];
 
@@ -28,10 +27,10 @@ fn save(directory: &Path, id: &str, value: &Value) -> Result<()> {
     )?;
     Ok(())
 }
-fn scoped(lease: &str, id: &str, mut parameters: Value) -> Value {
+fn scoped(session: &str, id: &str, mut parameters: Value) -> Value {
     parameters.as_object_mut().expect("parameters").extend(
         json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,
-        "lease_id":lease,"operation_id":id,"idempotency_key":id})
+        "session_id":session,"operation_id":id,"idempotency_key":id})
         .as_object()
         .unwrap()
         .clone(),
@@ -41,12 +40,12 @@ fn scoped(lease: &str, id: &str, mut parameters: Value) -> Value {
 fn child_operation(
     client: &mut McpClient,
     directory: &Path,
-    lease: &str,
+    session: &str,
     id: &str,
     tool: &str,
     parameters: Value,
 ) -> Result<Value> {
-    client.call(tool, scoped(lease, id, parameters))?;
+    client.call(tool, scoped(session, id, parameters))?;
     let receipt = lab::wait_operation(client, id, 60)?;
     save(directory, id, &receipt)?;
     Ok(lab::artifact_content(&receipt)?.clone())
@@ -64,15 +63,6 @@ fn refused(
     if response.pointer("/error/data/code") != Some(&json!(expected_code)) {
         bail!("request {id} did not receive the expected {expected_code} refusal");
     }
-    if expected_code == "validation_failed"
-        && !response["error"]["message"]
-            .as_str()
-            .is_some_and(|message| {
-                message.contains("recipient lease does not authorize this operation or binding")
-            })
-    {
-        bail!("request {id} failed validation outside the recipient scope boundary");
-    }
     Ok(())
 }
 
@@ -80,21 +70,21 @@ fn delegate(
     client: &mut McpClient,
     directory: &Path,
     principal: &str,
-    lease: &str,
+    session: &str,
     wallet: &str,
     reference: &str,
     receive: &Value,
 ) -> Result<()> {
     let value = client.call(
-        "proofstorm_lease_delegate",
-        json!({"parent_lease_id":PARENT,"recipient_principal_id":principal,
-        "recipient_lease_id":lease,"component":wallet,"mint":"mint","reference":reference,
-        "duration_seconds":300,"max_actions":8,"receive":receive,"idempotency_key":lease}),
+        "proofstorm_private_access_issue",
+        json!({"instance_id":INSTANCE,"recipient_principal_id":principal,
+        "recipient_grant_id":session,"component":wallet,"mint":"mint","reference":reference,
+        "receive":receive,"idempotency_key":session}),
     )?;
-    if value["principal_id"] != principal || value["delegation"]["reference"] != reference {
-        bail!("recipient lease binding differs");
+    if value["principal_id"] != principal || value["scope"]["reference"] != reference {
+        bail!("recipient session binding differs");
     }
-    save(directory, lease, &value)
+    save(directory, session, &value)
 }
 
 #[allow(
@@ -120,7 +110,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
     for (
         tag,
         principal,
-        lease,
+        session,
         source,
         destination,
         amount,
@@ -198,28 +188,28 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             parent,
             directory,
             principal,
-            lease,
+            session,
             destination,
             &reference,
             &json!({"argv":receive,"timeout_seconds":60,"input":input}),
         )?;
-        // A child cannot clear the parent's runtime lease before ownership is checked.
+        // A child cannot clear the parent's runtime session before ownership is checked.
         refused(
             recipient,
             directory,
             &id("parent-release-denied"),
-            "lease_owner_mismatch",
-            "proofstorm_lease_release",
-            json!({"lease_id":PARENT,"idempotency_key":id("parent-release-denied")}),
+            "validation_failed",
+            "proofstorm_session_finish",
+            json!({"session_id":PARENT,"idempotency_key":id("parent-release-denied")}),
         )?;
         refused(
             recipient,
             directory,
             &id("sender-balance-denied"),
-            "validation_failed",
+            "access_denied",
             "proofstorm_wallet_balance",
             scoped(
-                lease,
+                session,
                 &id("sender-balance-denied"),
                 json!({"wallet":source,"mint":"mint"}),
             ),
@@ -228,10 +218,10 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             recipient,
             directory,
             &id("unbound-exec-denied"),
-            "validation_failed",
+            "access_denied",
             "proofstorm_component_exec_live",
             scoped(
-                lease,
+                session,
                 &id("unbound-exec-denied"),
                 json!({"component":destination,"argv":["true"],"timeout_seconds":10}),
             ),
@@ -240,9 +230,11 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             parent,
             directory,
             &id("bind"),
-            json!({"transferMethod":"handoff","component":source,"reference":reference,"recipientLeaseId":lease}),
+            json!({"transferMethod":"handoff","component":source,"reference":reference,"recipientGrantId":session}),
         )?;
-        if handed["recipient"]["principal"] != principal || handed["recipient"]["lease"] != lease {
+        if handed["recipient"]["principal"] != principal
+            || handed["recipient"]["session"] != session
+        {
             bail!("custody recipient binding differs");
         }
         let mut substituted = receive.clone();
@@ -251,22 +243,25 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             recipient,
             directory,
             &id("command-denied"),
-            "validation_failed",
+            "access_denied",
             "proofstorm_component_exec_live",
             scoped(
-                lease,
+                session,
                 &id("command-denied"),
                 json!({
             "component":destination,"argv":substituted,"timeout_seconds":60,"output":{"mode":"private"},
             "private_payload":{"kind":"consume","reference":reference,"input":input}}),
             ),
         )?;
-        let read = recipient.call("proofstorm_lease_read", json!({"lease_id":lease}))?;
+        let read = recipient.call(
+            "proofstorm_private_access_read",
+            json!({"grant_id":session}),
+        )?;
         save(directory, &id("recipient-scope"), &read)?;
         let delivered = child_operation(
             recipient,
             directory,
-            lease,
+            session,
             &id("deliver"),
             "proofstorm_private_transfer",
             json!({"transfer":{"transferMethod":"deliver","component":destination,"reference":reference}}),
@@ -277,7 +272,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         let native = child_operation(
             recipient,
             directory,
-            lease,
+            session,
             &id("receive"),
             "proofstorm_component_exec_live",
             json!({"component":destination,"argv":receive,"timeout_seconds":60,"output":{"mode":"private"},
@@ -296,7 +291,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         let balance = child_operation(
             recipient,
             directory,
-            lease,
+            session,
             &id("balance"),
             "proofstorm_wallet_balance",
             json!({"wallet":destination,"mint":"mint"}),
@@ -305,18 +300,18 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             bail!("delegated {amount} sat receipt did not reach expected balance");
         }
         let released = parent.call(
-            "proofstorm_lease_release",
-            json!({"lease_id":lease,"idempotency_key":id("revoke")}),
+            "proofstorm_private_access_revoke",
+            json!({"grant_id":session}),
         )?;
         save(directory, &id("revoke"), &released)?;
         refused(
             recipient,
             directory,
             &id("revoked-balance-denied"),
-            "lease_inactive",
+            "access_denied",
             "proofstorm_wallet_balance",
             scoped(
-                lease,
+                session,
                 &id("revoked-balance-denied"),
                 json!({"wallet":destination,"mint":"mint"}),
             ),
@@ -364,7 +359,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
     save(
         directory,
         "handoff-summary",
-        &json!({"principals":["experiment-agent","recipient-cdk","recipient-coco"],"directions":[200,100],"final_balances":[4500,500],"transport":"infrastructure_relay","scope":"one transfer and wallet per recipient lease"}),
+        &json!({"principals":["experiment-agent","recipient-cdk","recipient-coco"],"directions":[200,100],"final_balances":[4500,500],"transport":"infrastructure_relay","scope":"one transfer and wallet per recipient session"}),
     )
 }
 
@@ -408,7 +403,7 @@ fn revoked_before_receive(
         parent,
         directory,
         "handoff-revoke-bind",
-        json!({"transferMethod":"handoff","component":"wallet-b","reference":reference,"recipientLeaseId":"handoff-revoked"}),
+        json!({"transferMethod":"handoff","component":"wallet-b","reference":reference,"recipientGrantId":"handoff-revoked"}),
     )?;
     let before = context.kubectl.get_json(&[
         "get",
@@ -463,14 +458,14 @@ fn revoked_before_receive(
         bail!("recipient custody did not survive controller replacement");
     }
     parent.call(
-        "proofstorm_lease_release",
-        json!({"lease_id":"handoff-revoked","idempotency_key":"revoke-before-input"}),
+        "proofstorm_private_access_revoke",
+        json!({"grant_id":"handoff-revoked"}),
     )?;
     refused(
         recipient,
         directory,
         "handoff-revoked-deliver",
-        "lease_inactive",
+        "access_denied",
         "proofstorm_private_transfer",
         scoped(
             "handoff-revoked",

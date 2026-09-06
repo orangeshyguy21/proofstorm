@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn configured_service() -> anyhow::Result<ProofstormMcp> {
     let toolset = std::env::var("PROOFSTORM_TOOLSET")
-        .unwrap_or_else(|_| "all".into())
+        .unwrap_or_else(|_| "developer".into())
         .parse::<ProofstormToolset>()
         .map_err(anyhow::Error::msg)?;
     let Ok(database_path) = std::env::var("PROOFSTORM_DB") else {

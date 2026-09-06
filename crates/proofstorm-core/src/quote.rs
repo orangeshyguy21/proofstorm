@@ -55,7 +55,7 @@ pub struct WalletQuoteObservation {
     pub workspace_id: String,
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    pub session_id: String,
     pub principal_id: String,
     pub observed_by_operation: String,
     pub role: WalletQuoteObservationRole,

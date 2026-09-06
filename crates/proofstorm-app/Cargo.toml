@@ -1,0 +1,40 @@
+[package]
+name = "proofstorm-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "proofstorm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+serde_urlencoded = "0.7"
+getrandom.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+k8s-openapi.workspace = true
+kube.workspace = true
+proofstorm-core = { path = "../proofstorm-core" }
+proofstorm-kube = { path = "../proofstorm-kube" }
+proofstorm-store = { path = "../proofstorm-store" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile = "3.20"
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+
+[lints]
+workspace = true

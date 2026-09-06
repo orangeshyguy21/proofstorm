@@ -134,13 +134,14 @@ pub struct ProofstormCandidateBuildStatus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormLabActionSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lease_scope: Option<proofstorm_core::PrivateTransferLeaseScope>,
+    pub access_scope: Option<proofstorm_core::PrivateAccessGrant>,
     pub lab_name: String,
     pub workspace_id: String,
     pub instance_id: String,
     pub instance_key: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(alias = "leaseId")]
+    pub session_id: String,
     pub principal_id: String,
     pub sequence: u64,
     pub operation_id: String,
@@ -241,7 +242,7 @@ enum LabActionKindSchema {
 #[allow(dead_code)]
 struct LabActionParametersSchema {
     transfer_method: Option<TransferMethod>,
-    recipient_lease_id: Option<String>,
+    recipient_grant_id: Option<String>,
     reference: Option<String>,
     destination_component: Option<String>,
     maximum_bytes: Option<u32>,
@@ -705,7 +706,7 @@ pub enum TransferMethod {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrivateTransferAction {
     #[serde(default)]
-    pub recipient_lease_id: Option<String>,
+    pub recipient_grant_id: Option<String>,
     pub transfer_method: TransferMethod,
     pub component: String,
     #[serde(default)]

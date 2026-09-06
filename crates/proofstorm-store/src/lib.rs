@@ -3,7 +3,16 @@
     reason = "all public store operations return the documented StoreError contract"
 )]
 
+mod environment;
+pub use environment::EnvironmentEntry;
 mod delegation;
+#[cfg(test)]
+mod session_tests;
+mod sessions;
+pub use sessions::SessionPage;
+mod labs;
+mod migration;
+pub use labs::{LabHandle, LabHandlePhase};
 
 use std::{
     collections::BTreeSet,
@@ -14,13 +23,12 @@ use std::{
 
 use proofstorm_core::{
     CandidateBuild, CandidateBuildPhase, Capability, CatalogResponse, DraftMutation, Experiment,
-    ExperimentLease, ExperimentPhase, LabInstance, LabOperation, LabSpec, LeasePhase,
-    OperationArtifact, OperationKind, OperationPhase, PublishedRevision, WalletQuoteDirection,
-    WalletQuoteObservation, WalletQuoteObservationInput, WalletQuoteObservationRole,
-    apply_draft_mutation, default_catalog, effective_catalog, resolve_effective_lab, resolve_lock,
-    validate_lab,
+    ExperimentPhase, LabInstance, LabOperation, LabSpec, OperationArtifact, OperationKind,
+    OperationPhase, PublishedRevision, WalletQuoteDirection, WalletQuoteObservation,
+    WalletQuoteObservationInput, WalletQuoteObservationRole, apply_draft_mutation, default_catalog,
+    effective_catalog, resolve_effective_lab, resolve_lock, validate_lab,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -85,16 +93,6 @@ pub enum StoreError {
         active: u32,
         maximum: u32,
     },
-    #[error("lab instance {instance:?} has active experiment lease {lease:?}")]
-    InstanceLeased { instance: String, lease: String },
-    #[error("experiment {experiment:?} has active lease {lease:?}")]
-    ExperimentLeased { experiment: String, lease: String },
-    #[error("experiment lease {lease:?} belongs to principal {owner:?}, not {principal:?}")]
-    LeaseOwnerMismatch {
-        lease: String,
-        owner: String,
-        principal: String,
-    },
     #[error("operation {operation:?} belongs to principal {owner:?}, not {principal:?}")]
     OperationOwnerMismatch {
         operation: String,
@@ -107,10 +105,6 @@ pub enum StoreError {
         owner: String,
         principal: String,
     },
-    #[error("experiment lease {lease:?} is not active")]
-    LeaseInactive { lease: String },
-    #[error("experiment lease {lease:?} exhausted its {maximum}-action budget")]
-    ActionBudgetExceeded { lease: String, maximum: u32 },
     #[error("wallet mint quote {quote:?} already has payment operation {operation:?}")]
     QuotePaymentAlreadyClaimed { quote: String, operation: String },
 }
@@ -134,13 +128,8 @@ impl StoreError {
             Self::Catalog(_) => "catalog_resolution_failed",
             Self::ArtifactTooLarge { .. } => "artifact_too_large",
             Self::OperationLimit { .. } => "operation_limit",
-            Self::InstanceLeased { .. } => "instance_leased",
-            Self::ExperimentLeased { .. } => "experiment_leased",
-            Self::LeaseOwnerMismatch { .. } => "lease_owner_mismatch",
             Self::OperationOwnerMismatch { .. } => "operation_owner_mismatch",
             Self::QuoteOwnerMismatch { .. } => "quote_owner_mismatch",
-            Self::LeaseInactive { .. } => "lease_inactive",
-            Self::ActionBudgetExceeded { .. } => "action_budget_exceeded",
             Self::QuotePaymentAlreadyClaimed { .. } => "quote_payment_already_claimed",
         }
     }
@@ -178,7 +167,7 @@ struct WalletQuoteObservationRow {
     workspace_id: String,
     instance_id: String,
     experiment_id: String,
-    lease_id: String,
+    session_id: String,
     principal_id: String,
     operation_id: String,
     observation_role_json: String,
@@ -206,7 +195,7 @@ impl TryFrom<WalletQuoteObservationRow> for WalletQuoteObservation {
             workspace_id: row.workspace_id,
             instance_id: row.instance_id,
             experiment_id: row.experiment_id,
-            lease_id: row.lease_id,
+            session_id: row.session_id,
             principal_id: row.principal_id,
             observed_by_operation: row.operation_id,
             role: serde_json::from_str(&row.observation_role_json)?,
@@ -230,6 +219,8 @@ impl TryFrom<WalletQuoteObservationRow> for WalletQuoteObservation {
 #[derive(Clone)]
 pub struct Store {
     connection: Arc<Mutex<Connection>>,
+    context_id: Arc<String>,
+    context_sessions: Arc<Mutex<BTreeSet<(String, String)>>>,
 }
 
 impl Store {
@@ -255,11 +246,20 @@ impl Store {
     )]
     fn from_connection(mut connection: Connection) -> Result<Self, StoreError> {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        migration::prepare(&mut connection)?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
              CREATE TABLE IF NOT EXISTS workspaces (
                id TEXT PRIMARY KEY, name TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS lab_handles (
+               workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+               name TEXT NOT NULL, generation INTEGER NOT NULL,
+               owner TEXT NOT NULL, config_digest TEXT NOT NULL,
+               phase TEXT NOT NULL,
+               instance_id TEXT NOT NULL,
+               PRIMARY KEY(workspace_id, name)
              );
              CREATE TABLE IF NOT EXISTS principals (
                id TEXT PRIMARY KEY
@@ -327,17 +327,16 @@ impl Store {
                PRIMARY KEY (workspace_id, id),
                FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id)
              );
-             CREATE TABLE IF NOT EXISTS experiment_leases (
+             CREATE TABLE IF NOT EXISTS sessions (
                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
                id TEXT NOT NULL,
                experiment_id TEXT NOT NULL,
                instance_id TEXT NOT NULL,
                principal_id TEXT NOT NULL REFERENCES principals(id),
                phase_json TEXT NOT NULL,
-               acquired_at INTEGER NOT NULL,
-               expires_at INTEGER NOT NULL,
-               max_actions INTEGER NOT NULL,
-               released_at INTEGER,
+               started_at INTEGER NOT NULL,
+               last_activity_at INTEGER NOT NULL,
+               finished_at INTEGER,
                PRIMARY KEY (workspace_id, id),
                FOREIGN KEY (workspace_id, experiment_id) REFERENCES experiments(workspace_id, id),
                FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id)
@@ -347,7 +346,7 @@ impl Store {
                id TEXT NOT NULL,
                instance_id TEXT NOT NULL,
                experiment_id TEXT NOT NULL,
-               lease_id TEXT NOT NULL,
+               session_id TEXT NOT NULL,
                principal_id TEXT NOT NULL,
                sequence INTEGER NOT NULL,
                kind_json TEXT NOT NULL,
@@ -364,14 +363,14 @@ impl Store {
                UNIQUE (workspace_id, experiment_id, sequence),
                FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id),
                FOREIGN KEY (workspace_id, experiment_id) REFERENCES experiments(workspace_id, id),
-               FOREIGN KEY (workspace_id, lease_id) REFERENCES experiment_leases(workspace_id, id)
+               FOREIGN KEY (workspace_id, session_id) REFERENCES sessions(workspace_id, id)
              );
              CREATE TABLE IF NOT EXISTS wallet_quote_observations (
                observation_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
                instance_id TEXT NOT NULL,
                experiment_id TEXT NOT NULL,
-               lease_id TEXT NOT NULL,
+               session_id TEXT NOT NULL,
                principal_id TEXT NOT NULL REFERENCES principals(id),
                operation_id TEXT NOT NULL,
                observation_role_json TEXT NOT NULL,
@@ -390,9 +389,13 @@ impl Store {
                UNIQUE (workspace_id, operation_id, observation_role_json),
                FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id),
                FOREIGN KEY (workspace_id, experiment_id) REFERENCES experiments(workspace_id, id),
-               FOREIGN KEY (workspace_id, lease_id) REFERENCES experiment_leases(workspace_id, id),
+               FOREIGN KEY (workspace_id, session_id) REFERENCES sessions(workspace_id, id),
                FOREIGN KEY (workspace_id, operation_id) REFERENCES actions(workspace_id, id)
              );
+             CREATE INDEX IF NOT EXISTS actions_by_instance_activity
+               ON actions(workspace_id, instance_id, accepted_at DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS sessions_by_instance
+               ON sessions(workspace_id, instance_id, id);
              CREATE INDEX IF NOT EXISTS wallet_quote_observations_latest
                ON wallet_quote_observations(
                  workspace_id, instance_id, wallet_id, mint_id, direction_json,
@@ -406,7 +409,7 @@ impl Store {
                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
                instance_id TEXT NOT NULL,
                experiment_id TEXT NOT NULL,
-               lease_id TEXT NOT NULL,
+               session_id TEXT NOT NULL,
                principal_id TEXT NOT NULL REFERENCES principals(id),
                operation_id TEXT NOT NULL,
                recipient_wallet_id TEXT NOT NULL,
@@ -422,7 +425,7 @@ impl Store {
                UNIQUE (workspace_id, operation_id),
                FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id),
                FOREIGN KEY (workspace_id, experiment_id) REFERENCES experiments(workspace_id, id),
-               FOREIGN KEY (workspace_id, lease_id) REFERENCES experiment_leases(workspace_id, id),
+               FOREIGN KEY (workspace_id, session_id) REFERENCES sessions(workspace_id, id),
                FOREIGN KEY (workspace_id, operation_id) REFERENCES actions(workspace_id, id)
              );
              CREATE TABLE IF NOT EXISTS idempotency (
@@ -435,8 +438,17 @@ impl Store {
                PRIMARY KEY (workspace_id, principal_id, key)
              );",
         )?;
-        delegation::migrate(&mut connection)?;
+        migration::upgrade(&mut connection)?;
         Ok(Self {
+            context_sessions: Arc::new(Mutex::new(BTreeSet::new())),
+            context_id: Arc::new(format!(
+                "{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            )),
             connection: Arc::new(Mutex::new(connection)),
         })
     }
@@ -498,7 +510,7 @@ impl Store {
         )?;
         for capability in capabilities {
             transaction.execute(
-                "INSERT INTO grants(workspace_id, principal_id, capability) VALUES (?1, ?2, ?3)",
+                "INSERT OR IGNORE INTO grants(workspace_id, principal_id, capability) VALUES (?1, ?2, ?3)",
                 params![workspace, principal, capability_name(capability)?],
             )?;
         }
@@ -1082,26 +1094,6 @@ impl Store {
         id: &str,
     ) -> Result<LabInstance, StoreError> {
         self.authorize(workspace, principal, Capability::LabClose)?;
-        let now = now_unix();
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        expire_leases(&transaction, workspace, now)?;
-        let active = transaction
-            .query_row(
-                "SELECT id FROM experiment_leases
-                 WHERE workspace_id = ?1 AND instance_id = ?2 AND phase_json = '\"active\"' AND delegation_json IS NULL LIMIT 1",
-                params![workspace, id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        transaction.commit()?;
-        drop(connection);
-        if let Some(lease) = active {
-            return Err(StoreError::InstanceLeased {
-                instance: id.to_owned(),
-                lease,
-            });
-        }
         self.instance_unchecked(workspace, id)
     }
 
@@ -1184,13 +1176,13 @@ impl Store {
         self.experiment_unchecked(workspace, experiment_id)
     }
 
-    pub fn experiment_for_lease(
+    pub fn experiment_for_session(
         &self,
         workspace: &str,
         principal: &str,
         experiment_id: &str,
     ) -> Result<Experiment, StoreError> {
-        self.authorize(workspace, principal, Capability::LeaseAcquire)?;
+        self.authorize(workspace, principal, Capability::LabOperate)?;
         self.experiment_unchecked(workspace, experiment_id)
     }
 
@@ -1216,21 +1208,6 @@ impl Store {
         let now = now_unix();
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        expire_leases(&transaction, workspace, now)?;
-        let active = transaction
-            .query_row(
-                "SELECT id FROM experiment_leases
-                 WHERE workspace_id = ?1 AND experiment_id = ?2 AND phase_json = '\"active\"' LIMIT 1",
-                params![workspace, experiment_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if let Some(lease) = active {
-            return Err(StoreError::ExperimentLeased {
-                experiment: experiment_id.to_owned(),
-                lease,
-            });
-        }
         transaction.execute(
             "UPDATE experiments SET phase_json = ?1, closed_at = COALESCE(closed_at, ?2)
              WHERE workspace_id = ?3 AND id = ?4",
@@ -1253,168 +1230,6 @@ impl Store {
             &experiment,
         )?;
         Ok(experiment)
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "lease authority, identity, deadline, budget, and idempotency are explicit"
-    )]
-    pub fn acquire_lease(
-        &self,
-        workspace: &str,
-        principal: &str,
-        experiment_id: &str,
-        lease_id: &str,
-        duration_seconds: u32,
-        max_actions: u32,
-        idempotency_key: &str,
-    ) -> Result<ExperimentLease, StoreError> {
-        self.authorize(workspace, principal, Capability::LeaseAcquire)?;
-        validate_lease_request(lease_id, duration_seconds, max_actions)?;
-        let experiment = self.experiment_unchecked(workspace, experiment_id)?;
-        if experiment.phase != ExperimentPhase::Active {
-            return Err(StoreError::Validation(format!(
-                "experiment {experiment_id:?} is closed"
-            )));
-        }
-        let request = serde_json::json!({
-            "experimentId": experiment_id, "leaseId": lease_id,
-            "durationSeconds": duration_seconds, "maxActions": max_actions
-        });
-        if let Some(response) = self.idempotent_response(
-            workspace,
-            principal,
-            idempotency_key,
-            "lease.acquire",
-            &request,
-        )? {
-            return Ok(response);
-        }
-        if let Ok(existing) = self.lease_unchecked(workspace, lease_id) {
-            if existing.experiment_id != experiment_id
-                || existing.principal_id != principal
-                || existing.max_actions != max_actions
-                || existing.expires_at_unix - existing.acquired_at_unix
-                    != i64::from(duration_seconds)
-            {
-                return Err(StoreError::Conflict {
-                    resource: "experiment lease",
-                    id: lease_id.to_owned(),
-                });
-            }
-            self.record_idempotency(
-                workspace,
-                principal,
-                idempotency_key,
-                "lease.acquire",
-                &request,
-                &existing,
-            )?;
-            return Ok(existing);
-        }
-        let acquired_at = now_unix();
-        let expires_at = acquired_at + i64::from(duration_seconds);
-        let lease = ExperimentLease {
-            delegation: None,
-            id: lease_id.to_owned(),
-            workspace_id: workspace.to_owned(),
-            experiment_id: experiment_id.to_owned(),
-            instance_id: experiment.instance_id.clone(),
-            principal_id: principal.to_owned(),
-            phase: LeasePhase::Active,
-            acquired_at_unix: acquired_at,
-            expires_at_unix: expires_at,
-            max_actions,
-            released_at_unix: None,
-        };
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        expire_leases(&transaction, workspace, acquired_at)?;
-        let active = transaction
-            .query_row(
-                "SELECT id FROM experiment_leases
-                 WHERE workspace_id = ?1 AND instance_id = ?2 AND phase_json = '\"active\"' LIMIT 1",
-                params![workspace, experiment.instance_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if let Some(active) = active {
-            return Err(StoreError::InstanceLeased {
-                instance: experiment.instance_id,
-                lease: active,
-            });
-        }
-        transaction.execute(
-            "INSERT INTO experiment_leases(workspace_id, id, experiment_id, instance_id, principal_id,
-             phase_json, acquired_at, expires_at, max_actions)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![workspace, lease_id, experiment_id, lease.instance_id, principal,
-                serde_json::to_string(&LeasePhase::Active)?, acquired_at, expires_at, max_actions],
-        )?;
-        transaction.commit()?;
-        drop(connection);
-        self.record_idempotency(
-            workspace,
-            principal,
-            idempotency_key,
-            "lease.acquire",
-            &request,
-            &lease,
-        )?;
-        Ok(lease)
-    }
-
-    pub fn lease(
-        &self,
-        workspace: &str,
-        principal: &str,
-        lease_id: &str,
-    ) -> Result<ExperimentLease, StoreError> {
-        self.authorize(workspace, principal, Capability::ExperimentRead)?;
-        self.refresh_lease(workspace, lease_id)
-    }
-
-    pub fn release_lease(
-        &self,
-        workspace: &str,
-        principal: &str,
-        lease_id: &str,
-        idempotency_key: &str,
-    ) -> Result<ExperimentLease, StoreError> {
-        let lease = self.lease_for_release(workspace, principal, lease_id)?;
-        let request = serde_json::json!({"leaseId": lease_id});
-        if let Some(response) = self.idempotent_response(
-            workspace,
-            principal,
-            idempotency_key,
-            "lease.release",
-            &request,
-        )? {
-            return Ok(response);
-        }
-        if lease.phase == LeasePhase::Active {
-            let now = now_unix();
-            self.lock()?.execute(
-                "UPDATE experiment_leases SET phase_json = ?1, released_at = ?2
-                 WHERE workspace_id = ?3 AND id = ?4 AND phase_json = '\"active\"'",
-                params![
-                    serde_json::to_string(&LeasePhase::Released)?,
-                    now,
-                    workspace,
-                    lease_id
-                ],
-            )?;
-        }
-        let lease = self.refresh_lease(workspace, lease_id)?;
-        self.record_idempotency(
-            workspace,
-            principal,
-            idempotency_key,
-            "lease.release",
-            &request,
-            &lease,
-        )?;
-        Ok(lease)
     }
 
     pub fn revision_for_materialize(
@@ -1443,7 +1258,7 @@ impl Store {
     #[allow(
         clippy::too_many_arguments,
         clippy::too_many_lines,
-        reason = "action identity and the lease, budget, sequence, quota, and insert checks remain one atomic admission transaction"
+        reason = "action identity and the session, sequence, concurrency, and insert checks remain one atomic admission transaction"
     )]
     pub fn create_operation(
         &self,
@@ -1451,7 +1266,7 @@ impl Store {
         principal: &str,
         instance_id: &str,
         experiment_id: &str,
-        lease_id: &str,
+        session_id: &str,
         operation_id: &str,
         kind: OperationKind,
         request: &serde_json::Value,
@@ -1463,7 +1278,7 @@ impl Store {
             principal,
             instance_id,
             experiment_id,
-            lease_id,
+            session_id,
             operation_id,
             kind,
             request,
@@ -1480,7 +1295,7 @@ impl Store {
         principal: &str,
         instance_id: &str,
         experiment_id: &str,
-        lease_id: &str,
+        session_id: &str,
         operation_id: &str,
         request: &serde_json::Value,
         idempotency_key: &str,
@@ -1502,7 +1317,7 @@ impl Store {
             principal,
             instance_id,
             experiment_id,
-            lease_id,
+            session_id,
             operation_id,
             OperationKind::WalletPay,
             request,
@@ -1521,7 +1336,7 @@ impl Store {
     #[allow(
         clippy::too_many_arguments,
         clippy::too_many_lines,
-        reason = "action identity, lease, quota, operation, and optional payment claim are one atomic admission transaction"
+        reason = "action identity, session, quota, operation, and optional payment claim are one atomic admission transaction"
     )]
     fn create_operation_inner(
         &self,
@@ -1529,7 +1344,7 @@ impl Store {
         principal: &str,
         instance_id: &str,
         experiment_id: &str,
-        lease_id: &str,
+        session_id: &str,
         operation_id: &str,
         kind: OperationKind,
         request: &serde_json::Value,
@@ -1546,22 +1361,31 @@ impl Store {
         self.instance_unchecked(workspace, instance_id)?;
         let envelope = serde_json::json!({
             "instanceId": instance_id, "experimentId": experiment_id,
-            "leaseId": lease_id, "operationId": operation_id,
+            "sessionId": session_id, "operationId": operation_id,
             "kind": kind, "request": request
         });
-        if let Some(response) = self.idempotent_response(
+        if let Some(response) = self.idempotent_response::<LabOperation, _>(
             workspace,
             principal,
             idempotency_key,
             "lab.operation.create",
             &envelope,
         )? {
-            return Ok(response);
+            return self.operation_unchecked(workspace, &response.id);
         }
+        self.authorize_operation_access(workspace, principal, instance_id, kind, request)?;
+        let run = self.experiment_unchecked(workspace, experiment_id)?;
+        if run.instance_id != instance_id || run.phase != ExperimentPhase::Active {
+            return Err(StoreError::Validation(
+                "action run must be open and belong to this lab".into(),
+            ));
+        }
+        let session = self.track_session(workspace, principal, experiment_id, session_id)?;
+        let session_id = session.id.as_str();
         let digest = proofstorm_core::digest_json(&(
             workspace,
             instance_id,
-            lease_id,
+            session_id,
             operation_id,
             &kind,
             request,
@@ -1569,86 +1393,25 @@ impl Store {
         let accepted_at = now_unix();
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        expire_leases(&transaction, workspace, accepted_at)?;
-        let lease = transaction
+        let handle_phase: Option<String> = transaction
             .query_row(
-                "SELECT experiment_id, instance_id, principal_id, phase_json, max_actions, delegation_json
-                 FROM experiment_leases WHERE workspace_id = ?1 AND id = ?2",
-                params![workspace, lease_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, u32>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                    ))
-                },
+                "SELECT phase FROM lab_handles WHERE workspace_id=?1 AND instance_id=?2",
+                params![workspace, instance_id],
+                |row| row.get(0),
             )
-            .optional()?
-            .ok_or_else(|| StoreError::NotFound {
-                resource: "experiment lease",
-                id: lease_id.to_owned(),
-            })?;
-        if lease.3 != serde_json::to_string(&LeasePhase::Active)? {
-            return Err(StoreError::LeaseInactive {
-                lease: lease_id.to_owned(),
-            });
-        }
-        if lease.0 != experiment_id || lease.1 != instance_id {
+            .optional()?;
+        if handle_phase.is_some_and(|phase| phase != "\"open\"") {
             return Err(StoreError::Validation(
-                "action experiment, lease, and instance identity do not match".into(),
+                "lab is closing; new actions are not admitted".into(),
             ));
         }
-        if lease.2 != principal {
-            return Err(StoreError::LeaseOwnerMismatch {
-                lease: lease_id.to_owned(),
-                owner: lease.2,
-                principal: principal.to_owned(),
-            });
-        }
-        let lease_scope: Option<proofstorm_core::PrivateTransferLeaseScope> =
-            lease.5.as_deref().map(serde_json::from_str).transpose()?;
-        let (root_id, root_maximum) = if let Some(scope) = &lease_scope {
-            if !scope.permits(kind, request) {
-                return Err(StoreError::Validation("recipient lease does not authorize this operation or binding; no operation was created".into()));
-            }
-            let maximum: Option<u32> = transaction.query_row("SELECT max_actions FROM experiment_leases WHERE workspace_id=?1 AND id=?2
-                AND phase_json='\"active\"' AND delegation_json IS NULL AND instance_id=?3 AND experiment_id=?4",
-                params![workspace,scope.parent_lease_id,instance_id,experiment_id], |r| r.get(0)).optional()?;
-            (
-                scope.parent_lease_id.as_str(),
-                maximum.ok_or_else(|| StoreError::LeaseInactive {
-                    lease: scope.parent_lease_id.clone(),
-                })?,
-            )
-        } else {
-            (lease_id, lease.4)
-        };
-        if delegation::parent_action_count(&transaction, workspace, root_id)? >= root_maximum {
-            return Err(StoreError::ActionBudgetExceeded {
-                lease: root_id.into(),
-                maximum: root_maximum,
-            });
-        }
+        transaction.execute("UPDATE sessions SET last_activity_at=MAX(last_activity_at,?1) WHERE workspace_id=?2 AND id=?3",params![accepted_at,workspace,session_id])?;
         let last_sequence = transaction.query_row(
             "SELECT COALESCE(MAX(sequence), 0) FROM actions
              WHERE workspace_id = ?1 AND experiment_id = ?2",
             params![workspace, experiment_id],
             |row| row.get::<_, i64>(0),
         )?;
-        let action_count = transaction.query_row(
-            "SELECT COUNT(*) FROM actions WHERE workspace_id = ?1 AND lease_id = ?2",
-            params![workspace, lease_id],
-            |row| row.get::<_, u32>(0),
-        )?;
-        if action_count >= lease.4 {
-            return Err(StoreError::ActionBudgetExceeded {
-                lease: lease_id.to_owned(),
-                maximum: lease.4,
-            });
-        }
         let sequence = u64::try_from(last_sequence + 1)
             .map_err(|_| StoreError::InvalidStoredVersion(last_sequence))?;
         let operation = LabOperation {
@@ -1656,7 +1419,7 @@ impl Store {
             workspace_id: workspace.to_owned(),
             instance_id: instance_id.to_owned(),
             experiment_id: experiment_id.to_owned(),
-            lease_id: lease_id.to_owned(),
+            session_id: session_id.to_owned(),
             principal_id: principal.to_owned(),
             sequence,
             kind,
@@ -1686,7 +1449,7 @@ impl Store {
             });
         }
         let inserted = transaction.execute(
-            "INSERT OR IGNORE INTO actions(workspace_id, id, instance_id, experiment_id, lease_id,
+            "INSERT OR IGNORE INTO actions(workspace_id, id, instance_id, experiment_id, session_id,
              principal_id, sequence, kind_json, capability_json, resource_name, request_digest,
              request_json, phase_json, accepted_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
@@ -1695,7 +1458,7 @@ impl Store {
                 operation_id,
                 instance_id,
                 experiment_id,
-                lease_id,
+                session_id,
                 principal,
                 sql_version(sequence)?,
                 serde_json::to_string(&kind)?,
@@ -1708,8 +1471,8 @@ impl Store {
             ],
         )?;
         if inserted == 0 {
-            let (existing_digest, existing_kind, existing_lease) = transaction.query_row(
-                "SELECT request_digest, kind_json, lease_id FROM actions
+            let (existing_digest, existing_kind, existing_session) = transaction.query_row(
+                "SELECT request_digest, kind_json, session_id FROM actions
                  WHERE workspace_id = ?1 AND id = ?2",
                 params![workspace, operation_id],
                 |row| {
@@ -1722,7 +1485,7 @@ impl Store {
             )?;
             if existing_digest != operation.request_digest
                 || existing_kind != serde_json::to_string(&kind)?
-                || existing_lease != lease_id
+                || existing_session != session_id
             {
                 return Err(StoreError::Conflict {
                     resource: "operation",
@@ -1733,7 +1496,7 @@ impl Store {
         if let Some(claim) = payment_claim {
             let claim_inserted = transaction.execute(
                 "INSERT OR IGNORE INTO wallet_payment_claims(
-                   workspace_id, instance_id, experiment_id, lease_id, principal_id,
+                   workspace_id, instance_id, experiment_id, session_id, principal_id,
                    operation_id, recipient_wallet_id, recipient_mint_id, mint_quote_id,
                    payer_wallet_id, payer_mint_id, admitted_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -1741,7 +1504,7 @@ impl Store {
                     workspace,
                     instance_id,
                     experiment_id,
-                    lease_id,
+                    session_id,
                     principal,
                     operation_id,
                     claim.recipient_wallet,
@@ -1781,7 +1544,7 @@ impl Store {
             let existing = self.operation_unchecked(workspace, operation_id)?;
             if existing.request_digest != operation.request_digest
                 || existing.kind != kind
-                || existing.lease_id != lease_id
+                || existing.session_id != session_id
             {
                 return Err(StoreError::Conflict {
                     resource: "operation",
@@ -1982,10 +1745,11 @@ impl Store {
             drop(connection);
             return self.operation_unchecked(workspace, operation_id);
         }
+        transaction.execute("UPDATE sessions SET last_activity_at=MAX(last_activity_at,?1) WHERE workspace_id=?2 AND id=?3",params![completed_at,workspace,existing.session_id])?;
         for observation in observations {
             transaction.execute(
                 "INSERT INTO wallet_quote_observations(
-                   workspace_id, instance_id, experiment_id, lease_id, principal_id,
+                   workspace_id, instance_id, experiment_id, session_id, principal_id,
                    operation_id, observation_role_json, wallet_id, mint_id,
                    direction_json, quote_id, amount_sat, state, wallet_created_at,
                    wallet_paid_at, wallet_expires_at, fee_reserve_sat, fee_paid_sat,
@@ -1996,7 +1760,7 @@ impl Store {
                     workspace,
                     existing.instance_id,
                     existing.experiment_id,
-                    existing.lease_id,
+                    existing.session_id,
                     existing.principal_id,
                     operation_id,
                     serde_json::to_string(&observation.role)?,
@@ -2040,7 +1804,7 @@ impl Store {
             .lock()?
             .query_row(
                 "SELECT observation_sequence, workspace_id, instance_id,
-                        experiment_id, lease_id, principal_id, operation_id,
+                        experiment_id, session_id, principal_id, operation_id,
                         observation_role_json, wallet_id, mint_id, direction_json,
                         quote_id, amount_sat, state, wallet_created_at,
                         wallet_paid_at, wallet_expires_at, fee_reserve_sat,
@@ -2096,7 +1860,7 @@ impl Store {
         let connection = self.lock()?;
         let mut statement = connection.prepare(
             "SELECT observation_sequence, workspace_id, instance_id,
-                    experiment_id, lease_id, principal_id, operation_id,
+                    experiment_id, session_id, principal_id, operation_id,
                     observation_role_json, wallet_id, mint_id, direction_json,
                     quote_id, amount_sat, state, wallet_created_at,
                     wallet_paid_at, wallet_expires_at, fee_reserve_sat,
@@ -2295,7 +2059,7 @@ impl Store {
     fn operation_unchecked(&self, workspace: &str, id: &str) -> Result<LabOperation, StoreError> {
         self.lock()?
             .query_row(
-                "SELECT instance_id, experiment_id, lease_id, principal_id, sequence, kind_json,
+                "SELECT instance_id, experiment_id, session_id, principal_id, sequence, kind_json,
                         capability_json, resource_name, request_digest, request_json, phase_json,
                         accepted_at, started_at, completed_at, artifact_json
                  FROM actions WHERE workspace_id = ?1 AND id = ?2",
@@ -2325,7 +2089,7 @@ impl Store {
                 |(
                     instance_id,
                     experiment_id,
-                    lease_id,
+                    session_id,
                     principal_id,
                     sequence,
                     kind,
@@ -2346,7 +2110,7 @@ impl Store {
                         workspace_id: workspace.to_owned(),
                         instance_id,
                         experiment_id,
-                        lease_id,
+                        session_id,
                         principal_id,
                         sequence,
                         kind: serde_json::from_str(&kind)?,
@@ -2406,75 +2170,6 @@ impl Store {
                 resource: "experiment",
                 id: id.to_owned(),
             })
-    }
-
-    fn lease_unchecked(&self, workspace: &str, id: &str) -> Result<ExperimentLease, StoreError> {
-        self.lock()?
-            .query_row(
-                "SELECT experiment_id, instance_id, principal_id, phase_json, acquired_at,
-                        expires_at, max_actions, released_at, delegation_json
-                 FROM experiment_leases WHERE workspace_id = ?1 AND id = ?2",
-                params![workspace, id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, u32>(6)?,
-                        row.get::<_, Option<i64>>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                    ))
-                },
-            )
-            .optional()?
-            .map(
-                |(
-                    experiment_id,
-                    instance_id,
-                    principal_id,
-                    phase,
-                    acquired_at_unix,
-                    expires_at_unix,
-                    max_actions,
-                    released_at_unix,
-                    delegation,
-                )| {
-                    Ok::<ExperimentLease, StoreError>(ExperimentLease {
-                        delegation: delegation.map(|s| serde_json::from_str(&s)).transpose()?,
-                        id: id.to_owned(),
-                        workspace_id: workspace.to_owned(),
-                        experiment_id,
-                        instance_id,
-                        principal_id,
-                        phase: serde_json::from_str(&phase)?,
-                        acquired_at_unix,
-                        expires_at_unix,
-                        max_actions,
-                        released_at_unix,
-                    })
-                },
-            )
-            .transpose()?
-            .ok_or_else(|| StoreError::NotFound {
-                resource: "experiment lease",
-                id: id.to_owned(),
-            })
-    }
-
-    fn refresh_lease(
-        &self,
-        workspace: &str,
-        lease_id: &str,
-    ) -> Result<ExperimentLease, StoreError> {
-        let mut connection = self.lock()?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        expire_leases(&tx, workspace, now_unix())?;
-        tx.commit()?;
-        drop(connection);
-        self.lease_unchecked(workspace, lease_id)
     }
 
     fn idempotent_response<T: DeserializeOwned, R: Serialize>(
@@ -2553,38 +2248,10 @@ fn now_unix() -> i64 {
     i64::try_from(seconds).unwrap_or(i64::MAX)
 }
 
-fn expire_leases(
-    transaction: &Transaction<'_>,
-    workspace: &str,
-    now: i64,
-) -> Result<(), StoreError> {
-    transaction.execute(
-        "UPDATE experiment_leases SET phase_json = ?1
-         WHERE workspace_id = ?2 AND phase_json = '\"active\"' AND expires_at <= ?3",
-        params![serde_json::to_string(&LeasePhase::Expired)?, workspace, now],
-    )?;
-    transaction.execute("UPDATE experiment_leases AS child SET phase_json=COALESCE(
-        (SELECT parent.phase_json FROM experiment_leases parent WHERE parent.workspace_id=child.workspace_id
-        AND parent.id=json_extract(child.delegation_json,'$.parent_lease_id')), '\"expired\"')
-        WHERE child.workspace_id=?1 AND child.phase_json='\"active\"' AND child.delegation_json IS NOT NULL
-        AND NOT EXISTS(SELECT 1 FROM experiment_leases parent WHERE parent.workspace_id=child.workspace_id
-        AND parent.id=json_extract(child.delegation_json,'$.parent_lease_id') AND parent.phase_json='\"active\"')", [workspace])?;
-    Ok(())
-}
-
-fn validate_lease_request(
-    lease_id: &str,
-    duration_seconds: u32,
-    max_actions: u32,
-) -> Result<(), StoreError> {
-    if !is_slug(lease_id) {
+fn validate_session_request(session_id: &str) -> Result<(), StoreError> {
+    if !is_slug(session_id) {
         return Err(StoreError::Validation(
-            "lease id must be a lowercase kebab-case identifier of 1..=63 bytes".into(),
-        ));
-    }
-    if !(1..=86_400).contains(&duration_seconds) || !(1..=1_000).contains(&max_actions) {
-        return Err(StoreError::Validation(
-            "lease duration_seconds must be 1..=86400 and max_actions must be 1..=1000".into(),
+            "session id must be a lowercase kebab-case identifier of 1..=63 bytes".into(),
         ));
     }
     Ok(())
@@ -2656,7 +2323,7 @@ fn wallet_quote_observation_row(
         workspace_id: row.get(1)?,
         instance_id: row.get(2)?,
         experiment_id: row.get(3)?,
-        lease_id: row.get(4)?,
+        session_id: row.get(4)?,
         principal_id: row.get(5)?,
         operation_id: row.get(6)?,
         observation_role_json: row.get(7)?,

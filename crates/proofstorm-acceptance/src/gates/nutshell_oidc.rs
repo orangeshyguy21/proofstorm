@@ -20,7 +20,7 @@ use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect, lab};
 const INSTANCE: &str = "nutshell-oidc-instance";
 const DRAFT: &str = "nutshell-oidc";
 const EXPERIMENT: &str = "nutshell-oidc-experiment";
-const LEASE: &str = "nutshell-oidc-lease";
+const LEASE: &str = "nutshell-oidc-session";
 const CAPABILITIES: &[&str] = &[
     "catalog.read",
     "lab.read",
@@ -33,8 +33,7 @@ const CAPABILITIES: &[&str] = &[
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lease.acquire",
-    "lease.release",
+    "lab.operate",
     "authentication.test",
     "artifact.read",
 ];
@@ -183,15 +182,15 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-nutshell-oidc-experiment"}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 3, "idempotency_key": "acquire-nutshell-oidc-lease"}),
+        "proofstorm_session_start",
+        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-nutshell-oidc-session"}),
     )?;
     client.call(
         "proofstorm_authentication_conformance",
         json!({
             "instance_id": INSTANCE,
             "experiment_id": EXPERIMENT,
-            "lease_id": LEASE,
+            "session_id": LEASE,
             "operation_id": "nutshell-oidc-baseline",
             "mint": "mint",
             "identity_provider": "identity",
@@ -235,7 +234,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({
             "instance_id": INSTANCE,
             "experiment_id": EXPERIMENT,
-            "lease_id": LEASE,
+            "session_id": LEASE,
             "operation_id": "nutshell-oidc-protected-spend",
             "mint": "mint",
             "identity_provider": "identity",
@@ -264,7 +263,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({
             "instance_id": INSTANCE,
             "experiment_id": EXPERIMENT,
-            "lease_id": LEASE,
+            "session_id": LEASE,
             "operation_id": "nutshell-oidc-replay",
             "mint": "mint",
             "identity_provider": "identity",

@@ -31,8 +31,8 @@ use crate::{
 
 pub const COMPONENT_LABEL: &str = "proofstorm.dev/component";
 const NETWORK_IDENTITY_LABEL: &str = "proofstorm.dev/network-identity";
-const RPC_USER: &str = "proofstorm";
-const RPC_PASSWORD: &str = "proofstorm-regtest-only";
+pub const RPC_USER: &str = "proofstorm";
+pub const RPC_PASSWORD: &str = "proofstorm-regtest-only";
 const CDK_MINT_MNEMONIC: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const CDK_WALLET_MNEMONIC: &str =

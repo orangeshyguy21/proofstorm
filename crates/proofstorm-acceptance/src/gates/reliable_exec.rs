@@ -6,10 +6,10 @@ use std::fs;
 
 const INSTANCE: &str = "reliable-exec-instance";
 const EXPERIMENT: &str = "reliable-exec-experiment";
-const LEASE: &str = "reliable-exec-lease";
+const LEASE: &str = "reliable-exec-session";
 
 fn request(id: &str, command: Value) -> Value {
-    let mut value = json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"lease_id":LEASE,
+    let mut value = json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":LEASE,
         "operation_id":id,"idempotency_key":id,"component":"wallet","timeout_seconds":10});
     let Value::Object(fields) = command else {
         panic!("command must be an object")
@@ -97,7 +97,10 @@ pub fn run(context: &GateContext) -> Result<()> {
         let ready = lab::wait_ready(&mut client, INSTANCE)?;
         let namespace = expect::string(&ready, "/instance_namespace")?;
         client.call("proofstorm_experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
-        client.call("proofstorm_lease_acquire",json!({"experiment_id":EXPERIMENT,"lease_id":LEASE,"duration_seconds":900,"max_actions":20,"idempotency_key":"lease"}))?;
+        client.call(
+            "proofstorm_session_start",
+            json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
+        )?;
         for (id, component, argv) in [
             ("musl-help", "lightning", vec!["lncli", "--version"]),
             ("glibc-help", "wallet", vec!["cdk-cli", "--version"]),
@@ -218,8 +221,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             bail!("native command replayed: {count}");
         }
         client.call(
-            "proofstorm_lease_release",
-            json!({"lease_id":LEASE,"idempotency_key":"release"}),
+            "proofstorm_session_finish",
+            json!({"session_id":LEASE,"idempotency_key":"release"}),
         )?;
         client.call(
             "proofstorm_experiment_close",
@@ -236,8 +239,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         Ok(())
     })();
     let _ = client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id":LEASE,"idempotency_key":"release"}),
+        "proofstorm_session_finish",
+        json!({"session_id":LEASE,"idempotency_key":"release"}),
     );
     let _ = client.call(
         "proofstorm_experiment_close",

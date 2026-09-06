@@ -2,7 +2,7 @@
 
 Status, 2026-09-06: the connected custody/runtime checkpoint passed both native wallet directions, populated controller restart and verified teardown. The [single-principal Kimi K2.5 checkpoint](private-ecash-kimi25-run04-20260906.md) subsequently held the technical transfer contract; its reporting proficiency still failed review. Earlier foundation, runtime and request-contract failures remain in their original checkpoint records.
 
-[Cross-principal handoff](private-ecash-cross-principal-handoff.md) now extends the exclusive root lease with restricted recipient child leases and an approved native receive command. Its [deterministic live gate passed](private-ecash-cross-principal-checkpoint-20260906.md); separate-model validation remains the next checkpoint. The source remains a trusted whole-lab owner, and recipients use independently configured identities against the shared authority database.
+[Cross-principal handoff](private-ecash-cross-principal-handoff.md) now uses independent private access grants with an approved native receive command. Its [deterministic live gate passed](private-ecash-cross-principal-checkpoint-20260906.md); separate-model validation remains the next checkpoint. The source remains a trusted whole-lab owner, and recipients use independently configured identities against the shared authority database.
 
 Proofstorm owns private byte transport, authorization, execution fences and evidence references. The installed wallet owns Cashu send, receive, proof-state checks and recovery. The [pinned native capability audit](private-ecash-wallet-capabilities.md) records the actual exposed interfaces and their limits. The design does not add another wallet SDK, mint proof-state client or Proofstorm spent-proof ledger.
 
@@ -17,7 +17,7 @@ The current Rust API implements these internal steps:
 | `prepare` | Same-lab endpoint identities, idempotency key, retention deadline and two preallocated payload slots | Native export has started |
 | `begin_capture` | Accepted source operation ID committed before native launch | Export succeeded or notes exist |
 | `capture` | Successful complete native receipt, source length/hash manifest, exact private bytes verified and committed | Recipient received or redeemed notes |
-| `handoff` | One-time binding of ready custody to an authorized recipient principal and child lease | Native import or financial settlement occurred |
+| `handoff` | One-time binding of ready custody to an authorized recipient principal and private access grant | Native import or financial settlement occurred |
 | `deliver` | Integrity-checked private inbox; repeated delivery verifies the same inbox | A receiver process was launched |
 | `begin_receive` / `consume` | Unique accepted receiver operation; one private input attempt persisted before writing | Native receive completed or a daemon mutation stopped on client cancellation |
 | `finish_source` / `finish_receive` | Immutable matching supervisor receipt, including late completion | Cashu financial success solely from exit 0 |
@@ -26,7 +26,7 @@ The current Rust API implements these internal steps:
 
 The implemented transport path is explicitly `infrastructure_relay`: agents address a peer, while the trusted runtime holds and delivers the bytes. This is not an end-to-end encrypted peer networking protocol. Payloads remain sensitive inside the runtime trust boundary.
 
-`Grant` is deliberately not deserializable. The embedding runtime must construct it from freshly checked workspace capabilities, active endpoint leases, principal identities and the exact same lab. It must validate destination authority rather than trusting agent-supplied fields. Existing accepted native completion callbacks have a separate trusted path so their receipts can survive lease expiry without restoring byte access. Evidence references must resolve to actual authorized operations before `observe`; the library cannot authenticate an arbitrary operation string.
+`Grant` is deliberately not deserializable. The embedding runtime must construct it from freshly checked workspace capabilities, private access grants, principal identities and the exact same lab. It must validate destination authority rather than trusting agent-supplied fields. Existing accepted native completion callbacks have a separate trusted path so their receipts can survive access revocation without restoring byte access. Evidence references must resolve to actual authorized operations before `observe`; the library cannot authenticate an arbitrary operation string.
 
 ## Storage and execution guarantees
 
@@ -57,13 +57,13 @@ Native proof-state SPENT does not identify which recipient redeemed a note. Corr
 ## Checkpoints and remaining build
 
 1. **Custody foundation — implemented.** Synthetic private payloads, restart/interruption, authorization, capacity and replay fencing; adversarial static review with regression fixes. This is the current checkpoint.
-2. **Runtime integration — implemented in checkpoint 2.** The shared controller owns per-lab vaults on a PVC and checks the active runtime lease before admission. Native capture/input bindings carry bounded bytes through private helper streams and preserve pod/operation identity. The MCP surface below exposes only metadata. Native evidence-reference attachment remains runtime-only; this checkpoint does not add an agent `observe` or proof-recovery wrapper.
+2. **Runtime integration — implemented in checkpoint 2.** The shared controller owns per-lab vaults on a PVC and checks the current private access grant before admission. Native capture/input bindings carry bounded bytes through private helper streams and preserve pod/operation identity. The MCP surface below exposes only metadata. Native evidence-reference attachment remains runtime-only; this checkpoint does not add an agent `observe` or proof-recovery wrapper.
 3. **Deterministic native transfer — next live gate.** CDK to cocod first, then bounded cocod to CDK. Use a lab mint, exact source/destination evidence and balances, native error envelopes and interrupted/restart cases. Verify source and destination cleanup independently. Large synthetic transport success is not evidence that real Cashu token imports work.
 4. **Agent fuzzer laboratory — after the native gate.** Bounded scenario with absolute cleanup/hard deadlines, opaque references only, exact receipt accounting, independent teardown audit and a private-material leakage check. Hand off directly to the existing fuzzer when deterministic runtime evidence supports it. Static review already occurred; no model/funded transport run has been dispatched.
 
 ## Validation and evidence
 
-Nineteen focused foundation tests cover a 560,000-byte private fixture; incorrect principals, wallets, labs and leases; capacity/idempotency; competing reservations, producer and receiver admissions/input; source/inbox tampering and source-manifest mismatch; incomplete native captures; both review races; partial write and flush failure; allocation/erase rollback; late receipts; private path modes; explicit cleanup accounting; and subprocess SIGKILL during an uncommitted capture.
+Nineteen focused foundation tests cover a 560,000-byte private fixture; incorrect principals, wallets, labs and access grants; capacity/idempotency; competing reservations, producer and receiver admissions/input; source/inbox tampering and source-manifest mismatch; incomplete native captures; both review races; partial write and flush failure; allocation/erase rollback; late receipts; private path modes; explicit cleanup accounting; and subprocess SIGKILL during an uncommitted capture.
 
 The kill test inspects both preallocated blobs immediately after reopening, before interrupt/release can erase evidence, and requires their original zero state. It also verifies SIGKILL, retained source receipt and refusal of another export. Its ignored child helper is invoked explicitly by the parent test; it is not an untested skipped scenario. Storage trigger failures exercise transactional allocation/erase rollback, not every possible real disk-full or hardware fault.
 
@@ -74,7 +74,7 @@ Final workspace validation: `cargo test --workspace --all-targets` passed 238 te
 
 ## Connected MCP flow
 
-`proofstorm_private_transfer` takes the ordinary instance, experiment, lease, operation and idempotency scope plus a nested `transfer` object. It is an asynchronous journaled action; read its terminal operation artifact for `transfer.id` and custody metadata.
+`proofstorm_private_transfer` takes the ordinary instance, experiment, optional session, operation and idempotency scope plus a nested `transfer` object. It is an asynchronous journaled action; read its terminal operation artifact for `transfer.id` and custody metadata.
 
 Reserve capacity before starting an export:
 
@@ -82,7 +82,7 @@ Reserve capacity before starting an export:
 {"transfer":{"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536}}
 ```
 
-The MCP `transfer` schema is method-specific. `prepare` requires all three endpoint/capacity fields shown above; `status`, `deliver` and `release` require `component` and `reference`; `handoff` also requires `recipientLeaseId` (see the linked cross-principal flow). Omit fields belonging to other methods instead of sending nulls. Missing, null or unexpected fields fail request decoding immediately. Empty identifiers, equal source/destination and out-of-range capacity fail pre-admission; endpoint validation and the CDK recipient's 65,536-byte limit also run before journal operation creation. The controller retains its existing action format and independently enforces custody authority.
+The MCP `transfer` schema is method-specific. `prepare` requires all three endpoint/capacity fields shown above; `status`, `deliver` and `release` require `component` and `reference`; `handoff` also requires `recipientGrantId` (see the linked cross-principal flow). Omit fields belonging to other methods instead of sending nulls. Missing, null or unexpected fields fail request decoding immediately. Empty identifiers, equal source/destination and out-of-range capacity fail pre-admission; endpoint validation and the CDK recipient's 65,536-byte limit also run before journal operation creation. The controller retains its existing action format and independently enforces custody authority.
 
 Run the selected wallet's native send command through `component_exec_live`, with private output and this additional binding:
 
@@ -108,7 +108,7 @@ Status and release use the same metadata action with `transferMethod` set to `st
 
 The controller stores vaults under `PROOFSTORM_PRIVATE_ROOT`, default `/var/lib/proofstorm/private`. The chart mounts a 1 GiB PVC at `/var/lib/proofstorm`, uses one controller with Recreate, and `fsGroupChangePolicy: OnRootMismatch` to preserve strict inner 0700/0600 modes on supporting volume drivers. The initial upgrade from an existing RollingUpdate deployment needs an explicit removal of `spec.strategy.rollingUpdate` when changing strategy; the local deployment required a merge-patch migration before Helm's server-side apply succeeded. Normal fresh installs use the chart's Recreate strategy directly. Different storage drivers need their own remount validation.
 
-Lease acquisition mirrors the owned lease into a CAS-protected lab annotation. A conflicting active runtime lease is refused. Release removes that runtime admission before marking the local lease released. Controller admission re-fetches the lab and checks exact lease phase, expiry and identity. Agent request JSON never supplies a trusted Grant or a token body.
+Lease acquisition mirrors the owned lease into a CAS-protected lab annotation. A conflicting current private access grant is refused. Release removes that runtime admission before marking the local access revocationd. Controller admission re-fetches the lab and checks exact lease phase and identity. Agent request JSON never supplies a trusted Grant or a token body.
 
 The first connected runtime allows up to 1 MiB of selected payload. It rejects reservations above 64 KiB when CDK is the destination, before native export. Source stdout retention permits the reservation plus 16 KiB for startup diagnostics; stderr retains 16 KiB. All ordinary output remains private for both capture and consume, including unsuccessful operations. File/helper reads are bounded independently of stored size metadata. Helper network operations have a 20-second deadline, native commands retain their existing 1–300 second deadline, and SQLite waits remain bounded to five seconds.
 

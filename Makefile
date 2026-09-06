@@ -49,7 +49,7 @@ help:
 	@echo "  make doctor           verify pinned tools, cluster, controller, and MCP discovery"
 	@echo "  make down             delete the local cluster and its registry"
 	@echo ""
-	@echo "  make build            build the MCP server, controller, and gate runner"
+	@echo "  make build            build the developer CLI, MCP server, and gate runner"
 	@echo "  make test             hermetic workspace tests; needs no cluster"
 	@echo "  make lint             formatting, strict Clippy, and Helm lint"
 	@echo ""
@@ -69,8 +69,8 @@ help:
 # ---- build and check -------------------------------------------------------
 
 build:
-	cargo build --locked -p proofstorm-mcp -p proofstorm-acceptance
-	cargo build --locked --release -p proofstorm-mcp
+	cargo build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance
+	cargo build --locked --release -p proofstorm-app -p proofstorm-mcp
 
 test:
 	cargo test --workspace --all-targets

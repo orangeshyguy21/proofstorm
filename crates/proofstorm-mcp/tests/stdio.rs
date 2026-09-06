@@ -30,7 +30,7 @@ fn assert_resource_contract(client: &mut McpClient) {
 }
 
 #[test]
-fn stdio_server_advertises_exact_slice_one_tools() {
+fn stdio_default_developer_discovery_respects_unconfigured_authority() {
     let mut client = McpClient::spawn_bare(binary(), "proofstorm-test").expect("spawn");
 
     let initialized = client.initialize_result().clone();
@@ -54,8 +54,6 @@ fn stdio_server_advertises_exact_slice_one_tools() {
             "proofstorm_catalog_config_schema_read",
             "proofstorm_catalog_entry_read",
             "proofstorm_catalog_list",
-            "proofstorm_lab_validate",
-            "proofstorm_network_capabilities",
         ]
     );
 
@@ -104,6 +102,7 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
             ("PROOFSTORM_DB", database.as_os_str()),
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
+            ("PROOFSTORM_TOOLSET", "all".as_ref()),
             ("PROOFSTORM_CAPABILITIES", "lab.read".as_ref()),
         ],
     )
@@ -159,7 +158,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
     assert_private_transfer_schema(tool);
     let request = |transfer| {
         json!({"instance_id":"unmaterialized", "experiment_id":"test",
-        "lease_id":"test", "operation_id":"must-not-exist", "idempotency_key":"test", "transfer":transfer})
+        "session_id":"test", "operation_id":"must-not-exist", "idempotency_key":"test", "transfer":transfer})
     };
     for (transfer, field) in invalid_private_transfer_requests() {
         let response = client
@@ -227,7 +226,7 @@ fn assert_private_transfer_schema(tool: &Value) {
                 "transferMethod",
                 "component",
                 "reference",
-                "recipientLeaseId",
+                "recipientGrantId",
             ]
         } else {
             vec!["transferMethod", "component", "reference"]
@@ -265,7 +264,7 @@ fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
         ),
         (
             json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque"}),
-            "recipientLeaseId",
+            "recipientGrantId",
         ),
         (
             json!({"transferMethod":"status","component":"wallet-a"}),
@@ -284,4 +283,50 @@ fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
             "maximumBytes",
         ),
     ]
+}
+
+#[test]
+fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("developer.sqlite3");
+    let mut client = McpClient::spawn(binary(), "developer-discovery", &[
+        ("PROOFSTORM_DB", database.as_os_str()),
+        ("PROOFSTORM_WORKSPACE", "local".as_ref()),
+        ("PROOFSTORM_PRINCIPAL", "developer".as_ref()),
+        ("PROOFSTORM_CAPABILITIES", "catalog.read,lab.create,lab.read,lab.publish,lab.materialize,lab.status,lab.close,experiment.create,experiment.read,experiment.close,lab.operate,component.exec_live,artifact.read,action.cancel".as_ref()),
+    ]).unwrap();
+    let listed = client.request("tools/list", json!({})).unwrap();
+    let names = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 14);
+    for name in [
+        "proofstorm_session_list",
+        "proofstorm_lab_up",
+        "proofstorm_lab_inspect",
+        "proofstorm_environment_read",
+        "proofstorm_lab_exec",
+        "proofstorm_lab_sync",
+        "proofstorm_lab_finish",
+    ] {
+        assert!(names.contains(&name));
+    }
+    for name in [
+        "proofstorm_experiment_create",
+        "proofstorm_session_start",
+        "proofstorm_lab_recipe_bootstrap",
+        "proofstorm_wallet_pay",
+    ] {
+        assert!(!names.contains(&name));
+    }
+    assert!(serde_json::to_vec(&listed).unwrap().len() < 64 * 1024);
+    assert!(
+        client.initialize_result()["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("lab_up")
+    );
 }

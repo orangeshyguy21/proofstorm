@@ -1,12 +1,18 @@
+use proofstorm_app::runtime::missing_action_artifact;
+use proofstorm_app::runtime::runtime_action_resource;
+#[cfg(test)]
+use proofstorm_app::runtime::terminal_action_observation;
+#[cfg(test)]
+use proofstorm_kube::ActionPhase;
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use k8s_openapi::api::core::v1::{ConfigMap, Pod};
+use k8s_openapi::api::core::v1::Pod;
 use kube::{
     Api, Client, ResourceExt,
-    api::{DeleteParams, Patch, PatchParams},
+    api::{Patch, PatchParams},
 };
 use proofstorm_core::{
     API_VERSION, AuthenticationProtocol, BitcoinNetwork, CandidateBuild, CandidateBuildPhase,
@@ -14,42 +20,76 @@ use proofstorm_core::{
     CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, ComponentKind, ComponentSpec,
     ComponentStatus, ControlClass, DatabaseRole, DependencyBinding, DraftMutation,
     EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent,
-    EvidenceInstance, Experiment, ExperimentLease, ExperimentPhase, InstancePhase, InventoryEntry,
-    LabInstance, LabInstanceStatus, LabOperation, LabPolicy, LabSpec, LinkKind, LinkSpec,
-    MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
-    NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature, OperationArtifact,
-    OperationKind, OperationPhase, PaymentMethod, PublishedRevision, ReleaseChannel,
-    SupportLifecycle, TeardownReceipt as CoreTeardownReceipt, ValidationIssue,
-    WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
-    WalletQuoteObservationRole, default_catalog, digest_json, network_policy_fault_backend,
-    validate_lab, wallet_quote_observations_from_artifact,
+    EvidenceInstance, Experiment, ExperimentPhase, InstancePhase, InventoryEntry, LabInstance,
+    LabInstanceStatus, LabOperation, LabPolicy, LabSpec, LinkKind, LinkSpec, MAX_NETWORK_DELAY_MS,
+    MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS, NetworkFaultBackend,
+    NetworkFaultDirection, NetworkFaultFeature, OperationArtifact, OperationKind, OperationPhase,
+    PaymentMethod, PublishedRevision, ReleaseChannel, SupportLifecycle,
+    TeardownReceipt as CoreTeardownReceipt, ValidationIssue, WalletQuoteDirection,
+    WalletQuoteObservation, WalletQuoteObservationRole, default_catalog, digest_json,
+    network_policy_fault_backend, validate_lab, wallet_quote_observations_from_artifact,
 };
 use proofstorm_kube::{
-    ACTION_CANCEL_ANNOTATION, ActionPhase, AuthenticationConformanceAction,
-    AuthenticationProtectedSpendAction, AuthenticationReplayAction, BootstrapLiquidityAction,
-    CANDIDATE_BUILD_LABEL, CANDIDATE_CANCEL_ANNOTATION, ChannelCloseAction, ChannelOpenAction,
-    ChannelPolicySetAction, ChannelRebalanceAction, ComponentExecLiveAction,
-    ComponentForensicsAction, ComponentLogsAction, LabAction, LabPhase, NetworkHealAction,
-    NetworkPartitionAction, NodeControlAction, PeerConnectAction, PeerDisconnectAction,
-    ProofstormCandidateBuild, ProofstormCandidateBuildSpec, ProofstormLab, ProofstormLabAction,
-    ProofstormLabActionSpec, ProofstormLabSpec, ReachabilityOracleAction, WalletBalanceAction,
-    WalletFundAction, WalletInitializeAction, WalletInvoiceAction, WalletMeltQuoteRefreshAction,
-    WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction, component_ports,
+    AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
+    AuthenticationReplayAction, BootstrapLiquidityAction, CANDIDATE_BUILD_LABEL,
+    CANDIDATE_CANCEL_ANNOTATION, ChannelCloseAction, ChannelOpenAction, ChannelPolicySetAction,
+    ChannelRebalanceAction, ComponentExecLiveAction, ComponentForensicsAction, ComponentLogsAction,
+    LabAction, NetworkHealAction, NetworkPartitionAction, NodeControlAction, PeerConnectAction,
+    PeerDisconnectAction, ProofstormCandidateBuild, ProofstormCandidateBuildSpec,
+    ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
+    WalletInitializeAction, WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction,
+    WalletQuoteClaimAction, WalletRoundTripAction, component_ports,
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
     ErrorData, Json, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        ListResourceTemplatesResult, PaginatedRequestParams, ReadResourceRequestParams,
-        ReadResourceResponse, ReadResourceResult, ResourceContents, ResourceTemplate,
-        ServerCapabilities, ServerInfo,
+        CallToolResult, ListResourceTemplatesResult, PaginatedRequestParams,
+        ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, ResourceContents,
+        ResourceTemplate, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeveloperUpRequest {
+    pub name: String,
+    pub lab: LabSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeveloperInspectRequest {
+    pub name: String,
+    #[serde(default)]
+    pub after_sequence: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeveloperExecRequest {
+    pub name: String,
+    pub component: String,
+    pub request_id: String,
+    pub argv: Vec<String>,
+    #[serde(default = "default_wait_timeout_seconds")]
+    pub timeout_seconds: u32,
+    #[serde(default)]
+    pub output: proofstorm_core::native::NativeOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeveloperFinishRequest {
+    pub name: String,
+    #[serde(default = "default_wait_timeout_seconds")]
+    pub timeout_seconds: u32,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -995,7 +1035,8 @@ pub struct OperationWaitManyResult {
 pub struct NodeControlRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub component: String,
     pub idempotency_key: String,
@@ -1006,7 +1047,8 @@ pub struct NodeControlRequest {
 pub struct ComponentLogsRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub component: String,
     /// Lines to read from the end of the component's current container log,
@@ -1020,7 +1062,8 @@ pub struct ComponentLogsRequest {
 pub struct AuthenticationConformanceRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub mint: String,
     pub identity_provider: String,
@@ -1032,7 +1075,8 @@ pub struct AuthenticationConformanceRequest {
 pub struct AuthenticationProtectedSpendRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub mint: String,
     pub identity_provider: String,
@@ -1044,7 +1088,8 @@ pub struct AuthenticationProtectedSpendRequest {
 pub struct AuthenticationReplayRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub mint: String,
     pub identity_provider: String,
@@ -1057,7 +1102,8 @@ pub struct AuthenticationReplayRequest {
 pub struct ComponentExecRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub component: String,
     /// Lab component whose native service endpoint should be exposed to the
@@ -1080,7 +1126,8 @@ pub struct ComponentExecLiveRequest {
     pub private_payload: Option<proofstorm_core::private_io::PayloadBinding>,
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub component: String,
     /// POSIX shell program. Its exit code describes the shell, including any pipelines.
@@ -1118,8 +1165,8 @@ pub enum PrivateTransferInput {
     Handoff {
         component: String,
         reference: String,
-        #[serde(rename = "recipientLeaseId")]
-        recipient_lease_id: String,
+        #[serde(rename = "recipientGrantId")]
+        recipient_grant_id: String,
     },
     Status {
         component: String,
@@ -1139,16 +1186,16 @@ impl PrivateTransferInput {
     fn action(&self) -> Result<proofstorm_kube::PrivateTransferAction, ErrorData> {
         use proofstorm_core::private_io::MAX_PRIVATE_BYTES;
         use proofstorm_kube::{PrivateTransferAction, TransferMethod};
-        let recipient_lease_id = if let Self::Handoff {
-            recipient_lease_id, ..
+        let recipient_grant_id = if let Self::Handoff {
+            recipient_grant_id, ..
         } = self
         {
-            if recipient_lease_id.trim().is_empty() {
+            if recipient_grant_id.trim().is_empty() {
                 return Err(invalid_operation(
-                    "handoff.recipientLeaseId must be nonempty",
+                    "handoff.recipientGrantId must be nonempty",
                 ));
             }
-            Some(recipient_lease_id.clone())
+            Some(recipient_grant_id.clone())
         } else {
             None
         };
@@ -1227,7 +1274,7 @@ impl PrivateTransferInput {
             ));
         }
         Ok(PrivateTransferAction {
-            recipient_lease_id,
+            recipient_grant_id,
             transfer_method: method,
             component: component.clone(),
             destination_component: destination,
@@ -1268,7 +1315,8 @@ fn validate_private_transfer_endpoints(
 pub struct PrivateTransferRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub transfer: PrivateTransferInput,
     pub idempotency_key: String,
@@ -1279,7 +1327,8 @@ pub struct PrivateTransferRequest {
 pub struct WalletMeltQuoteRefreshRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1295,7 +1344,8 @@ pub struct WalletMeltQuoteRefreshRequest {
 pub struct BootstrapLiquidityRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub chain: String,
     pub mint_lightning: String,
@@ -1314,7 +1364,8 @@ pub struct BootstrapLiquidityRequest {
 pub struct LabRecipeSetupRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub recipe: LabRecipe,
     pub idempotency_key: String,
@@ -1328,7 +1379,8 @@ pub struct LabRecipeSetupRequest {
 pub struct LabRecipeFeeMatrixRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     /// Stable correlation ID for the 26 journaled child operations. Proofstorm
     /// derives bounded internal operation IDs from it. Replaying the same
     /// matrix ID and idempotency key is idempotent.
@@ -1383,7 +1435,7 @@ fn recipe_fee_matrix_operation_prefix(request: &LabRecipeFeeMatrixRequest) -> St
     let digest = digest_json(&(
         request.instance_id.as_str(),
         request.experiment_id.as_str(),
-        request.lease_id.as_str(),
+        request.session_id.as_str(),
         request.matrix_id.as_str(),
         request.recipe,
     ));
@@ -1398,7 +1450,7 @@ fn recipe_bootstrap_request(request: LabRecipeSetupRequest) -> BootstrapLiquidit
         LabRecipe::NutshellLndClnRoutingFees => BootstrapLiquidityRequest {
             instance_id: request.instance_id,
             experiment_id: request.experiment_id,
-            lease_id: request.lease_id,
+            session_id: request.session_id,
             operation_id: request.operation_id,
             chain: "bitcoin-core".into(),
             mint_lightning: "lnd-backend".into(),
@@ -1416,7 +1468,7 @@ fn recipe_route_channel_request(request: LabRecipeSetupRequest) -> ChannelOpenRe
         LabRecipe::NutshellLndClnRoutingFees => ChannelOpenRequest {
             instance_id: request.instance_id,
             experiment_id: request.experiment_id,
-            lease_id: request.lease_id,
+            session_id: request.session_id,
             operation_id: request.operation_id,
             chain: "bitcoin-core".into(),
             from_lightning: "lnd-router".into(),
@@ -1443,7 +1495,8 @@ struct StoredBootstrapFunding {
 pub struct PeerConnectRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub from_lightning: String,
     pub to_lightning: String,
@@ -1455,7 +1508,8 @@ pub struct PeerConnectRequest {
 pub struct PeerDisconnectRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub from_lightning: String,
     pub to_lightning: String,
@@ -1467,7 +1521,8 @@ pub struct PeerDisconnectRequest {
 pub struct ChannelOpenRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub chain: String,
     pub from_lightning: String,
@@ -1482,7 +1537,8 @@ pub struct ChannelOpenRequest {
 pub struct ChannelPolicySetRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     /// Lightning node whose outgoing policy is updated.
     pub from_lightning: String,
@@ -1502,7 +1558,8 @@ pub struct ChannelPolicySetRequest {
 pub struct ChannelCloseRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub chain: String,
     pub from_lightning: String,
@@ -1516,7 +1573,8 @@ pub struct ChannelCloseRequest {
 pub struct ChannelRebalanceRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub lightning: String,
     pub outgoing_channel_id: String,
@@ -1531,7 +1589,8 @@ pub struct ChannelRebalanceRequest {
 pub struct NetworkPartitionRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub from_component: String,
     pub to_component: String,
@@ -1543,7 +1602,8 @@ pub struct NetworkPartitionRequest {
 pub struct NetworkDelayRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub from_component: String,
     pub to_component: String,
@@ -1558,7 +1618,8 @@ pub struct NetworkDelayRequest {
 pub struct NetworkLossRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub from_component: String,
     pub to_component: String,
@@ -1572,7 +1633,8 @@ pub struct NetworkLossRequest {
 pub struct NetworkHealRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub partition_operation_id: String,
     pub idempotency_key: String,
@@ -1583,7 +1645,8 @@ pub struct NetworkHealRequest {
 pub struct WalletInitializeRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1595,7 +1658,8 @@ pub struct WalletInitializeRequest {
 pub struct WalletBalanceRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1607,7 +1671,8 @@ pub struct WalletBalanceRequest {
 pub struct WalletFundRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1621,7 +1686,8 @@ pub struct WalletFundRequest {
 pub struct WalletInvoiceRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1640,7 +1706,8 @@ const fn default_quote_timeout_seconds() -> u32 {
 pub struct WalletPayRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1655,7 +1722,8 @@ pub struct WalletPayRequest {
 pub struct WalletQuoteClaimRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1675,7 +1743,8 @@ const fn default_claim_timeout_seconds() -> u32 {
 pub struct WalletRoundTripRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1690,7 +1759,8 @@ pub struct WalletRoundTripRequest {
 pub struct ConservationOracleRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub wallet: String,
     pub mint: String,
@@ -1707,7 +1777,8 @@ pub struct ConservationOracleRequest {
 pub struct ReachabilityOracleRequest {
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub operation_id: String,
     pub from_component: String,
     pub to_component: String,
@@ -1764,42 +1835,60 @@ pub struct CloseExperimentRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AcquireLeaseRequest {
+pub struct StartSessionRequest {
     pub experiment_id: String,
-    pub lease_id: String,
-    pub duration_seconds: u32,
-    pub max_actions: u32,
+    #[serde(default)]
+    pub session_id: String,
     pub idempotency_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct DelegatePrivateTransferLeaseRequest {
+pub struct PrivateAccessRequest {
     pub receive: proofstorm_core::PrivateReceiveCommand,
-    pub parent_lease_id: String,
+    pub instance_id: String,
     pub recipient_principal_id: String,
-    pub recipient_lease_id: String,
+    pub recipient_grant_id: String,
     pub component: String,
     pub mint: String,
     pub reference: String,
-    #[schemars(range(min = 1, max = 900))]
-    pub duration_seconds: u32,
-    #[schemars(range(min = 1, max = 32))]
-    pub max_actions: u32,
     pub idempotency_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LeaseRequest {
-    pub lease_id: String,
+pub struct SessionRequest {
+    #[serde(default)]
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ReleaseLeaseRequest {
-    pub lease_id: String,
+pub struct FinishSessionRequest {
+    #[serde(default)]
+    pub session_id: String,
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionListRequest {
+    #[serde(default)]
+    pub instance_id: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub cursor: String,
+    #[serde(default = "session_page_limit")]
+    pub limit: u32,
+}
+fn session_page_limit() -> u32 {
+    20
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateAccessIdRequest {
+    pub grant_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1835,7 +1924,8 @@ pub struct ActionSummary {
     pub id: String,
     pub instance_id: String,
     pub experiment_id: String,
-    pub lease_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub sequence: u64,
     pub kind: OperationKind,
     pub capability: Capability,
@@ -1856,7 +1946,7 @@ impl From<&LabOperation> for ActionSummary {
             id: operation.id.clone(),
             instance_id: operation.instance_id.clone(),
             experiment_id: operation.experiment_id.clone(),
-            lease_id: operation.lease_id.clone(),
+            session_id: operation.session_id.clone(),
             sequence: operation.sequence,
             kind: operation.kind,
             capability: operation.capability,
@@ -2039,6 +2129,8 @@ const MAX_AGENT_RESPONSE_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofstormToolset {
+    /// Ordinary named labs; advanced experiments and scenarios remain opt-in.
+    Developer,
     All,
     /// One compact, cross-phase surface for an agent that must design, run,
     /// evidence, and tear down an experiment without restarting its session.
@@ -2056,6 +2148,7 @@ impl std::str::FromStr for ProofstormToolset {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "developer" => Ok(Self::Developer),
             "all" => Ok(Self::All),
             "experiment" => Ok(Self::Experiment),
             "native" => Ok(Self::Native),
@@ -2063,15 +2156,36 @@ impl std::str::FromStr for ProofstormToolset {
             "runtime" => Ok(Self::Runtime),
             "evidence" => Ok(Self::Evidence),
             _ => Err(format!(
-                "invalid PROOFSTORM_TOOLSET {value:?}; expected all, experiment, native, design, runtime, or evidence"
+                "invalid PROOFSTORM_TOOLSET {value:?}; expected developer, all, experiment, native, design, runtime, or evidence"
             )),
         }
     }
 }
 
 impl ProofstormToolset {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "explicit toolset membership is the discoverable public surface"
+    )]
     fn includes(self, tool: &str) -> bool {
         match self {
+            Self::Developer => matches!(
+                tool,
+                "proofstorm_catalog_list"
+                    | "proofstorm_catalog_entry_read"
+                    | "proofstorm_catalog_config_schema_read"
+                    | "proofstorm_lab_up"
+                    | "proofstorm_lab_inspect"
+                    | "proofstorm_environment_read"
+                    | "proofstorm_session_list"
+                    | "proofstorm_lab_exec"
+                    | "proofstorm_lab_finish"
+                    | "proofstorm_lab_sync"
+                    | "proofstorm_lab_component_status_list"
+                    | "proofstorm_operation_status"
+                    | "proofstorm_operation_wait_many"
+                    | "proofstorm_action_cancel"
+            ),
             Self::All => true,
             Self::Experiment => experiment_tool(tool),
             Self::Native => {
@@ -2120,7 +2234,13 @@ impl ProofstormToolset {
             ),
             Self::Runtime => !matches!(
                 tool,
-                "proofstorm_lab_plan"
+                "proofstorm_lab_up"
+                    | "proofstorm_lab_inspect"
+                    | "proofstorm_environment_read"
+                    | "proofstorm_lab_exec"
+                    | "proofstorm_lab_sync"
+                    | "proofstorm_lab_finish"
+                    | "proofstorm_lab_plan"
                     | "proofstorm_candidate_build"
                     | "proofstorm_lab_apply"
                     | "proofstorm_lab_create"
@@ -2151,7 +2271,7 @@ impl ProofstormToolset {
                     | "proofstorm_lab_inventory_list"
                     | "proofstorm_lab_wait"
                     | "proofstorm_experiment_read"
-                    | "proofstorm_lease_read"
+                    | "proofstorm_session_read"
                     | "proofstorm_operation_status"
                     | "proofstorm_operation_wait"
                     | "proofstorm_operation_wait_many"
@@ -2187,10 +2307,13 @@ fn experiment_tool(tool: &str) -> bool {
             | "proofstorm_experiment_create"
             | "proofstorm_experiment_read"
             | "proofstorm_experiment_close"
-            | "proofstorm_lease_acquire"
-            | "proofstorm_lease_delegate"
-            | "proofstorm_lease_read"
-            | "proofstorm_lease_release"
+            | "proofstorm_session_start"
+            | "proofstorm_session_list"
+            | "proofstorm_private_access_read"
+            | "proofstorm_private_access_revoke"
+            | "proofstorm_private_access_issue"
+            | "proofstorm_session_read"
+            | "proofstorm_session_finish"
             | "proofstorm_node_restart"
             | "proofstorm_component_restart"
             | "proofstorm_component_exec_live"
@@ -2230,6 +2353,7 @@ pub struct ProofstormMcp {
     principal: String,
     kubernetes: Option<KubernetesRuntime>,
     tool_router: ToolRouter<Self>,
+    toolset: ProofstormToolset,
 }
 
 impl std::fmt::Debug for ProofstormMcp {
@@ -2298,6 +2422,7 @@ impl ProofstormMcp {
             principal,
             kubernetes: None,
             tool_router,
+            toolset: ProofstormToolset::All,
         })
     }
 
@@ -2321,6 +2446,7 @@ impl ProofstormMcp {
 
     #[must_use]
     pub fn with_toolset(mut self, toolset: ProofstormToolset) -> Self {
+        self.toolset = toolset;
         for (tool, _) in tool_capabilities() {
             if !toolset.includes(tool) {
                 self.tool_router.disable_route(tool);
@@ -2541,6 +2667,121 @@ struct KubernetesRuntime {
 
 #[tool_router(router = tool_router)]
 impl ProofstormMcp {
+    fn developer_labs(&self) -> Result<proofstorm_app::lab::Labs, ErrorData> {
+        let runtime = self.runtime()?;
+        Ok(proofstorm_app::lab::Labs::new(
+            self.store.clone(),
+            proofstorm_app::Runtime::new(runtime.client.clone(), runtime.control_namespace.clone()),
+            self.workspace.clone(),
+            self.principal.clone(),
+        ))
+    }
+
+    #[tool(
+        description = "Start a named lab from its specification. Publication and materialization are resumable stages. A default run and its activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing lab requires finishing it first. Returns the same status shape as lab_inspect."
+    )]
+    async fn proofstorm_lab_up(
+        &self,
+        Parameters(request): Parameters<DeveloperUpRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.developer_labs()?
+            .up(&request.name, &request.lab)
+            .await
+            .map_err(app_error)
+            .and_then(|view| developer_result(compact_developer_view(view)))
+    }
+
+    #[tool(
+        description = "Read the workspace environment: retained labs, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page labs, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one lab's sections. Same JSON contract as proofstorm environment and GET /v1/environment."
+    )]
+    async fn proofstorm_environment_read(
+        &self,
+        Parameters(request): Parameters<proofstorm_app::environment::EnvironmentQuery>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.developer_labs()?
+            .environment(&request)
+            .await
+            .map_err(app_error)
+            .and_then(|view| {
+                let value=serde_json::to_value(view).map_err(|e|ErrorData::internal_error(e.to_string(),None))?;
+                let mut result=CallToolResult::structured(value);
+                result.content=vec![rmcp::model::ContentBlock::text("Environment page is in structuredContent. Follow next_cursor fields for remaining labs and sections.")];
+                bounded_agent_response(result)
+            })
+    }
+
+    #[tool(
+        description = "Read named lab runtime status, run, owner and cached activity. This read does not execute commands or synchronize receipts. Use lab_sync for fresh action results."
+    )]
+    async fn proofstorm_lab_inspect(
+        &self,
+        Parameters(request): Parameters<DeveloperInspectRequest>,
+    ) -> Result<Json<DeveloperLabView>, ErrorData> {
+        self.developer_labs()?
+            .inspect(&request.name, request.after_sequence)
+            .await
+            .map(|view| Json(compact_developer_view(view)))
+            .map_err(app_error)
+    }
+
+    #[tool(
+        description = "Run one native argv command in a named lab without managing experiment or session IDs. Reuse request_id for an exact retry, and choose a new request_id for a new action. Output defaults to private. The returned operation can be waited or cancelled; command exit does not prove payment settlement. Returns the operation_status record shape."
+    )]
+    async fn proofstorm_lab_exec(
+        &self,
+        Parameters(request): Parameters<DeveloperExecRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let command = proofstorm_core::native::NativeCommand {
+            private_io: None,
+            script: String::new(),
+            argv: request.argv,
+            timeout_seconds: request.timeout_seconds,
+            output: request.output,
+        };
+        self.developer_labs()?
+            .exec(
+                &request.name,
+                &request.component,
+                command,
+                &request.request_id,
+            )
+            .await
+            .map_err(app_error)
+            .and_then(developer_result)
+    }
+
+    #[tool(
+        description = "Synchronize runtime receipts into durable activity for a named lab, without executing a new action. Then returns status and the first activity page. Unknown outcomes remain explicit. Returns the lab_inspect status shape."
+    )]
+    async fn proofstorm_lab_sync(
+        &self,
+        Parameters(request): Parameters<DeveloperInspectRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let labs = self.developer_labs()?;
+        labs.sync(&request.name).await.map_err(app_error)?;
+        labs.inspect(&request.name, request.after_sequence)
+            .await
+            .map_err(app_error)
+            .and_then(|view| developer_result(compact_developer_view(view)))
+    }
+
+    #[tool(
+        description = "Finish a named lab: revoke new actions, cancel/collect owned work, close the run and verify teardown. Recorded evidence stays in the durable journal. A timeout leaves a closing lab; repeat this call to finish, without replaying commands. Returns the lab_inspect status shape."
+    )]
+    async fn proofstorm_lab_finish(
+        &self,
+        Parameters(request): Parameters<DeveloperFinishRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if !(1..=120).contains(&request.timeout_seconds) {
+            return Err(invalid_operation("timeout_seconds must be in 1..=120"));
+        }
+        self.developer_labs()?
+            .down(&request.name, request.timeout_seconds)
+            .await
+            .map_err(app_error)
+            .and_then(|view| developer_result(compact_developer_view(view)))
+    }
+
     #[tool(description = "Read the selected Proofstorm workspace")]
     fn proofstorm_workspace_read(&self) -> Result<Json<Workspace>, ErrorData> {
         self.authorize(Capability::LabRead)?;
@@ -2865,7 +3106,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Atomically publish and materialize the exact validated lab plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. Replay the same request after interruption; both internal stages are idempotent. Then wait for ready"
+        description = "Publish, then materialize the exact validated lab plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. These are separate resumable stages: replay the same request after interruption; both are idempotent. Then wait for ready"
     )]
     async fn proofstorm_lab_apply(
         &self,
@@ -3516,7 +3757,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Close an unleased experiment after its actions are terminal. Proofstorm first reconciles completed runtime actions into the journal; if any are still active, wait for the returned operation IDs. Finalization order: operation waits, lease_release, experiment_close, artifact_export"
+        description = "Close an experiment after its actions are terminal. Proofstorm first reconciles completed runtime actions into the journal; if any are still active, wait for the returned operation IDs. Finalization order: operation waits, experiment_close, artifact_export; sessions do not block finalization"
     )]
     async fn proofstorm_experiment_close(
         &self,
@@ -3593,116 +3834,134 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Acquire an exclusive expiring action-budget lease on a ready lab instance"
+        description = "Start a passive activity session. Optional: actions automatically create sessions. Other sessions and finished sessions never block work."
     )]
-    async fn proofstorm_lease_acquire(
+    fn proofstorm_session_start(
         &self,
-        Parameters(request): Parameters<AcquireLeaseRequest>,
-    ) -> Result<Json<ExperimentLease>, ErrorData> {
-        self.authorize(Capability::LeaseAcquire)?;
-        let experiment = self
-            .store
-            .experiment_for_lease(&self.workspace, &self.principal, &request.experiment_id)
-            .map_err(store_error)?;
-        let (instance, _) = self
-            .store
-            .operation_context(
-                &self.workspace,
-                &self.principal,
-                &experiment.instance_id,
-                Capability::LeaseAcquire,
-            )
-            .map_err(store_error)?;
-        let status = self.runtime()?.status(instance).await?;
-        if status.phase != InstancePhase::Ready {
-            return Err(coded_invalid_request(
-                "instance_not_ready",
-                format!(
-                    "lab instance {:?} is not ready for a lease",
-                    experiment.instance_id
-                ),
-            ));
-        }
-        let lease = self
-            .store
-            .acquire_lease(
+        Parameters(request): Parameters<StartSessionRequest>,
+    ) -> Result<Json<proofstorm_core::Session>, ErrorData> {
+        self.store
+            .start_session(
                 &self.workspace,
                 &self.principal,
                 &request.experiment_id,
-                &request.lease_id,
-                request.duration_seconds,
-                request.max_actions,
+                &request.session_id,
                 &request.idempotency_key,
             )
-            .map_err(store_error)?;
-        self.runtime()?.private_lease(&lease, false).await?;
-        Ok(Json(lease))
-    }
-
-    #[tool(
-        description = "Delegate recipient access to an existing different principal under your exclusive parent lab lease. Scope permits only the source-approved receive command/input/timeout for one reference, its status/delivery, and passive balance for one wallet/mint. Requires a subsequent source private_transfer handoff to bind custody. No global capabilities are granted; the child shares the parent action budget and cannot outlive it. Release the child lease to revoke new admission; accepted native work may finish."
-    )]
-    async fn proofstorm_lease_delegate(
-        &self,
-        Parameters(request): Parameters<DelegatePrivateTransferLeaseRequest>,
-    ) -> Result<Json<ExperimentLease>, ErrorData> {
-        request.receive.validate().map_err(invalid_operation)?;
-        let scope = proofstorm_core::PrivateTransferLeaseScope {
-            receive_command_digest: request.receive.digest(),
-            parent_lease_id: request.parent_lease_id,
-            component: request.component,
-            mint: request.mint,
-            reference: request.reference,
-        };
-        let lease = self
-            .store
-            .delegate_private_transfer_lease(
-                &self.workspace,
-                &self.principal,
-                &request.recipient_principal_id,
-                &request.recipient_lease_id,
-                &scope,
-                request.duration_seconds,
-                request.max_actions,
-                &request.idempotency_key,
-            )
-            .map_err(store_error)?;
-        self.runtime()?.private_lease(&lease, false).await?;
-        Ok(Json(lease))
-    }
-
-    #[tool(description = "Read an experiment lease and refresh its expiry state")]
-    fn proofstorm_lease_read(
-        &self,
-        Parameters(request): Parameters<LeaseRequest>,
-    ) -> Result<Json<ExperimentLease>, ErrorData> {
-        self.authorize(Capability::ExperimentRead)?;
-        self.store
-            .lease(&self.workspace, &self.principal, &request.lease_id)
             .map(Json)
             .map_err(store_error)
     }
-
     #[tool(
-        description = "Release a lease owned by the current principal or a recipient lease delegated by their root lease. At finalization, first wait for submitted operations, then call lease_release, experiment_close, and artifact_export in that order"
+        description = "Read a session's actor and activity timestamps. An unfinished session is not proof the actor is still running."
     )]
-    async fn proofstorm_lease_release(
+    fn proofstorm_session_read(
         &self,
-        Parameters(request): Parameters<ReleaseLeaseRequest>,
-    ) -> Result<Json<ExperimentLease>, ErrorData> {
-        self.authorize(Capability::LeaseRelease)?;
-        let lease = self
-            .store
-            .lease_for_release(&self.workspace, &self.principal, &request.lease_id)
-            .map_err(store_error)?;
-        self.runtime()?.private_lease(&lease, true).await?;
+        Parameters(request): Parameters<SessionRequest>,
+    ) -> Result<Json<proofstorm_core::Session>, ErrorData> {
         self.store
-            .release_lease(
+            .session(&self.workspace, &self.principal, &request.session_id)
+            .map(Json)
+            .map_err(store_error)
+    }
+    #[tool(
+        description = "Finish an activity interval. This does not stop actions, revoke access or close the lab. Further work automatically starts another session."
+    )]
+    fn proofstorm_session_finish(
+        &self,
+        Parameters(request): Parameters<FinishSessionRequest>,
+    ) -> Result<Json<proofstorm_core::Session>, ErrorData> {
+        self.store
+            .finish_session(
                 &self.workspace,
                 &self.principal,
-                &request.lease_id,
+                &request.session_id,
                 &request.idempotency_key,
             )
+            .map(Json)
+            .map_err(store_error)
+    }
+    #[tool(
+        description = "List sessions in a lab, or temporal overlaps with session_id. Bounded pagination; no expiry or liveness inference. Overlap is advisory and never blocks work."
+    )]
+    fn proofstorm_session_list(
+        &self,
+        Parameters(request): Parameters<SessionListRequest>,
+    ) -> Result<Json<proofstorm_store::SessionPage>, ErrorData> {
+        if let Some(id) = request.session_id {
+            self.store
+                .overlapping_sessions(
+                    &self.workspace,
+                    &self.principal,
+                    &id,
+                    &request.cursor,
+                    request.limit,
+                )
+                .map(Json)
+                .map_err(store_error)
+        } else {
+            self.store
+                .sessions(
+                    &self.workspace,
+                    &self.principal,
+                    &request.instance_id,
+                    &request.cursor,
+                    request.limit,
+                )
+                .map(Json)
+                .map_err(store_error)
+        }
+    }
+    #[tool(
+        description = "Authorize a different principal to receive one private transfer using the exact approved wallet command. Independent of sessions. No broad lab permissions are granted; handoff must still bind the captured transfer."
+    )]
+    async fn proofstorm_private_access_issue(
+        &self,
+        Parameters(request): Parameters<PrivateAccessRequest>,
+    ) -> Result<Json<proofstorm_core::PrivateAccessGrant>, ErrorData> {
+        request.receive.validate().map_err(invalid_operation)?;
+        let scope = proofstorm_core::PrivateTransferScope {
+            issuer_principal_id: self.principal.clone(),
+            component: request.component,
+            mint: request.mint,
+            reference: request.reference,
+            receive_command_digest: request.receive.digest(),
+        };
+        let grant = self
+            .store
+            .issue_private_access(
+                &self.workspace,
+                &self.principal,
+                &request.recipient_principal_id,
+                &request.recipient_grant_id,
+                &request.instance_id,
+                &scope,
+                &request.idempotency_key,
+            )
+            .map_err(store_error)?;
+        self.runtime()?.private_access(&grant).await?;
+        Ok(Json(grant))
+    }
+    #[tool(
+        description = "Revoke one private-transfer permission. Does not finish or restrict any session."
+    )]
+    async fn proofstorm_private_access_revoke(
+        &self,
+        Parameters(request): Parameters<PrivateAccessIdRequest>,
+    ) -> Result<Json<proofstorm_core::PrivateAccessGrant>, ErrorData> {
+        let grant = self
+            .store
+            .revoke_private_access(&self.workspace, &self.principal, &request.grant_id)
+            .map_err(store_error)?;
+        self.runtime()?.private_access(&grant).await?;
+        Ok(Json(grant))
+    }
+    #[tool(description = "Read one private-transfer permission and its explicit revocation state.")]
+    fn proofstorm_private_access_read(
+        &self,
+        Parameters(request): Parameters<PrivateAccessIdRequest>,
+    ) -> Result<Json<proofstorm_core::PrivateAccessGrant>, ErrorData> {
+        self.store
+            .private_access(&self.workspace, &self.principal, &request.grant_id)
             .map(Json)
             .map_err(store_error)
     }
@@ -3763,7 +4022,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ComponentRestart,
             &request,
@@ -3781,6 +4040,9 @@ impl ProofstormMcp {
                 component: request.component,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -3818,7 +4080,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ComponentLogs,
             &request,
@@ -3865,7 +4127,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::AuthenticationConformance,
             &request,
@@ -3912,7 +4174,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::AuthenticationProtectedSpend,
             &request,
@@ -3966,7 +4228,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         let source_valid = source.instance_id == request.instance_id
             && source.experiment_id == request.experiment_id
-            && source.lease_id == request.lease_id
+            && source.session_id == request.session_id
             && source.principal_id == self.principal
             && source.kind == OperationKind::AuthenticationProtectedSpend
             && source.phase == OperationPhase::Succeeded
@@ -3979,14 +4241,14 @@ impl ProofstormMcp {
             });
         if !source_valid {
             return Err(invalid_operation(
-                "source operation must be a successful protected spend in the same instance, experiment, lease, principal, mint, and identity provider",
+                "source operation must be a successful protected spend in the same instance, experiment, session, principal, mint, and identity provider",
             ));
         }
         let session_secret = format!("{}-auth-session", source.resource_name);
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::AuthenticationReplay,
             &request,
@@ -4063,7 +4325,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ComponentForensics,
             &request,
@@ -4084,6 +4346,9 @@ impl ProofstormMcp {
                 timeout_seconds: request.timeout_seconds,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4092,7 +4357,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Reserve, inspect, deliver or release private byte custody between wallets under the current exclusive lab lease. prepare requires component, destinationComponent and maximumBytes; status/deliver/release require component and reference; handoff also requires recipientLeaseId from lease_delegate, and binds a completed capture before delivery. Invalid input creates no operation. Returns an operation whose artifact contains metadata and an opaque reference. Use component_exec_live.private_payload for native export/import. Delivery and native exit do not establish redemption."
+        description = "Reserve, inspect, deliver or release private byte custody between wallets with independent private-transfer permissions. prepare requires component, destinationComponent and maximumBytes; status/deliver/release require component and reference; handoff also requires recipientGrantId from private_access_issue, and binds a completed capture before delivery. Invalid input creates no operation. Returns an operation whose artifact contains metadata and an opaque reference. Use component_exec_live.private_payload for native export/import. Delivery and native exit do not establish redemption."
     )]
     async fn proofstorm_private_transfer(
         &self,
@@ -4113,7 +4378,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::PrivateTransfer,
             &request,
@@ -4129,10 +4394,13 @@ impl ProofstormMcp {
             &operation,
             LabAction::PrivateTransfer(transfer),
         );
-        action.spec.lease_scope = self
+        action.spec.access_scope = self
             .store
-            .operation_lease_scope(&operation)
+            .operation_access_scope(&operation)
             .map_err(store_error)?;
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4176,7 +4444,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ComponentExecLive,
             &request,
@@ -4199,10 +4467,13 @@ impl ProofstormMcp {
                 output: request.output,
             }),
         );
-        action.spec.lease_scope = self
+        action.spec.access_scope = self
             .store
-            .operation_lease_scope(&operation)
+            .operation_access_scope(&operation)
             .map_err(store_error)?;
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4263,7 +4534,7 @@ impl ProofstormMcp {
             self.proofstorm_wallet_initialize(Parameters(WalletInitializeRequest {
                 instance_id: request.instance_id.clone(),
                 experiment_id: request.experiment_id.clone(),
-                lease_id: request.lease_id.clone(),
+                session_id: request.session_id.clone(),
                 operation_id: operation_id(suffix),
                 wallet: wallet.into(),
                 mint: mint.into(),
@@ -4289,7 +4560,7 @@ impl ProofstormMcp {
             self.proofstorm_wallet_fund(Parameters(WalletFundRequest {
                 instance_id: request.instance_id.clone(),
                 experiment_id: request.experiment_id.clone(),
-                lease_id: request.lease_id.clone(),
+                session_id: request.session_id.clone(),
                 operation_id: operation_id(suffix),
                 wallet: wallet.into(),
                 mint: mint.into(),
@@ -4328,7 +4599,7 @@ impl ProofstormMcp {
                 self.proofstorm_channel_policy_set(Parameters(ChannelPolicySetRequest {
                     instance_id: request.instance_id.clone(),
                     experiment_id: request.experiment_id.clone(),
-                    lease_id: request.lease_id.clone(),
+                    session_id: request.session_id.clone(),
                     operation_id: operation_id(&suffix),
                     from_lightning: "lnd-router".into(),
                     to_lightning: to_lightning.into(),
@@ -4362,7 +4633,7 @@ impl ProofstormMcp {
                 self.proofstorm_wallet_balance(Parameters(WalletBalanceRequest {
                     instance_id: request.instance_id.clone(),
                     experiment_id: request.experiment_id.clone(),
-                    lease_id: request.lease_id.clone(),
+                    session_id: request.session_id.clone(),
                     operation_id: operation_id(&suffix),
                     wallet: wallet.into(),
                     mint: mint.into(),
@@ -4385,7 +4656,7 @@ impl ProofstormMcp {
                 self.proofstorm_wallet_invoice(Parameters(WalletInvoiceRequest {
                     instance_id: request.instance_id.clone(),
                     experiment_id: request.experiment_id.clone(),
-                    lease_id: request.lease_id.clone(),
+                    session_id: request.session_id.clone(),
                     operation_id: operation_id(&suffix),
                     wallet: wallet.into(),
                     mint: mint.into(),
@@ -4421,7 +4692,7 @@ impl ProofstormMcp {
                 self.proofstorm_wallet_pay(Parameters(WalletPayRequest {
                     instance_id: request.instance_id.clone(),
                     experiment_id: request.experiment_id.clone(),
-                    lease_id: request.lease_id.clone(),
+                    session_id: request.session_id.clone(),
                     operation_id: operation_id(&suffix),
                     wallet: direction.payer_wallet.into(),
                     mint: direction.payer_mint.into(),
@@ -4448,7 +4719,7 @@ impl ProofstormMcp {
                     .proofstorm_conservation_oracle(Parameters(ConservationOracleRequest {
                         instance_id: request.instance_id.clone(),
                         experiment_id: request.experiment_id.clone(),
-                        lease_id: request.lease_id.clone(),
+                        session_id: request.session_id.clone(),
                         operation_id: operation_id(&suffix),
                         wallet: direction.payer_wallet.into(),
                         mint: direction.payer_mint.into(),
@@ -4489,7 +4760,7 @@ impl ProofstormMcp {
             "wallet_funding_sat_each": ROUTING_FEE_RECIPE_WALLET_FUNDING_SAT,
             "payment_amount_sat": ROUTING_FEE_RECIPE_PAYMENT_SAT,
             "cases": cases,
-            "guidance": "Matrix complete. Release the lease, close the experiment, export evidence, then close and await the lab.",
+            "guidance": "Matrix complete. Close the experiment, export evidence, then close and await the lab.",
         })))
     }
 
@@ -4543,7 +4814,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::BootstrapLiquidity,
             &request,
@@ -4566,6 +4837,9 @@ impl ProofstormMcp {
                 push_sat: request.push_sat,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4597,7 +4871,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::PeerConnect,
             &request,
@@ -4616,6 +4890,9 @@ impl ProofstormMcp {
                 to_lightning: request.to_lightning.clone(),
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4644,7 +4921,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::PeerDisconnect,
             &request,
@@ -4663,6 +4940,9 @@ impl ProofstormMcp {
                 to_lightning: request.to_lightning.clone(),
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4698,7 +4978,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ChannelOpen,
             &request,
@@ -4720,6 +5000,9 @@ impl ProofstormMcp {
                 push_sat: request.push_sat,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4763,7 +5046,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ChannelPolicySet,
             &request,
@@ -4784,6 +5067,9 @@ impl ProofstormMcp {
                 fee_rate_ppm: request.fee_rate_ppm,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4831,7 +5117,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ChannelRebalance,
             &request,
@@ -4853,6 +5139,9 @@ impl ProofstormMcp {
                 max_fee_sat: request.max_fee_sat,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4895,7 +5184,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::NetworkPartition,
             &request,
@@ -4914,6 +5203,9 @@ impl ProofstormMcp {
                 to_component: request.to_component,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4984,7 +5276,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::NetworkHeal,
             &request,
@@ -5002,6 +5294,9 @@ impl ProofstormMcp {
                 partition_operation_id: request.partition_operation_id,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5030,7 +5325,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::WalletInitialize,
             &request,
@@ -5049,6 +5344,9 @@ impl ProofstormMcp {
                 mint: request.mint.clone(),
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5079,7 +5377,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::WalletBalance,
             &request,
@@ -5098,10 +5396,13 @@ impl ProofstormMcp {
                 mint: request.mint.clone(),
             }),
         );
-        action.spec.lease_scope = self
+        action.spec.access_scope = self
             .store
-            .operation_lease_scope(&operation)
+            .operation_access_scope(&operation)
             .map_err(store_error)?;
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5151,7 +5452,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::WalletFund,
             &request,
@@ -5172,6 +5473,9 @@ impl ProofstormMcp {
                 amount_sat: request.amount_sat,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5208,7 +5512,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::WalletInvoice,
             &request,
@@ -5229,6 +5533,9 @@ impl ProofstormMcp {
                 timeout_seconds: request.timeout_seconds,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5280,7 +5587,7 @@ impl ProofstormMcp {
                 &self.principal,
                 &request.instance_id,
                 &request.experiment_id,
-                &request.lease_id,
+                &request.session_id,
                 &request.operation_id,
                 &request_json,
                 &request.idempotency_key,
@@ -5306,6 +5613,9 @@ impl ProofstormMcp {
                 mint_quote_id: request.mint_quote_id.clone(),
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5341,7 +5651,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::WalletQuoteClaim,
             &request,
@@ -5362,6 +5672,9 @@ impl ProofstormMcp {
                 timeout_seconds: request.timeout_seconds,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5398,7 +5711,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::WalletMeltQuoteRefresh,
             &request,
@@ -5419,6 +5732,9 @@ impl ProofstormMcp {
                 timeout_seconds: request.timeout_seconds,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5459,7 +5775,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::WalletRoundTrip,
             &request,
@@ -5481,6 +5797,9 @@ impl ProofstormMcp {
                 tolerance_sat: request.tolerance_sat,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5534,7 +5853,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ConservationOracle,
             &request,
@@ -5604,7 +5923,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             OperationKind::ReachabilityOracle,
             &request,
@@ -5626,6 +5945,9 @@ impl ProofstormMcp {
                 attempts: request.attempts,
             }),
         );
+        if let Some(grant) = &action.spec.access_scope {
+            self.runtime()?.private_access(grant).await?;
+        }
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -5671,47 +5993,8 @@ impl ProofstormMcp {
         phase: OperationPhase,
         artifact: serde_json::Value,
     ) -> Result<LabOperation, ErrorData> {
-        let Ok(observations) = wallet_quote_observations_from_artifact(&artifact) else {
-            return self
-                .store
-                .record_operation_result(
-                    &self.workspace,
-                    &operation.id,
-                    OperationPhase::Failed,
-                    invalid_terminal_artifact(
-                        operation,
-                        phase,
-                        "invalid_wallet_quote_observation",
-                        "the runtime produced a wallet quote observation outside the strict contract",
-                    ),
-                )
-                .map_err(store_error);
-        };
-        if validate_operation_quote_observations(operation, &observations).is_err() {
-            return self
-                .store
-                .record_operation_result(
-                    &self.workspace,
-                    &operation.id,
-                    OperationPhase::Failed,
-                    invalid_terminal_artifact(
-                        operation,
-                        phase,
-                        "wallet_quote_observation_identity_mismatch",
-                        "the runtime wallet quote observations do not match the admitted typed operation",
-                    ),
-                )
-                .map_err(store_error);
-        }
-        self.store
-            .record_operation_result_with_quote_observations(
-                &self.workspace,
-                &operation.id,
-                phase,
-                artifact,
-                &observations,
-            )
-            .map_err(store_error)
+        proofstorm_app::journal::record(&self.store, &self.workspace, operation, phase, artifact)
+            .map_err(app_error)
     }
 
     #[tool(
@@ -5917,7 +6200,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Export complete deterministic evidence after lease_release and experiment_close. The journal always includes every action plus artifact descriptors; leave artifact_operation_ids empty unless up to 16 specific full bodies are needed. A smaller artifact_count does not mean incomplete evidence. Bulk content stays outside model context at resource_uri"
+        description = "Export complete deterministic evidence after experiment_close. The journal always includes every action plus artifact descriptors; leave artifact_operation_ids empty unless up to 16 specific full bodies are needed. A smaller artifact_count does not mean incomplete evidence. Bulk content stays outside model context at resource_uri"
     )]
     fn proofstorm_artifact_export(
         &self,
@@ -6164,59 +6447,6 @@ impl CatalogEntryDetail {
             required_config_fields: required_config_fields(entry),
             config_defaults: config_defaults(entry),
         }
-    }
-}
-
-fn validate_operation_quote_observations(
-    operation: &LabOperation,
-    observations: &[WalletQuoteObservationInput],
-) -> Result<(), ErrorData> {
-    let field = |name: &str| {
-        operation
-            .request
-            .get(name)
-            .and_then(serde_json::Value::as_str)
-    };
-    let valid = observations
-        .iter()
-        .all(|observation| match (operation.kind, observation.role) {
-            (OperationKind::WalletInvoice, WalletQuoteObservationRole::InvoiceReceive) => {
-                field("wallet") == Some(&observation.wallet_id)
-                    && field("mint") == Some(&observation.mint_id)
-                    && operation
-                        .request
-                        .get("amount_sat")
-                        .and_then(serde_json::Value::as_u64)
-                        == Some(observation.amount_sat)
-            }
-            (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentMelt) => {
-                field("wallet") == Some(&observation.wallet_id)
-                    && field("mint") == Some(&observation.mint_id)
-            }
-            (OperationKind::WalletMeltQuoteRefresh, WalletQuoteObservationRole::PaymentMelt) => {
-                field("wallet") == Some(&observation.wallet_id)
-                    && field("mint") == Some(&observation.mint_id)
-                    && field("melt_quote_id") == Some(&observation.quote_id)
-            }
-            (OperationKind::WalletPay, WalletQuoteObservationRole::PaymentReceive) => {
-                field("recipient_wallet") == Some(&observation.wallet_id)
-                    && field("recipient_mint") == Some(&observation.mint_id)
-                    && field("mint_quote_id") == Some(&observation.quote_id)
-            }
-            (OperationKind::WalletQuoteClaim, WalletQuoteObservationRole::ClaimReceive) => {
-                field("wallet") == Some(&observation.wallet_id)
-                    && field("mint") == Some(&observation.mint_id)
-                    && field("mint_quote_id") == Some(&observation.quote_id)
-            }
-            _ => false,
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err(coded_invalid_request(
-            "wallet_quote_observation_identity_mismatch",
-            "terminal wallet quote observations do not match the admitted typed operation",
-        ))
     }
 }
 
@@ -7509,8 +7739,11 @@ impl ServerHandler for ProofstormMcp {
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
         ))
-        .with_instructions(
-            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. After readiness, create one experiment and lease. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Release the lease, close the experiment, export evidence, and close and await the lab. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection.",
+        .with_instructions(if self.toolset == ProofstormToolset::Developer {
+            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named lab with lab_up, inspect runtime and cached activity with lab_inspect, and run native argv commands with lab_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use lab_sync to collect durable receipts; inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate lab is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with lab_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
+        } else {
+            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. After readiness, create an experiment; session attribution is automatic and optional session IDs are metadata. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Close the experiment, export evidence, and close and await the lab. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection."
+        }
         )
     }
 
@@ -7587,6 +7820,7 @@ impl ServerHandler for ProofstormMcp {
 fn tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     let mut tools = design_tool_capabilities();
     tools.extend(runtime_tool_capabilities());
+    tools.extend(activity_tool_capabilities());
     tools
 }
 
@@ -7681,13 +7915,27 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             "proofstorm_experiment_close",
             &[Capability::ExperimentClose],
         ),
-        ("proofstorm_lease_acquire", &[Capability::LeaseAcquire]),
+    ]
+}
+
+fn activity_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
+    vec![
+        ("proofstorm_session_start", &[Capability::ExperimentRead]),
         (
-            "proofstorm_lease_delegate",
-            &[Capability::LeaseAcquire, Capability::ComponentExecLive],
+            "proofstorm_private_access_issue",
+            &[Capability::LabOperate, Capability::ComponentExecLive],
         ),
-        ("proofstorm_lease_read", &[Capability::ExperimentRead]),
-        ("proofstorm_lease_release", &[Capability::LeaseRelease]),
+        ("proofstorm_session_list", &[Capability::ExperimentRead]),
+        (
+            "proofstorm_private_access_read",
+            &[Capability::ExperimentRead],
+        ),
+        (
+            "proofstorm_private_access_revoke",
+            &[Capability::ExperimentRead],
+        ),
+        ("proofstorm_session_read", &[Capability::ExperimentRead]),
+        ("proofstorm_session_finish", &[Capability::ExperimentRead]),
     ]
 }
 
@@ -7697,6 +7945,63 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
 )]
 fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
+        (
+            "proofstorm_lab_up",
+            &[
+                Capability::LabCreate,
+                Capability::LabRead,
+                Capability::LabPublish,
+                Capability::LabMaterialize,
+                Capability::LabStatus,
+                Capability::CatalogRead,
+                Capability::ExperimentCreate,
+                Capability::ExperimentRead,
+                Capability::LabOperate,
+            ],
+        ),
+        (
+            "proofstorm_environment_read",
+            &[
+                Capability::LabRead,
+                Capability::LabStatus,
+                Capability::ExperimentRead,
+            ],
+        ),
+        (
+            "proofstorm_lab_inspect",
+            &[Capability::LabStatus, Capability::ExperimentRead],
+        ),
+        (
+            "proofstorm_lab_exec",
+            &[
+                Capability::LabStatus,
+                Capability::ComponentExecLive,
+                Capability::ArtifactRead,
+                Capability::ExperimentCreate,
+                Capability::ExperimentRead,
+                Capability::LabOperate,
+            ],
+        ),
+        (
+            "proofstorm_lab_sync",
+            &[
+                Capability::LabStatus,
+                Capability::ArtifactRead,
+                Capability::ExperimentRead,
+            ],
+        ),
+        (
+            "proofstorm_lab_finish",
+            &[
+                Capability::LabStatus,
+                Capability::LabClose,
+                Capability::ExperimentRead,
+                Capability::ExperimentClose,
+                Capability::ExperimentRead,
+                Capability::ArtifactRead,
+                Capability::ActionCancel,
+            ],
+        ),
         ("proofstorm_node_start", &[Capability::NodeControl]),
         ("proofstorm_node_stop", &[Capability::NodeControl]),
         ("proofstorm_node_restart", &[Capability::NodeControl]),
@@ -7904,7 +8209,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             kind,
             &request,
@@ -7971,7 +8276,7 @@ impl ProofstormMcp {
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
-            &request.lease_id,
+            &request.session_id,
             &request.operation_id,
             kind,
             &request,
@@ -8085,7 +8390,7 @@ impl ProofstormMcp {
         &self,
         instance_id: &str,
         experiment_id: &str,
-        lease_id: &str,
+        session_id: &str,
         operation_id: &str,
         kind: OperationKind,
         request: &R,
@@ -8107,7 +8412,7 @@ impl ProofstormMcp {
                 &self.principal,
                 instance_id,
                 experiment_id,
-                lease_id,
+                session_id,
                 operation_id,
                 kind,
                 &value,
@@ -8374,49 +8679,6 @@ fn validate_authentication_components(
             "authentication conformance requires exactly one OIDC link from {mint:?} to {identity_provider:?}"
         )))
     }
-}
-
-fn runtime_action_resource(
-    control_namespace: &str,
-    instance: &LabInstance,
-    operation: &LabOperation,
-    action: LabAction,
-) -> ProofstormLabAction {
-    let mut resource = ProofstormLabAction::new(
-        &operation.resource_name,
-        ProofstormLabActionSpec {
-            lease_scope: None,
-            lab_name: instance.resource_name.clone(),
-            workspace_id: operation.workspace_id.clone(),
-            instance_id: operation.instance_id.clone(),
-            instance_key: instance.instance_key.clone(),
-            experiment_id: operation.experiment_id.clone(),
-            lease_id: operation.lease_id.clone(),
-            principal_id: operation.principal_id.clone(),
-            sequence: operation.sequence,
-            operation_id: operation.id.clone(),
-            request_digest: operation.request_digest.clone(),
-            capability: operation.capability,
-            accepted_at_unix: operation.accepted_at_unix,
-            action,
-        },
-    );
-    resource.metadata.namespace = Some(control_namespace.to_owned());
-    resource.metadata.labels = Some(std::collections::BTreeMap::from([
-        (
-            "proofstorm.dev/instance".to_owned(),
-            instance.instance_key.clone(),
-        ),
-        (
-            "proofstorm.dev/lab".to_owned(),
-            instance.resource_name.clone(),
-        ),
-        (
-            "app.kubernetes.io/managed-by".to_owned(),
-            "proofstorm-mcp".to_owned(),
-        ),
-    ]));
-    resource
 }
 
 /// On-chain headroom the bootstrap keeps for the channel funding transaction
@@ -9071,6 +9333,41 @@ fn inventory_key(entry: &InventoryEntry) -> String {
     )
 }
 
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DeveloperLabView {
+    pub lab: proofstorm_store::LabHandle,
+    pub runtime: Option<LabStatusSummary>,
+    pub run: Option<Experiment>,
+    pub sessions: proofstorm_store::SessionPage,
+    pub activity: Vec<proofstorm_app::lab::Activity>,
+    pub next_sequence: Option<u64>,
+    pub observed_at_unix: i64,
+}
+
+// Discovery publishes each response contract once (inspect/operation_status),
+// instead of duplicating it on every mutating lifecycle route.
+fn developer_result(value: impl Serialize) -> Result<CallToolResult, ErrorData> {
+    let value = serde_json::to_value(value)
+        .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+    bounded_agent_response(CallToolResult::structured(value))
+}
+
+fn compact_developer_view(view: proofstorm_app::lab::LabView) -> DeveloperLabView {
+    DeveloperLabView {
+        lab: view.lab,
+        runtime: view.runtime.map(|status| {
+            let mut summary = compact_lab_status(status);
+            summary.runtime_guidance = Some("Readiness describes infrastructure availability, not funding or payment settlement. Inspect individual components for recovery; execute native commands in the selected lab.".into());
+            summary
+        }),
+        run: view.run,
+        sessions: view.sessions,
+        activity: view.activity,
+        next_sequence: view.next_sequence,
+        observed_at_unix: view.observed_at_unix,
+    }
+}
+
 fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
     let ready_components = status
         .components
@@ -9122,7 +9419,7 @@ fn compact_lab_wait(
 const fn runtime_guidance(phase: InstancePhase) -> Option<&'static str> {
     match phase {
         InstancePhase::Ready => Some(
-            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and lease, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Prefer typed channel_policy_set for routing policies; reserve live native CLI execution for behavior without a typed control.",
+            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and session, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Prefer typed channel_policy_set for routing policies; reserve live native CLI execution for behavior without a typed control.",
         ),
         _ => None,
     }
@@ -9582,150 +9879,14 @@ fn unix_now() -> i64 {
 }
 
 impl KubernetesRuntime {
-    async fn private_lease(&self, lease: &ExperimentLease, release: bool) -> Result<(), ErrorData> {
-        use proofstorm_core::private_io::{
-            PRIVATE_DELEGATIONS_ANNOTATION, PRIVATE_LEASE_ANNOTATION,
-        };
-        if lease.delegation.is_some() {
-            return self.private_recipient_lease(lease, release).await;
-        }
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        let matches = labs
-            .list(&kube::api::ListParams::default())
-            .await
-            .map_err(kube_error)?
-            .items
-            .into_iter()
-            .filter(|lab| {
-                lab.spec.workspace_id == lease.workspace_id
-                    && lab.spec.instance_id == lease.instance_id
-            })
-            .collect::<Vec<_>>();
-        let [lab] = matches.as_slice() else {
-            return Err(invalid_operation("lease lab unavailable"));
-        };
-        let current = lab
-            .annotations()
-            .get(PRIVATE_LEASE_ANNOTATION)
-            .map(|text| serde_json::from_str::<ExperimentLease>(text))
-            .transpose()
-            .map_err(|_| invalid_operation("runtime lease invalid"))?;
-        if let Some(current) = current {
-            let same = current.id == lease.id
-                && current.principal_id == lease.principal_id
-                && current.experiment_id == lease.experiment_id
-                && current.workspace_id == lease.workspace_id;
-            if release && !same {
-                return Ok(());
-            }
-            if !release && !same && current.expires_at_unix > unix_now() {
-                return Err(invalid_operation("another runtime lab lease is active"));
-            }
-            if !release && current == *lease {
-                return Ok(());
-            }
-        } else if release {
-            return Ok(());
-        }
-        let value = if release {
-            serde_json::Value::Null
-        } else {
-            serde_json::json!(
-                serde_json::to_string(lease)
-                    .map_err(|_| invalid_operation("lease serialization failed"))?
-            )
-        };
-        // A root change/release atomically removes admission for its recipients.
-        labs.patch(&lab.name_any(),&PatchParams::default(),&Patch::Merge(serde_json::json!({"metadata":{"resourceVersion":lab.resource_version(),"annotations":{PRIVATE_LEASE_ANNOTATION:value,PRIVATE_DELEGATIONS_ANNOTATION:serde_json::Value::Null}}}))).await.map_err(kube_error)?;
-        Ok(())
-    }
-
-    async fn private_recipient_lease(
+    async fn private_access(
         &self,
-        lease: &ExperimentLease,
-        release: bool,
+        grant: &proofstorm_core::PrivateAccessGrant,
     ) -> Result<(), ErrorData> {
-        use proofstorm_core::private_io::{
-            PRIVATE_DELEGATIONS_ANNOTATION, PRIVATE_LEASE_ANNOTATION,
-        };
-        let scope = lease
-            .delegation
-            .as_ref()
-            .ok_or_else(|| invalid_operation("recipient scope missing"))?;
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        let matches = labs
-            .list(&kube::api::ListParams::default())
+        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+            .private_access(grant)
             .await
-            .map_err(kube_error)?
-            .items
-            .into_iter()
-            .filter(|lab| {
-                lab.spec.workspace_id == lease.workspace_id
-                    && lab.spec.instance_id == lease.instance_id
-            })
-            .collect::<Vec<_>>();
-        let [lab] = matches.as_slice() else {
-            return Err(invalid_operation("recipient lease lab unavailable"));
-        };
-        let mut children: BTreeMap<String, ExperimentLease> = lab
-            .annotations()
-            .get(PRIVATE_DELEGATIONS_ANNOTATION)
-            .map(|s| serde_json::from_str(s))
-            .transpose()
-            .map_err(|_| invalid_operation("runtime recipient leases invalid"))?
-            .unwrap_or_default();
-        if children.len() > 32 {
-            return Err(invalid_operation("runtime recipient lease limit exceeded"));
-        }
-        if release {
-            let Some(current) = children.get(&lease.id) else {
-                return Ok(());
-            };
-            if current.principal_id != lease.principal_id || current.delegation != lease.delegation
-            {
-                return Err(invalid_operation("recipient lease identity conflict"));
-            }
-            children.remove(&lease.id);
-        } else {
-            let root: ExperimentLease = lab
-                .annotations()
-                .get(PRIVATE_LEASE_ANNOTATION)
-                .and_then(|s| serde_json::from_str(s).ok())
-                .ok_or_else(|| invalid_operation("active parent lease required"))?;
-            if root.id != scope.parent_lease_id
-                || root.delegation.is_some()
-                || root.phase != proofstorm_core::LeasePhase::Active
-                || root.expires_at_unix <= unix_now()
-                || root.workspace_id != lease.workspace_id
-                || root.instance_id != lease.instance_id
-                || root.experiment_id != lease.experiment_id
-                || root.principal_id == lease.principal_id
-                || lease.phase != proofstorm_core::LeasePhase::Active
-                || lease.expires_at_unix <= unix_now()
-                || lease.expires_at_unix > root.expires_at_unix
-            {
-                return Err(invalid_operation(
-                    "recipient lease exceeds its active parent authority",
-                ));
-            }
-            if let Some(current) = children.get(&lease.id) {
-                return if current == lease {
-                    Ok(())
-                } else {
-                    Err(invalid_operation("recipient lease identity conflict"))
-                };
-            }
-            if children.len() >= 32 {
-                return Err(invalid_operation("runtime recipient lease limit reached"));
-            }
-            children.insert(lease.id.clone(), lease.clone());
-        }
-        let value = serde_json::to_string(&children)
-            .map_err(|_| invalid_operation("recipient lease serialization failed"))?;
-        labs.patch(&lab.name_any(), &PatchParams::default(), &Patch::Merge(serde_json::json!({"metadata": {
-            "resourceVersion":lab.resource_version(), "annotations":{PRIVATE_DELEGATIONS_ANNOTATION:value}
-        }}))).await.map_err(kube_error)?;
-        Ok(())
+            .map_err(app_error)
     }
 
     async fn apply_candidate_build(&self, candidate: &CandidateBuild) -> Result<(), ErrorData> {
@@ -9849,70 +10010,20 @@ impl KubernetesRuntime {
         instance: &LabInstance,
         action: &ProofstormLabAction,
     ) -> Result<(), ErrorData> {
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        let lab = labs
-            .get(&instance.resource_name)
+        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+            .apply_action(instance, action)
             .await
-            .map_err(kube_error)?;
-        if lab.status.as_ref().map(|status| status.phase) != Some(LabPhase::Ready) {
-            return Err(coded_invalid_request(
-                "instance_not_ready",
-                format!("lab instance {:?} is not ready for actions", instance.id),
-            ));
-        }
-        let actions =
-            Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
-        let name = action.metadata.name.as_deref().ok_or_else(|| {
-            ErrorData::internal_error(
-                "typed action has no resource name",
-                Some(serde_json::json!({"code": "render_failure"})),
-            )
-        })?;
-        if let Some(existing) = actions.get_opt(name).await.map_err(kube_error)? {
-            if existing.spec != action.spec {
-                return Err(coded_invalid_request(
-                    "action_identity_conflict",
-                    format!("action resource {name:?} already exists with a different request"),
-                ));
-            }
-            return Ok(());
-        }
-        actions
-            .patch(
-                name,
-                &PatchParams::apply("proofstorm-mcp"),
-                &Patch::Apply(action),
-            )
-            .await
-            .map_err(kube_error)?;
-        Ok(())
+            .map_err(app_error)
     }
 
     async fn action_status(
         &self,
         operation: &LabOperation,
     ) -> Result<Option<(OperationPhase, serde_json::Value)>, ErrorData> {
-        let actions =
-            Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
-        let Some(action) = actions
-            .get_opt(&operation.resource_name)
+        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+            .action_status(operation)
             .await
-            .map_err(kube_error)?
-        else {
-            // The runtime resource is gone (lab closed, or garbage collected)
-            // before the journal saw a terminal phase. A running operation
-            // whose resource vanished is a terminal outcome, never a live
-            // one; a pending operation may simply not be applied yet.
-            return Ok((operation.phase == OperationPhase::Running)
-                .then(|| (OperationPhase::Failed, missing_action_artifact(operation))));
-        };
-        let Some(status) = action.status else {
-            return Ok(None);
-        };
-        Ok(terminal_action_observation(
-            status,
-            matches!(action.spec.action, LabAction::ComponentExecLive(_)),
-        ))
+            .map_err(app_error)
     }
 
     /// Request cancellation of a runtime action. Returns `false` when the
@@ -9923,47 +10034,10 @@ impl KubernetesRuntime {
         operation: &LabOperation,
         token: &str,
     ) -> Result<bool, ErrorData> {
-        let actions =
-            Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
-        let Some(action) = actions
-            .get_opt(&operation.resource_name)
+        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+            .request_action_cancellation(operation, token)
             .await
-            .map_err(kube_error)?
-        else {
-            return Ok(false);
-        };
-        if action.spec.workspace_id != operation.workspace_id
-            || action.spec.instance_id != operation.instance_id
-            || action.spec.experiment_id != operation.experiment_id
-            || action.spec.operation_id != operation.id
-            || action.spec.principal_id != operation.principal_id
-            || action.spec.request_digest != operation.request_digest
-        {
-            return Err(coded_invalid_request(
-                "action_identity_conflict",
-                "action cancellation identity does not match the journal",
-            ));
-        }
-        if action.status.as_ref().is_some_and(|status| {
-            matches!(
-                status.phase,
-                ActionPhase::Succeeded | ActionPhase::Failed | ActionPhase::Cancelled
-            )
-        }) || action.annotations().contains_key(ACTION_CANCEL_ANNOTATION)
-        {
-            return Ok(true);
-        }
-        actions
-            .patch(
-                &operation.resource_name,
-                &PatchParams::default(),
-                &Patch::Merge(serde_json::json!({
-                    "metadata": {"annotations": {(ACTION_CANCEL_ANNOTATION): token}}
-                })),
-            )
-            .await
-            .map_err(kube_error)?;
-        Ok(true)
+            .map_err(app_error)
     }
 
     async fn materialize(
@@ -9971,161 +10045,25 @@ impl KubernetesRuntime {
         instance: LabInstance,
         revision: PublishedRevision,
     ) -> Result<LabInstanceStatus, ErrorData> {
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        let mut resource = ProofstormLab::new(
-            &instance.resource_name,
-            ProofstormLabSpec {
-                workspace_id: instance.workspace_id.clone(),
-                instance_id: instance.id.clone(),
-                instance_key: instance.instance_key.clone(),
-                revision_digest: instance.revision_digest.clone(),
-                lock: revision.lock,
-                lab: revision.lab,
-            },
-        );
-        resource.metadata.namespace = Some(self.control_namespace.clone());
-        let applied = labs
-            .patch(
-                &instance.resource_name,
-                &PatchParams::apply("proofstorm-mcp").force(),
-                &Patch::Apply(&resource),
-            )
+        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+            .materialize(instance, revision)
             .await
-            .map_err(kube_error)?;
-        Ok(status_from_resource(instance, &applied))
+            .map_err(app_error)
     }
 
     async fn status(&self, instance: LabInstance) -> Result<LabInstanceStatus, ErrorData> {
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        if let Some(resource) = labs
-            .get_opt(&instance.resource_name)
+        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+            .status(instance)
             .await
-            .map_err(kube_error)?
-        {
-            return Ok(status_from_resource(instance, &resource));
-        }
-        let receipts = Api::<ConfigMap>::namespaced(self.client.clone(), &self.control_namespace);
-        let name = format!("proofstorm-teardown-{}", instance.instance_key);
-        let receipt = receipts.get_opt(&name).await.map_err(kube_error)?;
-        let Some(receipt) = receipt else {
-            return Err(ErrorData::resource_not_found(
-                format!(
-                    "lab instance {:?} has no runtime resource or teardown receipt",
-                    instance.id
-                ),
-                Some(serde_json::json!({"code": "runtime_not_found"})),
-            ));
-        };
-        let data = receipt.data.unwrap_or_default();
-        Ok(LabInstanceStatus {
-            instance: instance.clone(),
-            phase: InstancePhase::Closed,
-            instance_namespace: data.get("instanceNamespace").cloned().unwrap_or_default(),
-            components: vec![],
-            inventory: vec![],
-            teardown_receipt: Some(CoreTeardownReceipt {
-                instance_id: instance.id,
-                instance_namespace: data.get("instanceNamespace").cloned().unwrap_or_default(),
-                inventory_digest: data.get("inventoryDigest").cloned().unwrap_or_default(),
-                verified_absent: data
-                    .get("verifiedAbsent")
-                    .is_some_and(|value| value == "true"),
-            }),
-            message: None,
-        })
+            .map_err(app_error)
     }
 
     async fn close(&self, instance: LabInstance) -> Result<LabInstanceStatus, ErrorData> {
-        let mut status = self.status(instance.clone()).await?;
-        if status.phase == InstancePhase::Closed {
-            return Ok(status);
-        }
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        labs.delete(&instance.resource_name, &DeleteParams::default())
+        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+            .close(instance)
             .await
-            .map_err(kube_error)?;
-        status.phase = InstancePhase::Closing;
-        status.message = Some("deleting instance namespace and verifying absence".into());
-        Ok(status)
+            .map_err(app_error)
     }
-}
-
-fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> LabInstanceStatus {
-    let status = resource.status.clone().unwrap_or_default();
-    LabInstanceStatus {
-        instance,
-        phase: match status.phase {
-            LabPhase::Pending => InstancePhase::Pending,
-            LabPhase::Ready => InstancePhase::Ready,
-            LabPhase::Closing => InstancePhase::Closing,
-            LabPhase::CleanupBlocked => InstancePhase::CleanupBlocked,
-        },
-        instance_namespace: status.instance_namespace.unwrap_or_default(),
-        components: status.components,
-        inventory: status.inventory,
-        teardown_receipt: status.teardown_receipt.map(|receipt| CoreTeardownReceipt {
-            instance_id: receipt.instance_id,
-            instance_namespace: receipt.instance_namespace,
-            inventory_digest: receipt.inventory_digest,
-            verified_absent: receipt.verified_absent,
-        }),
-        message: status.message,
-    }
-}
-
-fn terminal_action_observation(
-    status: proofstorm_kube::ProofstormLabActionStatus,
-    native: bool,
-) -> Option<(OperationPhase, serde_json::Value)> {
-    let (phase, fallback) = match status.phase {
-        ActionPhase::Pending | ActionPhase::Running => return None,
-        ActionPhase::Succeeded => (OperationPhase::Succeeded, "terminal_artifact_missing"),
-        ActionPhase::Failed => (OperationPhase::Failed, "action_failed"),
-        ActionPhase::Cancelled => (OperationPhase::Cancelled, "action_cancelled"),
-    };
-    // A cancelled or failed native execution can still have a supervisor receipt
-    // proving cleanup (or explicitly declining that proof). Preserve that evidence.
-    let content = match status.phase {
-        ActionPhase::Succeeded => status.artifact,
-        ActionPhase::Failed | ActionPhase::Cancelled if native => status.artifact.or(status.error),
-        ActionPhase::Failed => status.error,
-        _ => None,
-    };
-    let artifact = content.map_or_else(
-        || serde_json::json!({"code": fallback}),
-        |artifact| serde_json::to_value(artifact).expect("typed artifact serializes"),
-    );
-    Some((
-        phase,
-        if native {
-            proofstorm_core::native::cap_public_streams(artifact)
-        } else {
-            artifact
-        },
-    ))
-}
-
-fn missing_action_artifact(operation: &LabOperation) -> serde_json::Value {
-    serde_json::json!({
-        "code": "action_runtime_not_found",
-        "resource_name": operation.resource_name,
-        "message": "the runtime action resource no longer exists; its outcome was not observed",
-    })
-}
-
-fn invalid_terminal_artifact(
-    operation: &LabOperation,
-    reported_phase: OperationPhase,
-    code: &str,
-    message: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "code": code,
-        "message": message,
-        "operation_id": operation.id,
-        "reported_phase": reported_phase,
-        "recoverable": false,
-    })
 }
 
 #[allow(
@@ -10157,13 +10095,27 @@ fn store_error(error: StoreError) -> ErrorData {
     }
 }
 
+fn app_error(error: proofstorm_app::Error) -> ErrorData {
+    match error.kind {
+        proofstorm_app::ErrorKind::Invalid => {
+            ErrorData::invalid_request(error.message, error.details)
+        }
+        proofstorm_app::ErrorKind::Missing => {
+            ErrorData::resource_not_found(error.message, error.details)
+        }
+        proofstorm_app::ErrorKind::Failure => {
+            ErrorData::internal_error(error.message, error.details)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn private_transfer_methods_preserve_the_controller_wire_contract() {
         for input in [
             serde_json::json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536}),
-            serde_json::json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque-ref","recipientLeaseId":"child"}),
+            serde_json::json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque-ref","recipientGrantId":"child"}),
             serde_json::json!({"transferMethod":"status","component":"wallet-a","reference":"opaque-ref"}),
             serde_json::json!({"transferMethod":"deliver","component":"wallet-a","reference":"opaque-ref"}),
             serde_json::json!({"transferMethod":"release","component":"wallet-a","reference":"opaque-ref"}),
@@ -10676,7 +10628,7 @@ mod tests {
         let request = LabRecipeSetupRequest {
             instance_id: "instance".into(),
             experiment_id: "experiment".into(),
-            lease_id: "lease".into(),
+            session_id: "session".into(),
             operation_id: "operation".into(),
             recipe: LabRecipe::NutshellLndClnRoutingFees,
             idempotency_key: "once".into(),
@@ -10702,7 +10654,7 @@ mod tests {
         let mut input = serde_json::json!({
             "instance_id": "instance",
             "experiment_id": "experiment",
-            "lease_id": "lease",
+            "session_id": "session",
             "operation_id": "operation",
             "recipe": "nutshell_lnd_cln_routing_fees",
             "idempotency_key": "once"
@@ -10720,7 +10672,7 @@ mod tests {
         let mut input = serde_json::json!({
             "instance_id": "instance",
             "experiment_id": "experiment",
-            "lease_id": "lease",
+            "session_id": "session",
             "matrix_id": "matrix",
             "recipe": "nutshell_lnd_cln_routing_fees",
             "idempotency_key": "once"
@@ -11138,7 +11090,7 @@ mod tests {
         let request = LabRecipeFeeMatrixRequest {
             instance_id: "instance-with-a-long-but-valid-identifier-01234567890123456789".into(),
             experiment_id: "experiment-with-a-long-but-valid-identifier-012345678901234567".into(),
-            lease_id: "lease-with-a-long-but-valid-identifier-01234567890123456789012".into(),
+            session_id: "session-with-a-long-but-valid-identifier-01234567890123456789012".into(),
             matrix_id: "matrix-with-a-long-but-valid-identifier-0123456789012345678901".into(),
             recipe: LabRecipe::NutshellLndClnRoutingFees,
             idempotency_key: "once".into(),
@@ -11310,6 +11262,60 @@ mod tests {
             .grant("alpha", "reader", Capability::LabRead)
             .expect("reader grant");
         store
+    }
+
+    #[tokio::test]
+    async fn environment_tool_uses_shared_read_model_and_rechecks_permissions() {
+        let store = seeded_store();
+        store
+            .grant("alpha", "designer", Capability::ExperimentRead)
+            .unwrap();
+        let lab = store
+            .reserve_lab("alpha", "designer", "pending", "digest")
+            .unwrap();
+        let client = kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| {
+                std::future::ready(Err::<http::Response<kube::client::Body>, _>(
+                    std::io::Error::other("unexpected runtime read"),
+                ))
+            }),
+            "system",
+        );
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client, "system")
+            .with_toolset(ProofstormToolset::Developer);
+        assert!(
+            service
+                .tool_names()
+                .contains(&"proofstorm_environment_read".to_owned())
+        );
+        let result = service
+            .proofstorm_environment_read(Parameters(
+                proofstorm_app::environment::EnvironmentQuery::default(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["labs"]["items"][0]["id"],
+            lab.instance_id
+        );
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["labs"]["items"][0]["runtime"]["state"],
+            "not_materialized"
+        );
+        assert!(serde_json::to_vec(&result).unwrap().len() < MAX_AGENT_RESPONSE_BYTES);
+        store
+            .replace_grants("alpha", "designer", [Capability::LabRead])
+            .unwrap();
+        assert!(
+            service
+                .proofstorm_environment_read(Parameters(
+                    proofstorm_app::environment::EnvironmentQuery::default()
+                ))
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -11590,7 +11596,7 @@ mod tests {
         let request = |tail_lines: u32| ComponentLogsRequest {
             instance_id: "instance-one".into(),
             experiment_id: "experiment-one".into(),
-            lease_id: "lease-one".into(),
+            session_id: "session-one".into(),
             operation_id: "operation-logs".into(),
             component: "chain".into(),
             tail_lines,
@@ -11633,7 +11639,7 @@ mod tests {
             .proofstorm_authentication_conformance(Parameters(AuthenticationConformanceRequest {
                 instance_id: "instance-one".into(),
                 experiment_id: "experiment-one".into(),
-                lease_id: "lease-one".into(),
+                session_id: "session-one".into(),
                 operation_id: "operation-auth".into(),
                 mint: "mint".into(),
                 identity_provider: "identity".into(),
@@ -11831,7 +11837,7 @@ mod tests {
             workspace_id: "alpha".into(),
             instance_id: "instance".into(),
             experiment_id: "experiment".into(),
-            lease_id: "lease".into(),
+            session_id: "session".into(),
             principal_id: "designer".into(),
             sequence,
             kind,
@@ -11879,7 +11885,7 @@ mod tests {
         let request = ConservationOracleRequest {
             instance_id: "instance".into(),
             experiment_id: "experiment".into(),
-            lease_id: "lease".into(),
+            session_id: "session".into(),
             operation_id: "conservation".into(),
             wallet: "wallet".into(),
             mint: "mint".into(),
@@ -12010,6 +12016,27 @@ mod tests {
         }));
     }
 
+    fn assert_optional_tracking(service: &ProofstormMcp) {
+        assert!(
+            service
+                .tool_names()
+                .iter()
+                .all(|name| !name.starts_with("proofstorm_lease_"))
+        );
+        for tool in service.tool_router.list_all() {
+            let schema = serde_json::to_value(&tool.input_schema).unwrap();
+            if schema["properties"].get("session_id").is_some() {
+                assert!(
+                    !schema["required"]
+                        .as_array()
+                        .is_some_and(|keys| keys.contains(&serde_json::json!("session_id"))),
+                    "session attribution must be optional for {}",
+                    tool.name
+                );
+            }
+        }
+    }
+
     #[test]
     fn fully_authorized_tool_discovery_has_a_regression_budget() {
         let store = seeded_store();
@@ -12029,7 +12056,9 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 82);
+        assert_eq!(service.tool_names().len(), 91);
+        assert_optional_tracking(&service);
+
         assert!(
             !service
                 .tool_names()
@@ -12066,12 +12095,15 @@ mod tests {
             "routing policy is a first-class typed runtime operation"
         );
         assert!(
-            encoded.len() < 256 * 1024,
+            // The opt-in compatibility union includes five new lifecycle routes.
+            // The default developer profile has its own much smaller budget below.
+            encoded.len() < 288 * 1024,
             "fully authorized tool discovery is {} bytes",
             encoded.len()
         );
         for (toolset, maximum) in [
             // Custody, delegation, and approved-command metadata have bounded budgets.
+            (ProofstormToolset::Developer, 64 * 1024),
             (ProofstormToolset::Experiment, 160 * 1024),
             (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
@@ -12605,7 +12637,7 @@ mod tests {
         for capability in [
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
-            Capability::LeaseAcquire,
+            Capability::LabOperate,
             Capability::WalletFund,
         ] {
             store
@@ -12643,16 +12675,14 @@ mod tests {
             )
             .expect("experiment");
         store
-            .acquire_lease(
+            .start_session(
                 "alpha",
                 "designer",
                 "runtime-experiment",
-                "runtime-lease",
-                300,
-                2,
-                "acquire-runtime-lease",
+                "runtime-session",
+                "acquire-runtime-session",
             )
-            .expect("lease");
+            .expect("session");
         let service = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
         let error = service
             .require_liquidity_bootstrap("runtime-experiment", "runtime-instance")
@@ -12668,13 +12698,13 @@ mod tests {
                 "designer",
                 "runtime-instance",
                 "runtime-experiment",
-                "runtime-lease",
+                "runtime-session",
                 "runtime-bootstrap",
                 OperationKind::BootstrapLiquidity,
                 &serde_json::json!({
                     "instance_id": "runtime-instance",
                     "experiment_id": "runtime-experiment",
-                    "lease_id": "runtime-lease",
+                    "session_id": "runtime-session",
                     "operation_id": "runtime-bootstrap",
                     "chain": "chain",
                     "mint_lightning": "mint-lnd",
@@ -12708,7 +12738,7 @@ mod tests {
         let channel_request = |from: &str, channel_sat| ChannelOpenRequest {
             instance_id: "runtime-instance".into(),
             experiment_id: "runtime-experiment".into(),
-            lease_id: "runtime-lease".into(),
+            session_id: "runtime-session".into(),
             operation_id: "runtime-channel".into(),
             chain: "chain".into(),
             from_lightning: from.into(),
@@ -12745,8 +12775,8 @@ mod tests {
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
             Capability::ExperimentClose,
-            Capability::LeaseAcquire,
-            Capability::LeaseRelease,
+            Capability::LabOperate,
+            Capability::ExperimentRead,
             Capability::WalletControl,
         ] {
             store
@@ -12811,23 +12841,21 @@ mod tests {
             )
             .expect("active experiment");
         store
-            .acquire_lease(
+            .start_session(
                 "alpha",
                 "designer",
                 "active-finalization",
-                "active-finalization-lease",
-                300,
-                1,
-                "acquire-active-finalization-lease",
+                "active-finalization-session",
+                "acquire-active-finalization-session",
             )
-            .expect("lease");
+            .expect("session");
         let operation = store
             .create_operation(
                 "alpha",
                 "designer",
                 "finalization-instance",
                 "active-finalization",
-                "active-finalization-lease",
+                "active-finalization-session",
                 "active-finalization-balance",
                 OperationKind::WalletBalance,
                 &serde_json::json!({"wallet": "wallet", "mint": "mint"}),
@@ -12836,13 +12864,13 @@ mod tests {
             )
             .expect("active operation");
         store
-            .release_lease(
+            .finish_session(
                 "alpha",
                 "designer",
-                "active-finalization-lease",
-                "release-active-finalization-lease",
+                "active-finalization-session",
+                "release-active-finalization-session",
             )
-            .expect("release lease");
+            .expect("release session");
         let Err(error) = service
             .proofstorm_experiment_close(Parameters(CloseExperimentRequest {
                 experiment_id: "active-finalization".into(),
@@ -12892,7 +12920,7 @@ mod tests {
         let store = seeded_store();
         for capability in [
             Capability::ExperimentCreate,
-            Capability::LeaseAcquire,
+            Capability::LabOperate,
             Capability::WalletControl,
         ] {
             store
@@ -12935,24 +12963,13 @@ mod tests {
                 "create-artifact-contract-experiment",
             )
             .expect("experiment");
-        store
-            .acquire_lease(
-                "alpha",
-                "designer",
-                "artifact-contract-experiment",
-                "artifact-contract-lease",
-                300,
-                1,
-                "acquire-artifact-contract-lease",
-            )
-            .expect("lease");
         let operation = store
             .create_operation(
                 "alpha",
                 "designer",
                 "artifact-contract-instance",
                 "artifact-contract-experiment",
-                "artifact-contract-lease",
+                "artifact-contract-session",
                 "artifact-contract-pay",
                 OperationKind::WalletPay,
                 &serde_json::json!({
@@ -13015,7 +13032,7 @@ mod tests {
         let delay_result = session.proofstorm_network_delay(Parameters(NetworkDelayRequest {
             instance_id: "missing-instance".into(),
             experiment_id: "missing-experiment".into(),
-            lease_id: "missing-lease".into(),
+            session_id: "missing-session".into(),
             operation_id: "delay".into(),
             from_component: "wallet".into(),
             to_component: "mint".into(),
@@ -13035,7 +13052,7 @@ mod tests {
         let loss_result = session.proofstorm_network_loss(Parameters(NetworkLossRequest {
             instance_id: "missing-instance".into(),
             experiment_id: "missing-experiment".into(),
-            lease_id: "missing-lease".into(),
+            session_id: "missing-session".into(),
             operation_id: "loss".into(),
             from_component: "wallet".into(),
             to_component: "mint".into(),
@@ -13055,7 +13072,7 @@ mod tests {
             validate_network_delay_bounds(&NetworkDelayRequest {
                 instance_id: String::new(),
                 experiment_id: String::new(),
-                lease_id: String::new(),
+                session_id: String::new(),
                 operation_id: String::new(),
                 from_component: "a".into(),
                 to_component: "b".into(),
@@ -13070,7 +13087,7 @@ mod tests {
             validate_network_loss_bounds(&NetworkLossRequest {
                 instance_id: String::new(),
                 experiment_id: String::new(),
-                lease_id: String::new(),
+                session_id: String::new(),
                 operation_id: String::new(),
                 from_component: "a".into(),
                 to_component: "b".into(),
@@ -13129,7 +13146,7 @@ mod tests {
             validate_reachability_oracle_bounds(&ReachabilityOracleRequest {
                 instance_id: String::new(),
                 experiment_id: String::new(),
-                lease_id: String::new(),
+                session_id: String::new(),
                 operation_id: String::new(),
                 from_component: "wallet".into(),
                 to_component: "mint".into(),
@@ -13144,7 +13161,7 @@ mod tests {
             validate_reachability_oracle_bounds(&ReachabilityOracleRequest {
                 instance_id: String::new(),
                 experiment_id: String::new(),
-                lease_id: String::new(),
+                session_id: String::new(),
                 operation_id: String::new(),
                 from_component: "wallet".into(),
                 to_component: "wallet".into(),
@@ -13168,8 +13185,8 @@ mod tests {
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
             Capability::ExperimentClose,
-            Capability::LeaseAcquire,
-            Capability::LeaseRelease,
+            Capability::LabOperate,
+            Capability::ExperimentRead,
             Capability::OracleRun,
             Capability::ArtifactRead,
         ] {
@@ -13214,23 +13231,21 @@ mod tests {
             )
             .expect("experiment");
         store
-            .acquire_lease(
+            .start_session(
                 "alpha",
                 "designer",
                 "evidence-experiment",
-                "evidence-lease",
-                300,
-                1,
-                "acquire-evidence-lease",
+                "evidence-session",
+                "acquire-evidence-session",
             )
-            .expect("lease");
+            .expect("session");
         let operation = store
             .create_operation(
                 "alpha",
                 "designer",
                 "evidence-instance",
                 "evidence-experiment",
-                "evidence-lease",
+                "evidence-session",
                 "evidence-oracle",
                 OperationKind::ConservationOracle,
                 &serde_json::json!({"expected_sat": 100, "tolerance_sat": 0}),
@@ -13262,11 +13277,11 @@ mod tests {
         );
 
         store
-            .release_lease(
+            .finish_session(
                 "alpha",
                 "designer",
-                "evidence-lease",
-                "release-evidence-lease",
+                "evidence-session",
+                "release-evidence-session",
             )
             .expect("release");
         store

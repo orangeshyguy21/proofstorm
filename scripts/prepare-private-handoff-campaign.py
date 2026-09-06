@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'openrouter/moonshotai/kimi-k2.5'
 RECIPIENT_CAPABILITIES = [
     'catalog.read', 'component.exec_live', 'wallet.control', 'experiment.read',
-    'artifact.read', 'lease.release', 'action.cancel',
+    'artifact.read', 'action.cancel',
 ]
 RECEIVE = {
     'argv': ['cdk-cli', '--work-dir', '/wallet/cdk', '--unit', 'sat', '--non-interactive',
@@ -38,7 +38,7 @@ def coordination_packet(run_id, reference):
         raise ValueError('invalid opaque reference')
     return {
         'instance_id': run_id + '-lab', 'experiment_id': run_id + '-experiment',
-        'parent_lease_id': run_id + '-lease', 'recipient_lease_id': run_id + '-recipient',
+        'source_session_id': run_id + '-session', 'recipient_grant_id': run_id + '-recipient',
         'source_principal_id': 'benchmark-source', 'recipient_principal_id': 'benchmark-recipient',
         'source_wallet': 'wallet-a', 'component': 'wallet-b', 'mint': 'mint',
         'reference': reference, 'receive': copy.deepcopy(RECEIVE),
@@ -80,7 +80,7 @@ def proposal(output, run_id):
                        'fixed approved native receive contract', 'metadata-only inter-role coordination'],
         'transfer': {'direction': 'cocod-to-cdk', 'amount_sat': 70, 'maximum_bytes': 65536,
                      'initial_balances': [5000, 0], 'final_balances': [4930, 70],
-                     'receive': RECEIVE, 'child_seconds': 600, 'child_max_actions': 8},
+                     'receive': RECEIVE},
         'scope_limit': 'Source is trusted lab owner; no mutual wallet isolation claim.',
     }
     return contract, configs

@@ -112,7 +112,7 @@ def main():
     (output / 'manifest.json').write_text(json.dumps({'workspace': workspace, 'run_id': run_id,
                                                     'setup_only': True}))
     scope = {'instance_id': run_id + '-lab', 'experiment_id': run_id + '-experiment',
-             'lease_id': run_id + '-lease'}
+             'session_id': run_id + '-session'}
     ids = []
     client = Client(config, output)
 
@@ -150,7 +150,7 @@ def main():
     try:
         advertised = {tool['name'] for tool in client.rpc('tools/list', {})['tools']}
         required = {'proofstorm_lab_apply', 'proofstorm_lab_wait', 'proofstorm_experiment_create',
-                    'proofstorm_lease_acquire', 'proofstorm_component_exec_live',
+                    'proofstorm_session_start', 'proofstorm_component_exec_live',
                     'proofstorm_operation_wait_many', 'proofstorm_operation_status',
                     'proofstorm_component_restart', 'proofstorm_liquidity_bootstrap', 'proofstorm_wallet_balance'}
         if required - advertised:
@@ -163,10 +163,9 @@ def main():
         if ready.get('phase') != 'ready':
             raise RuntimeError('prefunding lab not ready')
         call('proofstorm_experiment_create', {k: v for k, v in {**scope, 'idempotency_key': 'setup-experiment'}.items()
-                                             if k != 'lease_id'}, 'experiment')
-        lease = call('proofstorm_lease_acquire', {'experiment_id': scope['experiment_id'], 'lease_id': scope['lease_id'],
-                                                'duration_seconds': 1800, 'max_actions': 100,
-                                                'idempotency_key': 'setup-lease'}, 'lease')
+                                             if k != 'session_id'}, 'experiment')
+        call('proofstorm_session_start', {'experiment_id': scope['experiment_id'], 'session_id': scope['session_id'],
+                                                'idempotency_key': 'setup-session'}, 'session')
         native('initialize', 'wallet-a', ['python3', '-c', API + "p=Path('/wallet/session.passphrase'); p.write_text(secrets.token_urlsafe(32)); p.chmod(0o600)\nr=api('/v1/admin/wallet/initialize',{'passphrase':p.read_text()}); assert r['generatedMnemonic']\nconfig=root/'config.json'; settings=json.loads(config.read_text()); settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings)); config.chmod(0o600)"])
         operation('proofstorm_component_restart', 'restart', {'component': 'wallet-a'})
         native('unlock', 'wallet-a', ['python3', '-c', API + "api('/v1/admin/session/start',{'passphrase':Path('/wallet/session.passphrase').read_text()})\ndeadline=time.monotonic()+40\nwhile time.monotonic()<deadline:\n if api('/v1/status')['cocoSession']['state']=='running': break\n time.sleep(.25)\nelse: raise RuntimeError('session_not_running')"])
@@ -192,11 +191,11 @@ def main():
             raise RuntimeError('setup cocod balance not verified')
         if any(b.get(k) != 0 for k in ['balance_sat', 'reserved_sat', 'pending_sat', 'pending_spent_sat']):
             raise RuntimeError('setup CDK zero balance not verified')
-        handoff = {**scope, 'principal': config['environment']['PROOFSTORM_PRINCIPAL'], 'lease_expires_at_unix': lease['expires_at_unix'],
+        handoff = {**scope, 'principal': config['environment']['PROOFSTORM_PRINCIPAL'],
                    'assisted_planning_and_prefunding': True, 'setup_operation_ids': ids,
                    'initial_balances': {'wallet-a': a, 'wallet-b': b},
                    'mint_url': 'http://mint:3338', 'setup_receipts': 'setup/*.json',
-                   'instructions': 'Continue this exact experiment and lease; prefix model action IDs with agent-. Do not initialize or fund again.'}
+                   'instructions': 'Continue this exact experiment and session; prefix model action IDs with agent-. Do not initialize or fund again.'}
         (output / 'setup-handoff.json').write_text(json.dumps(handoff, indent=2) + '\n')
         print(json.dumps({'setup_verified': True, 'operations': len(ids), **scope}), flush=True)
     except Exception as error:
