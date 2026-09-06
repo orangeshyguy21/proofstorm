@@ -17,8 +17,26 @@
         "artifact_url": {
           "type": "string"
         },
+        "build_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "commit_sha": {
           "type": "string"
+        },
+        "dependency_lock_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package_path": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "platform": {
           "type": "string"
@@ -31,6 +49,12 @@
         },
         "runtime_image": {
           "type": "string"
+        },
+        "transformations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -251,10 +275,16 @@
           "type": "string"
         },
         "minimum_supported": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "preferred_version": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "supported_versions": {
           "items": {
@@ -266,8 +296,6 @@
       },
       "required": [
         "implementation",
-        "minimum_supported",
-        "preferred_version",
         "supported_versions"
       ],
       "type": "object"

@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:d1903df788c43fd63bd3c31b268501ef73fff4a05a72db19523e6ecc1db57d59",
+  "catalog_digest": "sha256:6f679f1e140266a8d01dfd720d937b68bc6f38cc1404dd5c5c4ea2d51c6f59eb",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -876,6 +876,65 @@
           ]
         }
       ]
+    },
+    {
+      "implementation": "cocod-wallet",
+      "kind": "wallet",
+      "upstream_version": "0.0.17-dev.44e5101c",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "cocod-wallet/0.0.17/v1",
+      "config_schema_digest": "sha256:3dde4aa06c82c0f6da042c21478acf2c9cf3f2de849f68330904a95ce7701366",
+      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+      "fields": {
+        "client_credential": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "daemon_process": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "listener": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "storage_size": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "wallet_identity": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "wallet_seed": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume",
+          "sqlite"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
     },
     {
       "implementation": "keycloak",

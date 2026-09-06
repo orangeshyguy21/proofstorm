@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+lightning-invoice.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

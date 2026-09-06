@@ -87,7 +87,7 @@ pub struct LabPlanComponentInput {
     /// nutshell, cdk-ldk, or nutshell-wallet. This remains an open string so
     /// newly registered implementations require no MCP schema change.
     pub implementation: String,
-    /// Omit to select the catalog's preferred supported version.
+    /// Exact version. Required for experimental entries; otherwise defaults to preferred.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Omit to use the implementation's safe role default.
@@ -1086,10 +1086,13 @@ pub struct ComponentExecLiveRequest {
     /// Direct command and arguments. Prefer this to preserve the native process exit status.
     #[serde(default)]
     pub argv: Vec<String>,
-    /// `json_fields`: status, state, `failure_reason`, settled, `synced_to_chain`,
-    /// amount, `amount_sat`, `fee_paid`, `fee_paid_sat`, `value_sat`, `total_fees`, `total_fees_msat`,
-    /// `num_active_channels`, balance, `confirmed_balance`, `unconfirmed_balance`.
-    /// Default private. Public exposes raw safe-query output; other strings are not selectable.
+    /// Private default; public raw. `json_fields`: status,state,`failure_reason`,settled,
+    /// `synced_to_chain`,amount,`amount_sat`,
+    /// `fee_paid`,`fee_paid_sat`,`value_sat`,`total_fees`,`total_fees_msat`,`num_active_channels`,
+    /// balance,`confirmed_balance`,`unconfirmed_balance`,`seedAccess.state`,
+    /// `seedAccess.requiresPassphrase`,`cocoSession.state`.
+    /// bolt11: invoice text. `lnd_invoice`: LND JSON with matching hash.
+    /// Both return validated invoice/hash/amount/currency/expiry; raw streams stay private.
     #[serde(default)]
     pub output: proofstorm_core::native::NativeOutput,
     pub timeout_seconds: u32,
@@ -2382,7 +2385,8 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         let entry = exact_catalog_entry(&catalog.entries, &request.id, &request.version)?;
         let preferred = catalog.implementations.iter().any(|support| {
-            support.implementation == entry.id && support.preferred_version == entry.version
+            support.implementation == entry.id
+                && support.preferred_version.as_deref() == Some(entry.version.as_str())
         });
         bounded_agent_response(CatalogEntryDetail::from_entry(entry, preferred)).map(Json)
     }
@@ -2464,7 +2468,7 @@ impl ProofstormMcp {
             .implementations
             .iter()
             .find(|support| support.implementation == request.implementation)
-            .map(|support| support.preferred_version.clone())
+            .and_then(|support| support.preferred_version.clone())
             .ok_or_else(|| {
                 coded_invalid_request(
                     "candidate_implementation_not_found",
@@ -3855,7 +3859,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Supervise argv (command exit) or script (shell exit) inside the live component. Read catalog hints and native help first. Default output is private; public exposes bounded raw output. json_fields selects safe receipt values and fails closed. Retain the operation ID; wait or cancel it, never use nohup. Inspect exit_code/exit_signal, timed_out, cancelled, cleanup_verified and projection_succeeded independently of operation phase. Cancellation does not undo mutations."
+        description = "Run argv (command exit) or script (shell exit) in the live component. Wait/cancel the operation ID. Check exit_code/exit_signal, timed_out, cancelled, cleanup_verified and projection_succeeded separately from phase. Cancellation does not undo mutations."
     )]
     async fn proofstorm_component_exec_live(
         &self,
@@ -6332,7 +6336,12 @@ fn catalog_page_with_catalog(
     let preferred = catalog
         .implementations
         .iter()
-        .map(|support| (&support.implementation, &support.preferred_version))
+        .filter_map(|support| {
+            support
+                .preferred_version
+                .as_ref()
+                .map(|version| (&support.implementation, version))
+        })
         .collect::<BTreeSet<_>>();
     let summaries = entries
         .iter()
@@ -6703,13 +6712,24 @@ fn resolve_plan_components<'a>(
     let mut components = Vec::with_capacity(inputs.len());
     let mut selected_entries = BTreeMap::new();
     for input in inputs {
+        if input.version.is_none()
+            && catalog.implementations.iter().any(|support| {
+                support.implementation == input.implementation
+                    && support.preferred_version.is_none()
+            })
+        {
+            return Err(coded_invalid_request(
+                "lab_plan_explicit_version_required",
+                "experimental-only implementations require an exact version",
+            ));
+        }
         let version = match input.version.as_deref() {
             Some(version) => version,
             None => catalog
                 .implementations
                 .iter()
                 .find(|support| support.implementation == input.implementation)
-                .map(|support| support.preferred_version.as_str())
+                .and_then(|support| support.preferred_version.as_deref())
                 .ok_or_else(|| {
                     ErrorData::invalid_request(
                         format!(
@@ -7001,7 +7021,7 @@ fn preferred_recipe_component(
         .implementations
         .iter()
         .find(|support| support.implementation == implementation)
-        .map(|support| support.preferred_version.as_str())
+        .and_then(|support| support.preferred_version.as_deref())
         .ok_or_else(|| {
             ErrorData::internal_error(
                 format!("built-in recipe implementation {implementation:?} is not installed"),
@@ -9693,6 +9713,42 @@ fn store_error(error: StoreError) -> ErrorData {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn experimental_wallet_requires_exact_selection_and_retains_source_identity() {
+        let mut input = LabPlanComponentInput {
+            id: "wallet".into(),
+            implementation: "cocod-wallet".into(),
+            version: None,
+            control: None,
+            config: BTreeMap::new(),
+        };
+        let error = resolve_plan_components(&[input.clone()], default_catalog()).unwrap_err();
+        assert_eq!(
+            error.data.unwrap()["code"],
+            "lab_plan_explicit_version_required"
+        );
+        input.version = Some("0.0.17-dev.44e5101c".into());
+        let (components, entries) = resolve_plan_components(&[input], default_catalog()).unwrap();
+        assert_eq!(components[0].kind, ComponentKind::Wallet);
+        let entry = entries["wallet"];
+        assert_eq!(entry.support_lifecycle, SupportLifecycle::Experimental);
+        let provenance = entry.build_provenance.as_ref().unwrap();
+        assert_eq!(
+            provenance.commit_sha,
+            "44e5101cbea370132af6e68f88e01b47e39431c4"
+        );
+        assert_eq!(provenance.package_path.as_deref(), Some("packages/cocod"));
+        let support = default_catalog()
+            .implementations
+            .iter()
+            .find(|s| s.implementation == "cocod-wallet")
+            .unwrap();
+        assert!(
+            support.preferred_version.is_none()
+                && support.minimum_supported.is_none()
+                && support.supported_versions.is_empty()
+        );
+    }
+    #[test]
     fn escaped_native_output_cannot_overflow_the_journal_receipt() {
         for text in [
             "\0".repeat(16384),
@@ -10728,21 +10784,14 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 14);
+        assert_eq!(catalog.entries.len(), 15);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 13);
-        assert!(catalog.implementations.iter().all(|support| {
-            support
-                .supported_versions
-                .contains(&support.preferred_version)
-                && (support.implementation == "lnd"
-                    || support.minimum_supported == support.preferred_version
-                        && support.supported_versions.len() == 1)
-        }));
+        assert_eq!(catalog.implementations.len(), 14);
+        assert_support_defaults(catalog);
         let cdk = catalog
             .entries
             .iter()
@@ -10806,6 +10855,18 @@ mod tests {
         );
     }
 
+    fn assert_support_defaults(catalog: &proofstorm_core::CatalogResponse) {
+        assert!(catalog.implementations.iter().all(|support| {
+            support.implementation == "cocod-wallet"
+                || support.preferred_version.as_ref().is_some_and(|version| {
+                    support.supported_versions.contains(version)
+                        && (support.implementation == "lnd"
+                            || support.minimum_supported == support.preferred_version
+                                && support.supported_versions.len() == 1)
+                })
+        }));
+    }
+
     fn assert_embedded_ldk_support(catalog: &proofstorm_core::CatalogResponse) {
         let cdk_ldk = catalog
             .entries
@@ -10838,13 +10899,15 @@ mod tests {
             .proofstorm_catalog_list(Parameters(CatalogListRequest::default()))
             .expect("catalog discovery")
             .0;
-        assert_eq!(page.items.len(), 14);
+        assert_eq!(page.items.len(), 15);
         assert!(page.next_cursor.is_none());
         assert!(serialized_size(&page).expect("page size") < 8 * 1024);
         assert!(page.items.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && (entry.support_lifecycle == SupportLifecycle::Preferred
+                    || entry.id == "cocod-wallet"
+                        && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
                         && entry.version == "0.21.0-beta"
                         && entry.support_lifecycle == SupportLifecycle::Supported)
@@ -10950,7 +11013,7 @@ mod tests {
             }))
             .expect("harmless oversized page limit is saturated")
             .0;
-        assert_eq!(oversized_limit.items.len(), 14);
+        assert_eq!(oversized_limit.items.len(), 15);
 
         let stale = service.proofstorm_catalog_list(Parameters(CatalogListRequest {
             implementations: ["nutshell".into()].into(),

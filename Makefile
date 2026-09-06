@@ -37,7 +37,7 @@ GATES := slice2 slice4 slice5 native-exec cross-lab-scheduler \
 # Excluded from `make e2e`: fails on a known upstream Nutshell defect.
 EXPECTED_FAIL_GATES := nutshell-oidc
 # Development checkpoints needing an image provisioned in the local registry.
-LOCAL_IMAGE_GATES := cdk-wallet cdk-wallet-fees reliable-exec
+LOCAL_IMAGE_GATES := cdk-wallet cdk-wallet-fees reliable-exec cocod-wallet cocod-projection
 
 .PHONY: help build test lint tools cluster-up docker-build docker-push install \
 	deploy setup doctor cluster-schema e2e build-installer down clean-tools \

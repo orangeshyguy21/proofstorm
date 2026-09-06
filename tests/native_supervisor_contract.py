@@ -58,6 +58,49 @@ class SupervisorContract(unittest.TestCase):
         self.assertFalse(malformed['projection_succeeded'])
         self.assertNotIn(canary, json.dumps(malformed))
 
+    def test_invoice_relay_keeps_raw_streams_private_and_preserves_failure(self):
+        fixture = json.loads((Path(__file__).resolve().parents[1] /
+            'crates/proofstorm-core/tests/fixtures/invoice-relay.json').read_text())
+        request = fixture['payment_request']
+        response = dict(payment_request=request, r_hash=fixture['r_hash'],
+                        payment_preimage='invoice-private-canary')
+        code = 'import sys;print('+repr(json.dumps(response))+');print("stderr-private-canary",file=sys.stderr)'
+        directory = self.start(['python3', '-c', code], output={'mode':'lnd_invoice'})
+        receipt = self.receipt(directory)
+        self.assertTrue(receipt['projection_succeeded'])
+        self.assertEqual(receipt['selected_output']['payment_request'], request)
+        self.assertEqual(receipt['selected_output']['payment_hash'], fixture['r_hash'])
+        self.assertEqual(receipt['selected_output']['amount_msat'], 700000)
+        self.assertEqual((receipt['stdout'], receipt['stderr']), ('', ''))
+        self.assertNotIn('private-canary', json.dumps(receipt))
+        self.assertIn('invoice-private-canary', (directory/'stdout').read_text())
+        self.assertEqual((directory/'stdout').stat().st_mode & 0o777, 0o600)
+        for code, mode, exit_code in [
+            ('import sys;print('+repr(request)+');sys.exit(3)', 'bolt11', 3),
+            ('print("private-canary")', 'bolt11', 0),
+            ('print('+repr(json.dumps(response)*2)+')', 'lnd_invoice', 0),
+            ('print('+repr(json.dumps([request, fixture['r_hash']]))+')', 'lnd_invoice', 0),
+            ('print('+repr(request)+'+" "*20000)', 'bolt11', 0),
+        ]:
+            receipt = self.receipt(self.start(['python3','-c',code], output={'mode':mode}))
+            self.assertEqual(receipt['exit_code'], exit_code)
+            self.assertFalse(receipt['projection_succeeded'])
+            self.assertNotIn('selected_output', receipt)
+            self.assertEqual((receipt['stdout'], receipt['stderr']), ('', ''))
+            self.assertNotIn('private-canary', json.dumps(receipt))
+        code = 'import time;print('+repr(request)+',flush=True);time.sleep(10)'
+        for cancel in (False, True):
+            directory = self.start(['python3','-c',code], timeout=1,
+                                   output={'mode':'bolt11'})
+            if cancel:
+                time.sleep(0.1)
+                subprocess.check_call([RUNNER,'cancel',str(directory)],stdout=subprocess.DEVNULL)
+            receipt = self.receipt(directory)
+            self.assertTrue(receipt['cancelled'] if cancel else receipt['timed_out'])
+            self.assertEqual(receipt['exit_signal'], 15)
+            self.assertFalse(receipt['projection_succeeded'])
+            self.assertNotIn('selected_output', receipt)
+
     def test_timeout_reaps_session_escaping_descendant(self):
         pidfile = self.root/'escaped-pid'
         grandchild = 'import os,time;open('+repr(str(pidfile))+',"w").write(str(os.getpid()));time.sleep(120)'

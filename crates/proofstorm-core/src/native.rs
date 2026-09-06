@@ -12,6 +12,66 @@ pub enum OutputMode {
     Private,
     Public,
     JsonFields,
+    // One complete BOLT11 string (for example, cocod receive bolt11).
+    Bolt11,
+    // One LND addinvoice JSON object; payment_request and hex r_hash must agree.
+    LndInvoice,
+}
+
+/// Extract one bounded invoice. Raw responses and parser diagnostics stay private.
+/// This validates invoice syntax/signature and hash linkage, not settlement,
+/// expiry at payment time, routing, or the intended amount/network.
+///
+/// # Errors
+/// Returns only static diagnostics; never echoes native response data.
+pub fn project_invoice(bytes: &[u8], mode: OutputMode) -> Result<Value, &'static str> {
+    use lightning_invoice::Bolt11Invoice;
+
+    #[derive(Deserialize)]
+    struct LndInvoice {
+        payment_request: String,
+        r_hash: String,
+    }
+
+    // Bound parser work independently of private stream retention. Unknown JSON
+    // members remain private; duplicate selected members are rejected by serde.
+    if bytes.len() > 64 * 1024 {
+        return Err("invoice_response_too_large");
+    }
+    let (request, hash) = match mode {
+        OutputMode::Bolt11 => (
+            std::str::from_utf8(bytes)
+                .map_err(|_| "invoice_format_invalid")?
+                .trim()
+                .to_owned(),
+            None,
+        ),
+        OutputMode::LndInvoice => {
+            if bytes.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
+                return Err("invoice_format_invalid");
+            }
+            let response: LndInvoice =
+                serde_json::from_slice(bytes).map_err(|_| "invoice_format_invalid")?;
+            (response.payment_request, Some(response.r_hash))
+        }
+        _ => return Err("invoice_mode_invalid"),
+    };
+    if request.len() > 4096 {
+        return Err("invoice_too_large");
+    }
+    let invoice: Bolt11Invoice = request.parse().map_err(|_| "invoice_invalid")?;
+    invoice.check_signature().map_err(|_| "invoice_invalid")?;
+    let payment_hash = invoice.payment_hash().to_string();
+    if hash.is_some_and(|hash| hash != payment_hash) {
+        return Err("invoice_hash_mismatch");
+    }
+    Ok(serde_json::json!({
+        "payment_request":request,
+        "payment_hash":payment_hash,
+        "amount_msat":invoice.amount_milli_satoshis(),
+        "currency":invoice.currency().to_string(),
+        "expires_at_unix":invoice.expires_at().map(|expiry| expiry.as_secs()),
+    }))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -19,7 +79,7 @@ pub enum OutputMode {
 pub struct NativeOutput {
     #[serde(default)]
     pub mode: OutputMode,
-    /// Top-level, allowlisted receipt fields from the last JSON document.
+    /// Fixed receipt fields, including allowlisted lifecycle leaf paths; last JSON document.
     #[serde(default)]
     pub fields: Vec<String>,
 }
@@ -38,6 +98,11 @@ pub struct NativeCommand {
 
 const STATUS_FIELDS: &[&str] = &["status", "state", "failure_reason"];
 const BOOLEAN_FIELDS: &[&str] = &["settled", "synced_to_chain"];
+const LIFECYCLE_FIELDS: &[&str] = &[
+    "seedAccess.state",
+    "seedAccess.requiresPassphrase",
+    "cocoSession.state",
+];
 const NUMBER_FIELDS: &[&str] = &[
     "amount",
     "amount_sat",
@@ -79,6 +144,7 @@ impl NativeCommand {
                 !STATUS_FIELDS.contains(&field.as_str())
                     && !BOOLEAN_FIELDS.contains(&field.as_str())
                     && !NUMBER_FIELDS.contains(&field.as_str())
+                    && !LIFECYCLE_FIELDS.contains(&field.as_str())
             }) {
                 return Err("output field is not an allowlisted receipt field");
             }
@@ -101,12 +167,17 @@ pub fn project_receipt(bytes: &[u8], fields: &[String]) -> Result<Value, &'stati
     let value = last.ok_or("output_format_invalid")?;
     let mut selected = BTreeMap::new();
     for field in fields {
+        if LIFECYCLE_FIELDS.contains(&field.as_str()) {
+            selected.insert(field.clone(), lifecycle_value(&value, field)?.clone());
+            continue;
+        }
         let item = value.get(field).ok_or("output_field_missing")?;
         let safe = if STATUS_FIELDS.contains(&field.as_str()) {
             item.as_str().is_some_and(|state| {
                 matches!(
                     state,
                     "PAID"
+                        | "ok"
                         | "UNPAID"
                         | "PENDING"
                         | "ISSUED"
@@ -144,6 +215,36 @@ pub fn project_receipt(bytes: &[u8], fields: &[String]) -> Result<Value, &'stati
     Ok(serde_json::json!(selected))
 }
 
+// These are fixed leaf projections, not arbitrary traversal or object export.
+// A null seedAccess parent represents an uninitialized native wallet; a missing
+// parent or malformed child is an error and must never manufacture a state.
+fn lifecycle_value<'a>(value: &'a Value, field: &str) -> Result<&'a Value, &'static str> {
+    let (parent, leaf) = field.split_once('.').ok_or("output_field_missing")?;
+    let node = value.get(parent).ok_or("output_field_missing")?;
+    if parent == "seedAccess" && node.is_null() {
+        return Ok(node);
+    }
+    let item = node.get(leaf).ok_or("output_field_missing")?;
+    let safe = match field {
+        "seedAccess.state" => item
+            .as_str()
+            .is_some_and(|state| matches!(state, "locked" | "available")),
+        "seedAccess.requiresPassphrase" => item.is_boolean(),
+        "cocoSession.state" => item.as_str().is_some_and(|state| {
+            matches!(
+                state,
+                "stopped" | "starting" | "running" | "stopping" | "failed"
+            )
+        }),
+        _ => false,
+    };
+    if safe {
+        Ok(item)
+    } else {
+        Err("output_field_type_invalid")
+    }
+}
+
 /// Bound encoded public streams before persisting controller status or journal
 /// artifacts. Private retention and process/cleanup evidence remain unchanged.
 #[must_use]
@@ -178,6 +279,62 @@ pub fn cap_public_streams(mut receipt: serde_json::Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_projection_preserves_native_states_without_exporting_objects() {
+        let fields = LIFECYCLE_FIELDS
+            .iter()
+            .map(|field| (*field).to_owned())
+            .collect::<Vec<_>>();
+        let command = NativeCommand {
+            script: String::new(),
+            argv: vec!["cocod".into(), "status".into()],
+            timeout_seconds: 30,
+            output: NativeOutput {
+                mode: OutputMode::JsonFields,
+                fields: fields.clone(),
+            },
+        };
+        command.validate().unwrap();
+        let input = br#"{"seedAccess":{"state":"locked","requiresPassphrase":true,"secret":"canary"},"cocoSession":{"state":"stopped","lastFailure":{"message":"canary"}},"mnemonic":"canary"}"#;
+        assert_eq!(
+            project_receipt(input, &fields).unwrap(),
+            serde_json::json!({
+            "seedAccess.state":"locked", "seedAccess.requiresPassphrase":true, "cocoSession.state":"stopped"})
+        );
+        assert_eq!(
+            project_receipt(
+                br#"{"seedAccess":null,"cocoSession":{"state":"stopped"}}"#,
+                &fields
+            )
+            .unwrap(),
+            serde_json::json!({"seedAccess.state":null,"seedAccess.requiresPassphrase":null,"cocoSession.state":"stopped"})
+        );
+        for input in [
+            br#"{"seedAccess":{"state":"canary","requiresPassphrase":true},"cocoSession":{"state":"stopped"}}"#.as_slice(),
+            br#"{"seedAccess":{"state":null,"requiresPassphrase":true},"cocoSession":{"state":"stopped"}}"#,
+            br#"{"seedAccess":{"state":"locked","requiresPassphrase":"true"},"cocoSession":{"state":"stopped"}}"#,
+            br#"{"seedAccess":null,"cocoSession":{"state":"canary"}}"#,
+            br#"{"seedAccess":null,"cocoSession":null}"#,
+            br#"{"cocoSession":{"state":"stopped"}}"#,
+        ] { assert!(project_receipt(input, &fields).is_err()); }
+        for field in [
+            "seedAccess",
+            "cocoSession",
+            "cocoSession.lastFailure",
+            "cocoSession.lastFailure.message",
+            "mnemonic",
+        ] {
+            let mut invalid = command.clone();
+            invalid.output.fields = vec![field.into()];
+            assert!(invalid.validate().is_err());
+            assert!(project_receipt(input, &invalid.output.fields).is_err());
+        }
+        assert_eq!(
+            project_receipt(br#"{"status":"ok","secret":"canary"}"#, &["status".into()]).unwrap(),
+            serde_json::json!({"status":"ok"})
+        );
+    }
+
     #[test]
     fn projections_fail_closed_and_never_return_preimages() {
         let fields = vec!["status".into(), "value_sat".into()];

@@ -9,8 +9,26 @@
         "artifact_url": {
           "type": "string"
         },
+        "build_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "commit_sha": {
           "type": "string"
+        },
+        "dependency_lock_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package_path": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "platform": {
           "type": "string"
@@ -23,6 +41,12 @@
         },
         "runtime_image": {
           "type": "string"
+        },
+        "transformations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

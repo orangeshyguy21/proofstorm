@@ -1,0 +1,333 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "cocod-wallet",
+    "component_id": "wallet",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "implementation": "cocod-wallet"
+    },
+    "execution_context": {
+      "component_id": "wallet",
+      "environment": {
+        "COCOD_LISTEN_HOST": "127.0.0.1",
+        "COCOD_LISTEN_PORT": "62626",
+        "COCOD_URL": "http://127.0.0.1:62626",
+        "HOME": "/wallet",
+        "PROOFSTORM_WALLET": "{component_id}"
+      },
+      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+      "mounts": [
+        {
+          "mount_path": "/wallet",
+          "name": "wallet",
+          "read_only": false,
+          "source": {
+            "source": "component_persistent_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/cocod-wallet-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "wallet",
+    "linked_targets": {},
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "peer_channel_mutation",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "wallet_payment",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "relevant_links": [],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:ceac03d37087645926356794605e2f32f134d6bd52678a4229d3c45540f773f8",
+    "storage": [
+      {
+        "claim_name": "wallet-data"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "cocod-wallet",
+      "component_id": "wallet",
+      "kind": "wallet",
+      "ports": {},
+      "version": "0.0.17-dev.44e5101c"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "deployment",
+      "name": "wallet"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "cocod-wallet",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cocod-wallet-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "wallet",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "wallet"
+          },
+          "name": "wallet",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "wallet",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "wallet"
+            }
+          },
+          "strategy": {
+            "type": "Recreate"
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:ceac03d37087645926356794605e2f32f134d6bd52678a4229d3c45540f773f8"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "wallet",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "wallet"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "command": [
+                    "/bin/sh",
+                    "-c",
+                    "umask 077; unset COCOD_URL; exec cocod daemon"
+                  ],
+                  "env": [
+                    {
+                      "name": "HOME",
+                      "value": "/wallet"
+                    },
+                    {
+                      "name": "PROOFSTORM_WALLET",
+                      "value": "wallet"
+                    },
+                    {
+                      "name": "COCOD_URL",
+                      "value": "http://127.0.0.1:62626"
+                    },
+                    {
+                      "name": "COCOD_LISTEN_HOST",
+                      "value": "127.0.0.1"
+                    },
+                    {
+                      "name": "COCOD_LISTEN_PORT",
+                      "value": "62626"
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "python3",
+                        "-c",
+                        "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:62626/health',timeout=2)); assert r['status']=='ok' and r['interfaceVersion']=='1'"
+                      ]
+                    },
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/wallet",
+                      "name": "wallet"
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "nodeSelector": {
+                "kubernetes.io/arch": "arm64"
+              },
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "terminationGracePeriodSeconds": 45,
+              "volumes": [
+                {
+                  "name": "wallet",
+                  "persistentVolumeClaim": {
+                    "claimName": "wallet-data"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "persistentVolumeClaims": [
+      {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "wallet",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "wallet"
+          },
+          "name": "wallet-data",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "1Gi"
+            }
+          }
+        }
+      }
+    ],
+    "secrets": [],
+    "services": [],
+    "statefulSets": []
+  }
+}

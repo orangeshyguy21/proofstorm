@@ -20,9 +20,9 @@ pub use adapter::{
     PROTOCOL_PROBER_NAME, RenderedComponent, RenderedLab, compile_component_plans, component_ports,
     observe_component_statuses, render_attacker_component, render_bitcoin_component,
     render_cdk_component, render_cdk_wallet_component, render_cln_component,
-    render_component_network_policy, render_keycloak_component, render_lab, render_lnd_component,
-    render_nutshell_mint_component, render_postgres_component, render_protocol_prober,
-    render_redis_component, render_wallet_component,
+    render_cocod_wallet_component, render_component_network_policy, render_keycloak_component,
+    render_lab, render_lnd_component, render_nutshell_mint_component, render_postgres_component,
+    render_protocol_prober, render_redis_component, render_wallet_component,
 };
 pub use api::{
     ActionPhase, AuthenticationConformanceAction, AuthenticationConformanceFailureStage,

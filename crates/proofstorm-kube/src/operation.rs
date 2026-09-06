@@ -1449,6 +1449,11 @@ struct WalletObservationAdapter {
 
 const WALLET_OBSERVATION_ADAPTERS: &[WalletObservationAdapter] = &[
     WalletObservationAdapter {
+        implementation: "cocod-wallet",
+        version: "cocod/44e5101c/observations/v1",
+        balance: render_cocod_wallet_balance_job,
+    },
+    WalletObservationAdapter {
         implementation: "nutshell-wallet",
         version: "0.1.0-alpha.1",
         balance: render_wallet_balance_job,
@@ -1477,6 +1482,38 @@ fn render_cdk_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_
         "containers": [container_with_env("wallet", spec.wallet_image, script,
             &[mount("wallet", "/wallet", false)], vec![
                 ("PROOFSTORM_DATABASE", "/wallet/cdk/cdk-cli.sqlite"),
+                ("PROOFSTORM_WALLET", spec.wallet), ("PROOFSTORM_MINT", spec.mint),
+                ("PROOFSTORM_MINT_URL", mint_url.as_str()),
+            ])],
+        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{}-data", spec.wallet)}}]
+    });
+    job(
+        spec.resource_name,
+        &instance_namespace(spec.instance_key),
+        spec.instance_key,
+        "wallet-balance",
+        30,
+        &pod,
+    )
+}
+
+fn render_cocod_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
+    let script = concat!(
+        "python3 - <<'PROOFSTORM_READER' > /dev/termination-log\n",
+        include_str!("../drivers/cocod_wallet_balance.py"),
+        "\nPROOFSTORM_READER\n"
+    );
+    let mint_url = format!("http://{}:3338", spec.mint);
+    // SQLite needs writable WAL coordination files even for mode=ro. The
+    // locked reader uses query_only and a read transaction; it never starts cocod or its SDK.
+    let pod = json!({
+        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload",
+        "automountServiceAccountToken": false, "enableServiceLinks": false,
+        "securityContext": pod_security(), "affinity": instance_affinity(spec.instance_key),
+        "nodeSelector": {"kubernetes.io/arch": "arm64"},
+        "containers": [container_with_env("wallet", spec.wallet_image, script,
+            &[mount("wallet", "/wallet", false)], vec![
+                ("PROOFSTORM_DATABASE", "/wallet/.cocod/coco.db"),
                 ("PROOFSTORM_WALLET", spec.wallet), ("PROOFSTORM_MINT", spec.mint),
                 ("PROOFSTORM_MINT_URL", mint_url.as_str()),
             ])],

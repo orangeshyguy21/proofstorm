@@ -90,7 +90,10 @@ class CleanupGate:
     def allows(self, message):
         if message.get('method') != 'tools/call':
             return True
-        return not self.cleanup() or message.get('params', {}).get('name') in CLEANUP_TOOLS
+        if not self.cleanup():
+            return True
+        params = message.get('params')
+        return isinstance(params, dict) and params.get('name') in CLEANUP_TOOLS
 
     def budget(self, now=None):
         now = time.time() if now is None else now
@@ -109,17 +112,31 @@ class CleanupGate:
                                 'Finish experimental work before cleanup; reserve time for teardown and report.')}
 
     def bound_wait(self, message):
-        if message.get('params', {}).get('name') not in WAIT_TOOLS:
+        if not isinstance(message, dict) or message.get('method') != 'tools/call':
+            return message
+        params = message.get('params')
+        if not isinstance(params, dict) or params.get('name') not in WAIT_TOOLS:
+            return message
+        arguments = params.get('arguments')
+        if not isinstance(arguments, dict):
+            return message
+        requested = arguments.get('timeout_seconds')
+        # All four MCP wait tools accept 1..=120. Invalid timeouts must reach
+        # normal MCP validation unchanged, not become valid through clamping.
+        if type(requested) is not int or not 1 <= requested <= 120:
             return message
         budget = self.budget()
-        remaining = (min(10, budget['seconds_to_hard_stop']) if budget['phase'] == 'cleanup'
-                     else budget['seconds_to_cleanup'])
-        arguments = message.get('params', {}).get('arguments', {})
-        requested = arguments.get('timeout_seconds')
-        # Shorten only valid observation waits. Never alter execution deadlines
-        # or repair invalid requests on behalf of the model.
-        if type(requested) is int and requested >= 1:
-            arguments['timeout_seconds'] = min(requested, max(1, math.ceil(remaining)))
+        if (budget['phase'] == 'cleanup' and params['name'] == 'proofstorm_lab_wait'
+                and arguments.get('target_phase') == 'closed'):
+            # Ordinary deletion should not burn the remaining model steps in
+            # short polls. Keep a reporting margin and the server's 1s minimum
+            # if that margin has already been entered; admission is unchanged.
+            bound = max(1, min(60, math.floor(budget['seconds_to_hard_stop'] - 30)))
+        else:
+            remaining = (min(10, budget['seconds_to_hard_stop']) if budget['phase'] == 'cleanup'
+                         else budget['seconds_to_cleanup'])
+            bound = max(1, math.ceil(remaining))
+        arguments['timeout_seconds'] = min(requested, bound)
         return message
 
     def decorate(self, reply):

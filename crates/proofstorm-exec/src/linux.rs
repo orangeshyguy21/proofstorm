@@ -7,7 +7,7 @@ use nix::{
     },
     unistd::Pid,
 };
-use proofstorm_core::native::{NativeCommand, OutputMode, project_receipt};
+use proofstorm_core::native::{NativeCommand, OutputMode, project_invoice, project_receipt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -288,9 +288,15 @@ fn supervise(directory: &Path) -> Result<()> {
             receipt["stdout"] = json!(String::from_utf8_lossy(&out));
             receipt["stderr"] = json!(String::from_utf8_lossy(&err));
         }
-        OutputMode::JsonFields => {
+        OutputMode::JsonFields | OutputMode::Bolt11 | OutputMode::LndInvoice => {
             let selected = if truncated {
                 Err("output_capture_incomplete")
+            } else if command.output.mode != OutputMode::JsonFields
+                && (exit_code != Some(0) || timed_out || cancelled || !cleanup_verified)
+            {
+                Err("invoice_producer_unsuccessful")
+            } else if command.output.mode != OutputMode::JsonFields {
+                project_invoice(&out, command.output.mode)
             } else {
                 project_receipt(&out, &command.output.fields)
             };

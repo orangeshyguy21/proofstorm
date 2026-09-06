@@ -246,9 +246,9 @@ mod tests {
             .iter()
             .find(|support| support.implementation == "nutshell")
             .expect("Nutshell support");
-        assert_eq!(support.preferred_version, "0.20.3");
+        assert_eq!(support.preferred_version.as_deref(), Some("0.20.3"));
         assert!(
-            support
+            !support
                 .supported_versions
                 .contains("candidate-pr1095-aabbccdd")
         );

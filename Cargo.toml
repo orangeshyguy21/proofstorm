@@ -21,6 +21,7 @@ repository = "https://github.com/orangeshyguy21/proofstorm"
 anyhow = "1.0"
 futures = "0.3"
 getrandom = "0.3"
+lightning-invoice = { version = "=0.34.1", features = ["std"] }
 k8s-openapi = { version = "0.28.0", features = ["v1_34"] }
 kube = { version = "=4.0.0", default-features = false, features = ["client", "derive", "runtime", "rustls-tls", "ring", "ws"] }
 rmcp = { version = "3.0.1", default-features = false, features = ["macros", "schemars", "server", "transport-async-rw", "transport-io"] }

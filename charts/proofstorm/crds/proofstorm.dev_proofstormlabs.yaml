@@ -265,7 +265,16 @@ spec:
                               type: string
                             artifact_url:
                               type: string
+                            build_image:
+                              nullable: true
+                              type: string
                             commit_sha:
+                              type: string
+                            dependency_lock_digest:
+                              nullable: true
+                              type: string
+                            package_path:
+                              nullable: true
                               type: string
                             platform:
                               type: string
@@ -275,6 +284,10 @@ spec:
                               type: string
                             runtime_image:
                               type: string
+                            transformations:
+                              items:
+                                type: string
+                              type: array
                           required:
                           - artifact_sha256
                           - artifact_url

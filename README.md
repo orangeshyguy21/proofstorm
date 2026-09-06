@@ -562,10 +562,32 @@ gate, excluded from `make e2e` until the image is distributed. It uses
 native BOLT11 operations, separate wallet volumes, passive observations and
 verified teardown, retaining results under `dev/wallet-integration-runs/`.
 The `cdk-wallet-native-smoke` agent scenario is the subsequent usability gate;
-it is not run by the deterministic acceptance gate. cocod and the private ecash
-payload exchange remain subsequent wallet-expansion phases.
+it is not run by the deterministic acceptance gate. The private ecash payload
+exchange remains a subsequent wallet-expansion phase.
 The [first fuzzer handoff](docs/cdk-wallet-fuzzer-handoff.md) records the tested
 scope, local image prerequisite, retained evidence and launch instructions.
+
+`cocod-wallet` is available as the exact experimental source build
+`0.0.17-dev.44e5101c`, with no default version. It runs the upstream foreground
+daemon on loopback with private persistent state, authenticated native clients,
+and separate daemon-health and wallet-session checks. Protected sessions require
+explicit unlock after restart. Its passive `wallet_balance` SQLite projection
+distinguishes spendable, reserved and inflight proofs; native `/balance` reports
+the combined ready total. Typed wallet mutations remain unavailable.
+
+Run `make e2e-cocod-wallet` after provisioning its pinned local arm64 image.
+The deterministic checkpoint passed real funding, two payments, restart,
+two-wallet isolation, session lifecycle and verified teardown. See the
+[cocod fuzzer handoff](docs/cocod-wallet-fuzzer-handoff.md) for exact provenance,
+the protected native configuration workflow and evidence.
+Subsequent [agent execution hardening](docs/cocod-execution-hardening-2026-09-05.md)
+adds validated native lifecycle projections and more efficient teardown waits;
+focused agent runs verified restart/unlock and 5,000-sat funding followed by a
+700-sat payment. Earlier benchmark failures remain recorded.
+[Structured invoice relay](docs/structured-invoice-relay.md) now validates native
+cocod/LND invoice output and passed the deterministic money/restart gate. The
+focused agent relay target also held; its report accounting still failed review.
+Private ecash delivery remains the next build boundary.
 
 Nutshell's wallet database is authoritative for receive and melt quote facts.
 Proofstorm stores immutable, attributed observations of those adapter records;

@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import json
 from pathlib import Path
 import subprocess
@@ -137,6 +138,70 @@ for line in sys.stdin:
             with patch.object(proxy.time, 'time', return_value=1598):
                 wait = gate.bound_wait(request('proofstorm_lab_wait'))
                 self.assertEqual(wait['params']['arguments']['timeout_seconds'],2)
+
+    def test_early_step_cleanup_keeps_long_close_wait_without_extending_request(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = root/'events'
+            events.write_text('\n'.join(json.dumps({'type':'step_finish'}) for _ in range(40)))
+            gate = proxy.CleanupGate(events, root/'state', 1000, 600, 50)
+            with patch.object(proxy.time, 'time', return_value=1250):
+                for requested, expected in [(120,60),(60,60),(17,17),(1,1)]:
+                    request = {'method':'tools/call','params':{'name':'proofstorm_lab_wait',
+                        'arguments':{'instance_id':'owned','target_phase':'closed','timeout_seconds':requested}}}
+                    bounded = gate.bound_wait(request)
+                    self.assertEqual(bounded['params']['arguments']['timeout_seconds'],expected)
+                    self.assertEqual(bounded['params']['arguments']['instance_id'],'owned')
+                self.assertEqual(json.loads((root/'state').read_text())['reason'],'steps')
+                self.assertFalse(gate.allows({'method':'tools/call','params':{'name':'proofstorm_component_exec_live'}}))
+
+    def test_close_wait_preserves_report_margin_with_valid_minimum(self):
+        with tempfile.TemporaryDirectory() as temp:
+            gate = proxy.CleanupGate(Path(temp)/'events',Path(temp)/'state',1000,600,50)
+            for now, expected in [(1550,20),(1550.2,19),(1569,1),(1570,1),(1598,1)]:
+                with self.subTest(now=now), patch.object(proxy.time,'time',return_value=now):
+                    request = {'method':'tools/call','params':{'name':'proofstorm_lab_wait',
+                        'arguments':{'instance_id':'owned','target_phase':'closed','timeout_seconds':60}}}
+                    bounded = gate.bound_wait(request)
+                    self.assertEqual(bounded['params']['arguments']['timeout_seconds'],expected)
+
+    def test_close_wait_exception_does_not_change_work_or_other_cleanup_waits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            gate = proxy.CleanupGate(Path(temp)/'events',Path(temp)/'state',1000,600,50)
+            request = {'method':'tools/call','params':{'name':'proofstorm_lab_wait',
+                'arguments':{'instance_id':'owned','target_phase':'closed','timeout_seconds':120}}}
+            with patch.object(proxy.time,'time',return_value=1477.4):
+                self.assertEqual(gate.bound_wait(copy.deepcopy(request))['params']['arguments']['timeout_seconds'],3)
+            with patch.object(proxy.time,'time',return_value=1490):
+                for tool, arguments in [
+                    ('proofstorm_lab_wait',{'instance_id':'owned','target_phase':'ready'}),
+                    ('proofstorm_operation_wait',{'operation_id':'owned'}),
+                    ('proofstorm_operation_wait_many',{'operation_ids':['owned']}),
+                    ('proofstorm_candidate_wait',{'candidate_id':'owned'}),
+                ]:
+                    other = {'method':'tools/call','params':{'name':tool,
+                        'arguments':{**arguments,'timeout_seconds':120}}}
+                    self.assertEqual(gate.bound_wait(other)['params']['arguments']['timeout_seconds'],10)
+                command = copy.deepcopy(request)
+                command['params']['name'] = 'proofstorm_component_exec_live'
+                self.assertEqual(gate.bound_wait(command)['params']['arguments']['timeout_seconds'],120)
+
+    def test_invalid_wait_requests_are_not_repaired_or_crash_clamping(self):
+        with tempfile.TemporaryDirectory() as temp:
+            gate = proxy.CleanupGate(Path(temp)/'events',Path(temp)/'state',1000,600,50)
+            base = {'method':'tools/call','params':{'name':'proofstorm_lab_wait',
+                'arguments':{'instance_id':'owned','target_phase':'closed','timeout_seconds':60}}}
+            malformed = [None, [], {}, {'method':'tools/call','params':None}]
+            for arguments in [None, [], 'invalid', {}, {'timeout_seconds':None},
+                              *({'timeout_seconds':v} for v in [True,False,0,-1,121,600,1.5,'60'])]:
+                item = copy.deepcopy(base)
+                item['params']['arguments'] = arguments
+                malformed.append(item)
+            with patch.object(proxy.time,'time',return_value=1490):
+                for item in malformed:
+                    with self.subTest(item=item):
+                        self.assertEqual(gate.bound_wait(copy.deepcopy(item)),item)
+                self.assertFalse(gate.allows({'method':'tools/call','params':None}))
 
 
 if __name__ == '__main__':

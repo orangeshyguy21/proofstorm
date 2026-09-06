@@ -9,6 +9,7 @@ pub mod cdk_cln;
 pub mod cdk_ldk;
 pub mod cdk_postgres;
 pub mod cdk_wallet;
+pub mod cocod_wallet;
 pub mod cross_implementation_wallet;
 pub mod cross_lab_scheduler;
 pub mod failed_melt;
@@ -28,6 +29,8 @@ pub const NAMES: &[&str] = &[
     "nutshell-mint",
     "cdk-cln",
     "cdk-wallet",
+    "cocod-wallet",
+    "cocod-projection",
     "cdk-wallet-fees",
     "slice4",
     "nutshell-cln",
@@ -54,6 +57,8 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "nutshell-mint" => nutshell_mint::run(context),
         "cdk-cln" => cdk_cln::run(context),
         "cdk-wallet" => cdk_wallet::run(context),
+        "cocod-wallet" => cocod_wallet::run(context),
+        "cocod-projection" => cocod_wallet::run_projection(context),
         "cdk-wallet-fees" => cdk_wallet::run_with_fee(context, 100),
         "slice4" => slice4::run(context),
         "nutshell-cln" => nutshell_cln::run(context),

@@ -53,15 +53,32 @@ and failed operations preserve supervisor receipts when available.
 | --- | --- |
 | `private` (default) | Exit/cleanup status and byte/hash metadata; empty stdout/stderr |
 | `public` | Explicit opt-in to bounded stdout/stderr; no automatic secret filtering |
-| `json_fields` | Selected, typed top-level receipt values; empty stdout/stderr |
+| `json_fields` | Selected, typed receipt values; empty stdout/stderr |
+| `bolt11` | Validated invoice-only text and derived hash/amount/currency/expiry; empty stdout/stderr |
+| `lnd_invoice` | Validated LND invoice JSON with matching payment hash; empty stdout/stderr |
+
+The two invoice modes deliberately expose a small Lightning invoice, not Cashu
+notes. They require complete capture and a successful producer, preserve native
+exit evidence separately from extraction, and accept no `fields` argument.
+See [structured invoice relay](structured-invoice-relay.md) for limits, failure
+semantics and the separate native payment/settlement steps.
 
 For example, `{"mode":"json_fields","fields":["status","value_sat"]}`
 accepts those fields from the last document of a completely valid JSON stream.
 Allowed fields are fixed in `crates/proofstorm-core/src/native.rs`: enumerated
 status/failure values, selected booleans, and numeric amount/balance/fee values.
-Nested values, arbitrary strings, missing fields, malformed/table output or
+Objects, arbitrary strings, missing fields, malformed/table output or
 truncated capture produce a static projection error. There is no raw-output
 fallback. Preimages, proofs and tokens are not selectable fields.
+
+Cocod lifecycle observations use direct `argv: ["cocod", "status"]` with
+`{"mode":"json_fields","fields":["seedAccess.state","seedAccess.requiresPassphrase","cocoSession.state"]}`.
+These exact leaf paths have fixed enum/boolean validation. Selected keys retain
+their dotted names. A native `seedAccess: null` produces null for its selected
+children, indicating an uninitialized wallet; missing fields and unexpected
+values fail closed. Entire objects and `lastFailure` messages cannot be selected.
+For `cocod health`, select `status`; its allowed healthy value is `ok`.
+This keeps native command exits intact without an agent-written status parser.
 
 Prefer direct `argv` with private output when recipient settlement and passive
 wallet observations can establish the payment outcome. A native text parser is

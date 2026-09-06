@@ -500,6 +500,18 @@
         {
           "properties": {
             "implementation": {
+              "const": "cocod-wallet",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "implementation": {
               "const": "attacker-workspace",
               "type": "string"
             }

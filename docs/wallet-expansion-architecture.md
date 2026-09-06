@@ -1,10 +1,20 @@
 # CDK CLI and cocod wallet expansion
 
-Status: CDK phase 1 and its deterministic hardening baseline passed. The next
-wallet may begin its deterministic build checkpoint; no next wallet was started
-by this round. See the [hardening results and remaining agent-usability limits](cdk-wallet-hardening-2026-09-05.md).
-The funded agent benchmark has not passed all gates together. cocod and the
-private ecash exchange remain subsequent phases.
+Status updated 2026-09-05: CDK phase 1 and its deterministic hardening baseline
+passed. Cocod phase 2 also passed its deterministic money/lifecycle checkpoint;
+focused agent checkpoints verified restart/unlock and funding/payment behavior,
+while overall privacy/reporting gates remain failed. The initial
+[cocod fuzzer handoff](cocod-wallet-fuzzer-handoff.md) retains its original scope.
+See [cocod execution hardening](cocod-execution-hardening-2026-09-05.md) and the
+[CDK hardening results and agent-usability limits](cdk-wallet-hardening-2026-09-05.md).
+The funded CDK agent benchmark has not passed all gates together. Private ecash
+exchange and mixed-wallet laboratories remain subsequent phases.
+[Structured invoice relay](structured-invoice-relay.md) is implemented for native
+cocod invoice text and LND invoice JSON; its deterministic money/restart gate
+passed. It deliberately exposes small validated Lightning invoices and does not
+implement the private bearer-note exchange below.
+The focused agent relay execution was valid and its target held; report
+accounting still failed review, with an independent correction retained.
 Reviewed 2026-09-04 against Proofstorm commit
 `e6f918a3b3c2782958c2301ee838e53f4468d5eb`.
 
@@ -74,8 +84,8 @@ The cocod source reviewed is Coco commit
 [`44e5101cbea370132af6e68f88e01b47e39431c4`](https://github.com/cashubtc/coco/commit/44e5101cbea370132af6e68f88e01b47e39431c4).
 Its [package manifest](https://github.com/cashubtc/coco/blob/44e5101cbea370132af6e68f88e01b47e39431c4/packages/cocod/package.json)
 is private, reports `0.0.17`, and consumes workspace Coco packages through Bun.
-This is a reviewed source candidate, not a tested Proofstorm pin or a published
-0.0.17 release.
+It is now the tested experimental Proofstorm pin `0.0.17-dev.44e5101c`, built
+with unchanged source and lock. It is not a published 0.0.17 release.
 
 Its [README](https://github.com/cashubtc/coco/blob/44e5101cbea370132af6e68f88e01b47e39431c4/packages/cocod/README.md)
 and [API reference](https://github.com/cashubtc/coco/blob/44e5101cbea370132af6e68f88e01b47e39431c4/packages/cocod/docs/API.md)
@@ -83,8 +93,11 @@ describe foreground daemon execution, authenticated HTTP on
 `127.0.0.1:62626`, and separate process, wallet, and session lifecycle.
 Explicit client endpoints disable automatic daemon startup. The state directory
 contains the wallet database, credentials and a SQLite process-ownership lease.
-Initialization returns recovery material. These contracts need live verification
-in the pinned container before support is advertised.
+Initialization returns recovery material. The phase 2 gate verified these
+contracts in the pinned container using protected initialization and explicit
+session unlock. The public initialization API cannot choose a mint: private
+protected setup, native configuration while stopped, restart and explicit unlock
+are required to select the lab mint. See the handoff for the exact workflow.
 
 ## Architecture decisions
 
@@ -184,6 +197,11 @@ For cocod, prefer a verified passive query to the running daemon, with private
 credential handling. If its query synchronizes state, treat it as a mutation
 and use a passive alternative for observations. Running a second wallet SDK
 against its database would bypass the implementation being tested.
+
+Phase 2 finding: cocod's native balance query is passive but merges spendable
+and reserved ready proofs. The implemented SQLite read transaction retains
+those categories plus inflight proofs and remains available with the wallet
+session stopped. It does not load a second SDK or infer missing pending amounts.
 
 Do not generalize Nutshell's `cp -R` snapshot recipe to actively written
 databases. Use a transactionally consistent read/backup with declared semantics;
@@ -339,14 +357,15 @@ Review every 10 minutes or 10,000 new tokens; stop after two equivalent failures
 without a changed hypothesis. Record coordinator and fuzzer usage separately,
 including cached input, uncached input, output/reasoning and peak context.
 
-The current runner already bounds time, steps and repeated equivalent plans.
-It does not enforce the proposed token checkpoints/cleanup reserve.
-[The recovery report](recovery-round-2026-09-04.md) also records that live-exec
-timeout does not prove remote process termination and can lose partial output.
-Close those gaps before long recovery rounds. Initial smoke also needs bounded
-commands and a verified process-cleanup path. Preserve partial evidence, expose
-unknown execution outcomes, and never retry a possibly accepted payment just
-because its client timed out.
+The current runner bounds time, steps and repeated equivalent plans, exposes
+absolute cleanup/hard deadlines, clamps observation waits and enforces cleanup
+admission. Optional token ceilings trigger cleanup at observed model-step
+boundaries. Shared native supervision now retains terminal exit/signal,
+stream and cleanup receipts; the small reliability checkpoint passed. See
+[reliable native execution](reliable-native-execution.md). This supersedes the
+earlier timeout limitation in the recovery report, but does not establish every
+restart/descendant fault case. Preserve partial evidence, expose unknown outcomes,
+and never retry a possibly accepted payment just because its client timed out.
 
 After each run, reproduce a concrete defect deterministically where possible,
 fix the smallest owning layer, and rerun the affected brief. Add a typed helper
@@ -381,6 +400,6 @@ using the previous pinned implementation for fresh labs. Preserve failed-run
 evidence. Never downgrade an already migrated wallet database in place without
 a separately tested restore/migration contract.
 
-This architecture review read local code and public pinned upstream sources.
-It did not build either new image, execute the proposed wallet labs, run the
-fuzzer, or establish new compatibility results.
+The original architecture review was read-only. Subsequent CDK and cocod build
+checkpoints are linked above; their retained evidence defines the tested scope.
+The six-cell wallet/mint matrix and mixed-wallet ecash exchange are not complete.

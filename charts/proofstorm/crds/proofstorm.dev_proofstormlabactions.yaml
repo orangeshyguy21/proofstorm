@@ -153,7 +153,7 @@ spec:
                         properties:
                           fields:
                             default: []
-                            description: Top-level, allowlisted receipt fields from the last JSON document.
+                            description: Fixed receipt fields, including allowlisted lifecycle leaf paths; last JSON document.
                             items:
                               type: string
                             type: array
@@ -163,6 +163,8 @@ spec:
                             - private
                             - public
                             - json_fields
+                            - bolt11
+                            - lnd_invoice
                             type: string
                         type: object
                       partitionOperationId:

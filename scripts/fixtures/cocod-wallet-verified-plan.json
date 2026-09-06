@@ -1,0 +1,89 @@
+{
+  "components": [
+    {
+      "id": "btc",
+      "implementation": "bitcoin-core",
+      "version": "30.0"
+    },
+    {
+      "id": "lnd-a",
+      "implementation": "lnd",
+      "version": "0.20.0-beta"
+    },
+    {
+      "id": "lnd-b",
+      "implementation": "lnd",
+      "version": "0.20.0-beta"
+    },
+    {
+      "id": "mint",
+      "implementation": "cdk",
+      "version": "0.18.0",
+      "config": {
+        "input_fee_ppk": 0
+      }
+    },
+    {
+      "id": "wallet-1",
+      "implementation": "cocod-wallet",
+      "version": "0.0.17-dev.44e5101c"
+    },
+    {
+      "id": "wallet-2",
+      "implementation": "cocod-wallet",
+      "version": "0.0.17-dev.44e5101c"
+    }
+  ],
+  "connections": [
+    {
+      "chain": "btc",
+      "component": "lnd-a",
+      "id": "be-lnd-a",
+      "kind": "chain_backend",
+      "network": "regtest"
+    },
+    {
+      "chain": "btc",
+      "component": "lnd-b",
+      "id": "be-lnd-b",
+      "kind": "chain_backend",
+      "network": "regtest"
+    },
+    {
+      "id": "ln-peer",
+      "kind": "lightning_peer",
+      "node_a": "lnd-a",
+      "node_b": "lnd-b"
+    },
+    {
+      "id": "pay-backend",
+      "kind": "payment_backend",
+      "lightning": "lnd-a",
+      "mint": "mint",
+      "method": "bolt11",
+      "unit": "sat"
+    },
+    {
+      "id": "w1-net",
+      "kind": "network_path",
+      "source": "wallet-1",
+      "target": "mint"
+    },
+    {
+      "id": "w2-net",
+      "kind": "network_path",
+      "source": "wallet-2",
+      "target": "mint"
+    }
+  ],
+  "runtime_requirements": [
+    {
+      "component": "wallet-1",
+      "controls": [
+        "component_exec_live",
+        "component_restart",
+        "wallet_balance"
+      ]
+    }
+  ]
+}

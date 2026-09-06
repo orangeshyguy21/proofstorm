@@ -63,6 +63,7 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("nutshell", render_nutshell_mint_component),
             ("nutshell-wallet", render_wallet_component),
             ("cdk-cli-wallet", render_cdk_wallet_component),
+            ("cocod-wallet", render_cocod_wallet_component),
             ("postgresql", render_postgres_component),
             ("redis", render_redis_component),
         ])
@@ -2664,6 +2665,51 @@ pub fn render_cdk_wallet_component(
     container.readiness_probe = Some(resource(
         json!({"exec": {"command": ["/bin/sh", "-c", "test -w /wallet/cdk && cdk-cli --version"]}, "timeoutSeconds": 3}),
     )?);
+    Ok(rendered)
+}
+
+/// Render the native cocod daemon without making wallet initialization a readiness prerequisite.
+///
+/// # Errors
+/// Returns an error if the plan or Kubernetes resource shape is invalid.
+/// # Panics
+/// Panics if the shared wallet renderer does not return its single deployment.
+pub fn render_cocod_wallet_component(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
+    require_plan_backend(plan, "cocod-wallet", ComponentKind::Wallet)?;
+    let mut rendered = render_cli_wallet_workspace(plan)?;
+    let deployment = rendered
+        .deployments
+        .first_mut()
+        .expect("wallet deployment")
+        .spec
+        .as_mut()
+        .expect("deployment spec");
+    deployment.strategy = Some(resource(json!({"type":"Recreate"}))?);
+    let pod = deployment.template.spec.as_mut().expect("wallet pod");
+    pod.node_selector = Some(BTreeMap::from([(
+        "kubernetes.io/arch".into(),
+        "arm64".into(),
+    )]));
+    pod.termination_grace_period_seconds = Some(45);
+    let container = &mut pod.containers[0];
+    container.env = Some(resource(json!([
+        {"name":"HOME","value":"/wallet"},
+        {"name":"PROOFSTORM_WALLET","value":plan.component_id},
+        {"name":"COCOD_URL","value":"http://127.0.0.1:62626"},
+        {"name":"COCOD_LISTEN_HOST","value":"127.0.0.1"},
+        {"name":"COCOD_LISTEN_PORT","value":"62626"}
+    ]))?);
+    // Host-local daemon refuses explicit client endpoints. Kubernetes exec clients
+    // still inherit the pod's COCOD_URL and therefore can never autostart a daemon.
+    container.command = Some(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "umask 077; unset COCOD_URL; exec cocod daemon".into(),
+    ]);
+    let probe = json!({"exec":{"command":["python3","-c","import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:62626/health',timeout=2)); assert r['status']=='ok' and r['interfaceVersion']=='1'"]},"timeoutSeconds":3,"periodSeconds":3});
+    container.readiness_probe = Some(resource(probe)?);
     Ok(rendered)
 }
 
