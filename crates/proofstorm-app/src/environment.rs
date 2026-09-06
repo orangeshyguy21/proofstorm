@@ -1,191 +1,22 @@
 //! A credential-free read model shared by CLI, MCP and HTTP.
 mod resources;
-use crate::{
-    Error,
-    lab::{Activity, Labs},
-};
+use crate::{Error, lab::Labs};
 use futures::{StreamExt, stream};
 use kube::{Api, ResourceExt};
-use proofstorm_core::{
-    Capability, ComponentConditionReason, ComponentConditionState, ComponentConditionType,
-    ComponentKind, InstancePhase, LinkKind, Session,
-};
+use proofstorm_core::Capability;
 use proofstorm_kube::ProofstormLab;
-use proofstorm_store::{EnvironmentEntry, LabHandle, StoreError};
+use proofstorm_store::{EnvironmentEntry, StoreError};
 pub use resources::{Endpoint, ResourceDemand};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct EnvironmentQuery {
-    pub instance_id: Option<String>,
-    pub cursor: String,
-    #[schemars(range(min = 1, max = 50))]
-    pub limit: u32,
-    pub session_cursor: String,
-    pub activity_cursor: String,
-    pub component_cursor: String,
-    pub link_cursor: String,
-}
-impl Default for EnvironmentQuery {
-    fn default() -> Self {
-        Self {
-            instance_id: None,
-            cursor: String::new(),
-            limit: 20,
-            session_cursor: String::new(),
-            activity_cursor: String::new(),
-            component_cursor: String::new(),
-            link_cursor: String::new(),
-        }
-    }
-}
-impl EnvironmentQuery {
-    pub fn validate(&self) -> Result<(), Error> {
-        if !(1..=50).contains(&self.limit)
-            || [
-                &self.cursor,
-                &self.session_cursor,
-                &self.activity_cursor,
-                &self.component_cursor,
-                &self.link_cursor,
-            ]
-            .iter()
-            .any(|s| s.len() > 128)
-            || self
-                .instance_id
-                .as_ref()
-                .is_some_and(|s| s.is_empty() || s.len() > 128)
-        {
-            return Err(Error::problem(
-                "invalid_page",
-                "limit must be 1..=50; IDs and cursors must be at most 128 bytes",
-            ));
-        }
-        if (self.instance_id.is_none()
-            && (!self.session_cursor.is_empty()
-                || !self.activity_cursor.is_empty()
-                || !self.component_cursor.is_empty()
-                || !self.link_cursor.is_empty()))
-            || (self.instance_id.is_some() && !self.cursor.is_empty())
-        {
-            return Err(Error::problem(
-                "invalid_page",
-                "section cursors require instance_id; the lab cursor requires an environment page",
-            ));
-        }
-        Ok(())
-    }
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct Page<T> {
-    pub items: Vec<T>,
-    pub next_cursor: Option<String>,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct EnvironmentView {
-    pub api_version: String,
-    pub workspace_id: String,
-    pub scope: String,
-    pub observation_started_at_unix: i64,
-    pub observation_finished_at_unix: i64,
-    pub labs: Page<EnvironmentLab>,
-    pub coverage: Coverage,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct Coverage {
-    pub topology: String,
-    pub activity: String,
-    pub resource_demand: String,
-    pub resource_usage: String,
-    pub protocol_traffic: String,
-    pub attached_clients: String,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct EnvironmentLab {
-    pub id: String,
-    pub handle: Option<LabHandle>,
-    pub revision_digest: Option<String>,
-    pub journal_read_at_unix: i64,
-    pub last_recorded_activity_at_unix: Option<i64>,
-    pub runtime: RuntimeObservation,
-    pub components: Page<ComponentView>,
-    pub links: Page<LinkView>,
-    pub resources: Option<ResourceDemand>,
-    pub resource_error: Option<String>,
-    pub sessions: Page<SessionView>,
-    pub activity: Page<Activity>,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ObservationState {
-    Available,
-    Stale,
-    Missing,
-    Unavailable,
-    NotMaterialized,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct RuntimeObservation {
-    pub state: ObservationState,
-    pub fetched_at_unix: i64,
-    pub source_updated_at_unix: Option<i64>,
-    pub resource_version: Option<String>,
-    pub generation: Option<i64>,
-    pub observed_generation: Option<i64>,
-    pub phase: Option<InstancePhase>,
-    pub error: Option<String>,
-}
-impl RuntimeObservation {
-    fn empty(state: ObservationState, error: Option<&str>) -> Self {
-        Self {
-            state,
-            fetched_at_unix: now(),
-            source_updated_at_unix: None,
-            resource_version: None,
-            generation: None,
-            observed_generation: None,
-            phase: None,
-            error: error.map(str::to_owned),
-        }
-    }
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ComponentView {
-    pub id: String,
-    pub kind: ComponentKind,
-    pub implementation: String,
-    pub version: Option<String>,
-    pub ready: Option<bool>,
-    pub conditions: Vec<ConditionView>,
-    pub endpoints: Vec<Endpoint>,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ConditionView {
-    pub condition_type: ComponentConditionType,
-    pub state: ComponentConditionState,
-    pub reason: ComponentConditionReason,
-    pub last_transition_unix: i64,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct LinkView {
-    pub id: String,
-    pub kind: LinkKind,
-    pub from: String,
-    pub to: String,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct SessionView {
-    pub session: Session,
-    pub overlapping_session_count: i64,
-}
+pub use proofstorm_view::*;
 
 impl Labs {
     /// Only reads local history and existing runtime status. Never creates a session or job.
     pub async fn environment(&self, query: &EnvironmentQuery) -> Result<EnvironmentView, Error> {
-        query.validate()?;
+        query
+            .validate()
+            .map_err(|message| Error::problem("invalid_page", message))?;
         for cap in [
             Capability::LabRead,
             Capability::LabStatus,
@@ -257,10 +88,7 @@ impl Labs {
         let (runtime, resource) = if let Some(instance) = &instance {
             self.observe_environment_runtime(instance).await
         } else {
-            (
-                RuntimeObservation::empty(ObservationState::NotMaterialized, None),
-                None,
-            )
+            (empty_runtime(ObservationState::NotMaterialized, None), None)
         };
         let (resources, resource_error, endpoints) =
             if let (Some(instance), Some(revision)) = (&instance, &revision) {
@@ -374,26 +202,17 @@ impl Labs {
         {
             Ok(Ok(Some(r))) => r,
             Ok(Ok(None)) => {
-                return (
-                    RuntimeObservation::empty(ObservationState::Missing, None),
-                    None,
-                );
+                return (empty_runtime(ObservationState::Missing, None), None);
             }
             Ok(Err(_)) => {
                 return (
-                    RuntimeObservation::empty(
-                        ObservationState::Unavailable,
-                        Some("runtime_read_failed"),
-                    ),
+                    empty_runtime(ObservationState::Unavailable, Some("runtime_read_failed")),
                     None,
                 );
             }
             Err(_) => {
                 return (
-                    RuntimeObservation::empty(
-                        ObservationState::Unavailable,
-                        Some("runtime_read_timeout"),
-                    ),
+                    empty_runtime(ObservationState::Unavailable, Some("runtime_read_timeout")),
                     None,
                 );
             }
@@ -405,7 +224,7 @@ impl Labs {
             || resource.spec.lock.digest != instance.lock_digest
         {
             return (
-                RuntimeObservation::empty(
+                empty_runtime(
                     ObservationState::Unavailable,
                     Some("runtime_identity_mismatch"),
                 ),
@@ -575,4 +394,17 @@ fn topology(
         .unwrap_or_default();
 
     (components, links)
+}
+
+fn empty_runtime(state: ObservationState, error: Option<&str>) -> RuntimeObservation {
+    RuntimeObservation {
+        state,
+        fetched_at_unix: now(),
+        source_updated_at_unix: None,
+        resource_version: None,
+        generation: None,
+        observed_generation: None,
+        phase: None,
+        error: error.map(str::to_owned),
+    }
 }

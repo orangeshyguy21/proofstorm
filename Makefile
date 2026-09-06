@@ -39,7 +39,7 @@ EXPECTED_FAIL_GATES := nutshell-oidc
 # Development checkpoints needing an image provisioned in the local registry.
 LOCAL_IMAGE_GATES := private-handoff private-transfer cdk-wallet cdk-wallet-fees reliable-exec cocod-wallet cocod-projection
 
-.PHONY: help build test lint tools cluster-up docker-build docker-push install \
+.PHONY: help build web web-tools web-dev test lint tools cluster-up docker-build docker-push install \
 	deploy setup doctor cluster-schema e2e build-installer down clean-tools \
 	$(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES) $(LOCAL_IMAGE_GATES))
 
@@ -49,7 +49,9 @@ help:
 	@echo "  make doctor           verify pinned tools, cluster, controller, and MCP discovery"
 	@echo "  make down             delete the local cluster and its registry"
 	@echo ""
-	@echo "  make build            build the developer CLI, MCP server, and gate runner"
+	@echo "  make build            build the web app, developer CLI, MCP server, and gate runner"
+	@echo "  make web              compile the Rust/Wasm web app"
+	@echo "  make web-dev          hot-reload UI (run proofstorm serve separately)"
 	@echo "  make test             hermetic workspace tests; needs no cluster"
 	@echo "  make lint             formatting, strict Clippy, and Helm lint"
 	@echo ""
@@ -68,7 +70,7 @@ help:
 
 # ---- build and check -------------------------------------------------------
 
-build:
+build: web
 	cargo build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance
 	cargo build --locked --release -p proofstorm-app -p proofstorm-mcp
 
@@ -79,6 +81,18 @@ lint:
 	cargo fmt --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	$(HELM) lint $(CHART)
+
+# The browser stays Rust. Build it before embedding assets in the CLI binary.
+web-tools:
+	sh $(ROOT)tools/install-trunk.sh
+	rustup target add wasm32-unknown-unknown
+
+web: web-tools
+	NO_COLOR=true $(BIN_DIR)/trunk build --release --locked --config $(ROOT)crates/proofstorm-web/Trunk.toml
+
+# Run `proofstorm serve` on port 8787 first; Trunk proxies its API and event stream.
+web-dev: web-tools
+	NO_COLOR=true $(BIN_DIR)/trunk serve --config $(ROOT)crates/proofstorm-web/Trunk.toml
 
 # ---- pinned tools ----------------------------------------------------------
 

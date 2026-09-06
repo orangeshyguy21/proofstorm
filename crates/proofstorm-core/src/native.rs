@@ -24,6 +24,7 @@ pub enum OutputMode {
 ///
 /// # Errors
 /// Returns only static diagnostics; never echoes native response data.
+#[cfg(feature = "invoice-validation")]
 pub fn project_invoice(bytes: &[u8], mode: OutputMode) -> Result<Value, &'static str> {
     use lightning_invoice::Bolt11Invoice;
 

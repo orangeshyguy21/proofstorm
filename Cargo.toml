@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/proofstorm-app",
+    "crates/proofstorm-view",
+    "crates/proofstorm-web",
     "crates/proofstorm-acceptance",
     "crates/proofstorm-core",
     "crates/proofstorm-exec",

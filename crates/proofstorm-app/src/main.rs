@@ -63,7 +63,7 @@ enum Command {
         #[arg(long, default_value = "")]
         link_cursor: String,
     },
-    /// Serve the read-only environment API on 127.0.0.1 for local applications.
+    /// Open the live web app and API on 127.0.0.1; collect runtime receipts in the background.
     Serve {
         #[arg(long, default_value_t = 8787)]
         port: u16,

@@ -18,7 +18,7 @@ MCP exposes `proofstorm_environment_read` in the default `developer` and opt-in 
 
 The existing global CLI flags select `--database`, `--workspace`, `--principal`, `--context`, and `--namespace`. The reader needs `lab.read`, `lab.status`, and `experiment.read` in the selected workspace; it needs no operation or connection capability. HTTP uses the launching process's identity and rechecks its permissions on each data request.
 
-The HTTP server binds only to loopback. It serves GET requests, sends `Cache-Control: no-store`, accepts local Host names, and rejects Origin headers. It has no CORS or remote authentication surface: trusted local processes may read as its configured principal. It is not a remotely shared or multi-user server. Each connection closes after its response; Ctrl-C stops the server.
+The HTTP server binds only to loopback. It serves GET requests, sends `Cache-Control: no-store`, accepts local Host names and same-origin requests, and rejects foreign Origin headers. It has no CORS or remote authentication surface: trusted local processes may read as its configured principal. It is not a remotely shared or multi-user server. Snapshot connections close after their response; `/v1/events` stays open for SSE. Ctrl-C stops the server. The root path serves the embedded Leptos app. See [the web app guide](web-app.md).
 
 ## What the view means
 
@@ -35,7 +35,7 @@ Protocol traffic, measured resource usage, and attached external clients are exp
 
 The response reports its observation start and finish times. Each lab reports when its journal was read, its latest recorded operation activity, and when Kubernetes was fetched. Runtime resource versions and observed/current generations are included. `source_updated_at_unix` comes from Kubernetes status field-management metadata when available; otherwise it is null. Component condition transition timestamps are not polling timestamps.
 
-`runtime.state` is `available`, `stale`, `missing`, `unavailable`, or `not_materialized`. Revision/generation mismatches cannot produce a current `ready: true`. A failed or timed-out runtime read preserves stored topology and history, with a safe error code. A missing runtime object does not itself prove verified teardown; a named handle's closed phase records the completed lifecycle. Inspecting never repairs missing observations or synchronizes results. Use `proofstorm sync NAME` or an existing collector explicitly.
+`runtime.state` is `available`, `stale`, `missing`, `unavailable`, or `not_materialized`. Revision/generation mismatches cannot produce a current `ready: true`. A failed or timed-out runtime read preserves stored topology and history, with a safe error code. A missing runtime object does not itself prove verified teardown; a named handle's closed phase records the completed lifecycle. Inspecting never repairs missing observations or synchronizes results. `proofstorm serve` runs a separate background collector automatically; without the web server, use `proofstorm sync NAME` or `sync NAME --watch`.
 
 Pages are observations taken over an interval, not one atomic snapshot across SQLite and Kubernetes. Permission and storage errors fail the request; runtime observation failures are represented within each lab.
 

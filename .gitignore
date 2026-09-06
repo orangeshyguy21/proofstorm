@@ -8,3 +8,5 @@
 /.proofstorm/
 __pycache__/
 *.pyc
+
+/crates/proofstorm-web/dist/

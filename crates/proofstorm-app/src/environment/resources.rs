@@ -6,49 +6,11 @@ use k8s_openapi::{
 };
 use proofstorm_core::{LabInstance, PublishedRevision};
 use proofstorm_kube::{COMPONENT_LABEL, render_lab, render_security_spine};
-use schemars::JsonSchema;
-use serde::Serialize;
 use std::collections::BTreeMap;
 
-type Quantities = BTreeMap<String, String>;
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct Endpoint {
-    pub component: String,
-    pub name: String,
-    pub transport: String,
-    pub cluster_host: String,
-    pub port: i32,
-    pub local_connection_supported: bool,
-    pub local_authentication: Option<connections::Authentication>,
-    pub access_context: String,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ResourceDemand {
-    pub workloads: Vec<WorkloadDemand>,
-    pub storage: Vec<StorageDemand>,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct WorkloadDemand {
-    pub name: String,
-    pub component: Option<String>,
-    pub replicas: i32,
-    pub containers: Vec<ContainerDemand>,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ContainerDemand {
-    pub name: String,
-    pub init: bool,
-    pub requests: Quantities,
-    pub limits: Quantities,
-}
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct StorageDemand {
-    pub name: String,
-    pub workload: Option<String>,
-    pub replicas: i32,
-    pub component: Option<String>,
-    pub requests: Quantities,
-}
+pub use proofstorm_view::{
+    ContainerDemand, Endpoint, Quantities, ResourceDemand, StorageDemand, WorkloadDemand,
+};
 
 pub(super) fn project(
     instance: &LabInstance,

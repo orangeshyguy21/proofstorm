@@ -8,6 +8,21 @@ pub struct EnvironmentEntry {
 }
 
 impl Store {
+    /// Opaque invalidation inputs: catches writes through this connection and other processes.
+    /// Database-wide changes may cause harmless extra refreshes; no row data is returned.
+    pub fn observation_token(
+        &self,
+        workspace: &str,
+        principal: &str,
+    ) -> Result<(i64, u64), StoreError> {
+        self.authorize(workspace, principal, Capability::ExperimentRead)?;
+        let db = self.lock()?;
+        Ok((
+            db.query_row("PRAGMA data_version", [], |r| r.get(0))?,
+            db.total_changes(),
+        ))
+    }
+
     pub fn environment_entries(
         &self,
         workspace: &str,
@@ -95,6 +110,26 @@ impl Store {
         Ok((operations, next))
     }
 
+    /// Bounded, workspace-wide collector queue, including advanced runs and disconnected agents.
+    pub fn pending_observations(
+        &self,
+        workspace: &str,
+        principal: &str,
+        cursor: &str,
+        limit: u32,
+    ) -> Result<Vec<LabOperation>, StoreError> {
+        self.authorize(workspace, principal, Capability::ArtifactRead)?;
+        self.authorize(workspace, principal, Capability::ExperimentRead)?;
+        validate_page(cursor, limit)?;
+        let ids = {
+            let db = self.lock()?;
+            db.prepare("SELECT id FROM actions WHERE workspace_id=?1 AND id>?2 AND phase_json IN ('\"pending\"','\"running\"') ORDER BY id LIMIT ?3")?.query_map(params![workspace,cursor,limit],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?
+        };
+        ids.into_iter()
+            .map(|id| self.operation_unchecked(workspace, &id))
+            .collect()
+    }
+
     pub fn last_instance_activity(
         &self,
         workspace: &str,
@@ -124,4 +159,34 @@ fn validate_page(cursor: &str, limit: u32) -> Result<(), StoreError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    #[test]
+    fn invalidation_detects_same_connection_and_external_commits() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("journal.db");
+        let reader = Store::open(&path).unwrap();
+        reader
+            .put_workspace(&crate::Workspace {
+                id: "test".into(),
+                name: "test".into(),
+            })
+            .unwrap();
+        reader.put_principal("viewer").unwrap();
+        reader
+            .grant("test", "viewer", Capability::ExperimentRead)
+            .unwrap();
+        let before = reader.observation_token("test", "viewer").unwrap();
+        assert_eq!(before, reader.observation_token("test", "viewer").unwrap());
+        reader.put_principal("local-writer").unwrap();
+        let local = reader.observation_token("test", "viewer").unwrap();
+        assert_ne!(before, local);
+        let writer = Store::open(&path).unwrap();
+        writer.put_principal("external-writer").unwrap();
+        assert_ne!(local, reader.observation_token("test", "viewer").unwrap());
+        assert!(reader.observation_token("test", "unknown").is_err());
+    }
 }

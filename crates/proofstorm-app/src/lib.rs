@@ -6,9 +6,11 @@
 pub mod connections;
 pub mod environment;
 mod error;
+mod events;
 pub mod http;
 pub mod journal;
 pub mod lab;
+pub mod observer;
 pub mod runtime;
 
 pub use error::{Error, ErrorKind};

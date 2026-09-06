@@ -5,19 +5,14 @@ use kube::{Api, ResourceExt, api::ListParams};
 use proofstorm_core::{Capability, LabInstance, PublishedRevision};
 use proofstorm_store::LabHandlePhase;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{net::Ipv4Addr, path::Path, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Authentication {
-    None,
-    Basic,
-}
+pub use proofstorm_view::Authentication;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ConnectionDescriptor {

@@ -92,6 +92,13 @@ enum Error {
     LiveExec(String),
 }
 
+fn pod_belongs_to_instance(pod: &Pod, key: &str) -> bool {
+    pod.labels()
+        .get(INSTANCE_LABEL)
+        .is_some_and(|value| value == key)
+        && pod.metadata.namespace.as_deref() == Some(instance_namespace(key).as_str())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::try_default().await?;
@@ -99,7 +106,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let actions = Api::<ProofstormLabAction>::all(client.clone());
     let candidate_builds = Api::<ProofstormCandidateBuild>::all(client.clone());
     let context = Arc::new(Context { client });
-    let lab_controller = Controller::new(labs, watcher::Config::default())
+    let lab_controller = Controller::new(labs, watcher::Config::default());
+    let lab_cache = lab_controller.store();
+    let lab_controller = lab_controller
+        // Pod readiness, restarts and probe changes should refresh stable labs promptly.
+        // Keep the slower periodic requeue as a fallback when the watch reconnects.
+        .watches(
+            Api::<Pod>::all(context.client.clone()),
+            watcher::Config::default().labels(INSTANCE_LABEL),
+            move |pod| {
+                lab_cache
+                    .state()
+                    .into_iter()
+                    .filter(|lab| pod_belongs_to_instance(&pod, &lab.spec.instance_key))
+                    .map(|lab| kube::runtime::reflector::ObjectRef::from_obj(lab.as_ref()))
+                    .collect::<Vec<_>>()
+            },
+        )
         .with_config(
             kube::runtime::controller::Config::default().concurrency(LAB_CONTROLLER_CONCURRENCY),
         )
@@ -3734,6 +3757,19 @@ mod tests {
             ..ProofstormLabActionStatus::default()
         };
         assert!(action_execution_started(Some(&running)));
+    }
+
+    #[test]
+    fn pod_watch_routes_only_the_matching_instance_namespace() {
+        let mut pod = Pod::default();
+        pod.metadata.labels = Some(BTreeMap::from([(INSTANCE_LABEL.into(), "demo".into())]));
+        pod.metadata.namespace = Some("proofstorm-demo".into());
+        assert!(pod_belongs_to_instance(&pod, "demo"));
+        assert!(!pod_belongs_to_instance(&pod, "other"));
+        pod.metadata.namespace = Some("unrelated".into());
+        assert!(!pod_belongs_to_instance(&pod, "demo"));
+        pod.metadata.labels = None;
+        assert!(!pod_belongs_to_instance(&pod, "demo"));
     }
 
     #[test]

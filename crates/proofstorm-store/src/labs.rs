@@ -1,32 +1,8 @@
 //! Stable developer-facing names over immutable lab instances.
 use super::{Capability, Store, StoreError, TransactionBehavior, is_slug, params};
 use rusqlite::OptionalExtension;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum LabHandlePhase {
-    Open,
-    Closing,
-    Closed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct LabHandle {
-    pub name: String,
-    pub generation: u32,
-    pub owner: String,
-    pub config_digest: String,
-    pub phase: LabHandlePhase,
-    pub instance_id: String,
-}
-impl LabHandle {
-    #[must_use]
-    pub fn run_id(&self) -> String {
-        format!("run-{}", self.instance_id)
-    }
-}
+pub use proofstorm_view::{LabHandle, LabHandlePhase};
 
 fn read(
     db: &rusqlite::Connection,

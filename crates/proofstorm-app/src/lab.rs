@@ -7,7 +7,7 @@ use proofstorm_core::{
 use proofstorm_kube::{ComponentExecLiveAction, LabAction};
 use proofstorm_store::{LabHandle, LabHandlePhase, Store, StoreError};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -18,79 +18,7 @@ pub struct Labs {
     pub principal: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct Activity {
-    pub id: String,
-    pub sequence: u64,
-    pub kind: OperationKind,
-    pub phase: OperationPhase,
-    pub accepted_at_unix: i64,
-    pub completed_at_unix: Option<i64>,
-    pub artifact_digest: Option<String>,
-    pub session_id: String,
-    pub run_id: String,
-    pub native_exit_code: Option<i64>,
-    pub native_timed_out: Option<bool>,
-    pub cleanup_verified: Option<bool>,
-    pub principal_id: String,
-    pub components: Vec<String>,
-}
-impl From<LabOperation> for Activity {
-    fn from(op: LabOperation) -> Self {
-        Self {
-            run_id: op.experiment_id,
-            native_exit_code: op
-                .artifact
-                .as_ref()
-                .and_then(|a| a.content["exit_code"].as_i64()),
-            native_timed_out: op
-                .artifact
-                .as_ref()
-                .and_then(|a| a.content["timed_out"].as_bool()),
-            cleanup_verified: op
-                .artifact
-                .as_ref()
-                .and_then(|a| a.content["cleanup_verified"].as_bool()),
-            session_id: op.session_id,
-            principal_id: op.principal_id,
-            components: [
-                "/component",
-                "/wallet",
-                "/mint",
-                "/chain",
-                "/from_lightning",
-                "/to_lightning",
-                "/payer_lightning",
-                "/mint_lightning",
-                "/target_component",
-                "/from_component",
-                "/to_component",
-                "/lightning",
-                "/recipient_wallet",
-                "/recipient_mint",
-                "/transfer/component",
-                "/transfer/destinationComponent",
-            ]
-            .into_iter()
-            .filter_map(|path| {
-                op.request
-                    .pointer(path)
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-            id: op.id,
-            sequence: op.sequence,
-            kind: op.kind,
-            phase: op.phase,
-            accepted_at_unix: op.accepted_at_unix,
-            completed_at_unix: op.completed_at_unix,
-            artifact_digest: op.artifact.map(|a| a.digest),
-        }
-    }
-}
+pub use proofstorm_view::Activity;
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct LabView {

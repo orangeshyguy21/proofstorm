@@ -578,3 +578,181 @@ async fn recorded_network_faults_identify_both_components() {
         vec!["chain", "chain-two"]
     );
 }
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one server lifecycle covers receipt collection, reconnect and revocation"
+)]
+async fn server_collects_disconnected_agent_receipts_and_streams_changes() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let lab = labs.up("demo", &spec()).await.unwrap().lab;
+    let op = labs
+        .exec("demo", "chain", command(), "background-op")
+        .await
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(proofstorm_app::http::serve_listener(labs.clone(), listener));
+    let client = reqwest::Client::new();
+    let mut stream = client.get(format!("{url}/v1/events")).send().await.unwrap();
+    assert_eq!(stream.headers()["content-type"], "text/event-stream");
+    let first = stream.chunk().await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&first).contains("event: environment"));
+    let start = cluster.lock().unwrap().requests.len();
+    for (path, object) in &mut cluster.lock().unwrap().objects {
+        if path.contains("/proofstormlabactions/") {
+            object["status"] = json!({"phase":"Succeeded", "artifact":{"exit_code":0,"cleanup_verified":true,"timed_out":false}});
+        }
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let result = labs
+                .environment(&EnvironmentQuery::default())
+                .await
+                .unwrap();
+            if result.labs.items[0].activity.items[0].phase == OperationPhase::Succeeded {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let event = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let chunk = stream.chunk().await.unwrap().unwrap();
+            if String::from_utf8_lossy(&chunk).contains("event: environment") {
+                break;
+            }
+        }
+    })
+    .await;
+    assert!(event.is_ok());
+    let status: Value = client
+        .get(format!("{url}/v1/observer"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["state"], "watching");
+    assert_eq!(status["recorded_operations"], 1);
+    // Re-observation uses the existing idempotent journal path and creates no work.
+    labs.sync("demo").await.unwrap();
+    assert_eq!(
+        store.operation("local", "developer", &op.id).unwrap().phase,
+        OperationPhase::Succeeded
+    );
+    assert!(
+        cluster.lock().unwrap().requests[start..]
+            .iter()
+            .all(|(method, _)| method == "GET")
+    );
+    assert_eq!(
+        store
+            .sessions("local", "developer", &lab.instance_id, "", 100)
+            .unwrap()
+            .sessions
+            .len(),
+        1
+    );
+    let mut reconnected = client
+        .get(format!("{url}/v1/events"))
+        .header("Last-Event-ID", "999999")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&reconnected.chunk().await.unwrap().unwrap())
+            .contains("event: environment")
+    );
+    store.replace_grants("local", "developer", []).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while stream.chunk().await.unwrap().is_some() {}
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        client
+            .get(format!("{url}/v1/events"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn web_assets_and_same_origin_requests_are_served_safely() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let labs = service(store, Arc::new(Mutex::new(Cluster::default())));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(proofstorm_app::http::serve_listener(labs, listener));
+    let client = reqwest::Client::new();
+    let root = client.get(&url).send().await.unwrap();
+    if root.status() == 200 {
+        assert!(
+            root.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .contains("text/html")
+        );
+        let html = root.text().await.unwrap();
+        assert!(html.contains(".wasm"));
+        let wasm = html
+            .split(['\"', '\''])
+            .find(|part| {
+                std::path::Path::new(part)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wasm"))
+            })
+            .unwrap();
+        let asset = client.get(format!("{url}{wasm}")).send().await.unwrap();
+        assert_eq!(asset.headers()["content-type"], "application/wasm");
+    } else {
+        assert_eq!(root.status(), 503);
+    }
+    assert_eq!(
+        client
+            .get(format!("{url}/v1/environment"))
+            .header("Origin", &url)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    for path in ["/v1/events", "/"] {
+        assert_eq!(
+            client
+                .get(format!("{url}{path}"))
+                .header("Origin", "https://foreign.example")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        assert_eq!(
+            client
+                .post(format!("{url}{path}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            405
+        );
+    }
+    server.abort();
+    let _ = server.await;
+}

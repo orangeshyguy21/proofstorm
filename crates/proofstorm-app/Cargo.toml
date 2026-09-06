@@ -11,6 +11,7 @@ name = "proofstorm"
 path = "src/main.rs"
 
 [dependencies]
+proofstorm-view = { path = "../proofstorm-view" }
 anyhow.workspace = true
 futures.workspace = true
 hyper = { version = "1", features = ["server", "http1"] }

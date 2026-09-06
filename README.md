@@ -85,8 +85,10 @@ closes just that lab.
 ## See the environment
 
 ```bash
+# make build includes the Rust/Wasm website
 target/debug/proofstorm environment
 target/debug/proofstorm serve --port 8787
+# Open http://127.0.0.1:8787 to watch agents build labs
 # From another terminal:
 curl http://127.0.0.1:8787/v1/environment
 ```
@@ -95,7 +97,10 @@ The same read-only view is available through MCP `proofstorm_environment_read`.
 It includes topology, endpoint metadata, desired resources, session overlaps,
 and recorded activity across retained labs. Each source reports its freshness;
 protocol traffic and external clients are explicitly unobserved. Results are
-paged, and reads never start commands or collect receipts. See the
+paged, and reads never start commands or collect receipts. The web server uses
+SSE to keep the topology and activity current and runs a background receipt
+collector, including after an agent disconnects. Use the same database and
+workspace as your agent. See the [live web app guide](docs/web-app.md) and the
 [environment API contract](docs/environment-api-2026-09-06.md) for scope,
 pagination, local HTTP access, and the JSON Schema.
 
