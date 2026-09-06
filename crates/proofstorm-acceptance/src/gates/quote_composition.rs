@@ -309,7 +309,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             "external-claim",
             json!({
                 "wallet": "recipient-wallet", "mint": "mint", "mint_quote_id": external_quote,
-                "timeout_seconds": 60, "idempotency_key": format!("external-claim-{run}")
+                "timeout_seconds": 30, "idempotency_key": format!("external-claim-{run}")
             }),
         ),
     )?;

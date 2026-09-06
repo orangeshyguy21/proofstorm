@@ -1,0 +1,8 @@
+.git
+.env
+.tools
+.proofstorm
+target
+dev
+__pycache__
+*.log

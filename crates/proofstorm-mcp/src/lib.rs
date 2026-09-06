@@ -87,7 +87,7 @@ pub struct LabPlanComponentInput {
     /// nutshell, cdk-ldk, or nutshell-wallet. This remains an open string so
     /// newly registered implementations require no MCP schema change.
     pub implementation: String,
-    /// Omit to select the catalog's preferred supported version.
+    /// Exact version. Required for experimental entries; otherwise defaults to preferred.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Omit to use the implementation's safe role default.
@@ -165,10 +165,9 @@ pub struct LabPlanRequest {
     pub plan_id: String,
     pub components: Vec<LabPlanComponentInput>,
     pub connections: Vec<LabPlanConnectionInput>,
-    /// Required. Runtime controls the experiment will need, grouped by
-    /// component and logical endpoint. Use an empty array only for a plan-only
-    /// request with no intended runtime work. Proofstorm checks these before
-    /// storage so an unavailable driver cannot become a live-lab failure.
+    /// Required endpoint controls, grouped by component. Discover IDs from
+    /// `catalog_entry_read`. Use [] only for plans with no runtime work.
+    /// Unsupported controls fail before storage.
     pub runtime_requirements: Vec<LabPlanRuntimeRequirement>,
     #[serde(default)]
     pub policy: LabPolicy,
@@ -183,8 +182,10 @@ pub struct LabPlanRuntimeRequirement {
     /// endpoint IDs are discovered from `catalog_entry_read`.
     #[serde(default = "default_runtime_endpoint")]
     pub endpoint: String,
-    /// Open control identifiers such as `channel_open`, `wallet_pay`,
-    /// `node_restart`, or `authentication_replay`.
+    /// Use IDs advertised by this catalog endpoint. `component_exec_live`
+    /// covers its native CLI commands. Platform faults (`network_partition`,
+    /// `network_heal`) are not endpoint controls. Wallet operations belong to
+    /// the wallet endpoint.
     pub controls: BTreeSet<String>,
 }
 
@@ -201,6 +202,8 @@ pub struct LabPlanResolvedComponent {
     pub version: String,
     pub config_version: String,
     pub control: ControlClass,
+    /// Authored overrides only; omitted defaults and backend settings are not expanded.
+    pub config: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1072,15 +1075,202 @@ pub struct ComponentExecRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentExecLiveRequest {
+    /// Opaque custody reference; token bytes never belong in this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_payload: Option<proofstorm_core::private_io::PayloadBinding>,
     pub instance_id: String,
     pub experiment_id: String,
     pub lease_id: String,
     pub operation_id: String,
     pub component: String,
-    /// An unrestricted non-interactive shell program executed inside the
-    /// selected running component container.
+    /// POSIX shell program. Its exit code describes the shell, including any pipelines.
+    #[serde(default)]
     pub script: String,
+    /// Direct command and arguments. Prefer this to preserve the native process exit status.
+    #[serde(default)]
+    pub argv: Vec<String>,
+    /// Private default; public raw. `json_fields`: status,state,`failure_reason`,settled,
+    /// `synced_to_chain`,amount,`amount_sat`,
+    /// `fee_paid`,`fee_paid_sat`,`value_sat`,`total_fees`,`total_fees_msat`,`num_active_channels`,
+    /// balance,`confirmed_balance`,`unconfirmed_balance`,`seedAccess.state`,
+    /// `seedAccess.requiresPassphrase`,`cocoSession.state`.
+    /// bolt11: invoice text. `lnd_invoice`: LND JSON with matching hash.
+    /// Both return validated invoice/hash/amount/currency/expiry; raw streams stay private.
+    #[serde(default)]
+    pub output: proofstorm_core::native::NativeOutput,
     pub timeout_seconds: u32,
+    pub idempotency_key: String,
+}
+
+// Method-specific public input. Keep the flat Kubernetes action an internal wire type.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "transferMethod", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrivateTransferInput {
+    Prepare {
+        component: String,
+        #[serde(rename = "destinationComponent")]
+        destination_component: String,
+        /// Reserve before export: 1..=1048576 bytes; CDK recipients allow at most 65536.
+        #[serde(rename = "maximumBytes")]
+        #[schemars(range(min = 1, max = 1_048_576))]
+        maximum_bytes: u32,
+    },
+    Handoff {
+        component: String,
+        reference: String,
+        #[serde(rename = "recipientLeaseId")]
+        recipient_lease_id: String,
+    },
+    Status {
+        component: String,
+        reference: String,
+    },
+    Deliver {
+        component: String,
+        reference: String,
+    },
+    Release {
+        component: String,
+        reference: String,
+    },
+}
+
+impl PrivateTransferInput {
+    fn action(&self) -> Result<proofstorm_kube::PrivateTransferAction, ErrorData> {
+        use proofstorm_core::private_io::MAX_PRIVATE_BYTES;
+        use proofstorm_kube::{PrivateTransferAction, TransferMethod};
+        let recipient_lease_id = if let Self::Handoff {
+            recipient_lease_id, ..
+        } = self
+        {
+            if recipient_lease_id.trim().is_empty() {
+                return Err(invalid_operation(
+                    "handoff.recipientLeaseId must be nonempty",
+                ));
+            }
+            Some(recipient_lease_id.clone())
+        } else {
+            None
+        };
+        let (method, component, destination, reference, maximum) = match self {
+            Self::Prepare {
+                component,
+                destination_component,
+                maximum_bytes,
+            } => {
+                if !(1..=MAX_PRIVATE_BYTES).contains(maximum_bytes) {
+                    return Err(invalid_operation(
+                        "prepare.maximumBytes must be between 1 and 1048576; no operation was created",
+                    ));
+                }
+                if component == destination_component {
+                    return Err(invalid_operation(
+                        "prepare.destinationComponent must differ from component; no operation was created",
+                    ));
+                }
+                (
+                    TransferMethod::Prepare,
+                    component,
+                    Some(destination_component.clone()),
+                    None,
+                    Some(*maximum_bytes),
+                )
+            }
+            Self::Handoff {
+                component,
+                reference,
+                ..
+            } => (
+                TransferMethod::Handoff,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+            Self::Status {
+                component,
+                reference,
+            } => (
+                TransferMethod::Status,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+            Self::Deliver {
+                component,
+                reference,
+            } => (
+                TransferMethod::Deliver,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+            Self::Release {
+                component,
+                reference,
+            } => (
+                TransferMethod::Release,
+                component,
+                None,
+                Some(reference.clone()),
+                None,
+            ),
+        };
+        if component.trim().is_empty()
+            || destination.as_ref().is_some_and(|id| id.trim().is_empty())
+            || reference.as_ref().is_some_and(|id| id.trim().is_empty())
+        {
+            return Err(invalid_operation(
+                "private transfer component, destinationComponent and reference must be nonempty when required; no operation was created",
+            ));
+        }
+        Ok(PrivateTransferAction {
+            recipient_lease_id,
+            transfer_method: method,
+            component: component.clone(),
+            destination_component: destination,
+            reference,
+            maximum_bytes: maximum,
+        })
+    }
+}
+
+fn validate_private_transfer_endpoints(
+    transfer: &proofstorm_kube::PrivateTransferAction,
+    revision: &PublishedRevision,
+) -> Result<(), ErrorData> {
+    for id in std::iter::once(&transfer.component).chain(transfer.destination_component.iter()) {
+        component_image_any(revision, id, ComponentKind::Wallet)?;
+    }
+    if let Some(destination) = &transfer.destination_component {
+        let is_cdk = revision
+            .lab
+            .components
+            .iter()
+            .any(|c| &c.id == destination && c.implementation == "cdk-cli-wallet");
+        if is_cdk
+            && transfer
+                .maximum_bytes
+                .is_some_and(|maximum| maximum > proofstorm_core::private_io::MAX_PRIVATE_ARG_BYTES)
+        {
+            return Err(invalid_operation(
+                "prepare.maximumBytes must be at most 65536 for a CDK CLI recipient's native argv input; no operation was created",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateTransferRequest {
+    pub instance_id: String,
+    pub experiment_id: String,
+    pub lease_id: String,
+    pub operation_id: String,
+    pub transfer: PrivateTransferInput,
     pub idempotency_key: String,
 }
 
@@ -1584,6 +1774,23 @@ pub struct AcquireLeaseRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct DelegatePrivateTransferLeaseRequest {
+    pub receive: proofstorm_core::PrivateReceiveCommand,
+    pub parent_lease_id: String,
+    pub recipient_principal_id: String,
+    pub recipient_lease_id: String,
+    pub component: String,
+    pub mint: String,
+    pub reference: String,
+    #[schemars(range(min = 1, max = 900))]
+    pub duration_seconds: u32,
+    #[schemars(range(min = 1, max = 32))]
+    pub max_actions: u32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LeaseRequest {
     pub lease_id: String,
 }
@@ -1981,11 +2188,13 @@ fn experiment_tool(tool: &str) -> bool {
             | "proofstorm_experiment_read"
             | "proofstorm_experiment_close"
             | "proofstorm_lease_acquire"
+            | "proofstorm_lease_delegate"
             | "proofstorm_lease_read"
             | "proofstorm_lease_release"
             | "proofstorm_node_restart"
             | "proofstorm_component_restart"
             | "proofstorm_component_exec_live"
+            | "proofstorm_private_transfer"
             | "proofstorm_component_forensics"
             | "proofstorm_component_logs"
             | "proofstorm_liquidity_bootstrap"
@@ -2118,6 +2327,30 @@ impl ProofstormMcp {
             }
         }
         self
+    }
+
+    fn require_wallet_action(
+        &self,
+        revision: &PublishedRevision,
+        wallet: &str,
+        control: &str,
+    ) -> Result<(), ErrorData> {
+        let component = revision
+            .lab
+            .components
+            .iter()
+            .find(|component| component.id == wallet)
+            .ok_or_else(|| {
+                coded_invalid_request("component_id_unknown", "wallet is not in the revision")
+            })?;
+        if component.implementation == "nutshell-wallet" {
+            return Ok(());
+        }
+        let catalog = self
+            .store
+            .effective_catalog(&self.workspace, &self.principal)
+            .map_err(store_error)?;
+        require_component_runtime_control(revision, wallet, "component", control, &catalog)
     }
 
     fn authorize(&self, capability: Capability) -> Result<(), ErrorData> {
@@ -2346,7 +2579,8 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         let entry = exact_catalog_entry(&catalog.entries, &request.id, &request.version)?;
         let preferred = catalog.implementations.iter().any(|support| {
-            support.implementation == entry.id && support.preferred_version == entry.version
+            support.implementation == entry.id
+                && support.preferred_version.as_deref() == Some(entry.version.as_str())
         });
         bounded_agent_response(CatalogEntryDetail::from_entry(entry, preferred)).map(Json)
     }
@@ -2428,7 +2662,7 @@ impl ProofstormMcp {
             .implementations
             .iter()
             .find(|support| support.implementation == request.implementation)
-            .map(|support| support.preferred_version.clone())
+            .and_then(|support| support.preferred_version.clone())
             .ok_or_else(|| {
                 coded_invalid_request(
                     "candidate_implementation_not_found",
@@ -2565,7 +2799,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Plan any supported lab topology from catalog implementation IDs and role connections. Read catalog_entry details for selected implementations and declare every intended runtime control in runtime_requirements; Proofstorm rejects unavailable driver controls before storing or materializing. It selects preferred versions, infers component kinds, configuration contracts, and typed dependency bindings. Adding implementations or controls does not add MCP tools. Next call lab_apply with the returned digest"
+        description = "Plan from catalog IDs and backend-role connections. Declare advertised endpoint controls in runtime_requirements. Verify component config in the receipt before lab_apply. Changed plans need a new plan_id and idempotency_key; exact retries reuse both. Versions, kinds and backend bindings are inferred"
     )]
     fn proofstorm_lab_plan(
         &self,
@@ -2603,7 +2837,18 @@ impl ProofstormMcp {
                 &lab,
                 &request.idempotency_key,
             )
-            .map_err(store_error)
+            .map_err(|error| match error {
+                StoreError::Conflict { resource: "draft", id } => ErrorData::invalid_request(
+                    "plan_id already exists; existing plan unchanged and nothing applied. Use a new plan_id and idempotency_key for a changed plan; replay the original request and key for an exact retry",
+                    Some(serde_json::json!({
+                        "code": "lab_plan_id_conflict",
+                        "plan_id": id,
+                        "mutation_disposition": "existing_plan_unchanged",
+                        "recovery": "use a new plan_id and idempotency_key for a changed plan",
+                    })),
+                ),
+                other => store_error(other),
+            })
             .and_then(|draft| {
                 bounded_agent_response(LabPlanReceipt {
                     plan_id: draft.id,
@@ -3378,7 +3623,8 @@ impl ProofstormMcp {
                 ),
             ));
         }
-        self.store
+        let lease = self
+            .store
             .acquire_lease(
                 &self.workspace,
                 &self.principal,
@@ -3388,8 +3634,41 @@ impl ProofstormMcp {
                 request.max_actions,
                 &request.idempotency_key,
             )
-            .map(Json)
-            .map_err(store_error)
+            .map_err(store_error)?;
+        self.runtime()?.private_lease(&lease, false).await?;
+        Ok(Json(lease))
+    }
+
+    #[tool(
+        description = "Delegate recipient access to an existing different principal under your exclusive parent lab lease. Scope permits only the source-approved receive command/input/timeout for one reference, its status/delivery, and passive balance for one wallet/mint. Requires a subsequent source private_transfer handoff to bind custody. No global capabilities are granted; the child shares the parent action budget and cannot outlive it. Release the child lease to revoke new admission; accepted native work may finish."
+    )]
+    async fn proofstorm_lease_delegate(
+        &self,
+        Parameters(request): Parameters<DelegatePrivateTransferLeaseRequest>,
+    ) -> Result<Json<ExperimentLease>, ErrorData> {
+        request.receive.validate().map_err(invalid_operation)?;
+        let scope = proofstorm_core::PrivateTransferLeaseScope {
+            receive_command_digest: request.receive.digest(),
+            parent_lease_id: request.parent_lease_id,
+            component: request.component,
+            mint: request.mint,
+            reference: request.reference,
+        };
+        let lease = self
+            .store
+            .delegate_private_transfer_lease(
+                &self.workspace,
+                &self.principal,
+                &request.recipient_principal_id,
+                &request.recipient_lease_id,
+                &scope,
+                request.duration_seconds,
+                request.max_actions,
+                &request.idempotency_key,
+            )
+            .map_err(store_error)?;
+        self.runtime()?.private_lease(&lease, false).await?;
+        Ok(Json(lease))
     }
 
     #[tool(description = "Read an experiment lease and refresh its expiry state")]
@@ -3405,13 +3684,18 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Release an experiment lease owned by the current principal. At finalization, first wait for submitted operations, then call lease_release, experiment_close, and artifact_export in that order"
+        description = "Release a lease owned by the current principal or a recipient lease delegated by their root lease. At finalization, first wait for submitted operations, then call lease_release, experiment_close, and artifact_export in that order"
     )]
-    fn proofstorm_lease_release(
+    async fn proofstorm_lease_release(
         &self,
         Parameters(request): Parameters<ReleaseLeaseRequest>,
     ) -> Result<Json<ExperimentLease>, ErrorData> {
         self.authorize(Capability::LeaseRelease)?;
+        let lease = self
+            .store
+            .lease_for_release(&self.workspace, &self.principal, &request.lease_id)
+            .map_err(store_error)?;
+        self.runtime()?.private_lease(&lease, true).await?;
         self.store
             .release_lease(
                 &self.workspace,
@@ -3808,21 +4092,71 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Operate deployed software with a bounded, non-interactive POSIX /bin/sh script in its running component container. Native CLIs share the service's network, user, files, localhost APIs and Unix sockets. This is the normal surface for implementation-specific operations. Read catalog endpoint hints and native CLI help. Results are journaled. Nonzero exits may follow partial mutations; inspect artifacts and verify state before retrying. Use Proofstorm actions for provisioning, coordination, faults, lifecycle and portable observations"
+        description = "Reserve, inspect, deliver or release private byte custody between wallets under the current exclusive lab lease. prepare requires component, destinationComponent and maximumBytes; status/deliver/release require component and reference; handoff also requires recipientLeaseId from lease_delegate, and binds a completed capture before delivery. Invalid input creates no operation. Returns an operation whose artifact contains metadata and an opaque reference. Use component_exec_live.private_payload for native export/import. Delivery and native exit do not establish redemption."
+    )]
+    async fn proofstorm_private_transfer(
+        &self,
+        Parameters(request): Parameters<PrivateTransferRequest>,
+    ) -> Result<Json<LabOperation>, ErrorData> {
+        self.authorize(Capability::ComponentExecLive)?;
+        let transfer = request.transfer.action()?;
+        let (instance, revision) = self
+            .store
+            .operation_context(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                Capability::ComponentExecLive,
+            )
+            .map_err(store_error)?;
+        validate_private_transfer_endpoints(&transfer, &revision)?;
+        let operation = self.create_operation(
+            &request.instance_id,
+            &request.experiment_id,
+            &request.lease_id,
+            &request.operation_id,
+            OperationKind::PrivateTransfer,
+            &request,
+            &request.idempotency_key,
+            Capability::ComponentExecLive,
+        )?;
+        if operation.phase != OperationPhase::Pending {
+            return Ok(Json(operation));
+        }
+        let mut action = runtime_action_resource(
+            &self.runtime()?.control_namespace,
+            &instance,
+            &operation,
+            LabAction::PrivateTransfer(transfer),
+        );
+        action.spec.lease_scope = self
+            .store
+            .operation_lease_scope(&operation)
+            .map_err(store_error)?;
+        self.runtime()?.apply_action(&instance, &action).await?;
+        self.store
+            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
+            .map(Json)
+            .map_err(store_error)
+    }
+
+    #[tool(
+        description = "Run argv (command exit) or script (shell exit) in the live component. Wait/cancel the operation ID. Check exit_code/exit_signal, timed_out, cancelled, cleanup_verified and projection_succeeded separately from phase. Cancellation does not undo mutations."
     )]
     async fn proofstorm_component_exec_live(
         &self,
         Parameters(request): Parameters<ComponentExecLiveRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize(Capability::ComponentExecLive)?;
-        if request.script.is_empty() || request.script.len() > 16 * 1024 {
-            return Err(invalid_operation(
-                "script must contain 1..=16384 UTF-8 bytes",
-            ));
+        proofstorm_core::native::NativeCommand {
+            private_io: None,
+            script: request.script.clone(),
+            argv: request.argv.clone(),
+            timeout_seconds: request.timeout_seconds,
+            output: request.output.clone(),
         }
-        if !(1..=300).contains(&request.timeout_seconds) {
-            return Err(invalid_operation("timeout_seconds must be in 1..=300"));
-        }
+        .validate()
+        .map_err(invalid_operation)?;
         let (instance, revision) = self
             .store
             .operation_context(
@@ -3852,16 +4186,23 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        let action = runtime_action_resource(
+        let mut action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
             LabAction::ComponentExecLive(ComponentExecLiveAction {
+                private_payload: request.private_payload,
                 component: request.component,
                 script: request.script,
+                argv: request.argv,
                 timeout_seconds: request.timeout_seconds,
+                output: request.output,
             }),
         );
+        action.spec.lease_scope = self
+            .store
+            .operation_lease_scope(&operation)
+            .map_err(store_error)?;
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4520,7 +4861,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Bidirectionally partition two logical components using a durable bounded network fault"
+        description = "Bidirectionally partition two components with a durable bounded fault. Existing connections can survive; for immediate interruption use native disconnect or restart, then verify application state"
     )]
     async fn proofstorm_network_partition(
         &self,
@@ -4685,6 +5026,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_initialize")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4714,7 +5056,9 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Read a sanitized balance from a snapshot of a logical wallet")]
+    #[tool(
+        description = "Read a sanitized wallet-local balance using its locked observation adapter; CDK uses a passive SQLite transaction and Nutshell uses a disposable snapshot"
+    )]
     async fn proofstorm_wallet_balance(
         &self,
         Parameters(request): Parameters<WalletBalanceRequest>,
@@ -4731,6 +5075,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_balance")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4744,7 +5089,7 @@ impl ProofstormMcp {
         if operation.phase != OperationPhase::Pending {
             return Ok(Json(operation));
         }
-        let action = runtime_action_resource(
+        let mut action = runtime_action_resource(
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
@@ -4753,6 +5098,10 @@ impl ProofstormMcp {
                 mint: request.mint.clone(),
             }),
         );
+        action.spec.lease_scope = self
+            .store
+            .operation_lease_scope(&operation)
+            .map_err(store_error)?;
         self.runtime()?.apply_action(&instance, &action).await?;
         self.store
             .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
@@ -4798,6 +5147,7 @@ impl ProofstormMcp {
             "lnd",
         )?;
         validate_wallet_fund_payer(&revision.lab, &request.mint, &request.payer_lightning)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_fund")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4854,6 +5204,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_invoice")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -4920,6 +5271,8 @@ impl ProofstormMcp {
         if let Some(object) = request_json.as_object_mut() {
             object.remove("idempotency_key");
         }
+        self.require_wallet_action(&revision, &request.wallet, "wallet_pay")?;
+        self.require_wallet_action(&revision, &request.recipient_wallet, "wallet_quote_claim")?;
         let operation = self
             .store
             .create_wallet_pay_operation(
@@ -4984,6 +5337,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_quote_claim")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -5016,7 +5370,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Refresh one exact payer-side melt quote through the wallet adapter. This performs the wallet's native mint round-trip and, when the mint reports UNPAID, releases proofs reserved by that melt. The artifact reports before/after quote state, reserved proof count, and available balance"
+        description = "Refresh an exact payer melt quote through the wallet's mint round-trip. An UNPAID response releases that quote's reserved proofs. Receipt: wallet-local state before, mint state after, reserved counts/amounts and available balances. Unknown fees are null"
     )]
     async fn proofstorm_wallet_melt_quote_refresh(
         &self,
@@ -5040,6 +5394,7 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         component_image_any(&revision, &request.wallet, ComponentKind::Wallet)?;
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_melt_quote_refresh")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -5100,6 +5455,7 @@ impl ProofstormMcp {
             ComponentKind::Lightning,
             "lnd",
         )?;
+        self.require_wallet_action(&revision, &request.wallet, "wallet_round_trip")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -5174,6 +5530,7 @@ impl ProofstormMcp {
             &self.workspace,
             &self.principal,
         )?;
+        self.require_wallet_action(&revision, &request.wallet, "conservation_oracle")?;
         let operation = self.create_operation(
             &request.instance_id,
             &request.experiment_id,
@@ -6271,7 +6628,12 @@ fn catalog_page_with_catalog(
     let preferred = catalog
         .implementations
         .iter()
-        .map(|support| (&support.implementation, &support.preferred_version))
+        .filter_map(|support| {
+            support
+                .preferred_version
+                .as_ref()
+                .map(|version| (&support.implementation, version))
+        })
         .collect::<BTreeSet<_>>();
     let summaries = entries
         .iter()
@@ -6642,13 +7004,24 @@ fn resolve_plan_components<'a>(
     let mut components = Vec::with_capacity(inputs.len());
     let mut selected_entries = BTreeMap::new();
     for input in inputs {
+        if input.version.is_none()
+            && catalog.implementations.iter().any(|support| {
+                support.implementation == input.implementation
+                    && support.preferred_version.is_none()
+            })
+        {
+            return Err(coded_invalid_request(
+                "lab_plan_explicit_version_required",
+                "experimental-only implementations require an exact version",
+            ));
+        }
         let version = match input.version.as_deref() {
             Some(version) => version,
             None => catalog
                 .implementations
                 .iter()
                 .find(|support| support.implementation == input.implementation)
-                .map(|support| support.preferred_version.as_str())
+                .and_then(|support| support.preferred_version.as_deref())
                 .ok_or_else(|| {
                     ErrorData::invalid_request(
                         format!(
@@ -6892,6 +7265,7 @@ fn resolved_plan_components(lab: &LabSpec) -> Vec<LabPlanResolvedComponent> {
             version: component.version.clone().unwrap_or_default(),
             config_version: component.config_version.clone(),
             control: component.control,
+            config: component.config.clone(),
         })
         .collect()
 }
@@ -6939,7 +7313,7 @@ fn preferred_recipe_component(
         .implementations
         .iter()
         .find(|support| support.implementation == implementation)
-        .map(|support| support.preferred_version.as_str())
+        .and_then(|support| support.preferred_version.as_deref())
         .ok_or_else(|| {
             ErrorData::internal_error(
                 format!("built-in recipe implementation {implementation:?} is not installed"),
@@ -7308,6 +7682,10 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             &[Capability::ExperimentClose],
         ),
         ("proofstorm_lease_acquire", &[Capability::LeaseAcquire]),
+        (
+            "proofstorm_lease_delegate",
+            &[Capability::LeaseAcquire, Capability::ComponentExecLive],
+        ),
         ("proofstorm_lease_read", &[Capability::ExperimentRead]),
         ("proofstorm_lease_release", &[Capability::LeaseRelease]),
     ]
@@ -7325,6 +7703,10 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         (
             "proofstorm_component_restart",
             &[Capability::ComponentControl],
+        ),
+        (
+            "proofstorm_private_transfer",
+            &[Capability::ComponentExecLive],
         ),
         (
             "proofstorm_component_exec_live",
@@ -8003,6 +8385,7 @@ fn runtime_action_resource(
     let mut resource = ProofstormLabAction::new(
         &operation.resource_name,
         ProofstormLabActionSpec {
+            lease_scope: None,
             lab_name: instance.resource_name.clone(),
             workspace_id: operation.workspace_id.clone(),
             instance_id: operation.instance_id.clone(),
@@ -9199,6 +9582,152 @@ fn unix_now() -> i64 {
 }
 
 impl KubernetesRuntime {
+    async fn private_lease(&self, lease: &ExperimentLease, release: bool) -> Result<(), ErrorData> {
+        use proofstorm_core::private_io::{
+            PRIVATE_DELEGATIONS_ANNOTATION, PRIVATE_LEASE_ANNOTATION,
+        };
+        if lease.delegation.is_some() {
+            return self.private_recipient_lease(lease, release).await;
+        }
+        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
+        let matches = labs
+            .list(&kube::api::ListParams::default())
+            .await
+            .map_err(kube_error)?
+            .items
+            .into_iter()
+            .filter(|lab| {
+                lab.spec.workspace_id == lease.workspace_id
+                    && lab.spec.instance_id == lease.instance_id
+            })
+            .collect::<Vec<_>>();
+        let [lab] = matches.as_slice() else {
+            return Err(invalid_operation("lease lab unavailable"));
+        };
+        let current = lab
+            .annotations()
+            .get(PRIVATE_LEASE_ANNOTATION)
+            .map(|text| serde_json::from_str::<ExperimentLease>(text))
+            .transpose()
+            .map_err(|_| invalid_operation("runtime lease invalid"))?;
+        if let Some(current) = current {
+            let same = current.id == lease.id
+                && current.principal_id == lease.principal_id
+                && current.experiment_id == lease.experiment_id
+                && current.workspace_id == lease.workspace_id;
+            if release && !same {
+                return Ok(());
+            }
+            if !release && !same && current.expires_at_unix > unix_now() {
+                return Err(invalid_operation("another runtime lab lease is active"));
+            }
+            if !release && current == *lease {
+                return Ok(());
+            }
+        } else if release {
+            return Ok(());
+        }
+        let value = if release {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(
+                serde_json::to_string(lease)
+                    .map_err(|_| invalid_operation("lease serialization failed"))?
+            )
+        };
+        // A root change/release atomically removes admission for its recipients.
+        labs.patch(&lab.name_any(),&PatchParams::default(),&Patch::Merge(serde_json::json!({"metadata":{"resourceVersion":lab.resource_version(),"annotations":{PRIVATE_LEASE_ANNOTATION:value,PRIVATE_DELEGATIONS_ANNOTATION:serde_json::Value::Null}}}))).await.map_err(kube_error)?;
+        Ok(())
+    }
+
+    async fn private_recipient_lease(
+        &self,
+        lease: &ExperimentLease,
+        release: bool,
+    ) -> Result<(), ErrorData> {
+        use proofstorm_core::private_io::{
+            PRIVATE_DELEGATIONS_ANNOTATION, PRIVATE_LEASE_ANNOTATION,
+        };
+        let scope = lease
+            .delegation
+            .as_ref()
+            .ok_or_else(|| invalid_operation("recipient scope missing"))?;
+        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
+        let matches = labs
+            .list(&kube::api::ListParams::default())
+            .await
+            .map_err(kube_error)?
+            .items
+            .into_iter()
+            .filter(|lab| {
+                lab.spec.workspace_id == lease.workspace_id
+                    && lab.spec.instance_id == lease.instance_id
+            })
+            .collect::<Vec<_>>();
+        let [lab] = matches.as_slice() else {
+            return Err(invalid_operation("recipient lease lab unavailable"));
+        };
+        let mut children: BTreeMap<String, ExperimentLease> = lab
+            .annotations()
+            .get(PRIVATE_DELEGATIONS_ANNOTATION)
+            .map(|s| serde_json::from_str(s))
+            .transpose()
+            .map_err(|_| invalid_operation("runtime recipient leases invalid"))?
+            .unwrap_or_default();
+        if children.len() > 32 {
+            return Err(invalid_operation("runtime recipient lease limit exceeded"));
+        }
+        if release {
+            let Some(current) = children.get(&lease.id) else {
+                return Ok(());
+            };
+            if current.principal_id != lease.principal_id || current.delegation != lease.delegation
+            {
+                return Err(invalid_operation("recipient lease identity conflict"));
+            }
+            children.remove(&lease.id);
+        } else {
+            let root: ExperimentLease = lab
+                .annotations()
+                .get(PRIVATE_LEASE_ANNOTATION)
+                .and_then(|s| serde_json::from_str(s).ok())
+                .ok_or_else(|| invalid_operation("active parent lease required"))?;
+            if root.id != scope.parent_lease_id
+                || root.delegation.is_some()
+                || root.phase != proofstorm_core::LeasePhase::Active
+                || root.expires_at_unix <= unix_now()
+                || root.workspace_id != lease.workspace_id
+                || root.instance_id != lease.instance_id
+                || root.experiment_id != lease.experiment_id
+                || root.principal_id == lease.principal_id
+                || lease.phase != proofstorm_core::LeasePhase::Active
+                || lease.expires_at_unix <= unix_now()
+                || lease.expires_at_unix > root.expires_at_unix
+            {
+                return Err(invalid_operation(
+                    "recipient lease exceeds its active parent authority",
+                ));
+            }
+            if let Some(current) = children.get(&lease.id) {
+                return if current == lease {
+                    Ok(())
+                } else {
+                    Err(invalid_operation("recipient lease identity conflict"))
+                };
+            }
+            if children.len() >= 32 {
+                return Err(invalid_operation("runtime recipient lease limit reached"));
+            }
+            children.insert(lease.id.clone(), lease.clone());
+        }
+        let value = serde_json::to_string(&children)
+            .map_err(|_| invalid_operation("recipient lease serialization failed"))?;
+        labs.patch(&lab.name_any(), &PatchParams::default(), &Patch::Merge(serde_json::json!({"metadata": {
+            "resourceVersion":lab.resource_version(), "annotations":{PRIVATE_DELEGATIONS_ANNOTATION:value}
+        }}))).await.map_err(kube_error)?;
+        Ok(())
+    }
+
     async fn apply_candidate_build(&self, candidate: &CandidateBuild) -> Result<(), ErrorData> {
         let builds = Api::<ProofstormCandidateBuild>::namespaced(
             self.client.clone(),
@@ -9380,27 +9909,10 @@ impl KubernetesRuntime {
         let Some(status) = action.status else {
             return Ok(None);
         };
-        match status.phase {
-            ActionPhase::Pending | ActionPhase::Running => Ok(None),
-            ActionPhase::Succeeded => Ok(Some((
-                OperationPhase::Succeeded,
-                status.artifact.map_or_else(
-                    || serde_json::json!({"code": "terminal_artifact_missing"}),
-                    |artifact| serde_json::to_value(artifact).expect("typed artifact serializes"),
-                ),
-            ))),
-            ActionPhase::Failed => Ok(Some((
-                OperationPhase::Failed,
-                status.error.map_or_else(
-                    || serde_json::json!({"code": "action_failed"}),
-                    |error| serde_json::to_value(error).expect("typed action error serializes"),
-                ),
-            ))),
-            ActionPhase::Cancelled => Ok(Some((
-                OperationPhase::Cancelled,
-                serde_json::json!({"code": "action_cancelled"}),
-            ))),
-        }
+        Ok(terminal_action_observation(
+            status,
+            matches!(action.spec.action, LabAction::ComponentExecLive(_)),
+        ))
     }
 
     /// Request cancellation of a runtime action. Returns `false` when the
@@ -9561,6 +10073,38 @@ fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> LabI
     }
 }
 
+fn terminal_action_observation(
+    status: proofstorm_kube::ProofstormLabActionStatus,
+    native: bool,
+) -> Option<(OperationPhase, serde_json::Value)> {
+    let (phase, fallback) = match status.phase {
+        ActionPhase::Pending | ActionPhase::Running => return None,
+        ActionPhase::Succeeded => (OperationPhase::Succeeded, "terminal_artifact_missing"),
+        ActionPhase::Failed => (OperationPhase::Failed, "action_failed"),
+        ActionPhase::Cancelled => (OperationPhase::Cancelled, "action_cancelled"),
+    };
+    // A cancelled or failed native execution can still have a supervisor receipt
+    // proving cleanup (or explicitly declining that proof). Preserve that evidence.
+    let content = match status.phase {
+        ActionPhase::Succeeded => status.artifact,
+        ActionPhase::Failed | ActionPhase::Cancelled if native => status.artifact.or(status.error),
+        ActionPhase::Failed => status.error,
+        _ => None,
+    };
+    let artifact = content.map_or_else(
+        || serde_json::json!({"code": fallback}),
+        |artifact| serde_json::to_value(artifact).expect("typed artifact serializes"),
+    );
+    Some((
+        phase,
+        if native {
+            proofstorm_core::native::cap_public_streams(artifact)
+        } else {
+            artifact
+        },
+    ))
+}
+
 fn missing_action_artifact(operation: &LabOperation) -> serde_json::Value {
     serde_json::json!({
         "code": "action_runtime_not_found",
@@ -9615,6 +10159,212 @@ fn store_error(error: StoreError) -> ErrorData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_transfer_methods_preserve_the_controller_wire_contract() {
+        for input in [
+            serde_json::json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536}),
+            serde_json::json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque-ref","recipientLeaseId":"child"}),
+            serde_json::json!({"transferMethod":"status","component":"wallet-a","reference":"opaque-ref"}),
+            serde_json::json!({"transferMethod":"deliver","component":"wallet-a","reference":"opaque-ref"}),
+            serde_json::json!({"transferMethod":"release","component":"wallet-a","reference":"opaque-ref"}),
+        ] {
+            let old: proofstorm_kube::PrivateTransferAction =
+                serde_json::from_value(input.clone()).unwrap();
+            let public: PrivateTransferInput = serde_json::from_value(input.clone()).unwrap();
+            assert_eq!(public.action().unwrap(), old);
+            assert_eq!(serde_json::to_value(public).unwrap(), input);
+        }
+    }
+
+    #[test]
+    fn private_transfer_preflight_enforces_native_input_limits_and_endpoints() {
+        let prepare = |size, destination: &str| PrivateTransferInput::Prepare {
+            component: "wallet-a".into(),
+            destination_component: destination.into(),
+            maximum_bytes: size,
+        };
+        for size in [0, 1_048_577, u32::MAX] {
+            assert!(
+                prepare(size, "wallet-b")
+                    .action()
+                    .unwrap_err()
+                    .message
+                    .contains("maximumBytes")
+            );
+        }
+        assert!(
+            prepare(65536, "wallet-a")
+                .action()
+                .unwrap_err()
+                .message
+                .contains("must differ")
+        );
+        assert!(prepare(65536, " ").action().is_err());
+        let recipient = |implementation: &str| {
+            let mut revision = component_reference_revision();
+            let entry = default_catalog()
+                .entries
+                .iter()
+                .find(|e| e.id == implementation)
+                .unwrap();
+            let component = revision
+                .lab
+                .components
+                .iter_mut()
+                .find(|c| c.id == "wallet-b")
+                .unwrap();
+            component.implementation = entry.id.clone();
+            component.version = Some(entry.version.clone());
+            component.config_version = entry.config_version.clone();
+            component.control = entry.allowed_control[0];
+            revision.lock =
+                proofstorm_core::resolve_lock(&revision.lab, default_catalog()).unwrap();
+            revision
+        };
+        let revision = recipient("cdk-cli-wallet");
+        for size in [1, 65536] {
+            validate_private_transfer_endpoints(
+                &prepare(size, "wallet-b").action().unwrap(),
+                &revision,
+            )
+            .unwrap();
+        }
+        for size in [65537, 1_048_576] {
+            let error = validate_private_transfer_endpoints(
+                &prepare(size, "wallet-b").action().unwrap(),
+                &revision,
+            )
+            .unwrap_err();
+            assert!(
+                error.message.contains("65536")
+                    && error.message.contains("no operation was created")
+            );
+        }
+        for destination in ["missing", "chain"] {
+            assert!(
+                validate_private_transfer_endpoints(
+                    &prepare(1, destination).action().unwrap(),
+                    &revision
+                )
+                .is_err()
+            );
+        }
+        let revision = recipient("cocod-wallet");
+        validate_private_transfer_endpoints(
+            &prepare(1_048_576, "wallet-b").action().unwrap(),
+            &revision,
+        )
+        .unwrap();
+        assert!(
+            PrivateTransferInput::Status {
+                component: "wallet-a".into(),
+                reference: String::new()
+            }
+            .action()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn experimental_wallet_requires_exact_selection_and_retains_source_identity() {
+        let mut input = LabPlanComponentInput {
+            id: "wallet".into(),
+            implementation: "cocod-wallet".into(),
+            version: None,
+            control: None,
+            config: BTreeMap::new(),
+        };
+        let error = resolve_plan_components(&[input.clone()], default_catalog()).unwrap_err();
+        assert_eq!(
+            error.data.unwrap()["code"],
+            "lab_plan_explicit_version_required"
+        );
+        input.version = Some("0.0.17-dev.44e5101c".into());
+        let (components, entries) = resolve_plan_components(&[input], default_catalog()).unwrap();
+        assert_eq!(components[0].kind, ComponentKind::Wallet);
+        let entry = entries["wallet"];
+        assert_eq!(entry.support_lifecycle, SupportLifecycle::Experimental);
+        let provenance = entry.build_provenance.as_ref().unwrap();
+        assert_eq!(
+            provenance.commit_sha,
+            "44e5101cbea370132af6e68f88e01b47e39431c4"
+        );
+        assert_eq!(provenance.package_path.as_deref(), Some("packages/cocod"));
+        let support = default_catalog()
+            .implementations
+            .iter()
+            .find(|s| s.implementation == "cocod-wallet")
+            .unwrap();
+        assert!(
+            support.preferred_version.is_none()
+                && support.minimum_supported.is_none()
+                && support.supported_versions.is_empty()
+        );
+    }
+    #[test]
+    fn escaped_native_output_cannot_overflow_the_journal_receipt() {
+        for text in [
+            "\0".repeat(16384),
+            "界\n\\\"".repeat(8192),
+            "x".repeat(16384),
+        ] {
+            let receipt = serde_json::json!({"stdout":text,"stderr":text,
+                "cleanup_verified":true,"exit_code":7,"output_truncated":false});
+            let status = proofstorm_kube::ProofstormLabActionStatus {
+                phase: ActionPhase::Succeeded,
+                artifact: Some(serde_json::from_value(receipt).unwrap()),
+                ..Default::default()
+            };
+            let (_, artifact) = terminal_action_observation(status, true).unwrap();
+            assert!(serde_json::to_vec(&artifact).unwrap().len() < 28 * 1024);
+            assert_eq!(artifact["cleanup_verified"], true);
+            assert_eq!(artifact["exit_code"], 7);
+            assert_eq!(artifact["output_truncated"], true);
+            assert!(!artifact["stdout"].as_str().unwrap().is_empty());
+        }
+    }
+    #[test]
+    fn terminal_native_receipts_survive_cancellation_and_failure() {
+        for (phase, expected) in [
+            (ActionPhase::Cancelled, OperationPhase::Cancelled),
+            (ActionPhase::Failed, OperationPhase::Failed),
+        ] {
+            let receipt = serde_json::json!({"cleanup_verified": phase == ActionPhase::Cancelled,
+                "cancelled":true,"exit_signal":15,"stdout":"","stderr":""});
+            let status = proofstorm_kube::ProofstormLabActionStatus {
+                phase,
+                artifact: Some(serde_json::from_value(receipt.clone()).unwrap()),
+                error: Some(
+                    serde_json::from_value(serde_json::json!({"code":"generic_error"})).unwrap(),
+                ),
+                ..Default::default()
+            };
+            assert_eq!(
+                terminal_action_observation(status.clone(), true),
+                Some((expected, receipt))
+            );
+            let legacy = if phase == ActionPhase::Failed {
+                serde_json::json!({"code":"generic_error"})
+            } else {
+                serde_json::json!({"code":"action_cancelled"})
+            };
+            assert_eq!(
+                terminal_action_observation(status, false),
+                Some((expected, legacy))
+            );
+        }
+        let status = proofstorm_kube::ProofstormLabActionStatus {
+            phase: ActionPhase::Cancelled,
+            ..Default::default()
+        };
+        assert_eq!(
+            terminal_action_observation(status, true),
+            Some((
+                OperationPhase::Cancelled,
+                serde_json::json!({"code":"action_cancelled"})
+            ))
+        );
+    }
     use super::*;
     use proofstorm_core::{API_VERSION, LabPolicy};
 
@@ -10000,7 +10750,7 @@ mod tests {
                     implementation: "lnd".into(),
                     version: None,
                     control: None,
-                    config: BTreeMap::new(),
+                    config: BTreeMap::from([("alias".into(), serde_json::json!("authored-lnd"))]),
                 },
                 LabPlanComponentInput {
                     id: "lnd-b".into(),
@@ -10052,6 +10802,9 @@ mod tests {
                 })
         }));
         assert!(lab.links[2].binding.is_none());
+        let components = resolved_plan_components(&lab);
+        assert_eq!(components[1].config["alias"], "authored-lnd");
+        assert!(components[0].config.is_empty());
     }
 
     #[test]
@@ -10332,10 +11085,26 @@ mod tests {
             .expect("plan stored")
             .0;
         let replay = service
-            .proofstorm_lab_plan(Parameters(request))
+            .proofstorm_lab_plan(Parameters(request.clone()))
             .expect("plan replay")
             .0;
         assert_eq!(first, replay);
+        let mut changed = request.clone();
+        changed.components[0].id = "changed-chain".into();
+        changed.idempotency_key = "changed-plan-once".into();
+        let Err(error) = service.proofstorm_lab_plan(Parameters(changed.clone())) else {
+            panic!("a changed plan cannot overwrite the original");
+        };
+        let data = error.data.expect("actionable conflict data");
+        assert_eq!(data["code"], "lab_plan_id_conflict");
+        assert_eq!(data["plan_id"], request.plan_id);
+        assert_eq!(data["mutation_disposition"], "existing_plan_unchanged");
+        changed.plan_id = "changed-plan".into();
+        let corrected = service
+            .proofstorm_lab_plan(Parameters(changed))
+            .expect("new identity permits a corrected plan")
+            .0;
+        assert_eq!(corrected.components[0].id, "changed-chain");
         let stored = store
             .read_draft("alpha", "designer", "durable-plan")
             .expect("durable plan can be read");
@@ -10568,21 +11337,14 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 13);
+        assert_eq!(catalog.entries.len(), 15);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 12);
-        assert!(catalog.implementations.iter().all(|support| {
-            support
-                .supported_versions
-                .contains(&support.preferred_version)
-                && (support.implementation == "lnd"
-                    || support.minimum_supported == support.preferred_version
-                        && support.supported_versions.len() == 1)
-        }));
+        assert_eq!(catalog.implementations.len(), 14);
+        assert_support_defaults(catalog);
         let cdk = catalog
             .entries
             .iter()
@@ -10646,6 +11408,18 @@ mod tests {
         );
     }
 
+    fn assert_support_defaults(catalog: &proofstorm_core::CatalogResponse) {
+        assert!(catalog.implementations.iter().all(|support| {
+            support.implementation == "cocod-wallet"
+                || support.preferred_version.as_ref().is_some_and(|version| {
+                    support.supported_versions.contains(version)
+                        && (support.implementation == "lnd"
+                            || support.minimum_supported == support.preferred_version
+                                && support.supported_versions.len() == 1)
+                })
+        }));
+    }
+
     fn assert_embedded_ldk_support(catalog: &proofstorm_core::CatalogResponse) {
         let cdk_ldk = catalog
             .entries
@@ -10678,13 +11452,15 @@ mod tests {
             .proofstorm_catalog_list(Parameters(CatalogListRequest::default()))
             .expect("catalog discovery")
             .0;
-        assert_eq!(page.items.len(), 13);
+        assert_eq!(page.items.len(), 15);
         assert!(page.next_cursor.is_none());
         assert!(serialized_size(&page).expect("page size") < 8 * 1024);
         assert!(page.items.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && (entry.support_lifecycle == SupportLifecycle::Preferred
+                    || entry.id == "cocod-wallet"
+                        && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
                         && entry.version == "0.21.0-beta"
                         && entry.support_lifecycle == SupportLifecycle::Supported)
@@ -10790,7 +11566,7 @@ mod tests {
             }))
             .expect("harmless oversized page limit is saturated")
             .0;
-        assert_eq!(oversized_limit.items.len(), 13);
+        assert_eq!(oversized_limit.items.len(), 15);
 
         let stale = service.proofstorm_catalog_list(Parameters(CatalogListRequest {
             implementations: ["nutshell".into()].into(),
@@ -11253,7 +12029,7 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 80);
+        assert_eq!(service.tool_names().len(), 82);
         assert!(
             !service
                 .tool_names()
@@ -11290,15 +12066,16 @@ mod tests {
             "routing policy is a first-class typed runtime operation"
         );
         assert!(
-            encoded.len() < 248 * 1024,
+            encoded.len() < 256 * 1024,
             "fully authorized tool discovery is {} bytes",
             encoded.len()
         );
         for (toolset, maximum) in [
-            (ProofstormToolset::Experiment, 145 * 1024),
-            (ProofstormToolset::Native, 120 * 1024),
+            // Custody, delegation, and approved-command metadata have bounded budgets.
+            (ProofstormToolset::Experiment, 160 * 1024),
+            (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 200 * 1024),
+            (ProofstormToolset::Runtime, 214 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);

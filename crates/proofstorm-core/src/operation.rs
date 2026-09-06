@@ -33,6 +33,7 @@ pub enum OperationKind {
     ReachabilityOracle,
     ComponentForensics,
     ComponentExecLive,
+    PrivateTransfer,
     ComponentLogs,
     AuthenticationConformance,
     AuthenticationProtectedSpend,

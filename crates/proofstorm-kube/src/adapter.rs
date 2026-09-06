@@ -62,6 +62,8 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("lnd", render_lnd_component),
             ("nutshell", render_nutshell_mint_component),
             ("nutshell-wallet", render_wallet_component),
+            ("cdk-cli-wallet", render_cdk_wallet_component),
+            ("cocod-wallet", render_cocod_wallet_component),
             ("postgresql", render_postgres_component),
             ("redis", render_redis_component),
         ])
@@ -2620,6 +2622,100 @@ pub fn render_wallet_component(
     plan: &ComponentPlanContract,
 ) -> Result<RenderedComponent, AdapterError> {
     require_plan_backend(plan, "nutshell-wallet", ComponentKind::Wallet)?;
+    render_cli_wallet_workspace(plan)
+}
+
+/// Render the pinned CDK CLI workspace with one persistent state owner.
+///
+/// # Panics
+/// Panics if the internal shared renderer stops returning one complete deployment.
+///
+/// # Errors
+/// Returns an error for a mismatched backend or invalid resource contract.
+pub fn render_cdk_wallet_component(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
+    require_plan_backend(plan, "cdk-cli-wallet", ComponentKind::Wallet)?;
+    let mut rendered = render_cli_wallet_workspace(plan)?;
+    let deployment = rendered.deployments.first_mut().expect("wallet deployment");
+    deployment.spec.as_mut().expect("deployment spec").strategy =
+        Some(resource(json!({"type": "Recreate"}))?);
+    deployment
+        .spec
+        .as_mut()
+        .expect("deployment spec")
+        .template
+        .spec
+        .as_mut()
+        .expect("pod spec")
+        .node_selector = Some(BTreeMap::from([(
+        "kubernetes.io/arch".into(),
+        "arm64".into(),
+    )]));
+    let container = &mut deployment
+        .spec
+        .as_mut()
+        .expect("deployment spec")
+        .template
+        .spec
+        .as_mut()
+        .expect("pod spec")
+        .containers[0];
+    container.command = Some(vec!["/bin/sh".into(), "-c".into(), "umask 077; mkdir -p /wallet/cdk; trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done".into()]);
+    container.readiness_probe = Some(resource(
+        json!({"exec": {"command": ["/bin/sh", "-c", "test -w /wallet/cdk && cdk-cli --version"]}, "timeoutSeconds": 3}),
+    )?);
+    Ok(rendered)
+}
+
+/// Render the native cocod daemon without making wallet initialization a readiness prerequisite.
+///
+/// # Errors
+/// Returns an error if the plan or Kubernetes resource shape is invalid.
+/// # Panics
+/// Panics if the shared wallet renderer does not return its single deployment.
+pub fn render_cocod_wallet_component(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
+    require_plan_backend(plan, "cocod-wallet", ComponentKind::Wallet)?;
+    let mut rendered = render_cli_wallet_workspace(plan)?;
+    let deployment = rendered
+        .deployments
+        .first_mut()
+        .expect("wallet deployment")
+        .spec
+        .as_mut()
+        .expect("deployment spec");
+    deployment.strategy = Some(resource(json!({"type":"Recreate"}))?);
+    let pod = deployment.template.spec.as_mut().expect("wallet pod");
+    pod.node_selector = Some(BTreeMap::from([(
+        "kubernetes.io/arch".into(),
+        "arm64".into(),
+    )]));
+    pod.termination_grace_period_seconds = Some(45);
+    let container = &mut pod.containers[0];
+    container.env = Some(resource(json!([
+        {"name":"HOME","value":"/wallet"},
+        {"name":"PROOFSTORM_WALLET","value":plan.component_id},
+        {"name":"COCOD_URL","value":"http://127.0.0.1:62626"},
+        {"name":"COCOD_LISTEN_HOST","value":"127.0.0.1"},
+        {"name":"COCOD_LISTEN_PORT","value":"62626"}
+    ]))?);
+    // Host-local daemon refuses explicit client endpoints. Kubernetes exec clients
+    // still inherit the pod's COCOD_URL and therefore can never autostart a daemon.
+    container.command = Some(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "umask 077; unset COCOD_URL; exec cocod daemon".into(),
+    ]);
+    let probe = json!({"exec":{"command":["python3","-c","import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:62626/health',timeout=2)); assert r['status']=='ok' and r['interfaceVersion']=='1'"]},"timeoutSeconds":3,"periodSeconds":3});
+    container.readiness_probe = Some(resource(probe)?);
+    Ok(rendered)
+}
+
+fn render_cli_wallet_workspace(
+    plan: &ComponentPlanContract,
+) -> Result<RenderedComponent, AdapterError> {
     let namespace = instance_namespace(&plan.instance_key);
     let data_name = format!("{}-data", plan.component_id);
     let mut rendered = RenderedComponent::default();

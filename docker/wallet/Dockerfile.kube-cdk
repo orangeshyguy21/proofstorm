@@ -1,0 +1,28 @@
+# CDK v0.18.0: d3dec24c784e8fec1fd65f853241c7a2261c7abd.
+# Upstream release binaries, verified against GitHub's published asset digests.
+FROM python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254
+ARG TARGETARCH
+RUN TARGETARCH="$TARGETARCH" python3 - <<'PY'
+import hashlib
+import os
+import urllib.request
+assets = {
+    "arm64": ("aarch64", "9e0112477188155d5aeb6970a53b8fd0f336ba563db81ffe74e1fe2beaf48a8f"),
+    "amd64": ("x86_64", "4b68e34a912a282159468bf8391a2d247f02fa1797c1424fc905842cec720153"),
+}
+arch, expected = assets[os.environ["TARGETARCH"]]
+url = f"https://github.com/cashubtc/cdk/releases/download/v0.18.0/cdk-cli-0.18.0-{arch}"
+with urllib.request.urlopen(url, timeout=120) as response:
+    binary = response.read()
+assert hashlib.sha256(binary).hexdigest() == expected, "release checksum mismatch"
+with open("/usr/local/bin/cdk-cli", "wb") as output:
+    output.write(binary)
+os.chmod("/usr/local/bin/cdk-cli", 0o755)
+PY
+LABEL org.opencontainers.image.source="https://github.com/cashubtc/cdk" \
+      org.opencontainers.image.revision="d3dec24c784e8fec1fd65f853241c7a2261c7abd" \
+      org.opencontainers.image.version="0.18.0"
+ENV HOME=/wallet PYTHONDONTWRITEBYTECODE=1
+USER 1000:1000
+RUN cdk-cli --version
+ENTRYPOINT ["/bin/sh", "-c", "umask 077; trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"]

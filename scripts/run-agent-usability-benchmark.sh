@@ -18,12 +18,14 @@ RUN_ID=""
 MAX_STEPS=100
 MAX_SECONDS=2700
 MAX_EQUIVALENT_PLANS=4
+MAX_CONTEXT_TOKENS=0
+MAX_PROCESSED_TOKENS=0
 LIST_SCENARIOS=false
 PRINT_PROMPT=false
 
 usage() {
   printf '%s\n' \
-    "usage: $0 --run-id ID [--scenario ID] [--variant N|auto] [--model PROVIDER/MODEL] [--toolset TOOLSET] [--max-steps N] [--max-seconds N] [--max-equivalent-plans N]" \
+    "usage: $0 --run-id ID [--scenario ID] [--variant N|auto] [--model PROVIDER/MODEL] [--toolset TOOLSET] [--max-steps N] [--max-seconds N] [--max-equivalent-plans N] [--max-context-tokens N] [--max-processed-tokens N]" \
     "       $0 --list-scenarios" \
     "" \
     "Runs one scenario from the versioned Proofstorm agent-usability corpus in" \
@@ -64,6 +66,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --max-equivalent-plans)
       MAX_EQUIVALENT_PLANS="${2:-}"
+      shift 2
+      ;;
+    --max-context-tokens)
+      MAX_CONTEXT_TOKENS="${2:-}"
+      shift 2
+      ;;
+    --max-processed-tokens)
+      MAX_PROCESSED_TOKENS="${2:-}"
       shift 2
       ;;
     --list-scenarios)
@@ -131,6 +141,12 @@ for command in "$OPENCODE_BIN" jq git shasum sqlite3 python3; do
     exit 1
   fi
 done
+for budget in "$MAX_CONTEXT_TOKENS" "$MAX_PROCESSED_TOKENS"; do
+  if [[ ! "$budget" =~ ^(0|[1-9][0-9]*)$ || ${#budget} -gt 9 ]]; then
+    printf '%s\n' "token budgets must be nonnegative integers of at most 9 digits (0 disables)" >&2
+    exit 2
+  fi
+done
 
 SCENARIO_JSON="$(jq -c --arg id "$SCENARIO" '.scenarios[] | select(.id == $id)' "$SCENARIO_CATALOG")"
 if [[ -z "$SCENARIO_JSON" ]]; then
@@ -158,9 +174,12 @@ SCENARIO_NOVELTY="$(jq -r '.novelty' <<<"$SCENARIO_JSON")"
 EXPECTATIONS="$(jq -c '.gates' <<<"$SCENARIO_JSON")"
 MANUAL_GATES="$(jq -c '.manual_gates' <<<"$SCENARIO_JSON")"
 EXECUTION_SURFACE="$(jq -r '.execution_surface // "mixed"' <<<"$SCENARIO_JSON")"
+SCENARIO_CAPABILITIES="$(jq -r '.capabilities // ""' <<<"$SCENARIO_JSON")"
 INPUTS="$(jq -c --argjson index "$VARIANT_INDEX" '.input_sets?[$index] // {}' <<<"$SCENARIO_JSON")"
 PROMPT_BASE="$(jq -r --argjson index "$VARIANT_INDEX" '.prompt_variants[$index]' <<<"$SCENARIO_JSON")"
 PROMPT="$PROMPT_BASE Use run identifier $RUN_ID for names that must be unique."
+PROMPT="$PROMPT Your hard session limits are $MAX_SECONDS seconds and $MAX_STEPS model steps. Stop new experiments and begin evidence export and cleanup by $(( MAX_SECONDS * 80 / 100 )) seconds or $(( MAX_STEPS * 80 / 100 )) steps, whichever comes first. The MCP admission gate enforces this cleanup phase and refuses new experimental commands. Report incomplete objectives honestly; do not extend the run."
+PROMPT="$PROMPT Observed token ceilings (0 means disabled): context=$MAX_CONTEXT_TOKENS, processed=$MAX_PROCESSED_TOKENS. Cleanup also latches at 80 percent of either enabled token ceiling. These include cache-read tokens and are measured at completed model steps; avoid repeated bulk output and prefer compact receipts."
 if [[ "$EXECUTION_SURFACE" == "typed-contract" ]]; then
   PROMPT="$PROMPT This run checks the typed-operation contract: use advertised typed operations rather than native execution."
 fi
@@ -236,18 +255,56 @@ jq \
   --arg database "$DATABASE" \
   --arg workspace "$WORKSPACE" \
   --arg toolset "$TOOLSET" \
+  --arg capabilities "$SCENARIO_CAPABILITIES" \
   '.mcp.proofstorm.command = [$binary]
    | .mcp.proofstorm.environment.PROOFSTORM_DB = $database
    | .mcp.proofstorm.environment.PROOFSTORM_WORKSPACE = $workspace
    | .mcp.proofstorm.environment.PROOFSTORM_PRINCIPAL = "benchmark-agent"
-   | .mcp.proofstorm.environment.PROOFSTORM_TOOLSET = $toolset' \
+   | .mcp.proofstorm.environment.PROOFSTORM_TOOLSET = $toolset
+   | if $capabilities != "" then .mcp.proofstorm.environment.PROOFSTORM_CAPABILITIES = $capabilities else . end' \
   "$BASE_CONFIG" >"$CONFIG"
+
+SEED_PLAN="$(jq -r '.seed_plan // ""' <<<"$SCENARIO_JSON")"
+if [[ -n "$SEED_PLAN" ]]; then
+  python3 "$ROOT/scripts/seed-agent-usability-plan.py" "$CONFIG" "$ROOT/$SEED_PLAN" "$RUN_ID"
+  cp "$ROOT/$SEED_PLAN" "$RUN_ROOT/seed-plan.fixture.json"
+  cp "$ROOT/scripts/seed-agent-usability-plan.py" "$RUN_ROOT/seed-plan-client.py"
+  SEED_RECEIPT="$(jq -c '{plan_id,plan_digest,components,connections}' "$RUN_ROOT/seed-plan.json")"
+  PROMPT="$PROMPT Operator-provided verified plan (apply directly; do not replan): $SEED_RECEIPT"
+fi
+
+if [[ "$(jq -r '.prefunded_fixture // ""' <<<"$SCENARIO_JSON")" == "private-ecash-v1" ]]; then
+  cp "$ROOT/scripts/private-transfer-argument-audit.mjs" "$RUN_ROOT/argument-audit-plugin.mjs"
+  jq --arg plugin "file://$RUN_ROOT/argument-audit-plugin.mjs" \
+    '.plugin = ((.plugin // []) + [$plugin])' "$CONFIG" > "$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+  cp "$ROOT/scripts/prepare-private-ecash-benchmark.py" "$RUN_ROOT/setup-client.py"
+  python3 "$ROOT/scripts/prepare-private-ecash-benchmark.py" "$CONFIG" "$RUN_ID"
+  SETUP_RECEIPT="$(jq -c . "$RUN_ROOT/setup-handoff.json")"
+  PROMPT="$PROMPT Operator-prefunded setup (already applied; do not apply the plan or acquire another lease): $SETUP_RECEIPT"
+fi
 
 SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 SOURCE_DIRTY="$(git -C "$ROOT" status --porcelain=v1 | wc -l | tr -d '[:space:]')"
 BINARY_DIGEST="$(shasum -a 256 "$ROOT/target/release/proofstorm-mcp" | awk '{print $1}')"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 STARTED_EPOCH="$(date +%s)"
+PROMPT="$PROMPT Absolute budget (Unix seconds): start=$STARTED_EPOCH, cleanup=$(( STARTED_EPOCH + MAX_SECONDS * 80 / 100 )), hard_stop=$(( STARTED_EPOCH + MAX_SECONDS )). Tool responses include _benchmark_budget with current time, phase and remaining seconds. On cleanup phase, immediately stop waiting for experimental completion and cancel remaining work; then finish teardown and reporting. Work-phase observation waits are shortened at the cleanup boundary. During cleanup, lab_wait with target_phase=closed may retain a requested valid wait up to 60 seconds while leaving 30 seconds before the hard deadline for reporting; once inside that margin it uses the server minimum of one second. Other cleanup waits remain at most 10 seconds; execution deadlines and admission are unchanged. Call lab_close, then lab_wait with target_phase=closed and a requested timeout of 60 to verify absence economically. Do not spend cleanup steps updating todo lists; finish the actual report before the hard cap."
+
+# Enforce the cleanup boundary at every MCP tool call, including reconnects.
+jq --arg proxy "$ROOT/scripts/native-execution-proxy.py" \
+  --arg argument_audit "$RUN_ROOT/mcp-arguments.jsonl" \
+  --argjson public_help_only "$(jq '.prefunded_fixture == "private-ecash-v1"' <<<"$SCENARIO_JSON")" \
+  --arg events "$EVENTS" --arg state "$RUN_ROOT/cleanup-phase.json" \
+  --arg started "$STARTED_EPOCH" --arg seconds "$MAX_SECONDS" --arg steps "$MAX_STEPS" \
+  --arg context_tokens "$MAX_CONTEXT_TOKENS" --arg processed_tokens "$MAX_PROCESSED_TOKENS" \
+  '.mcp.proofstorm.command = (["python3", $proxy, "--events", $events, "--state", $state,
+    "--started-at", $started, "--max-seconds", $seconds, "--max-steps", $steps,
+    "--max-context-tokens", $context_tokens, "--max-processed-tokens", $processed_tokens,
+    "--argument-audit", $argument_audit] + (if $public_help_only then ["--public-help-only"] else [] end)
+    + ["--"] + .mcp.proofstorm.command)' \
+  "$CONFIG" > "$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
 
 jq -n \
   --arg run_id "$RUN_ID" \
@@ -269,6 +326,8 @@ jq -n \
   --arg started_at "$STARTED_AT" \
   --argjson max_steps "$MAX_STEPS" \
   --argjson max_seconds "$MAX_SECONDS" \
+  --argjson max_context_tokens "$MAX_CONTEXT_TOKENS" \
+  --argjson max_processed_tokens "$MAX_PROCESSED_TOKENS" \
   --argjson max_equivalent_plans "$MAX_EQUIVALENT_PLANS" \
   '{run_id:$run_id, scenario:$scenario, scenario_family:$scenario_family,
     scenario_novelty:$scenario_novelty, variant_index:$variant_index,
@@ -278,17 +337,25 @@ jq -n \
     source_dirty_files:$source_dirty_files, binary_digest:$binary_digest,
     started_at:$started_at,
     limits:{max_steps:$max_steps,max_seconds:$max_seconds,
+      max_context_tokens:$max_context_tokens,max_processed_tokens:$max_processed_tokens,
       max_equivalent_plans:$max_equivalent_plans}}' >"$MANIFEST"
 
 git -C "$ROOT" diff --binary HEAD >"$RUN_ROOT/source-diff.patch"
-shasum -a 256 "$SCENARIO_CATALOG" "$0" "$ROOT/scripts/evaluate-agent-usability.py" "$ROOT/scripts/agent-usability-cluster.py" >"$RUN_ROOT/harness-digests.txt"
+shasum -a 256 "$SCENARIO_CATALOG" "$0" "$ROOT/scripts/evaluate-agent-usability.py" "$ROOT/scripts/agent-usability-cluster.py" "$ROOT/scripts/native-execution-proxy.py" >"$RUN_ROOT/harness-digests.txt"
 mkdir "$RUN_ROOT/harness"
-cp "$SCENARIO_CATALOG" "$0" "$ROOT/scripts/evaluate-agent-usability.py" "$ROOT/scripts/agent-usability-cluster.py" "$RUN_ROOT/harness/"
+cp "$SCENARIO_CATALOG" "$0" "$ROOT/scripts/evaluate-agent-usability.py" "$ROOT/scripts/agent-usability-cluster.py" "$ROOT/scripts/native-execution-proxy.py" "$RUN_ROOT/harness/"
 
 printf '[proofstorm-benchmark] run=%s scenario=%s variant=%s model=%s toolset=%s\n' \
   "$RUN_ID" "$SCENARIO" "$VARIANT_INDEX" "$MODEL" "$TOOLSET"
+token_limit_reason() {
+  python3 - "$ROOT/scripts/native-execution-proxy.py" "$EVENTS" "$MAX_CONTEXT_TOKENS" "$MAX_PROCESSED_TOKENS" <<'PY'
+import runpy, sys
+contract = runpy.run_path(sys.argv[1])
+print(contract['token_limit_reason'](contract['read_usage'](sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])))
+PY
+}
 set +e
-OPENCODE_CONFIG="$CONFIG" "$OPENCODE_BIN" run \
+PROOFSTORM_ARGUMENT_AUDIT="$RUN_ROOT/opencode-arguments.jsonl" OPENCODE_CONFIG="$CONFIG" "$OPENCODE_BIN" run \
   --model "$MODEL" \
   --format json \
   --print-logs \
@@ -302,6 +369,7 @@ OPENCODE_PID=$!
   while kill -0 "$OPENCODE_PID" 2>/dev/null; do
     ELAPSED="$(( $(date +%s) - STARTED_EPOCH ))"
     STEPS="$(grep -c '\"type\":\"step_finish\"' "$EVENTS" 2>/dev/null || true)"
+    TOKEN_LIMIT_REASON="$(token_limit_reason)"
     EQUIVALENT_PLANS="$(
       jq -rs '
         [.[]
@@ -327,6 +395,13 @@ OPENCODE_PID=$!
       kill -KILL "$OPENCODE_PID" 2>/dev/null || true
       exit 0
     fi
+    if [[ -n "$TOKEN_LIMIT_REASON" ]]; then
+      printf '%s\n' "$TOKEN_LIMIT_REASON" >"$STOP_REASON"
+      kill -TERM "$OPENCODE_PID" 2>/dev/null || true
+      sleep 10
+      kill -KILL "$OPENCODE_PID" 2>/dev/null || true
+      exit 0
+    fi
     if [[ "$EQUIVALENT_PLANS" -ge "$MAX_EQUIVALENT_PLANS" ]]; then
       printf 'repeated_equivalent_lab_plan:%s\n' "$EQUIVALENT_PLANS" >"$STOP_REASON"
       kill -TERM "$OPENCODE_PID" 2>/dev/null || true
@@ -342,6 +417,11 @@ wait "$OPENCODE_PID"
 OPENCODE_STATUS=$?
 kill "$WATCHDOG_PID" 2>/dev/null || true
 wait "$WATCHDOG_PID" 2>/dev/null || true
+# A final completed step can cross a token ceiling immediately before exit.
+TOKEN_LIMIT_REASON="$(token_limit_reason)"
+if [[ -n "$TOKEN_LIMIT_REASON" && ! -s "$STOP_REASON" ]]; then
+  printf '%s\n' "$TOKEN_LIMIT_REASON" >"$STOP_REASON"
+fi
 set -e
 
 SESSION_ID="$(jq -rs '[.[] | .sessionID? // empty][0] // ""' "$EVENTS")"

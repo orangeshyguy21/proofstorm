@@ -181,16 +181,25 @@ make down
 Proofstorm exposes two deliberately different native shell primitives.
 `proofstorm_component_exec_live` (`component.exec_live`) runs inside the
 selected running container, so native CLIs see the component's real localhost,
-Unix sockets, files, credentials, user, and network identity. It is bounded,
-fully journaled, and fail-closed against replay after controller interruption.
+Unix sockets, files, credentials, user, and network identity. A static supervisor
+owns the command and its descendants, enforces its deadline inside the container,
+and records exit status and verified cleanup. The operation ID is the handle for
+waiting or cancellation; controller interruption does not replay the command.
+Use `argv` for direct invocation, or `script` for shell semantics. Output is private
+by default; opt into `public` for safe output or `json_fields` for selected typed
+receipt fields. Requests remain journaled, so never embed secrets in arguments.
+The [reliable native execution contract](docs/reliable-native-execution.md)
+describes receipts, uncertain outcomes and the next fuzzer checkpoint.
 `proofstorm_component_forensics` (`component.forensics`) instead creates a
 short-lived pod from the locked image and data mounts. It is useful for offline
 source/database inspection, but explicitly does not promise live CLI or socket
-connectivity. Both record bounded output and an exit code. Native CLIs are the
+connectivity. Forensics retains its separate bounded-output contract. Native CLIs are the
 normal surface for operating deployed software; use typed actions where they
 provide coordination, lifecycle guarantees, or useful portable observations.
 The [native-first validation plan](docs/native-first-experiments.md) describes
-how execution choices and evidence are evaluated. `proofstorm_component_restart`
+how execution choices and evidence are evaluated; the
+[recovery round](docs/recovery-round-2026-09-04.md) records live findings.
+`proofstorm_component_restart`
 (`component.control`) rolls any primary component workload, including mints and
 wallets, while preserving its persistent state.
 
@@ -207,6 +216,9 @@ native Bitcoin help, RPC against two independently selectable Bitcoin nodes,
 LND help, Nutshell help, and an in-workload
 service-account-token absence check; verifies action idempotency, locked images,
 network identity, bounded artifacts, canonical evidence, and verified teardown.
+The focused supervisor gate, `make e2e-reliable-exec`, additionally checks CDK and
+LND compatibility, private output, cancellation, deadlines and controller restart.
+It requires the locally provisioned CDK wallet image.
 
 Agents should use `proofstorm_lab_wait` after materialization or close and
 `proofstorm_operation_wait` after action submission. These calls perform
@@ -525,11 +537,57 @@ trip, and exact conservation-oracle behavior before verified teardown.
 
 The implementation-neutral wallet surface now includes
 `proofstorm_wallet_initialize`, `proofstorm_wallet_balance`, and
-`proofstorm_wallet_fund`. Balance reads copy the persistent wallet into a
+`proofstorm_wallet_fund`. Nutshell balance reads copy the persistent wallet into a
 disposable snapshot before invoking the locked adapter, while initialize and
-fund are bounded state-changing actions under separate capabilities. MCP never
-receives a mnemonic, proof database, mint quote, Lightning invoice, or adapter
-command.
+fund are bounded state-changing actions under separate capabilities. Those typed
+operations keep mnemonics, proof databases, mint quotes, Lightning invoices and
+adapter commands outside MCP responses.
+
+`cdk-cli-wallet` 0.18.0 adds a separate persistent native CLI wallet and a passive
+`proofstorm_wallet_balance` adapter. Use `--work-dir /wallet/cdk --unit sat
+--non-interactive` on native commands. Native CDK commands, including `balance`,
+may run recovery; the typed observation instead reads SQLite in a read-only
+transaction. Its volume permits SQLite's WAL coordination files, but the reader
+does not change wallet records or contact a mint. Typed wallet mutations and
+quote/oracle workflows remain unavailable for CDK and are refused before an
+operation is created. The initial local-registry image is Linux arm64; source,
+release-binary checksum, runtime image and recipe provenance are recorded in the
+catalog and resolved lock. See the [wallet expansion architecture](docs/wallet-expansion-architecture.md).
+In this CDK release, resume a paid mint quote with `mint <url> --quote-id <id>`;
+`mint-pending` checks pending proofs despite its quote-claiming help text.
+
+Run `make e2e-cdk-wallet` for the deterministic CDK wallet checkpoint, after
+provisioning its pinned image in the local registry. It is an explicit local
+gate, excluded from `make e2e` until the image is distributed. It uses
+native BOLT11 operations, separate wallet volumes, passive observations and
+verified teardown, retaining results under `dev/wallet-integration-runs/`.
+The `cdk-wallet-native-smoke` agent scenario is the subsequent usability gate;
+it is not run by the deterministic acceptance gate. The private ecash payload
+exchange remains a subsequent wallet-expansion phase.
+The [first fuzzer handoff](docs/cdk-wallet-fuzzer-handoff.md) records the tested
+scope, local image prerequisite, retained evidence and launch instructions.
+
+`cocod-wallet` is available as the exact experimental source build
+`0.0.17-dev.44e5101c`, with no default version. It runs the upstream foreground
+daemon on loopback with private persistent state, authenticated native clients,
+and separate daemon-health and wallet-session checks. Protected sessions require
+explicit unlock after restart. Its passive `wallet_balance` SQLite projection
+distinguishes spendable, reserved and inflight proofs; native `/balance` reports
+the combined ready total. Typed wallet mutations remain unavailable.
+
+Run `make e2e-cocod-wallet` after provisioning its pinned local arm64 image.
+The deterministic checkpoint passed real funding, two payments, restart,
+two-wallet isolation, session lifecycle and verified teardown. See the
+[cocod fuzzer handoff](docs/cocod-wallet-fuzzer-handoff.md) for exact provenance,
+the protected native configuration workflow and evidence.
+Subsequent [agent execution hardening](docs/cocod-execution-hardening-2026-09-05.md)
+adds validated native lifecycle projections and more efficient teardown waits;
+focused agent runs verified restart/unlock and 5,000-sat funding followed by a
+700-sat payment. Earlier benchmark failures remain recorded.
+[Structured invoice relay](docs/structured-invoice-relay.md) now validates native
+cocod/LND invoice output and passed the deterministic money/restart gate. The
+focused agent relay target also held; its report accounting still failed review.
+Private ecash delivery remains the next build boundary.
 
 Nutshell's wallet database is authoritative for receive and melt quote facts.
 Proofstorm stores immutable, attributed observations of those adapter records;

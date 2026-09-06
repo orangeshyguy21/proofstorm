@@ -264,6 +264,13 @@ def proof_reservation_snapshot(target_quote_id):
         connection = None
         try:
             connection = connect_read_only(path, 1)
+            # auth.sqlite3 can also contain a proofs table. Correlate the
+            # database with this exact melt rather than taking the first table.
+            if connection.execute(
+                "SELECT 1 FROM bolt11_melt_quotes WHERE quote = ? LIMIT 1",
+                (target_quote_id,),
+            ).fetchone() is None:
+                continue
             reserved = connection.execute(
                 "SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM proofs "
                 "WHERE melt_id = ? AND reserved",
@@ -412,7 +419,7 @@ async def refresh_melt_quote_async():
     if remote_state not in ("UNPAID", "PENDING", "PAID"):
         raise DriverFailure("unsupported_wallet_quote_state")
 
-    _, _, amount, fee_reserve, fee_paid = before_row
+    _, _, amount, fee_reserve, _ = before_row
     observation = {
         "role": "payment_melt",
         "direction": "pay",
@@ -422,7 +429,10 @@ async def refresh_melt_quote_async():
         "state": remote_state,
         "amount_sat": int(amount),
         "fee_reserve_sat": int(fee_reserve),
-        "fee_paid_sat": None if fee_paid is None else int(fee_paid),
+        # The local Nutshell field uses legacy accounting, and its refreshed
+        # MeltQuote defaults fee_paid to zero without a remote fee observation.
+        # Neither is evidence of the actual Lightning fee.
+        "fee_paid_sat": None,
     }
     artifact = {
         "melt_quote_id": target_quote_id,

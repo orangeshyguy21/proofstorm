@@ -1,5 +1,65 @@
 {
   "$defs": {
+    "BuildProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "type": "string"
+        },
+        "artifact_url": {
+          "type": "string"
+        },
+        "build_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit_sha": {
+          "type": "string"
+        },
+        "dependency_lock_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "type": "string"
+        },
+        "recipe_digest": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "runtime_image": {
+          "type": "string"
+        },
+        "transformations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "repository",
+        "commit_sha",
+        "artifact_url",
+        "artifact_sha256",
+        "platform",
+        "runtime_image",
+        "recipe_digest"
+      ],
+      "type": "object"
+    },
     "CandidateSource": {
       "additionalProperties": false,
       "properties": {
@@ -83,6 +143,16 @@
       "properties": {
         "adapter_version": {
           "type": "string"
+        },
+        "build_provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BuildProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "catalog_id": {
           "type": "string"

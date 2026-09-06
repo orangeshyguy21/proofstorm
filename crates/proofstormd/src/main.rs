@@ -415,10 +415,44 @@ async fn reconcile_action(
         return Ok(Action::await_change());
     }
     if action.annotations().contains_key(ACTION_CANCEL_ANNOTATION) {
+        if matches!(action.spec.action, LabAction::ComponentExecLive(_))
+            && action
+                .status
+                .as_ref()
+                .is_some_and(|status| status.native_execution.is_some())
+        {
+            let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
+            let lab = labs.get(&action.spec.lab_name).await?;
+            return native_exec::reconcile(action.as_ref(), &lab, &context).await;
+        }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
     }
     let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
     let lab = labs.get(&action.spec.lab_name).await?;
+    // Existing native handles only reconcile owned work; changed readiness must
+    // not discard a completed native receipt or turn collection into a new start.
+    if matches!(action.spec.action, LabAction::ComponentExecLive(_))
+        && action
+            .status
+            .as_ref()
+            .is_some_and(|status| status.native_execution.is_some())
+    {
+        return native_exec::reconcile(action.as_ref(), &lab, &context).await;
+    }
+    if !action
+        .status
+        .as_ref()
+        .is_some_and(|status| status.phase == ActionPhase::Running)
+        && private_transfer::validate_delegated_action(action.as_ref(), &lab).is_err()
+    {
+        return patch_action_failure(
+            action.as_ref(),
+            &context,
+            "recipient_lease_refused",
+            "recipient lease unavailable or action outside its scope; no new command started",
+        )
+        .await;
+    }
     if let Err(error) = evaluate_action_admission(action.as_ref(), &lab) {
         patch_action_status(
             action.as_ref(),
@@ -451,6 +485,9 @@ async fn reconcile_action(
     }
     if matches!(action.spec.action, LabAction::ComponentLogs(_)) {
         return reconcile_component_logs(action.as_ref(), &lab, &context).await;
+    }
+    if matches!(action.spec.action, LabAction::PrivateTransfer(_)) {
+        return private_transfer::reconcile(action.as_ref(), &context).await;
     }
     if matches!(action.spec.action, LabAction::ComponentExecLive(_)) {
         return reconcile_component_exec_live(action.as_ref(), &lab, &context).await;
@@ -1114,243 +1151,16 @@ async fn reconcile_component_restart(
     Ok(Action::await_change())
 }
 
-const LIVE_EXEC_OUTPUT_LIMIT: usize = 20 * 1024;
-const LIVE_EXEC_AUTHORIZED_MARKER: &str = "live-exec-authorized";
-const LIVE_EXEC_STARTED_MARKER: &str = "live-exec-started";
+mod native_exec;
+mod private_transfer;
+const LIVE_EXEC_OUTPUT_LIMIT: usize = 256 * 1024;
 
-/// Execute once inside the actual component container. The two-phase status marker is
-/// deliberately fail-closed: after the controller records that execution started, a
-/// later reconciliation will never replay an arbitrary command after a controller crash.
-#[allow(
-    clippy::too_many_lines,
-    clippy::single_match_else,
-    reason = "authorization, replay fencing, execution, and terminal journaling stay visibly contiguous"
-)]
 async fn reconcile_component_exec_live(
     action: &ProofstormLabAction,
     lab: &ProofstormLab,
     context: &Context,
 ) -> Result<Action, Error> {
-    if action.spec.capability != proofstorm_core::Capability::ComponentExecLive {
-        return patch_invalid_action(
-            action,
-            context,
-            "live component execution requires component.exec_live",
-        )
-        .await;
-    }
-    let LabAction::ComponentExecLive(request) = &action.spec.action else {
-        return Err(Error::ControllerInvariant(
-            "expected live component execution action",
-        ));
-    };
-    let plans = compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
-    )?;
-    let Some(component) = plans
-        .iter()
-        .find(|plan| plan.component_id == request.component)
-    else {
-        return patch_invalid_action(action, context, "component is not in the immutable lab")
-            .await;
-    };
-
-    match action
-        .status
-        .as_ref()
-        .and_then(|status| status.job_name.as_deref())
-    {
-        None => {
-            patch_action_status(
-                action,
-                context,
-                ProofstormLabActionStatus {
-                    phase: ActionPhase::Running,
-                    observed_generation: action.metadata.generation,
-                    job_name: Some(LIVE_EXEC_AUTHORIZED_MARKER.to_owned()),
-                    started_at_unix: Some(now_unix()),
-                    ..ProofstormLabActionStatus::default()
-                },
-            )
-            .await?;
-            return Ok(Action::requeue(Duration::from_millis(250)));
-        }
-        Some(LIVE_EXEC_STARTED_MARKER) => {
-            let started = action
-                .status
-                .as_ref()
-                .and_then(|status| status.started_at_unix)
-                .unwrap_or_else(now_unix);
-            let replay_fence_deadline = started
-                .saturating_add(i64::from(request.timeout_seconds))
-                .saturating_add(10);
-            if now_unix() <= replay_fence_deadline {
-                // A status update can enqueue another reconciliation while the
-                // original WebSocket command is still draining. Wait for that
-                // execution to journal its terminal result; never replay it.
-                return Ok(Action::requeue(Duration::from_secs(1)));
-            }
-            return patch_action_failure(
-                action,
-                context,
-                "live_exec_interrupted",
-                "live execution did not journal a result before its timeout; the command was not replayed",
-            )
-            .await;
-        }
-        Some(LIVE_EXEC_AUTHORIZED_MARKER) => {}
-        Some(_) => {
-            return patch_invalid_action(action, context, "invalid live execution journal marker")
-                .await;
-        }
-    }
-
-    patch_action_status(
-        action,
-        context,
-        ProofstormLabActionStatus {
-            phase: ActionPhase::Running,
-            observed_generation: action.metadata.generation,
-            job_name: Some(LIVE_EXEC_STARTED_MARKER.to_owned()),
-            started_at_unix: action
-                .status
-                .as_ref()
-                .and_then(|status| status.started_at_unix),
-            ..ProofstormLabActionStatus::default()
-        },
-    )
-    .await?;
-
-    let namespace = instance_namespace(&action.spec.instance_key);
-    let pods = Api::<Pod>::namespaced(context.client.clone(), &namespace);
-    let selector = format!(
-        "{COMPONENT_LABEL}={},{INSTANCE_LABEL}={}",
-        request.component, action.spec.instance_key
-    );
-    let mut candidates = pods
-        .list(&ListParams::default().labels(&selector))
-        .await?
-        .items;
-    candidates.retain(|pod| {
-        pod.status
-            .as_ref()
-            .and_then(|status| status.phase.as_deref())
-            == Some("Running")
-            && pod.metadata.deletion_timestamp.is_none()
-    });
-    candidates.sort_by_key(|pod| pod.metadata.creation_timestamp.clone());
-    let Some(pod) = candidates.pop() else {
-        return patch_action_failure(
-            action,
-            context,
-            "component_pod_not_ready",
-            "no running component pod was available; the command was not executed",
-        )
-        .await;
-    };
-    let pod_name = pod.name_any();
-    let container = pod
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.containers.first())
-        .map(|container| container.name.clone())
-        .ok_or_else(|| Error::LiveExec("component pod has no primary container".to_owned()))?;
-    let attach = AttachParams::default()
-        .container(container.clone())
-        .stdout(true)
-        .stderr(true);
-    let command = vec!["/bin/sh", "-c", request.script.as_str()];
-    let execution = async {
-        let mut process = pods.exec(&pod_name, command, &attach).await?;
-        let stdout = process
-            .stdout()
-            .ok_or_else(|| Error::LiveExec("stdout stream was not attached".to_owned()))?;
-        let stderr = process
-            .stderr()
-            .ok_or_else(|| Error::LiveExec("stderr stream was not attached".to_owned()))?;
-        let status = process
-            .take_status()
-            .ok_or_else(|| Error::LiveExec("exit status stream was not attached".to_owned()))?;
-        let (stdout, stderr, status) = tokio::join!(
-            read_bounded_output(stdout),
-            read_bounded_output(stderr),
-            status
-        );
-        process
-            .join()
-            .await
-            .map_err(|error| Error::LiveExec(error.to_string()))?;
-        Ok::<_, Error>((stdout?, stderr?, status))
-    };
-    let timeout = Duration::from_secs(u64::from(request.timeout_seconds));
-    let ((stdout, stdout_truncated), (stderr, stderr_truncated), status) =
-        match tokio::time::timeout(timeout, execution).await {
-            Ok(result) => result?,
-            Err(_) => {
-                patch_action_status(
-                    action,
-                    context,
-                    ProofstormLabActionStatus {
-                        phase: ActionPhase::Succeeded,
-                        observed_generation: action.metadata.generation,
-                        job_name: Some(LIVE_EXEC_STARTED_MARKER.to_owned()),
-                        started_at_unix: action
-                            .status
-                            .as_ref()
-                            .and_then(|status| status.started_at_unix),
-                        completed_at_unix: Some(now_unix()),
-                        artifact: Some(status_object(serde_json::json!({
-                            "component": request.component,
-                            "kind": component.kind,
-                            "pod": pod_name,
-                            "container": container,
-                            "execution_context": "live_component",
-                            "exit_code": null,
-                            "stdout": "",
-                            "stderr": "command exceeded its declared timeout",
-                            "output_truncated": false,
-                            "timed_out": true,
-                        }))),
-                        ..ProofstormLabActionStatus::default()
-                    },
-                )
-                .await?;
-                return Ok(Action::await_change());
-            }
-        };
-    let exit_code = exec_exit_code(status.as_ref());
-    patch_action_status(
-        action,
-        context,
-        ProofstormLabActionStatus {
-            phase: ActionPhase::Succeeded,
-            observed_generation: action.metadata.generation,
-            job_name: Some(LIVE_EXEC_STARTED_MARKER.to_owned()),
-            started_at_unix: action
-                .status
-                .as_ref()
-                .and_then(|status| status.started_at_unix),
-            completed_at_unix: Some(now_unix()),
-            artifact: Some(status_object(serde_json::json!({
-                "component": request.component,
-                "kind": component.kind,
-                "pod": pod_name,
-                "container": container,
-                "execution_context": "live_component",
-                "exit_code": exit_code,
-                "stdout": String::from_utf8_lossy(&stdout),
-                "stderr": String::from_utf8_lossy(&stderr),
-                "output_truncated": stdout_truncated || stderr_truncated,
-                "timed_out": false,
-            }))),
-            ..ProofstormLabActionStatus::default()
-        },
-    )
-    .await?;
-    Ok(Action::await_change())
+    native_exec::reconcile(action, lab, context).await
 }
 
 async fn read_bounded_output(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, bool), Error> {
@@ -2435,6 +2245,7 @@ async fn ensure_generated_keycloak_secret(
 )]
 async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
     validate_instance_key(&lab.spec.instance_key)?;
+    private_transfer::expire(&lab)?;
     let workloads = render_lab(
         &lab.spec.instance_key,
         &lab.spec.revision_digest,
@@ -2820,6 +2631,7 @@ fn deployment_matches_plan(
 }
 
 async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
+    private_transfer::close(&lab)?;
     let instance_namespace = instance_namespace(&lab.spec.instance_key);
     patch_status(
         lab.as_ref(),
@@ -2890,6 +2702,7 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
         }
     }
 
+    private_transfer::remove_closed(&lab)?;
     write_teardown_receipt(lab.as_ref(), context, &instance_namespace).await?;
     Ok(Action::await_change())
 }
@@ -3596,6 +3409,7 @@ mod tests {
         ProofstormLabAction::new(
             "op-auth-spend-resource",
             proofstorm_kube::ProofstormLabActionSpec {
+                lease_scope: None,
                 lab_name: "lab-auth".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
@@ -4114,6 +3928,7 @@ mod tests {
         let mut resource = ProofstormLabAction::new(
             &format!("action-{sequence}"),
             proofstorm_kube::ProofstormLabActionSpec {
+                lease_scope: None,
                 lab_name: "lab-1".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),

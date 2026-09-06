@@ -1,0 +1,194 @@
+"""Run inside Linux with the static runner on PATH; never uses live funds."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+import unittest
+
+RUNNER = os.environ.get('PROOFSTORM_NATIVE_RUNNER', '/usr/local/bin/proofstorm-exec')
+
+
+class SupervisorContract(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='supervisor-test-'))
+        self.handles = []
+
+    def tearDown(self):
+        for directory in self.handles:
+            subprocess.run([RUNNER, 'cancel', str(directory)], capture_output=True, check=False)
+            self.receipt(directory)
+        shutil.rmtree(self.root)
+
+    def start(self, argv=None, script='', timeout=2, output=None, private_io=None, private_input=None):
+        directory = self.root / str(len(self.handles))
+        directory.mkdir(mode=0o700)
+        if private_input is not None:
+            subprocess.run([RUNNER,'input',str(directory),str(len(private_input)), hashlib.sha256(private_input).hexdigest()], input=private_input, capture_output=True,check=True,timeout=5)
+        self.handles.append(directory)
+        result = subprocess.run([RUNNER, 'start', str(directory)], input=json.dumps({
+            'argv': argv or [], 'script': script, 'timeout_seconds':timeout,
+            'output': output or {'mode':'private'}, 'private_io': private_io}), text=True,capture_output=True,check=True,timeout=5)
+        self.assertEqual(json.loads(result.stdout), {'started':True})
+        return directory
+
+    def receipt(self, directory):
+        deadline = time.monotonic()+10
+        while time.monotonic() < deadline:
+            data = json.loads(subprocess.check_output([RUNNER,'status',str(directory)]))
+            if not data.get('running'):
+                self.assertTrue(data.get('cleanup_verified'), data)
+                return data
+            time.sleep(0.03)
+        self.fail('supervisor failed to produce bounded cleanup receipt')
+
+    def test_large_private_source_manifest_and_stdin_consumption(self):
+        body=b'private-transfer-canary-'*24000
+        source=self.start(['python3','-c','import sys;sys.stdout.write("private-transfer-canary-"*24000)'],
+            private_io={'kind':'capture','maximum_bytes':600000,'format':'bytes'})
+        receipt=self.receipt(source)
+        self.assertEqual(receipt['payload_manifest'],{'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()})
+        self.assertEqual((receipt['stdout'],receipt['stderr']),('',''))
+        self.assertNotIn('private-transfer-canary',json.dumps(receipt))
+        self.assertEqual(subprocess.check_output([RUNNER,'payload',str(source)]),body)
+        consumer=self.start(['python3','-c','import sys;assert sys.stdin.buffer.read()==b"private-transfer-canary-"*24000'],
+            private_io={'kind':'consume','bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'input':{'kind':'stdin'}},private_input=body)
+        self.assertEqual(self.receipt(consumer)['exit_code'],0)
+        for directory in (source,consumer):
+            subprocess.run([RUNNER,'retire',str(directory)],check=True,capture_output=True)
+            self.assertFalse((directory/'input').exists())
+            self.assertFalse((directory/'payload').exists())
+            self.assertFalse((directory/'stdout').exists())
+
+    def test_private_argv_binding_and_capture_failures(self):
+        body=b'cashuBprivate_test_token'
+        directory=self.start(['python3','-c','import sys;assert sys.argv[1]=="cashuBprivate_test_token"','@proofstorm-private-input'],
+            private_io={'kind':'consume','bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'input':{'kind':'argv','index':3}},private_input=body)
+        receipt=self.receipt(directory)
+        self.assertEqual(receipt['exit_code'],0)
+        self.assertNotIn(body.decode(),json.dumps(receipt))
+        for code, maximum in [('print("cashuBfirst\\ncashuBsecond")',100),('print("cashuB"+"x"*100)',10),('import sys;print("cashuBabcdef");sys.exit(3)',100)]:
+            directory=self.start(['python3','-c',code],private_io={'kind':'capture','maximum_bytes':maximum,'format':'cashu_token'})
+            receipt=self.receipt(directory)
+            self.assertNotIn('payload_manifest',receipt)
+            self.assertIn('payload_error',receipt)
+            self.assertFalse((directory/'payload').exists())
+
+    def test_private_helper_rejects_tampered_payload_and_duplicate_input(self):
+        directory=self.start(['printf','cashuBabcdef'],private_io={'kind':'capture','maximum_bytes':100,'format':'cashu_token'})
+        self.receipt(directory)
+        (directory/'payload').write_bytes(b'cashuBtampered')
+        result=subprocess.run([RUNNER,'payload',str(directory)],capture_output=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(result.stdout,b'')
+        self.assertNotIn(b'tampered',result.stderr)
+        target=self.root/'input-target'
+        target.mkdir(mode=0o700)
+        args=[RUNNER,'input',str(target),'3',hashlib.sha256(b'abc').hexdigest()]
+        subprocess.run(args,input=b'abc',check=True,capture_output=True)
+        self.assertNotEqual(subprocess.run(args,input=b'abc',capture_output=True).returncode,0)
+        self.assertEqual((target/'input').read_bytes(),b'abc')
+
+    def test_private_capture_and_allowlisted_projection(self):
+        canary = 'private-preimage-canary'
+        code = 'import json;print(json.dumps(dict(status="SUCCEEDED",value_sat="700",payment_preimage="'+canary+'")))'
+        private = self.start(['python3','-c',code])
+        receipt = self.receipt(private)
+        self.assertNotIn(canary, json.dumps(receipt))
+        self.assertEqual(receipt['stdout'], '')
+        self.assertIn(canary, (private/'stdout').read_text())
+        self.assertEqual((private/'stdout').stat().st_mode & 0o777, 0o600)
+        selected = self.receipt(self.start(['python3','-c',code],output={'mode':'json_fields','fields':['status','value_sat']}))
+        self.assertEqual(selected['selected_output'], {'status':'SUCCEEDED','value_sat':'700'})
+        self.assertNotIn(canary, json.dumps(selected))
+        malformed = self.receipt(self.start(['printf','PREIMAGE '+canary],output={'mode':'json_fields','fields':['status']}))
+        self.assertFalse(malformed['projection_succeeded'])
+        self.assertNotIn(canary, json.dumps(malformed))
+
+    def test_invoice_relay_keeps_raw_streams_private_and_preserves_failure(self):
+        fixture = json.loads((Path(__file__).resolve().parents[1] /
+            'crates/proofstorm-core/tests/fixtures/invoice-relay.json').read_text())
+        request = fixture['payment_request']
+        response = dict(payment_request=request, r_hash=fixture['r_hash'],
+                        payment_preimage='invoice-private-canary')
+        code = 'import sys;print('+repr(json.dumps(response))+');print("stderr-private-canary",file=sys.stderr)'
+        directory = self.start(['python3', '-c', code], output={'mode':'lnd_invoice'})
+        receipt = self.receipt(directory)
+        self.assertTrue(receipt['projection_succeeded'])
+        self.assertEqual(receipt['selected_output']['payment_request'], request)
+        self.assertEqual(receipt['selected_output']['payment_hash'], fixture['r_hash'])
+        self.assertEqual(receipt['selected_output']['amount_msat'], 700000)
+        self.assertEqual((receipt['stdout'], receipt['stderr']), ('', ''))
+        self.assertNotIn('private-canary', json.dumps(receipt))
+        self.assertIn('invoice-private-canary', (directory/'stdout').read_text())
+        self.assertEqual((directory/'stdout').stat().st_mode & 0o777, 0o600)
+        for code, mode, exit_code in [
+            ('import sys;print('+repr(request)+');sys.exit(3)', 'bolt11', 3),
+            ('print("private-canary")', 'bolt11', 0),
+            ('print('+repr(json.dumps(response)*2)+')', 'lnd_invoice', 0),
+            ('print('+repr(json.dumps([request, fixture['r_hash']]))+')', 'lnd_invoice', 0),
+            ('print('+repr(request)+'+" "*20000)', 'bolt11', 0),
+        ]:
+            receipt = self.receipt(self.start(['python3','-c',code], output={'mode':mode}))
+            self.assertEqual(receipt['exit_code'], exit_code)
+            self.assertFalse(receipt['projection_succeeded'])
+            self.assertNotIn('selected_output', receipt)
+            self.assertEqual((receipt['stdout'], receipt['stderr']), ('', ''))
+            self.assertNotIn('private-canary', json.dumps(receipt))
+        code = 'import time;print('+repr(request)+',flush=True);time.sleep(10)'
+        for cancel in (False, True):
+            directory = self.start(['python3','-c',code], timeout=1,
+                                   output={'mode':'bolt11'})
+            if cancel:
+                time.sleep(0.1)
+                subprocess.check_call([RUNNER,'cancel',str(directory)],stdout=subprocess.DEVNULL)
+            receipt = self.receipt(directory)
+            self.assertTrue(receipt['cancelled'] if cancel else receipt['timed_out'])
+            self.assertEqual(receipt['exit_signal'], 15)
+            self.assertFalse(receipt['projection_succeeded'])
+            self.assertNotIn('selected_output', receipt)
+
+    def test_timeout_reaps_session_escaping_descendant(self):
+        pidfile = self.root/'escaped-pid'
+        grandchild = 'import os,time;open('+repr(str(pidfile))+',"w").write(str(os.getpid()));time.sleep(120)'
+        parent = 'import subprocess,time;subprocess.Popen(["python3","-c",'+repr(grandchild)+'],start_new_session=True);time.sleep(120)'
+        directory = self.start(['python3','-c',parent],timeout=1)
+        receipt = self.receipt(directory)
+        self.assertTrue(receipt['timed_out'])
+        self.assertGreaterEqual(receipt['children_reaped'],2)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(pidfile.read_text()),0)
+
+    def test_cancel_is_scoped_and_reaps_owned_children(self):
+        one = self.start(['sleep','120'],timeout=10)
+        two = self.start(['sleep','120'],timeout=10)
+        time.sleep(0.15)
+        subprocess.check_call([RUNNER,'cancel',str(one)],stdout=subprocess.DEVNULL)
+        self.assertTrue(self.receipt(one)['cancelled'])
+        self.assertEqual(json.loads(subprocess.check_output([RUNNER,'status',str(two)])),{'running':True})
+        subprocess.check_call([RUNNER,'cancel',str(two)],stdout=subprocess.DEVNULL)
+        self.assertTrue(self.receipt(two)['cancelled'])
+
+    def test_exit_scope_and_background_cleanup(self):
+        direct = self.receipt(self.start(['sh','-c','exit 7']))
+        self.assertEqual((direct['exit_code'],direct['exit_scope']),(7,'command'))
+        shell = self.receipt(self.start(script='false | true'))
+        self.assertEqual((shell['exit_code'],shell['exit_scope']),(0,'shell'))
+        orphan = self.receipt(self.start(script='sleep 120 & exit 0'))
+        self.assertEqual(orphan['exit_code'],0)
+        self.assertGreaterEqual(orphan['children_reaped'],2)
+
+    def test_large_streams_are_drained_but_retention_is_bounded(self):
+        receipt = self.receipt(self.start(['python3','-c','import sys;sys.stdout.write("x"*100000);sys.stderr.write("y"*100000)']))
+        self.assertTrue(receipt['output_truncated'])
+        self.assertTrue(receipt['streams_complete'])
+        for stream in ['stdout','stderr']:
+            self.assertEqual(receipt['private_output'][stream]['bytes_observed'],100000)
+            self.assertEqual(receipt['private_output'][stream]['retained_bytes'],16384)
+
+
+if __name__ == '__main__':
+    unittest.main()

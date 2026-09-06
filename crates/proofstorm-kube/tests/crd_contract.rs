@@ -4,6 +4,54 @@ use kube::CustomResourceExt;
 use proofstorm_kube::{ProofstormCandidateBuild, ProofstormLab, ProofstormLabAction};
 
 #[test]
+fn native_action_fields_survive_the_structural_schema() {
+    // CRD regeneration alone cannot catch a field omitted from the hand-written
+    // structural union. Check the actual serialized request against that union.
+    let action =
+        proofstorm_kube::LabAction::ComponentExecLive(proofstorm_kube::ComponentExecLiveAction {
+            private_payload: Some(proofstorm_core::private_io::PayloadBinding::Consume {
+                reference: "payload-ref".into(),
+                input: proofstorm_core::private_io::InputBinding::Argv { index: 2 },
+            }),
+            component: "wallet".into(),
+            script: String::new(),
+            argv: vec!["cdk-cli".into(), "--version".into()],
+            timeout_seconds: 10,
+            output: proofstorm_core::native::NativeOutput {
+                mode: proofstorm_core::native::OutputMode::JsonFields,
+                fields: vec!["status".into()],
+            },
+        });
+    let request = serde_json::to_value(action).unwrap();
+    let crd = serde_json::to_value(ProofstormLabAction::crd()).unwrap();
+    let properties = crd.pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/action/properties/parameters/properties").unwrap();
+    for field in request["parameters"].as_object().unwrap().keys() {
+        assert!(
+            properties.get(field).is_some(),
+            "CRD drops native field {field}"
+        );
+    }
+    for field in ["kind", "reference", "input"] {
+        assert!(
+            properties["privatePayload"]["properties"]
+                .get(field)
+                .is_some()
+        );
+    }
+    assert!(
+        properties["privatePayload"]["properties"]["input"]["properties"]
+            .get("index")
+            .is_some()
+    );
+    for field in request["parameters"]["output"].as_object().unwrap().keys() {
+        assert!(
+            properties["output"]["properties"].get(field).is_some(),
+            "CRD drops output field {field}"
+        );
+    }
+}
+
+#[test]
 fn checked_in_crds_match_typed_contracts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let cases = [
@@ -31,4 +79,36 @@ fn checked_in_crds_match_typed_contracts() {
             .unwrap_or_else(|error| panic!("read checked-in {name}: {error}"));
         assert_eq!(generated, checked_in, "regenerate CRD {name}");
     }
+}
+
+#[test]
+fn recipient_scope_and_handoff_survive_structural_schema() {
+    let crd = serde_json::to_value(ProofstormLabAction::crd()).unwrap();
+    let spec = crd
+        .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties")
+        .unwrap();
+    let scope = &spec["leaseScope"];
+    for field in [
+        "parent_lease_id",
+        "component",
+        "mint",
+        "reference",
+        "receive_command_digest",
+    ] {
+        assert!(scope["properties"].get(field).is_some());
+        assert!(
+            scope["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(field))
+        );
+    }
+    let parameters = &spec["action"]["properties"]["parameters"]["properties"];
+    assert!(parameters.get("recipientLeaseId").is_some());
+    assert!(
+        parameters["transferMethod"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("handoff"))
+    );
 }

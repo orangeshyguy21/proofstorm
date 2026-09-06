@@ -28,7 +28,7 @@ fn component(
         id: id.into(),
         kind,
         implementation: implementation.into(),
-        version: None,
+        version: (implementation == "cocod-wallet").then(|| "0.0.17-dev.44e5101c".into()),
         config_version: match implementation {
             "bitcoin-core" => "bitcoin-core/30/v1",
             "lnd" => "lnd/0.20/v1",
@@ -41,6 +41,8 @@ fn component(
             "redis" => "redis/8.10/v1",
             "keycloak" => "keycloak/25/v1",
             "nutshell-wallet" => "nutshell-wallet/0.20/v1",
+            "cdk-cli-wallet" => "cdk-cli-wallet/0.18/v1",
+            "cocod-wallet" => "cocod-wallet/0.0.17/v1",
             "attacker-workspace" => "attacker-workspace/0.1/v1",
             _ => panic!("unknown test implementation {implementation:?}"),
         }
@@ -218,13 +220,13 @@ fn backend_lab(backend_id: &str) -> (LabSpec, &'static str) {
             ),
             "mint",
         ),
-        "nutshell-wallet" => (
+        "nutshell-wallet" | "cdk-cli-wallet" | "cocod-wallet" => (
             lab(
                 "golden-wallet",
                 vec![component(
                     "wallet",
                     ComponentKind::Wallet,
-                    "nutshell-wallet",
+                    backend_id,
                     ControlClass::Laboratory,
                 )],
                 vec![],
@@ -349,6 +351,8 @@ fn render_backend(backend_id: &str) -> Value {
         "cdk" | "cdk-ldk" | "cdk-bdk" => render_cdk_component(plan),
         "nutshell" => render_nutshell_mint_component(plan),
         "nutshell-wallet" => render_wallet_component(plan),
+        "cdk-cli-wallet" => proofstorm_kube::render_cdk_wallet_component(plan),
+        "cocod-wallet" => proofstorm_kube::render_cocod_wallet_component(plan),
         "postgresql" => render_postgres_component(plan),
         "redis" => render_redis_component(plan),
         "keycloak" => render_keycloak_component(plan),
@@ -1098,8 +1102,10 @@ fn every_registered_backend_matches_its_golden_contract() {
         "bitcoin-core",
         "cdk",
         "cdk-bdk",
+        "cdk-cli-wallet",
         "cdk-ldk",
         "cln",
+        "cocod-wallet",
         "keycloak",
         "lnd",
         "nutshell",
@@ -1117,6 +1123,10 @@ fn every_registered_backend_matches_its_golden_contract() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the complete baseline is one golden rendering contract"
+)]
 fn full_baseline_lab_matches_its_golden_contract() {
     let spec = full_baseline_lab();
     let lock = resolve_lock(&spec, default_catalog()).expect("full baseline lock");
@@ -1150,6 +1160,7 @@ fn full_baseline_lab_matches_its_golden_contract() {
     let action = ProofstormLabAction::new(
         "golden-native-exec",
         ProofstormLabActionSpec {
+            lease_scope: None,
             lab_name: "golden-lab".into(),
             workspace_id: "workspace-golden".into(),
             instance_id: "instance-golden".into(),

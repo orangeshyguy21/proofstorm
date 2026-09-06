@@ -140,6 +140,26 @@ pub struct CatalogRuntimeEndpoint {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct BuildProvenance {
+    pub repository: String,
+    pub commit_sha: String,
+    pub artifact_url: String,
+    pub artifact_sha256: String,
+    pub platform: String,
+    pub runtime_image: String,
+    pub recipe_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_lock_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transformations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CatalogEntry {
     pub id: String,
     pub kind: ComponentKind,
@@ -163,6 +183,8 @@ pub struct CatalogEntry {
     pub source_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CandidateSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_provenance: Option<BuildProvenance>,
     pub allowed_control: Vec<ControlClass>,
 }
 
@@ -170,8 +192,8 @@ pub struct CatalogEntry {
 #[serde(deny_unknown_fields)]
 pub struct CatalogImplementationSupport {
     pub implementation: String,
-    pub minimum_supported: String,
-    pub preferred_version: String,
+    pub minimum_supported: Option<String>,
+    pub preferred_version: Option<String>,
     pub supported_versions: BTreeSet<String>,
 }
 
@@ -187,7 +209,8 @@ impl CatalogResponse {
     /// Build one internally consistent exact-version catalog.
     ///
     /// Entries for the same implementation are ordered from the minimum
-    /// supported version to newer versions. Exactly one must be preferred.
+    /// supported version to newer versions. Exactly one must be preferred,
+    /// except implementations with only experimental entries have no default.
     ///
     /// # Errors
     ///
@@ -617,6 +640,8 @@ fn build_default_catalog() -> CatalogResponse {
             ),
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
+        cdk_cli_wallet_entry(backends, adapter_version),
+        cocod_wallet_entry(backends, adapter_version),
         catalog_entry(
             "attacker-workspace",
             backends,
@@ -681,7 +706,7 @@ fn implementation_support(
                 .copied()
                 .filter(|entry| entry.support_lifecycle == SupportLifecycle::Preferred)
                 .collect::<Vec<_>>();
-            if preferred.len() != 1 {
+            if preferred.len() > 1 || (preferred.is_empty() && entries.iter().any(|entry| entry.support_lifecycle != SupportLifecycle::Experimental)) {
                 return Err(format!(
                     "catalog_preferred_version_ambiguous: implementation {implementation:?} has {} preferred versions",
                     preferred.len()
@@ -689,16 +714,16 @@ fn implementation_support(
             }
             let supported_versions = entries
                 .iter()
+                .filter(|entry| entry.support_lifecycle != SupportLifecycle::Experimental)
                 .map(|entry| entry.version.clone())
                 .collect::<BTreeSet<_>>();
             Ok(CatalogImplementationSupport {
                 implementation,
                 minimum_supported: entries
-                    .first()
-                    .expect("catalog implementation has an entry")
-                    .version
-                    .clone(),
-                preferred_version: preferred[0].version.clone(),
+                    .iter()
+                    .find(|entry| entry.support_lifecycle != SupportLifecycle::Experimental)
+                    .map(|entry| entry.version.clone()),
+                preferred_version: preferred.first().map(|entry| entry.version.clone()),
                 supported_versions,
             })
         })
@@ -1042,8 +1067,86 @@ fn catalog_entry_with_lifecycle(
             &runtime_endpoints,
         )),
         source: None,
+        build_provenance: None,
         allowed_control,
     }
+}
+
+fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
+    let mut entry = catalog_entry(
+        "cdk-cli-wallet",
+        backends,
+        ComponentKind::Wallet,
+        "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 laboratory build",
+        adapter_version,
+        "0.18.0",
+        ReleaseChannel::Stable,
+        "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+        BTreeSet::from([
+            CatalogFeature::NativeCli,
+            CatalogFeature::PersistentState,
+            CatalogFeature::Sqlite,
+            CatalogFeature::Bolt11,
+        ]),
+        vec![],
+        support_matrix(
+            &[StorageBackend::PersistentVolume, StorageBackend::Sqlite],
+            &[PaymentMethod::Bolt11],
+            &[],
+            &["sat"],
+            &[],
+            &[AuthenticationMode::Unauthenticated],
+            vec![],
+        ),
+        vec![ControlClass::Laboratory, ControlClass::Attacker],
+    );
+    entry.protocol_action_adapter_version = Some("cdk-cli/0.18/observations/v1".into());
+    let provenance: BuildProvenance = serde_json::from_str(include_str!(
+        "../../../docker/wallet/cdk-cli-0.18.0-provenance.json"
+    ))
+    .expect("pinned wallet build provenance");
+    entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
+    entry.build_provenance = Some(provenance);
+    entry
+}
+
+fn cocod_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
+    let mut entry = catalog_entry(
+        "cocod-wallet",
+        backends,
+        ComponentKind::Wallet,
+        "Unreleased cocod daemon from Coco 44e5101c; experimental Linux arm64 laboratory build",
+        adapter_version,
+        "0.0.17-dev.44e5101c",
+        ReleaseChannel::Prerelease,
+        "proofstorm-registry.localhost:5000/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+        BTreeSet::from([
+            CatalogFeature::NativeCli,
+            CatalogFeature::PersistentState,
+            CatalogFeature::Sqlite,
+            CatalogFeature::Bolt11,
+        ]),
+        vec![],
+        support_matrix(
+            &[StorageBackend::PersistentVolume, StorageBackend::Sqlite],
+            &[PaymentMethod::Bolt11],
+            &[],
+            &["sat"],
+            &[],
+            &[AuthenticationMode::Unauthenticated],
+            vec![],
+        ),
+        vec![ControlClass::Laboratory, ControlClass::Attacker],
+    );
+    entry.support_lifecycle = SupportLifecycle::Experimental;
+    entry.protocol_action_adapter_version = Some("cocod/44e5101c/observations/v1".into());
+    let provenance: BuildProvenance = serde_json::from_str(include_str!(
+        "../../../docker/wallet/cocod-44e5101c-provenance.json"
+    ))
+    .expect("pinned wallet build provenance");
+    entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
+    entry.build_provenance = Some(provenance);
+    entry
 }
 
 fn runtime_endpoint(
@@ -1117,7 +1220,9 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "reachability_oracle",
                 "wallet_fund",
             ],
-            &["live lncli uses --network=regtest --lnddir=/home/lnd/.lnd"],
+            &[
+                "live lncli uses --network=regtest --lnddir=/home/lnd/.lnd. Native addinvoice --amt=<sat> uses output mode lnd_invoice: validated payment_request/payment_hash plus amount_msat, currency, expires_at_unix; raw output stays private. Pay with payinvoice --force --json and json_fields status,value_sat; lookupinvoice --rhash <payment_hash> with json_fields state,settled. Require successful native exit and projection, verify intended amount/network/expiry before payment; do not grep invoice output.",
+            ],
         )],
         "cln" => vec![runtime_endpoint(
             "component",
@@ -1185,6 +1290,30 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 &["the embedded BDK backend has no direct runtime controls"],
             ),
         ],
+        "cocod-wallet" => vec![runtime_endpoint(
+            "component",
+            "wallet",
+            &["wallet_balance"],
+            &[
+                "Experimental commit pin; no default version. Native cocod CLI and authenticated loopback HTTP are the mutation surface.",
+                "COCOD_URL=http://127.0.0.1:62626 makes clients strictly client-only. Daemon runs in foreground under native exclusive state lease. Never start another daemon in a Job or forensics pod.",
+                "HOME=/wallet; private state /wallet/.cocod; credentials/current/client contains the administrative bearer. Initialization/recovery output includes mnemonic: use private execution output.",
+                "This pin's initialize CLI/API cannot select a mint. Initialize with a private passphrase (keeps session stopped), configure mintUrl in its native config.json while the protected session is stopped, restart the component, then explicitly start the protected session. Never use its public default mint in a lab.",
+                "Read catalog and cocod subcommand help first. Prefer direct private payment invocation and independent recipient settlement plus passive balances. No invented parser defaults; failure is not rollback.",
+                "wallet_balance is a read-only SQLite transaction over exact mint/sat proof state. balance_sat is unreserved ready proofs; reserved_sat is reserved ready proofs; inflight_sat is a distinct local category. The native /balance endpoint returns ready total, including reservations. Neither is a mint-side proof-state oracle.",
+                "Health means process reachability, not initialization or running session. Protected sessions remain stopped across restart. NPC external traffic is blocked by the laboratory network policy; NPC is outside this checkpoint.",
+                "Observe native status directly with argv [cocod,status] and json_fields selecting seedAccess.state, seedAccess.requiresPassphrase, cocoSession.state. Fixed enums/booleans are validated; null seedAccess produces null leaves for an uninitialized wallet. Use argv [cocod,health] with json_fields field status. No raw status/error output or custom status parser is needed. API reference: /opt/coco/packages/cocod/docs/API.md; structured recovery response: private mnemonic field.",
+                "Use native cocod receive bolt11 <sat> with output mode bolt11. It validates the entire invoice-only response and exposes payment_request/payment_hash, amount_msat, currency, expires_at_unix; raw streams stay private. Check exit_code 0 and projection_succeeded, then intended amount/network/expiry before relaying payment_request as a separate native payer argument. Do not grep invoice output. This public invoice projection is not for spendable Cashu tokens.",
+            ],
+        )],
+        "cdk-cli-wallet" => vec![runtime_endpoint(
+            "component",
+            "wallet",
+            &["component_logs", "wallet_balance"],
+            &[
+                "Native entrypoint: cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive --help. Set --work-dir /wallet/cdk on EVERY native invocation. SQLite and sat are the installed observation contract. Native commands, including balance, may recover incomplete sagas; use wallet_balance for passive wallet-local observations. Initialize with the native balance command before observing an empty database. A failed melt is not a rollback: completed preparation swaps can charge input fees even when payment fails. Reconcile passive balances and quote/recipient state before a new attempt. Reuse the same operation ID and idempotency key to retrieve an existing execution, not a new CLI mutation. Use native mint/melt commands. In this pinned release, mint-pending checks pending proofs, not paid mint-quote issuance despite its help text. Resume a paid quote with mint <url> --quote-id <id>, then verify the passive balance; command success alone does not prove issuance. Typed wallet mutations, quote recovery and conservation are unavailable. Initial image is Linux arm64 only. Mint compatibility requires live evidence for each claimed combination.",
+            ],
+        )],
         "nutshell-wallet" => vec![runtime_endpoint(
             "component",
             "wallet",
@@ -1199,7 +1328,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "wallet_pay",
             ],
             &[
-                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet",
+                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
             ],
         )],
         "keycloak" => vec![runtime_endpoint(
@@ -1388,27 +1517,95 @@ mod tests {
     use super::*;
 
     #[test]
+    fn packaged_wallet_provenance_and_observation_surface_are_explicit() {
+        use sha2::{Digest, Sha256};
+        let entry = default_catalog()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cdk-cli-wallet")
+            .expect("CDK wallet");
+        let provenance = entry.build_provenance.as_ref().expect("release provenance");
+        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.kube-cdk");
+        assert_eq!(
+            provenance.recipe_digest,
+            format!("sha256:{:x}", Sha256::digest(recipe))
+        );
+        assert_eq!(
+            provenance.commit_sha,
+            "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
+        );
+        assert_eq!(provenance.platform, "linux/arm64");
+        let controls = &entry.runtime_endpoints[0].controls;
+        assert!(controls.contains("wallet_balance"));
+        assert!(controls.contains("component_exec_live"));
+        assert!(!controls.contains("wallet_fund"));
+        assert!(!controls.contains("wallet_pay"));
+        assert!(!entry.features.contains(&CatalogFeature::WalletOperations));
+        assert!(
+            entry.source.is_none(),
+            "release provenance must not invent a PR"
+        );
+    }
+
+    #[test]
+    fn cocod_provenance_and_passive_controls_match_the_packaged_recipe() {
+        use sha2::{Digest, Sha256};
+        let entry = default_catalog()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cocod-wallet")
+            .expect("cocod wallet");
+        let provenance = entry.build_provenance.as_ref().expect("source provenance");
+        assert_eq!(
+            provenance.recipe_digest,
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(include_bytes!(
+                    "../../../docker/wallet/Dockerfile.kube-cocod"
+                ))
+            )
+        );
+        assert_eq!(
+            provenance.commit_sha,
+            "44e5101cbea370132af6e68f88e01b47e39431c4"
+        );
+        assert_eq!(provenance.package_path.as_deref(), Some("packages/cocod"));
+        assert_eq!(
+            provenance.dependency_lock_digest.as_deref(),
+            Some("sha256:8c6bc502e3fa1178e3efbb56f86ef8a92d1e9612952a3f8d7268e2de7e611055")
+        );
+        assert_eq!(entry.support_lifecycle, SupportLifecycle::Experimental);
+        let controls = &entry.runtime_endpoints[0].controls;
+        assert!(controls.contains("wallet_balance"));
+        assert!(controls.contains("component_exec_live"));
+        assert!(!controls.contains("wallet_initialize"));
+        assert!(!controls.contains("wallet_fund"));
+        assert!(!controls.contains("wallet_pay"));
+    }
+
+    #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "one catalog invariant test keeps all fail-closed variants together"
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 13);
-        assert_eq!(catalog.implementations.len(), 12);
+        assert_eq!(catalog.entries.len(), 15);
+        assert_eq!(catalog.implementations.len(), 14);
         let lnd = catalog
             .implementations
             .iter()
             .find(|support| support.implementation == "lnd")
             .expect("LND support summary");
-        assert_eq!(lnd.minimum_supported, "0.20.0-beta");
-        assert_eq!(lnd.preferred_version, "0.20.0-beta");
+        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.0-beta"));
+        assert_eq!(lnd.preferred_version.as_deref(), Some("0.20.0-beta"));
         assert_eq!(
             lnd.supported_versions,
             BTreeSet::from(["0.20.0-beta".into(), "0.21.0-beta".into()])
         );
         assert!(catalog.implementations.iter().all(|support| {
-            support.implementation == "lnd"
+            support.implementation == "cocod-wallet"
+                || support.implementation == "lnd"
                 || support.minimum_supported == support.preferred_version
                     && support.supported_versions.len() == 1
         }));

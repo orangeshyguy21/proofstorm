@@ -24,10 +24,24 @@ def snapshot():
     items = resources('namespaces,proofstormlabs,proofstormlabactions,proofstormcandidatebuilds,jobs,pods,persistentvolumeclaims,persistentvolumes')
     blockers = []
     control_plane = []
+    infrastructure_claims = {
+        volume['persistentVolumeClaim']['claimName']
+        for item in items
+        if item['kind'] == 'Pod'
+        and item['metadata'].get('namespace') == CONTROL
+        and item['metadata'].get('labels', {}).get('app.kubernetes.io/name') == 'proofstormd'
+        for volume in item.get('spec', {}).get('volumes', [])
+        if 'persistentVolumeClaim' in volume
+    }
+    infrastructure_storage = []
     for item in items:
         meta = item['metadata']
         kind, name, ns = item['kind'], meta['name'], meta.get('namespace', '')
         labels = meta.get('labels', {})
+        if (kind == 'PersistentVolumeClaim' and ns == CONTROL
+                and name in infrastructure_claims and item.get('status', {}).get('phase') == 'Bound'):
+            infrastructure_storage.append({'namespace': ns, 'name': name, 'phase': 'Bound'})
+            continue
         if kind == 'Pod' and ns == CONTROL and labels.get('app.kubernetes.io/name') == 'proofstormd':
             control_plane.append({'pod': name, 'uid': meta.get('uid'),
                                   'containers': [{'name': c['name'], 'image': c.get('image'),
@@ -44,7 +58,8 @@ def snapshot():
                              'phase': item.get('status', {}).get('phase'),
                              'deleting': bool(meta.get('deletionTimestamp'))})
     return {'context': 'k3d-proofstorm', 'verified_idle': not blockers,
-            'blockers': blockers, 'control_plane': control_plane, 'checked_at_unix': int(time.time())}
+            'blockers': blockers, 'control_plane': control_plane,
+            'infrastructure_storage': infrastructure_storage, 'checked_at_unix': int(time.time())}
 
 
 def retire(run, cleanup):

@@ -54,6 +54,7 @@ spec:
                     - reachability_oracle
                     - component_forensics
                     - component_exec_live
+                    - private_transfer
                     - component_logs
                     - authentication_conformance
                     - authentication_protected_spend
@@ -66,6 +67,11 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      argv:
+                        items:
+                          type: string
+                        nullable: true
+                        type: array
                       attempts:
                         format: uint32
                         minimum: 0.0
@@ -91,6 +97,9 @@ spec:
                         nullable: true
                         type: integer
                       component:
+                        nullable: true
+                        type: string
+                      destinationComponent:
                         nullable: true
                         type: string
                       expectedSat:
@@ -128,6 +137,11 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      maximumBytes:
+                        format: uint32
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
                       meltQuoteId:
                         nullable: true
                         type: string
@@ -143,12 +157,68 @@ spec:
                       outgoingChannelId:
                         nullable: true
                         type: string
+                      output:
+                        nullable: true
+                        properties:
+                          fields:
+                            default: []
+                            description: Fixed receipt fields, including allowlisted lifecycle leaf paths; last JSON document.
+                            items:
+                              type: string
+                            type: array
+                          mode:
+                            default: private
+                            enum:
+                            - private
+                            - public
+                            - json_fields
+                            - bolt11
+                            - lnd_invoice
+                            type: string
+                        type: object
                       partitionOperationId:
                         nullable: true
                         type: string
                       payerLightning:
                         nullable: true
                         type: string
+                      privatePayload:
+                        nullable: true
+                        properties:
+                          format:
+                            enum:
+                            - bytes
+                            - cashu_token
+                            - null
+                            nullable: true
+                            type: string
+                          input:
+                            nullable: true
+                            properties:
+                              index:
+                                format: uint32
+                                minimum: 0.0
+                                nullable: true
+                                type: integer
+                              kind:
+                                enum:
+                                - stdin
+                                - argv
+                                type: string
+                            required:
+                            - kind
+                            type: object
+                          kind:
+                            enum:
+                            - capture
+                            - consume
+                            type: string
+                          reference:
+                            type: string
+                        required:
+                        - kind
+                        - reference
+                        type: object
                       pushSat:
                         format: uint64
                         minimum: 0.0
@@ -157,10 +227,16 @@ spec:
                       quoteId:
                         nullable: true
                         type: string
+                      recipientLeaseId:
+                        nullable: true
+                        type: string
                       recipientMint:
                         nullable: true
                         type: string
                       recipientWallet:
+                        nullable: true
+                        type: string
+                      reference:
                         nullable: true
                         type: string
                       script:
@@ -199,6 +275,16 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
+                      transferMethod:
+                        enum:
+                        - prepare
+                        - handoff
+                        - status
+                        - deliver
+                        - release
+                        - null
+                        nullable: true
+                        type: string
                       treatmentOperationId:
                         nullable: true
                         type: string
@@ -276,6 +362,29 @@ spec:
                 type: string
               leaseId:
                 type: string
+              leaseScope:
+                description: |-
+                  A recipient may inspect and consume one private transfer in one wallet.
+                  The parent remains the exclusive lab lease; this scope grants no global capability.
+                nullable: true
+                properties:
+                  component:
+                    type: string
+                  mint:
+                    type: string
+                  parent_lease_id:
+                    type: string
+                  receive_command_digest:
+                    type: string
+                  reference:
+                    type: string
+                required:
+                - component
+                - mint
+                - parent_lease_id
+                - receive_command_digest
+                - reference
+                type: object
               operationId:
                 type: string
               principalId:
@@ -319,6 +428,27 @@ spec:
               jobName:
                 nullable: true
                 type: string
+              nativeExecution:
+                description: Identifies the exact supervised execution across controller reconciliations.
+                nullable: true
+                properties:
+                  container:
+                    type: string
+                  directory:
+                    type: string
+                  pod:
+                    type: string
+                  podUid:
+                    type: string
+                  runnerDigest:
+                    type: string
+                required:
+                - container
+                - directory
+                - pod
+                - podUid
+                - runnerDigest
+                type: object
               observedGeneration:
                 format: int64
                 nullable: true

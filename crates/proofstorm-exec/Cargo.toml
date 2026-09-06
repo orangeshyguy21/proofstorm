@@ -1,0 +1,17 @@
+[package]
+name = "proofstorm-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+proofstorm-core = { path = "../proofstorm-core" }
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["process", "signal"] }
+
+[lints]
+workspace = true

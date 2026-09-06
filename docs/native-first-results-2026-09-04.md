@@ -5,6 +5,9 @@ This is the first execution round of the
 sessions. The experiment agent has no host shell or operator access; native
 commands run inside the actual lab components through Proofstorm.
 
+The subsequent [wallet crash recovery round](recovery-round-2026-09-04.md)
+records later receipt corrections and genuine reservation-release experiments.
+
 ## Changes exercised
 
 - Supplied OpenCode profiles now default to `native`. The existing `experiment`

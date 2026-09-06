@@ -133,6 +133,8 @@ pub struct ProofstormCandidateBuildStatus {
 )]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormLabActionSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_scope: Option<proofstorm_core::PrivateTransferLeaseScope>,
     pub lab_name: String,
     pub workspace_id: String,
     pub instance_id: String,
@@ -178,6 +180,7 @@ pub enum LabAction {
     ReachabilityOracle(ReachabilityOracleAction),
     ComponentForensics(ComponentForensicsAction),
     ComponentExecLive(ComponentExecLiveAction),
+    PrivateTransfer(PrivateTransferAction),
     ComponentLogs(ComponentLogsAction),
     AuthenticationConformance(AuthenticationConformanceAction),
     AuthenticationProtectedSpend(AuthenticationProtectedSpendAction),
@@ -226,6 +229,7 @@ enum LabActionKindSchema {
     ReachabilityOracle,
     ComponentForensics,
     ComponentExecLive,
+    PrivateTransfer,
     ComponentLogs,
     AuthenticationConformance,
     AuthenticationProtectedSpend,
@@ -236,6 +240,12 @@ enum LabActionKindSchema {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(dead_code)]
 struct LabActionParametersSchema {
+    transfer_method: Option<TransferMethod>,
+    recipient_lease_id: Option<String>,
+    reference: Option<String>,
+    destination_component: Option<String>,
+    maximum_bytes: Option<u32>,
+    private_payload: Option<PayloadBindingSchema>,
     component: Option<String>,
     target_component: Option<String>,
     chain: Option<String>,
@@ -275,6 +285,8 @@ struct LabActionParametersSchema {
     service: Option<String>,
     attempts: Option<u32>,
     script: Option<String>,
+    argv: Option<Vec<String>>,
+    output: Option<proofstorm_core::native::NativeOutput>,
     tail_lines: Option<u32>,
 }
 
@@ -442,9 +454,28 @@ pub struct ComponentForensicsAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentExecLiveAction {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<PayloadBindingSchema>")]
+    pub private_payload: Option<proofstorm_core::private_io::PayloadBinding>,
     pub component: String,
+    #[serde(default)]
     pub script: String,
+    #[serde(default)]
+    pub argv: Vec<String>,
     pub timeout_seconds: u32,
+    #[serde(default)]
+    pub output: proofstorm_core::native::NativeOutput,
+}
+
+/// Identifies the exact supervised execution across controller reconciliations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeExecutionRef {
+    pub pod: String,
+    pub pod_uid: String,
+    pub container: String,
+    pub directory: String,
+    pub runner_digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -643,6 +674,8 @@ fn preserved_object_schema(_: &mut SchemaGenerator) -> Schema {
 pub struct ProofstormLabActionStatus {
     pub phase: ActionPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_execution: Option<NativeExecutionRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_name: Option<String>,
@@ -656,4 +689,60 @@ pub struct ProofstormLabActionStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "preserved_object_schema")]
     pub error: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferMethod {
+    Prepare,
+    Handoff,
+    Status,
+    Deliver,
+    Release,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrivateTransferAction {
+    #[serde(default)]
+    pub recipient_lease_id: Option<String>,
+    pub transfer_method: TransferMethod,
+    pub component: String,
+    #[serde(default)]
+    pub destination_component: Option<String>,
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub maximum_bytes: Option<u32>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct PayloadBindingSchema {
+    kind: PayloadBindingKindSchema,
+    reference: String,
+    format: Option<proofstorm_core::private_io::CaptureFormat>,
+    input: Option<InputBindingSchema>,
+}
+#[derive(JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+enum PayloadBindingKindSchema {
+    Capture,
+    Consume,
+}
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct InputBindingSchema {
+    kind: InputBindingKindSchema,
+    index: Option<u32>,
+}
+#[derive(JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+enum InputBindingKindSchema {
+    Stdin,
+    Argv,
 }
