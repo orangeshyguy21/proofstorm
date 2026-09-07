@@ -16,55 +16,103 @@ pub(super) async fn sample(
     pods: &Api<Pod>,
     inventory: &[Pod],
 ) -> Vec<ComponentBalance> {
-    stream::iter(lab.spec.lab.components.iter().filter(|c| {
-        matches!(
-            c.implementation.as_str(),
-            "lnd" | "cln" | "cdk-cli-wallet" | "cocod-wallet" | "nutshell-wallet"
-        )
-    }))
-    .map(|component| async move {
-        let pod = inventory.iter().find(|pod| {
-            pod.labels().get(COMPONENT_LABEL) == Some(&component.id)
-                && pod.metadata.deletion_timestamp.is_none()
-                && pod
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.container_statuses.as_ref())
-                    .is_some_and(|statuses| {
-                        statuses.iter().any(|s| s.name == "component" && s.ready)
-                    })
-                && lab
-                    .spec
-                    .lock
-                    .entries
-                    .iter()
-                    .find(|entry| entry.component_id == component.id)
-                    .is_some_and(|entry| {
-                        pod.annotations().get(ROLLOUT_DIGEST_ANNOTATION)
-                            == Some(&entry.rollout_digest)
-                    })
-        });
-        let amounts = if let Some(pod) = pod {
-            observe(
-                pods,
-                &pod.name_any(),
-                &component.id,
-                &component.implementation,
+    let components = lab
+        .spec
+        .lab
+        .components
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.implementation.as_str(),
+                "bitcoin-core"
+                    | "lnd"
+                    | "cln"
+                    | "cdk-cli-wallet"
+                    | "cocod-wallet"
+                    | "nutshell-wallet"
             )
-            .await
-        } else {
-            None
-        };
-        ComponentBalance {
-            component: component.id.clone(),
-            observed_at_unix: super::now(),
-            error: amounts.is_none().then(|| "Balance unavailable".into()),
-            amounts: amounts.unwrap_or_default(),
-        }
-    })
-    .buffer_unordered(4)
-    .collect()
-    .await
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    stream::iter(components)
+        .map(|component| async move {
+            let pod = inventory.iter().find(|pod| {
+                pod.labels().get(COMPONENT_LABEL) == Some(&component.id)
+                    && pod.metadata.deletion_timestamp.is_none()
+                    && pod
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.container_statuses.as_ref())
+                        .is_some_and(|statuses| {
+                            statuses.iter().any(|s| s.name == "component" && s.ready)
+                        })
+                    && lab
+                        .spec
+                        .lock
+                        .entries
+                        .iter()
+                        .find(|entry| entry.component_id == component.id)
+                        .is_some_and(|entry| {
+                            pod.annotations().get(ROLLOUT_DIGEST_ANNOTATION)
+                                == Some(&entry.rollout_digest)
+                                && matches_adapter(
+                                    &component.implementation,
+                                    entry.protocol_action_adapter_version.as_deref(),
+                                )
+                        })
+            });
+            let (amounts, block_height) = if let Some(pod) = pod {
+                if component.implementation == "bitcoin-core" {
+                    let height = read(
+                        pods,
+                        &pod.name_any(),
+                        vec![
+                            "bitcoin-cli".into(),
+                            "-regtest".into(),
+                            format!("-rpcuser={}", proofstorm_kube::BITCOIN_RPC_USER),
+                            format!("-rpcpassword={}", proofstorm_kube::BITCOIN_RPC_PASSWORD),
+                            "getblockchaininfo".into(),
+                        ],
+                    )
+                    .await
+                    .and_then(|value| value["blocks"].as_u64());
+                    (None, height)
+                } else {
+                    (
+                        observe(
+                            pods,
+                            &pod.name_any(),
+                            &component.id,
+                            &component.implementation,
+                        )
+                        .await,
+                        None,
+                    )
+                }
+            } else {
+                (None, None)
+            };
+            ComponentBalance {
+                component: component.id.clone(),
+                observed_at_unix: super::now(),
+                error: (amounts.is_none() && block_height.is_none())
+                    .then(|| "Observation unavailable".into()),
+                amounts: amounts.unwrap_or_default(),
+                block_height,
+            }
+        })
+        .buffer_unordered(4)
+        .collect()
+        .await
+}
+
+fn matches_adapter(implementation: &str, version: Option<&str>) -> bool {
+    match implementation {
+        "cdk-cli-wallet" => version == Some("cdk-cli/0.18/observations/v1"),
+        "cocod-wallet" => version == Some("cocod/44e5101c/observations/v1"),
+        "nutshell-wallet" => version == Some("0.1.0-alpha.1"),
+        _ => true,
+    }
 }
 
 async fn observe(
@@ -251,7 +299,7 @@ mod tests {
     use super::*;
     #[test]
     fn cln_preserves_units_and_excludes_closed_channels_and_unconfirmed_outputs() {
-        let values = cln_amounts(&serde_json::json!({"outputs":[{"status":"confirmed","amount_msat":120000},{"status":"unconfirmed","amount_msat":99000}],"channels":[{"state":"CHANNELD_NORMAL","our_amount_msat":"25000msat","amount_msat":100000},{"state":"CLOSINGD_COMPLETE","our_amount_msat":999000,"amount_msat":999000}]})).unwrap();
+        let values = cln_amounts(&serde_json::json!({"outputs":[{"status":"confirmed","amount_msat":120_000},{"status":"unconfirmed","amount_msat":99000}],"channels":[{"state":"CHANNELD_NORMAL","our_amount_msat":"25000msat","amount_msat":100_000},{"state":"CLOSINGD_COMPLETE","our_amount_msat":999_000,"amount_msat":999_000}]})).unwrap();
         assert_eq!(
             values.iter().map(|v| v.sat).collect::<Vec<_>>(),
             vec![120, 25, 75]

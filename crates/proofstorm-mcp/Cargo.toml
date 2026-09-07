@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+proofstorm-view = { path = "../proofstorm-view" }
 proofstorm-app = { path = "../proofstorm-app" }
 anyhow.workspace = true
 futures.workspace = true

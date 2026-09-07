@@ -51,16 +51,27 @@ pub fn position(components: &[ComponentView], id: &str) -> (i32, i32) {
     let Some(component) = components.iter().find(|c| c.id == id) else {
         return (0, 0);
     };
-    let column = column(component.kind);
+    let group = column(component.kind);
     let row = components
         .iter()
-        .filter(|c| column == self::column(c.kind) && c.id.as_str() < id)
+        .filter(|c| group == column(c.kind) && c.id.as_str() < id)
         .count();
+    let previous_columns: usize = (0..group)
+        .map(|group| {
+            components
+                .iter()
+                .filter(|c| column(c.kind) == group)
+                .count()
+                .div_ceil(4)
+                .max(1)
+        })
+        .sum();
     (
-        55 + column * 265,
-        65 + i32::try_from(row).unwrap_or(0) * 155,
+        40 + i32::try_from(previous_columns + row / 4).unwrap_or(0) * 292,
+        40 + i32::try_from(row % 4).unwrap_or(0) * 170,
     )
 }
+
 fn column(kind: ComponentKind) -> i32 {
     match kind {
         ComponentKind::Bitcoin | ComponentKind::Database | ComponentKind::IdentityProvider => 0,
@@ -93,9 +104,112 @@ pub fn merge_resources(target: &mut Option<ResourceDemand>, page: Option<Resourc
         }
     }
 }
+
+pub fn cpu(value: Option<f64>) -> String {
+    value.map_or_else(
+        || "—".into(),
+        |value| {
+            if value >= 1000.0 {
+                format!("{:.2} cores", value / 1000.0)
+            } else {
+                format!("{value:.1}m")
+            }
+        },
+    )
+}
+pub fn memory(value: Option<f64>) -> String {
+    value.map_or_else(
+        || "—".into(),
+        |value| {
+            if value >= 1_073_741_824.0 {
+                format!("{:.2} GiB", value / 1_073_741_824.0)
+            } else {
+                format!("{:.1} MiB", value / 1_048_576.0)
+            }
+        },
+    )
+}
+pub fn sat(value: u64) -> String {
+    let raw = value.to_string();
+    raw.chars()
+        .enumerate()
+        .fold(String::new(), |mut result, (i, c)| {
+            if i > 0 && (raw.len() - i).is_multiple_of(3) {
+                result.push(',');
+            }
+            result.push(c);
+            result
+        })
+}
+
+pub fn block_height(lab: &proofstorm_view::LabUsage) -> Option<u64> {
+    lab.balances
+        .iter()
+        .filter(|b| b.error.is_none())
+        .filter_map(|b| b.block_height)
+        .max()
+}
+
+pub fn process_group(process: &proofstorm_view::ProcessUsage) -> String {
+    process.component.clone().unwrap_or_else(|| {
+        if process.container.starts_with("probe-")
+            || process.pod.starts_with("proofstorm-protocol-prober")
+        {
+            "Probes".into()
+        } else if process.pod.starts_with("op-") {
+            "Action jobs".into()
+        } else {
+            "Shared services".into()
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn height_tracks_the_current_lab_and_can_decrease() {
+        let observation = |height, error| proofstorm_view::ComponentBalance {
+            component: "chain".into(),
+            observed_at_unix: 1,
+            error,
+            amounts: vec![],
+            block_height: height,
+        };
+        let mut lab = proofstorm_view::LabUsage {
+            balances: vec![
+                observation(Some(12), None),
+                observation(Some(15), None),
+                observation(Some(99), Some("stale".into())),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(block_height(&lab), Some(15));
+        lab.balances = vec![observation(Some(0), None)];
+        assert_eq!(block_height(&lab), Some(0));
+        lab.balances.clear();
+        assert_eq!(block_height(&lab), None);
+    }
+    #[test]
+    fn large_layouts_wrap_each_kind_without_overlapping_tiles() {
+        let nodes = (0..10)
+            .map(|i| ComponentView {
+                id: format!("node-{i}"),
+                kind: ComponentKind::Lightning,
+                implementation: "lnd".into(),
+                version: None,
+                ready: None,
+                conditions: vec![],
+                endpoints: vec![],
+            })
+            .collect::<Vec<_>>();
+        let positions = nodes
+            .iter()
+            .map(|n| position(&nodes, &n.id))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(positions.len(), 10);
+        assert!(positions.iter().all(|(_, y)| *y <= 550));
+    }
     #[test]
     fn merges_component_pages_without_duplicating_shared_demands() {
         let resource = || ResourceDemand {
@@ -124,24 +238,10 @@ mod tests {
             endpoints: vec![],
         };
         let nodes = vec![node("b"), node("a")];
-        assert_eq!(position(&nodes, "a"), (55, 65));
+        assert_eq!(position(&nodes, "a"), (40, 40));
         assert_eq!(
             position(&[nodes[1].clone(), nodes[0].clone()], "b"),
-            (55, 220)
+            (40, 210)
         );
     }
-}
-
-pub fn cpu(value: Option<f64>) -> String {
-    value.map_or_else(|| "—".into(), |value| if value >= 1000.0 { format!("{:.2} cores", value / 1000.0) } else { format!("{value:.1}m") })
-}
-pub fn memory(value: Option<f64>) -> String {
-    value.map_or_else(|| "—".into(), |value| if value >= 1_073_741_824.0 { format!("{:.2} GiB",value / 1_073_741_824.0) } else { format!("{:.1} MiB",value / 1_048_576.0) })
-}
-pub fn sat(value: u64) -> String {
-    let raw = value.to_string();
-    raw.chars().enumerate().fold(String::new(), |mut result,(i,c)| {
-        if i > 0 && (raw.len()-i).is_multiple_of(3) { result.push(','); }
-        result.push(c); result
-    })
 }

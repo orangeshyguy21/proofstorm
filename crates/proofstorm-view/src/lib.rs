@@ -7,11 +7,13 @@ use proofstorm_core::{
     ComponentConditionReason, ComponentConditionState, ComponentConditionType, ComponentKind,
     InstancePhase, LabOperation, LinkKind, OperationKind, OperationPhase, Session,
 };
+mod display;
+pub use display::*;
 mod telemetry;
-pub use telemetry::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+pub use telemetry::*;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]

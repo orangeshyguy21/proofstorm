@@ -25,10 +25,23 @@ agent. The CLI defaults and example MCP configurations share
 `.proofstorm/proofstorm.sqlite3` and workspace `local-lab`. An agent with the
 `developer` toolset can call `proofstorm_lab_up`, then `proofstorm_lab_exec`.
 The website automatically discovers the lab and shows its components,
-connections, readiness, desired resources, sessions and recorded activity.
+connections, readiness, sessions and recorded activity. The canvas is the main
+workspace, with live balances and the lab’s highest observed Bitcoin block height.
 
-The UI is read-only. Click a component for service endpoints and resource
-requests; drag the topology to pan, or use the zoom controls. Only labs present
+The UI is read-only. Collapse the lab navigator to make more room, select a
+component to open its inspector, and open Activity or Sessions in the bottom
+drawer. Drag the topology to pan; use zoom and fit controls to frame the lab.
+Selection, pan, zoom, and open panels survive live updates. When a new lab
+appears, the UI switches to its canvas and resets the component selection and
+viewport. Ordinary refreshes and reconnects keep the selected lab. System / Dark / Light
+appearance follows the operating system by default; manual overrides persist.
+
+Open the System summary for measured CPU and memory usage, running/ready
+container counts, and restarts. Expand lab → component → container to inspect
+state, sample coverage, resource requests and limits. Probes, action jobs and
+shared services have separate groups so each container contributes once.
+Search by component or process, filter by lab, and include stopped containers.
+Resource rows link back to components on the canvas. Only labs present
 in the current cluster are listed; deleted labs disappear automatically. Activity and sessions offer
 explicit history pagination; the graph follows every component and link page.
 Labs with incompatible stored records show "History unavailable" individually,
@@ -49,7 +62,9 @@ id: 12
 data: {"refresh":true}
 ```
 
-Subscribers fetch `GET /v1/environment` for the current typed snapshot. Events
+Subscribers fetch `GET /v1/environment` for the current typed snapshot. A separate
+`telemetry` event invalidates the cached `GET /v1/system` snapshot. The initial
+environment event refreshes both snapshots. Events
 are invalidation hints, not durable operations or a replayable event log.
 `Last-Event-ID` never suppresses the initial refresh: reconnecting always gets
 a current snapshot. Browser `EventSource` reconnects automatically. Slow
@@ -68,6 +83,22 @@ refresh, but the snapshots remain workspace-scoped. This is eventual observation
 usually within a few seconds, not a complete record of every intermediate pod
 transition. Kubernetes watches can replace server-side checks later without
 changing the subscription contract.
+
+One shared telemetry task samples the workspace’s labs every five seconds,
+with bounded concurrency and timeouts. It reads labelled pods and the Kubernetes
+Metrics API; missing, stale, or failed measurements remain unavailable rather
+than becoming zero. Totals exclude terminated containers. Missing lab inventories
+make aggregate usage unavailable. CPU is displayed in millicores and memory in
+binary units. Metrics require a working cluster Metrics API.
+
+Fixed passive readers observe Bitcoin Core block height, LND/CLN balances, and
+supported pinned CDK, Coco and Nutshell wallet balances. Amounts are projected
+as satoshis; RPC output, credentials, and raw errors are not returned to clients.
+Wallet readers do not start SDK recovery or managed wallet actions. Readers
+require `component.exec.live`; HTTP snapshots recheck permissions, including
+before returning cached balances. The lab height is the maximum currently
+observed Bitcoin height, so it can decrease after a reset or reorganization.
+Unavailable heights display “Block —”; partial node coverage is marked.
 
 Starting `serve` also starts a background receipt collector. Every second it
 checks up to 50 pending/running operations across this workspace, with bounded
@@ -92,8 +123,11 @@ It is not a multi-user deployment or remote authentication service.
 
 The view covers labs present in the selected cluster and tracked in the selected database/workspace. It does not
 discover labs created using another database. Connections are declared topology,
-not live payment flows. CPU/memory/storage are desired demands, not measured
-usage. Protocol traffic and attached external clients are not collected yet.
+not live payment flows. The environment snapshot retains desired resource
+requests; the separate System snapshot reports observed container usage.
+Storage values are reservations, not measured disk consumption. “Processes”
+means workload containers, not individual operating-system processes. Protocol
+traffic and attached external clients are not collected yet.
 Endpoint metadata is credential-free; use `proofstorm connect` to produce a
 local application's private connection configuration.
 
@@ -124,7 +158,20 @@ cargo clippy -p proofstorm-web --target wasm32-unknown-unknown -- -D warnings
 cargo fmt --check
 ```
 
-## Verified locally (2026-09-06)
+MCP tools expose human-readable title metadata, and Activity uses the same
+explicit display names. Callable tool names and arguments remain unchanged.
+Exact operation and session identifiers remain available in details.
+
+## GUI verification (2026-09-07)
+
+The canvas redesign passed 102 affected tests, native and Wasm Clippy, and
+release asset/application builds. Browser checks used the existing 14-component
+lab at desktop and narrow widths, with both themes, live balances and resource
+hierarchy expansion. Selection and 120% zoom survived a server restart and SSE
+reconnect. See [the implementation plan](gui-plan.md) for the completed scope
+and detailed validation.
+
+## Earlier live-update verification (2026-09-06)
 
 - 19 app lifecycle/API tests, 63 MCP/stdio tests, 15 store tests, two web
   presentation tests and 20 controller tests passed. The published environment

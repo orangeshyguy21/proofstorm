@@ -3,8 +3,16 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod client;
 #[cfg(target_arch = "wasm32")]
-mod system;
+mod graph;
+#[cfg(target_arch = "wasm32")]
+mod inspector;
+#[cfg(target_arch = "wasm32")]
+mod lab_view;
 mod model;
+#[cfg(target_arch = "wasm32")]
+mod system;
+#[cfg(target_arch = "wasm32")]
+mod theme;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {

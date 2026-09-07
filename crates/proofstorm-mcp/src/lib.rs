@@ -2479,6 +2479,9 @@ impl ProofstormMcp {
         let principal = principal.into();
         let capabilities = store.capabilities(&workspace, &principal)?;
         let mut tool_router = Self::tool_router();
+        for route in tool_router.map.values_mut() {
+            route.attr.title = proofstorm_view::tool_title(&route.attr.name).map(str::to_owned);
+        }
         // Whole-document replacement is retained in the store for non-agent
         // callers, but is intentionally absent from MCP. Stable-ID component
         // and link mutations are the safe agent editing contract.
@@ -12543,6 +12546,15 @@ mod tests {
                 .all(|name| !name.starts_with("proofstorm_lease_"))
         );
         for tool in service.tool_router.list_all() {
+            assert_eq!(
+                tool.title.as_deref(),
+                proofstorm_view::tool_title(&tool.name)
+            );
+            assert!(
+                tool.title.is_some(),
+                "missing display name for {}",
+                tool.name
+            );
             let schema = serde_json::to_value(&tool.input_schema).unwrap();
             if schema["properties"].get("session_id").is_some() {
                 assert!(
@@ -12625,10 +12637,11 @@ mod tests {
             // Startup reasons and blocker receipts add up to 4 KiB to readiness profiles.
             (ProofstormToolset::Developer, 64 * 1024),
             // Full configuration reads, update previews, and revision/generation receipts.
-            (ProofstormToolset::Experiment, 172 * 1024),
+            // Human-readable tool titles add at most 2 KiB to these dense profiles.
+            (ProofstormToolset::Experiment, 174 * 1024),
             (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 218 * 1024),
+            (ProofstormToolset::Runtime, 220 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);

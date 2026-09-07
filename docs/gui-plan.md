@@ -9,7 +9,7 @@ labels.
 
 The revised request adds five requirements to the original work:
 
-- The canvas dominates the normal view, as well as supporting fullscreen.
+- The canvas is the main lab screen, with collapsible panels around it.
 - Resource summaries expand from totals to labs to components and containers.
 - MCP tools and recorded actions have human-readable display names.
 - Theme selection follows the operating system and supports manual overrides.
@@ -21,16 +21,15 @@ The revised request adds five requirements to the original work:
   collapsible lab navigator on the left.
 - Put the lab name, readiness, and essential controls in the toolbar. Remove
   the large heading and metric-card row above the topology.
-- Show a compact “Block 1,234” indicator in the canvas toolbar, visible in
-  both the normal and fullscreen views.
+- Show a compact “Block 1,234” indicator in the canvas toolbar.
 - Fill the remaining central area with the topology; avoid document-style page
   scrolling in the lab view.
 - Open a collapsible inspector on component selection. Keep it closed by
   default so it does not consume canvas space.
 - Move Activity and Sessions into a collapsible bottom drawer with tabs.
-- Provide pan, zoom, fit-to-lab, fullscreen, and Escape to exit fullscreen.
-- Preserve selection, pan, zoom, drawer state, and fullscreen across live
-  updates. Reset or restore the viewport deliberately when changing labs.
+- Provide pan, zoom, and fit-to-lab controls.
+- Preserve selection, pan, zoom, and panel state across live updates.
+  Reset or restore the viewport deliberately when changing labs.
 - On smaller screens, use overlay panels and keep the canvas usable.
 
 ## 2. System summary and resource view
@@ -118,8 +117,8 @@ The revised request adds five requirements to the original work:
 
 - Inspect a real populated lab at desktop and small-screen sizes in both
   themes; confirm the canvas occupies the main working area.
-- Check fullscreen enter/exit, keyboard access, zoom, pan, fit, and selection
-  through multiple SSE updates and a reconnect.
+- Check panel collapse/expand, canvas resizing, keyboard access, zoom, pan,
+  fit, and selection through multiple SSE updates and a reconnect.
 - Reconcile totals with cluster container metrics and expanded rows; exercise
   missing metrics, stopped containers, multiple labs, and shared workloads.
 - Verify balance units and passive readers against known results and ensure
@@ -133,9 +132,28 @@ The revised request adds five requirements to the original work:
 
 ## Current implementation status
 
-Initial edits from the original request are in progress: shared measurement
-types, a background sampler, cached System snapshots, SSE refreshes, resource
-tables, balance display hooks, fullscreen state, and some copy cleanup.
-These are a draft foundation, not a completed or browser-verified redesign.
-The revised canvas layout, expandable component hierarchy, system-aware theme,
-and shared tool display names remain to be implemented under this plan.
+Implemented: the persistent canvas layout, collapsible navigator and inspector,
+Activity/Sessions drawer, System resource hierarchy, system-aware themes, live
+balances and block height, readable tool titles, and copy cleanup. Fullscreen
+controls have been removed.
+
+Verification completed on 2026-09-07:
+
+- 102 tests across the app, MCP/stdio, shared view and web crates passed.
+- Native and Wasm Clippy passed with warnings denied; release Wasm assets and
+  the application binary built successfully.
+- The populated `thunder-dome` lab displayed 14 components, 23 links, 25 running
+  containers, live satoshi balances and block height 138. System totals reconciled
+  with its component and probe groups; container rows showed measured usage
+  separately from requests and limits.
+- Browser checks covered desktop and narrow layouts, both themes, manual theme
+  persistence, panels, filtering, keyboard selection, pan, zoom and fit.
+- The selected Bitcoin node and 120% zoom survived a server restart and SSE
+  reconnect. Browser error/warning logs were empty after recovery.
+- Transport tests covered telemetry invalidations, access revocation and foreign
+  origins. Measurement tests covered missing metrics and terminated containers;
+  presentation tests covered current maximum height, zero and decreasing height.
+
+Live verification used passive reads of the existing lab. No blocks were mined
+and no payments or wallet actions were submitted for this GUI check. Storage
+remains reserved capacity; actual disk consumption is not collected.

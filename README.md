@@ -114,7 +114,10 @@ disappear automatically. Each source reports its freshness;
 protocol traffic and external clients are explicitly unobserved. Results are
 paged, and reads never start commands or collect receipts. The web server uses
 SSE to keep the topology and activity current and runs a background receipt
-collector, including after an agent disconnects. Use the same database and
+collector, including after an agent disconnects. The canvas shows live balances
+and the lab’s highest observed block height. Open System for measured CPU,
+memory and container state, expanded by lab and component. Appearance follows
+the system theme, with Dark and Light overrides. Use the same database and
 workspace as your agent. See the [live web app guide](docs/web-app.md) and the
 [environment API contract](docs/environment-api-2026-09-06.md) for scope,
 pagination, local HTTP access, and the JSON Schema.

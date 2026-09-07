@@ -1,0 +1,8 @@
+Generated with the built-in image_gen tool.
+
+Use case: logo-brand
+Asset type: circular brand logo / app avatar for prootstorm.
+Primary request: A powerful tornado and lightning storm ripping through a forest, with chunky three-dimensional cube blocks being sucked upward into the tornado.
+Style/medium: polished graphic logo, bold vector-like shapes, crisp clean edges, strong negative space and a simple recognizable silhouette. Compact limited color treatment, high contrast. Stylized rather than photographic.
+Composition/framing: single centered circular emblem on a square canvas. The winding tornado is the dominant central shape; its broad spiral crown follows the circle's upper arc. A small forest of angular conifer silhouettes anchors the bottom and sides, trees bending toward the vortex. Several clearly recognizable solid cube blocks of different sizes rise along a curved spiral into the tornado. Sharp lightning bolts illuminate the storm and frame the funnel. Keep the whole scene integrated inside the circle, comfortable edge clearance for circular cropping, readable at avatar size, balanced visual weight.
+Constraints: no text or lettering, no mockup, no multiple options, no fine fussy detail, no watermark. Deliver one finished logo.

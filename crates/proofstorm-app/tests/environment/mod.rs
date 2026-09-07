@@ -671,7 +671,21 @@ async fn http_matches_shared_contract_and_refuses_writes_foreign_origins_and_rev
             .status(),
         400
     );
+    let system_url = format!("http://{address}/v1/system");
+    assert_eq!(client.get(&system_url).send().await.unwrap().status(), 200);
+    assert_eq!(client.post(&system_url).send().await.unwrap().status(), 405);
+    assert_eq!(
+        client
+            .get(&system_url)
+            .header("origin", "https://elsewhere.example")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
     store.replace_grants("local", "viewer", []).unwrap();
+    assert_eq!(client.get(&system_url).send().await.unwrap().status(), 403);
     assert_eq!(client.get(&url).send().await.unwrap().status(), 403);
     server.abort();
     let _ = server.await;
@@ -831,6 +845,19 @@ async fn server_collects_disconnected_agent_receipts_and_streams_changes() {
     assert_eq!(stream.headers()["content-type"], "text/event-stream");
     let first = stream.chunk().await.unwrap().unwrap();
     assert!(String::from_utf8_lossy(&first).contains("event: environment"));
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let mut received = String::new();
+        loop {
+            received.push_str(&String::from_utf8_lossy(
+                &stream.chunk().await.unwrap().unwrap(),
+            ));
+            if received.contains("event: telemetry") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("sampler must invalidate cached measurements through SSE");
     let start = cluster.lock().unwrap().requests.len();
     for (path, object) in &mut cluster.lock().unwrap().objects {
         if path.contains("/proofstormlabactions/") {
@@ -984,4 +1011,78 @@ async fn web_assets_and_same_origin_requests_are_served_safely() {
     }
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn system_measurements_are_scoped_passive_and_preserve_missing_metrics() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let handle = labs.up("demo", &spec()).await.unwrap().lab;
+    let instance = store
+        .instance("local", "developer", &handle.instance_id)
+        .unwrap();
+    let namespace = proofstorm_kube::instance_namespace(&instance.instance_key);
+    let pods_path = format!("/api/v1/namespaces/{namespace}/pods");
+    let metrics_path = format!("/apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods");
+    {
+        let mut cluster = cluster.lock().unwrap();
+        cluster.objects.insert(pods_path.clone(), json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{
+            "metadata":{"name":"chain-0","labels":{"proofstorm.dev/component":"chain","proofstorm.dev/instance":instance.instance_key}},
+            "spec":{"containers":[{"name":"component","resources":{"requests":{"cpu":"100m","memory":"64Mi"},"limits":{"cpu":"1","memory":"256Mi"}}}]},
+            "status":{"containerStatuses":[{"name":"component","image":"chain","imageID":"chain","ready":true,"restartCount":2,"state":{"running":{}}}]}
+        }]}));
+        cluster.objects.insert(metrics_path.clone(), json!({"apiVersion":"metrics.k8s.io/v1beta1","kind":"PodMetricsList","metadata":{},"items":[{
+            "metadata":{"name":"chain-0"},"timestamp":k8s_openapi::jiff::Timestamp::now().to_string(),
+            "containers":[{"name":"component","usage":{"cpu":"125000000n","memory":"32Mi"}}]
+        },{"metadata":{"name":"unrelated"},"containers":[{"name":"component","usage":{"cpu":"100","memory":"32Gi"}}]}]}));
+        cluster.requests.clear();
+    }
+    let viewer = observer(&labs);
+    let view = viewer.system().await.unwrap();
+    assert_eq!(view.labs.len(), 1);
+    assert_eq!(
+        (view.totals.running, view.totals.ready, view.totals.sampled),
+        (1, 1, 1)
+    );
+    assert!((view.totals.cpu_millicores.unwrap() - 125.0).abs() < 1e-9);
+    assert_eq!(
+        view.labs[0].processes[0].component.as_deref(),
+        Some("chain")
+    );
+    assert!(view.labs[0].balances.is_empty()); // Viewer cannot run even passive commands.
+    assert!(
+        cluster
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(method, _)| method == "GET")
+    );
+    cluster.lock().unwrap().objects.remove(&metrics_path);
+    let missing = viewer.system().await.unwrap();
+    assert_eq!(missing.totals.running, 1);
+    assert_eq!(missing.totals.sampled, 0);
+    assert!(missing.totals.cpu_millicores.is_none());
+    assert!(missing.labs[0].metrics_error.is_some());
+    let lab_path = format!(
+        "/apis/proofstorm.dev/v1alpha1/namespaces/system/proofstormlabs/{}",
+        instance.resource_name
+    );
+    cluster.lock().unwrap().objects.get_mut(&lab_path).unwrap()["spec"]["instanceKey"] =
+        json!("wrong-key");
+    let invalid = viewer.system().await.unwrap();
+    assert!(invalid.labs[0].error.is_some());
+    assert!(invalid.totals.cpu_millicores.is_none());
+    assert!(
+        !cluster
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .any(|(_, path)| path.contains("wrong-key"))
+    );
+    store.replace_grants("local", "viewer", []).unwrap();
+    assert!(viewer.system().await.is_err());
 }

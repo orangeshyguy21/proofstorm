@@ -19,6 +19,7 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
+    #[must_use]
     pub fn start(labs: Labs) -> Self {
         let (sender, receiver) = watch::channel(SystemView::default());
         let task = tokio::spawn(async move {
@@ -80,7 +81,10 @@ impl Labs {
             }
         }
         let mut labs = stream::iter(scoped)
-            .map(|(lab, name)| async move { self.sample_lab(&lab, name).await })
+            .map(|(lab, name)| {
+                let service = (*self).clone();
+                async move { service.sample_lab(&lab, name).await }
+            })
             .buffer_unordered(2)
             .collect::<Vec<_>>()
             .await;
@@ -102,9 +106,21 @@ impl Labs {
     async fn sample_lab(&self, lab: &ProofstormLab, name: Option<String>) -> LabUsage {
         let mut usage = LabUsage {
             id: lab.spec.instance_id.clone(),
-            name: name.unwrap_or_else(|| lab.spec.lab.name.clone()),
+            name: name.unwrap_or_else(|| lab.spec.instance_id.clone()),
             ..LabUsage::default()
         };
+        if self
+            .store
+            .instance(&self.workspace, &self.principal, &lab.spec.instance_id)
+            .ok()
+            .is_none_or(|instance| {
+                instance.instance_key != lab.spec.instance_key
+                    || instance.resource_name != lab.name_any()
+            })
+        {
+            usage.error = Some("Runtime identity unavailable.".into());
+            return usage;
+        }
         let namespace = instance_namespace(&lab.spec.instance_key);
         let pods = Api::<Pod>::namespaced(self.runtime.client.clone(), &namespace);
         let params =
@@ -185,6 +201,7 @@ fn processes(pod: &Pod, metric: Option<&DynamicObject>) -> Vec<ProcessUsage> {
                 .find(|s| s.name == container.name);
             let state = status.and_then(|s| s.state.as_ref());
             let running = state.is_some_and(|s| s.running.is_some());
+            let terminated = state.is_some_and(|s| s.terminated.is_some());
             let state = state.map_or_else(
                 || "Pending".into(),
                 |s| {
@@ -200,7 +217,8 @@ fn processes(pod: &Pod, metric: Option<&DynamicObject>) -> Vec<ProcessUsage> {
                     }
                 },
             );
-            let measured = metric
+            let fresh_metric = metric.filter(|metric| metric_is_current(metric, pod));
+            let measured = fresh_metric
                 .and_then(|m| m.data["containers"].as_array())
                 .and_then(|containers| containers.iter().find(|c| c["name"] == container.name))
                 .filter(|_| running);
@@ -208,12 +226,14 @@ fn processes(pod: &Pod, metric: Option<&DynamicObject>) -> Vec<ProcessUsage> {
                 .resources
                 .as_ref()
                 .and_then(|r| r.requests.as_ref());
+            let limits = container.resources.as_ref().and_then(|r| r.limits.as_ref());
             ProcessUsage {
                 pod: pod.name_any(),
                 container: container.name.clone(),
                 component: pod.labels().get(COMPONENT_LABEL).cloned(),
                 state,
                 running,
+                terminated,
                 ready: status.is_some_and(|s| s.ready),
                 restarts: status.map_or(0, |s| s.restart_count),
                 cpu_millicores: measured
@@ -226,9 +246,30 @@ fn processes(pod: &Pod, metric: Option<&DynamicObject>) -> Vec<ProcessUsage> {
                     .and_then(|r| quantity(&r.get("cpu")?.0))
                     .map(|cpu| cpu * 1000.0),
                 memory_request_bytes: requests.and_then(|r| quantity(&r.get("memory")?.0)),
+                cpu_limit_millicores: limits
+                    .and_then(|r| quantity(&r.get("cpu")?.0))
+                    .map(|cpu| cpu * 1000.0),
+                memory_limit_bytes: limits.and_then(|r| quantity(&r.get("memory")?.0)),
             }
         })
         .collect()
+}
+
+fn metric_is_current(metric: &DynamicObject, pod: &Pod) -> bool {
+    let Some(timestamp) = metric.data["timestamp"]
+        .as_str()
+        .and_then(|value| value.parse::<k8s_openapi::jiff::Timestamp>().ok())
+    else {
+        return false;
+    };
+    let age = now().saturating_sub(timestamp.as_second());
+    if !(-5..=90).contains(&age) {
+        return false;
+    }
+    pod.status
+        .as_ref()
+        .and_then(|s| s.start_time.as_ref())
+        .is_none_or(|start| timestamp >= start.0)
 }
 
 /// Kubernetes decimal and binary quantities, including metrics-server nanocores.
@@ -291,7 +332,7 @@ mod tests {
             {"name":"b","image":"x","imageID":"x","ready":false,"restartCount":0,"state":{"running":{}}},
             {"name":"c","image":"x","imageID":"x","ready":false,"restartCount":0,"state":{"terminated":{"exitCode":0}}}
         ]}})).unwrap();
-        let metric: DynamicObject = serde_json::from_value(serde_json::json!({"metadata":{"name":"pod"},"containers":[{"name":"a","usage":{"cpu":"10m","memory":"1Mi"}},{"name":"c","usage":{"cpu":"500m","memory":"2Gi"}}]})).unwrap();
+        let metric: DynamicObject = serde_json::from_value(serde_json::json!({"metadata":{"name":"pod"},"timestamp":k8s_openapi::jiff::Timestamp::now().to_string(),"containers":[{"name":"a","usage":{"cpu":"10m","memory":"1Mi"}},{"name":"c","usage":{"cpu":"500m","memory":"2Gi"}}]})).unwrap();
         let rows = processes(&pod, Some(&metric));
         let totals = UsageTotals::from_processes(rows.iter());
         assert_eq!((totals.running, totals.sampled, totals.restarts), (2, 1, 2));

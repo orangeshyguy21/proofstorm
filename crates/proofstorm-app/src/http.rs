@@ -99,8 +99,18 @@ async fn handle(
                 return Ok(error(StatusCode::FORBIDDEN, "access_denied"));
             }
             let mut snapshot = telemetry.borrow().clone();
-            if labs.store.authorize(&labs.workspace, &labs.principal, proofstorm_core::Capability::ComponentExecLive).is_err() {
-                for lab in &mut snapshot.labs { lab.balances.clear(); }
+            if labs
+                .store
+                .authorize(
+                    &labs.workspace,
+                    &labs.principal,
+                    proofstorm_core::Capability::ComponentExecLive,
+                )
+                .is_err()
+            {
+                for lab in &mut snapshot.labs {
+                    lab.balances.clear();
+                }
             }
             Ok(json(StatusCode::OK, &snapshot))
         }
