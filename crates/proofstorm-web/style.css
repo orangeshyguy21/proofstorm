@@ -14,3 +14,7 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column;position:relati
 @media(prefers-reduced-motion:reduce){button,select{transition:none}}
 
 .check-state{float:right;font-size:10px;color:var(--muted)}.retained-storage{max-width:650px;padding:12px 24px}
+
+/* Measurement labels stay visible without hover. */
+.cpu-usage{min-width:170px}.usage-bar{height:5px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:8px}.usage-bar>span{display:block;height:100%;background:var(--accent);border-radius:inherit}.usage-bar.near-limit>span{background:var(--pending)}.partial-label,td small.partial-label{color:var(--pending);white-space:normal}.metrics .partial-label{flex-basis:100%}.measurement-note{color:var(--muted)}.system-summary-values{grid-template-columns:minmax(0,1fr);gap:10px}.system-summary-values>span{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.system-summary-values small{margin:0}.system-summary-values strong{font-size:12px}.metrics strong{font-size:clamp(17px,1.7vw,24px)}
+@media(max-width:760px){.page-heading{flex-wrap:wrap;gap:10px}.heading-note{display:block}.metrics strong{font-size:20px}}

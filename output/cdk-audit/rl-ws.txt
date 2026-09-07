@@ -1,0 +1,46 @@
+=== rate_limit.rs structure ===
+53:pub struct RateLimitConfig {
+61:impl RateLimitConfig {
+63:    pub fn new(capacity: NonZeroU32, refill_per_minute: NonZeroU32) -> Self {
+72:    pub fn try_new(capacity: u32, refill_per_minute: u32) -> Option<Self> {
+80:impl Default for RateLimitConfig {
+111:struct KvBudgetStore {
+118:impl BudgetStore for KvBudgetStore {
+142:struct BucketState {
+163:struct Writer {
+169:struct TokenBucketInner {
+190:pub struct TokenBucket {
+194:impl TokenBucket {
+196:    pub fn new(config: RateLimitConfig) -> Self {
+242:    pub fn set_config(&self, config: RateLimitConfig) {
+254:    pub fn set_enabled(&self, enabled: bool) {
+262:    pub async fn acquire<F, T>(&self, action: F) -> T
+293:    pub async fn try_acquire(&self) -> bool {
+448:    pub async fn flush(&self) {
+482:struct ManagerSettings {
+496:pub struct RateLimiterManager {
+510:impl std::fmt::Debug for RateLimiterManager {
+518:impl RateLimiterManager {
+521:    pub fn new(config: RateLimitConfig, db: Option<BudgetDb>) -> Self {
+546:    pub fn bucket_for(&self, url: &Url) -> TokenBucket {
+570:    pub fn set_config(&self, config: RateLimitConfig) {
+583:    pub fn set_enabled(&self, enabled: bool) {
+592:    pub fn is_enabled(&self) -> bool {
+606:    pub async fn flush(&self) {
+613:    pub fn origin_count(&self) -> usize {
+700:/// scheme-default port away, so `:443` and an implicit default map to one origin
+703:pub fn origin_key(url: &Url) -> Option<String> {
+750:pub struct RateLimitedTransport<T> {
+755:impl<T> RateLimitedTransport<T> {
+757:    pub fn with_manager(inner: T, limiter: RateLimiterManager) -> Self {
+762:impl<T: Default> Default for RateLimitedTransport<T> {
+773:impl<T: Transport> Transport for RateLimitedTransport<T> {
+886:    struct StubStore {
+891:    impl BudgetStore for StubStore {
+903:    struct GatedStore {
+910:    impl BudgetStore for GatedStore {
+=== rate limit usage in axum ===
+=== ws.rs structure ===
+52:pub fn notification_uuid_to_notification_string(
+89:pub fn notification_to_ws_message(notification: NotificationInner<QuoteId>) -> WsMessageOrResponse {
+105:    fn websocket_requests_reject_oversized_subscription_ids() {

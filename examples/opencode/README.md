@@ -1,27 +1,50 @@
 # OpenCode profiles
 
-Each file here is a complete OpenCode configuration that registers the
-Proofstorm MCP server with the same capability set and differs only in what
-the agent may do on the host. Pick one with the config environment variable:
+These profiles add the Proofstorm MCP server to your personal OpenCode
+configuration. From the repository root, launch:
 
 ```bash
 OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 ```
 
-| Profile | Host tools | Use it for |
-|---|---|---|
-| `proofstorm-only.json` | none; every host tool is denied | evidence-grade runs where all lab and network control must go through Proofstorm MCP; the doctor validates this file |
-| `research.json` | read, glob, grep, list, web fetch, web search | experiments whose prompt asks the agent to read the README, the spec, the gates, or upstream sources before acting |
-| `contributor.json` | research plus edits under the acceptance crate, `tests/`, `examples/`, and `scenarios/`, and hermetic cargo and read-only git commands | runs that must leave a new acceptance gate or scenario behind |
+`proofstorm-only.json`, `research.json`, and `contributor.json` now have the same
+settings. Existing launch commands still work; the filenames no longer select
+different host restrictions. The doctor uses `proofstorm-only.json` to check MCP
+discovery, not host permissions.
+
+OpenCode automatically merges `~/.config/opencode/opencode.json` with the selected
+profile. Your providers, models, and named subagents remain personal. These
+profiles enable the Task tool and leave shell, editing, file access (including
+external directories), and web permissions to your settings and OpenCode defaults.
+They do not grant every tool unconditional access. Agent-specific permissions can
+still restrict individual agents.
+
+To use a different model for delegated work, define a named agent with
+`mode: "subagent"` and `model: "provider/model"` in your personal config, then ask
+the main agent to delegate to it. No shell wrapper is needed. Provider endpoints
+and model choices do not belong in these shared profiles. Restart OpenCode after
+changing configuration.
+
+See OpenCode's [configuration precedence](https://opencode.ai/docs/config/#precedence-order)
+and [subagent configuration](https://opencode.ai/docs/agents/#json). To inspect
+the merged settings locally, run:
+
+```bash
+OPENCODE_CONFIG=examples/opencode/research.json opencode debug config
+```
+
+The output can contain private provider settings; inspect it locally rather than
+posting the full output.
 
 Rules shared by all three profiles:
 
-- Lab and network control always goes through the MCP server. No profile
-  grants `kubectl`, `docker`, `helm`, `make`, or a Proofstorm release build.
-  Pull-request candidate images are built through Proofstorm MCP by a durable
-  controller-owned Job; the agent never needs a host command.
-- "Internet" means two different things. Host web access is a profile choice
-  above. Network access from inside lab pods is a lab property and stays
+- Use MCP for lab operations so Proofstorm can track them. These profiles do not
+  enforce MCP-only execution. Acceptance runs that require it must state that
+  requirement in their prompt and verify the recorded tool calls.
+  Pull-request candidate images can be built through Proofstorm MCP by a durable
+  controller-owned Job.
+- "Internet" means two different things. Host web access follows your OpenCode
+  settings. Network access from inside lab pods is a lab property and stays
   default-deny except for cluster DNS; both native component execution modes
   run in-cluster and cannot reach the internet under any profile.
 - `PROOFSTORM_DB` is relative to the process working directory;
@@ -35,10 +58,6 @@ typed-contract comparisons. Native commands run through `component_exec_live`
 inside a lab component; the host `bash` permission can remain denied. See the
 [validation plan](../../docs/native-first-experiments.md) for evaluation and
 cleanup requirements.
-
-OpenCode resolves permission patterns with `*` matching any characters, so
-`tests/*` covers every file below `tests/`. Agent-level `permission` blocks
-override these globals if you add named agents to a profile.
 
 ## Growing an existing lab
 

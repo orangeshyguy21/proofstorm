@@ -3,6 +3,8 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod client;
 #[cfg(target_arch = "wasm32")]
+mod freshness;
+#[cfg(target_arch = "wasm32")]
 mod graph;
 #[cfg(target_arch = "wasm32")]
 mod inspector;

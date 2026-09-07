@@ -1,0 +1,65 @@
+=== AXUM ROUTES (mintd/axum) ===
+route("/"
+route("/checkstate"
+route("/info"
+route("/keys"
+route("/keys/{keyset_id}"
+route("/keysets"
+route("/melt/{method}"
+route("/melt/quote/{method}"
+route("/mint"
+route("/mint/{method}"
+route("/mint/{method}/batch"
+route("/mint/quote/{method}"
+route("/restore"
+route("/swap"
+route("/ws"
+
+=== cdk-common mint modules ===
+auth
+common.rs
+database
+error.rs
+grpc.rs
+lib.rs
+melt.rs
+mint_quote.rs
+mint.rs
+payment.rs
+pub_sub
+rate_limit.rs
+redact.rs
+state.rs
+stream.rs
+subscription.rs
+task.rs
+terminal.rs
+wallet
+ws.rs
+
+=== cdk-common/src/mint* ===
+   22312 total
+    2396 crates/cdk-common/src/mint.rs
+    1998 crates/cdk-common/src/database/mint/test/mint.rs
+    1820 crates/cdk-common/src/database/wallet/test/mod.rs
+    1741 crates/cdk-common/src/wallet/mod.rs
+    1542 crates/cdk-common/src/rate_limit.rs
+    1531 crates/cdk-common/src/error.rs
+    1125 crates/cdk-common/src/database/mint/test/proofs.rs
+    1018 crates/cdk-common/src/pub_sub/remote_consumer.rs
+    1015 crates/cdk-common/src/payment.rs
+     712 crates/cdk-common/src/database/mint/mod.rs
+     584 crates/cdk-common/src/database/mint/test/saga.rs
+     506 crates/cdk-common/src/melt.rs
+     498 crates/cdk-common/src/common.rs
+     489 crates/cdk-common/src/auth/oidc.rs
+     452 crates/cdk-common/src/stream.rs
+     446 crates/cdk-common/src/database/mint/test/mod.rs
+     391 crates/cdk-common/src/database/kvstore.rs
+     331 crates/cdk-common/src/database/mint/test/keys.rs
+     304 crates/cdk-common/src/state.rs
+     286 crates/cdk-common/src/subscription.rs
+     285 crates/cdk-common/src/database/mint/test/signatures.rs
+     283 crates/cdk-common/src/mint_quote.rs
+     264 crates/cdk-common/src/database/wallet/mod.rs
+     247 crates/cdk-common/src/wallet/saga/mod.rs

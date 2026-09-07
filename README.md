@@ -185,10 +185,10 @@ OpenCode installed, start a project session without changing personal config:
 OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 ```
 
-That profile denies every host tool so all control flows through Proofstorm.
-Two wider profiles, `research.json` and `contributor.json`, live alongside it;
-[`examples/opencode/README.md`](examples/opencode/README.md) explains when to
-use each.
+OpenCode merges this profile with your personal providers, models, and subagents.
+All three profiles enable task delegation and leave other host permissions to
+your settings and OpenCode defaults. `research.json` and `contributor.json` are
+equivalent launch options; see [`examples/opencode/README.md`](examples/opencode/README.md).
 
 Use the complete agent request in
 [`examples/opencode-conversation.md`](examples/opencode-conversation.md), then
@@ -199,7 +199,8 @@ make down
 ```
 
 The MCP configuration is operator-owned. Its principal and capability set are
-not agent inputs, and the agent never receives kubeconfig. A principal granted
+not agent inputs, and MCP does not return kubeconfig. Host file and shell access
+is governed separately by your OpenCode settings. A principal granted
 `component.exec_live` or `component.forensics` can inspect component-local
 credentials, so both capabilities must be treated as secret-bearing authority.
 Live execution additionally shares the running component's process, network,

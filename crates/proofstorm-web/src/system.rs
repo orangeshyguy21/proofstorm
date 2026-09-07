@@ -1,6 +1,6 @@
 use crate::{
-    inspector::time,
-    model::{block_height, cpu, memory, process_group, sat},
+    freshness::{UpdatedAgo, parse_timestamp},
+    model::{block_height, cpu, cpu_amount, memory, process_group, sat},
 };
 use leptos::prelude::*;
 use proofstorm_core::ComponentKind;
@@ -15,8 +15,8 @@ pub fn SystemSummary(
     view! {
         <button class=move || if open.get() { "system-summary selected" } else { "system-summary" } on:click=move |_| open.set(true) aria-label="Open system usage">
             <span class="system-summary-title"><span>"System"</span><span>"↗"</span></span>
-            <span class="system-summary-values"><span><small>"CPU"</small><strong>{move || cpu(telemetry.get().filter(|s|s.error.is_none()).and_then(|s|s.totals.cpu_millicores))}</strong></span><span><small>"Memory"</small><strong>{move || memory(telemetry.get().filter(|s|s.error.is_none()).and_then(|s|s.totals.memory_bytes))}</strong></span></span>
-            <small class="system-summary-count">{move || telemetry.get().map_or_else(||"Loading…".into(), |s| if s.error.is_some(){"Unavailable".into()}else if s.labs.iter().any(|lab|lab.error.is_some()){"Partial inventory".into()}else if s.sampled_at_unix==0{"Sampling…".into()}else if s.totals.sampled<s.totals.running {format!("{} running · partial metrics",s.totals.running)}else{format!("{} running · {} lab{}",s.totals.running,s.labs.len(),if s.labs.len()==1{""}else{"s"})})}</small>
+            <span class="system-summary-values"><span><small>"CPU usage"</small><strong>{move || cpu(telemetry.get().filter(|s|s.error.is_none()).and_then(|s|s.totals.cpu_millicores))}</strong></span><span><small>"Memory"</small><strong>{move || memory(telemetry.get().filter(|s|s.error.is_none()).and_then(|s|s.totals.memory_bytes))}</strong></span></span>
+            <small class="system-summary-count">{move || telemetry.get().map_or_else(||"Loading…".into(), |s| if s.error.is_some(){"Unavailable".into()}else if s.labs.iter().any(|lab|lab.error.is_some()){"Partial inventory".into()}else if s.sampled_at_unix==0{"Sampling…".into()}else if s.totals.sampled<s.totals.running {format!("{} running · partial measurement",s.totals.running)}else{format!("{} running · {} lab{}",s.totals.running,s.labs.len(),if s.labs.len()==1{""}else{"s"})})}</small>
         </button>
     }
 }
@@ -35,21 +35,22 @@ pub fn SystemPanel(
     let expanded_groups = RwSignal::new(BTreeSet::<String>::new());
     view! {
         <section class="system-page">
-            <div class="page-heading"><div><h1>"System"</h1><p class="page-description">"Containers in this workspace’s labs"</p></div><span class="heading-note">{move ||telemetry.get().filter(|s|s.sampled_at_unix>0).map(|s|format!("Updated {}",time(s.sampled_at_unix)))}</span></div>
+            <div class="page-heading"><div><h1>"System"</h1><p class="page-description">"Containers in this workspace’s labs"</p></div><span class="heading-note">{move ||telemetry.get().filter(|s|s.sampled_at_unix>0).map(|s|view!{<UpdatedAgo unix=s.sampled_at_unix />})}</span></div>
             {move ||telemetry.get().and_then(|s|s.error).map(|message|view!{<div class="notice warning">{message}</div>})}
             {move ||telemetry.get().map(|s|{
                 let incomplete=s.error.is_some()||s.labs.iter().any(|lab|lab.error.is_some());
                 let t=s.totals;
+                let partial=t.sampled<t.running;
                 view!{
-                    <div class="metrics"><div><span>"CPU usage"</span><strong>{cpu(t.cpu_millicores)}</strong></div><div><span>"Memory"</span><strong>{memory(t.memory_bytes)}</strong></div><div><span>"Running"</span><strong>{if incomplete{"—".into()}else{t.running.to_string()}}</strong><small>{if incomplete{"Inventory unavailable".into()}else{format!("{} ready",t.ready)}}</small></div><div><span>"Restarts"</span><strong>{if incomplete{"—".into()}else{t.restarts.to_string()}}</strong></div></div>
+                    <div class="metrics"><div><span>"CPU usage"</span><strong>{cpu(t.cpu_millicores)}</strong>{partial.then(||view!{<small class="partial-label">"Partial measurement"</small>})}</div><div><span>"Memory"</span><strong>{memory(t.memory_bytes)}</strong>{partial.then(||view!{<small class="partial-label">"Partial measurement"</small>})}</div><div><span>"Running"</span><strong>{if incomplete{"—".into()}else{t.running.to_string()}}</strong><small>{if incomplete{"Inventory unavailable".into()}else{format!("{} ready",t.ready)}}</small></div><div><span>"Restarts"</span><strong>{if incomplete{"—".into()}else{t.restarts.to_string()}}</strong></div></div>
                     {incomplete.then(||view!{<p class="measurement-note">"Totals unavailable · some lab inventories could not be read"</p>})}
-                    {(t.sampled<t.running).then(||view!{<p class="measurement-note">{format!("Partial usage · {} of {} running containers sampled",t.sampled,t.running)}</p>})}
+                    {(!incomplete).then(||view!{<p class="measurement-note">{format!("Measurements available for {} of {} running containers",t.sampled,t.running)}</p>})}
                 }
             })}
             <section class="resource-panel">
                 <div class="panel-title"><h2>"Resources & processes"</h2><span>"Expand a lab or component"</span></div>
                 <div class="process-filters"><select aria-label="Filter by lab" prop:value=move ||filter.get() on:change=move |event|filter.set(event_target_value(&event))><option value="">"All labs"</option>{move ||telemetry.get().map(|s|s.labs.into_iter().map(|lab|view!{<option value=lab.id>{lab.name}</option>}).collect_view())}</select><input class="search" placeholder="Find a component or process…" aria-label="Find a component or process" on:input=move |event|search.set(event_target_value(&event)) /><label><input type="checkbox" on:change=move |event|include_stopped.set(event_target_checked(&event)) />"Include stopped"</label></div>
-                <div class="table-scroll"><table><thead><tr><th>"Lab / component / container"</th><th>"State"</th><th>"CPU"</th><th>"Memory"</th><th>"Restarts"</th><th>"Sampled"</th></tr></thead><tbody>{move ||{
+                <div class="table-scroll"><table><thead><tr><th>"Lab / component / container"</th><th>"State"</th><th>"CPU usage"</th><th>"Memory"</th><th>"Restarts"</th><th>"Measurements"</th></tr></thead><tbody>{move ||{
                     let query=search.get().to_lowercase();let lab_filter=filter.get();let mut rows=Vec::new();
                     for lab in telemetry.get().into_iter().flat_map(|s|s.labs).filter(|lab|lab_filter.is_empty()||lab.id==lab_filter) {
                         let expanded=expanded_labs.get().contains(&lab.id)||!query.is_empty();
@@ -87,13 +88,34 @@ fn TotalsCells(totals: UsageTotals, #[prop(default = false)] unavailable: bool) 
         return view! {<td>"Unavailable"</td><td>"—"</td><td>"—"</td><td>"—"</td><td>"—"</td>}
             .into_any();
     }
-    view! {<td>{format!("{} running",totals.running)}<small>{format!("{} ready",totals.ready)}</small></td><td>{cpu(totals.cpu_millicores)}</td><td>{memory(totals.memory_bytes)}</td><td>{totals.restarts}</td><td>{format!("{} / {}",totals.sampled,totals.running)}</td>}.into_any()
+    let partial = totals.sampled < totals.running;
+    view! {<td>{format!("{} running",totals.running)}<small>{format!("{} ready",totals.ready)}</small></td><td>{cpu(totals.cpu_millicores)}{partial.then(||view!{<small class="partial-label">"Partial measurement"</small>})}</td><td>{memory(totals.memory_bytes)}{partial.then(||view!{<small class="partial-label">"Partial measurement"</small>})}</td><td>{totals.restarts}</td><td>{format!("{} of {} container{}",totals.sampled,totals.running,if totals.running==1 {""}else{"s"})}</td>}.into_any()
+}
+#[component]
+fn CpuUsage(usage: Option<f64>, limit: Option<f64>) -> impl IntoView {
+    if let Some((usage, limit)) = usage.zip(limit).filter(|(usage, limit)| {
+        usage.is_finite() && *usage >= 0.0 && limit.is_finite() && *limit > 0.0
+    }) {
+        let percentage = usage / limit * 100.0;
+        let description = format!("{} of {} maximum", cpu_amount(usage), cpu(Some(limit)));
+        return view!{
+            <div class="cpu-usage"><span>{description.clone()}</span><div class={if percentage>=90.0 {"usage-bar near-limit"} else {"usage-bar"}} role="meter" aria-label="CPU usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow=percentage.clamp(0.0,100.0) aria-valuetext=description><span style=format!("width: {:.3}%",percentage.clamp(0.0,100.0))></span></div></div>
+        }.into_any();
+    }
+    view! {<span>{cpu(usage)}</span>}.into_any()
 }
 #[component]
 fn ProcessRow(process: ProcessUsage) -> impl IntoView {
     let p = process;
     let measured = p.cpu_millicores.is_some() && p.memory_bytes.is_some();
-    view! {<tr class="process-row"><td><strong>{p.container}</strong><small>{p.pod}</small></td><td><span class=if p.ready{"process-state ready"}else{"process-state"}>{p.state}</span></td><td>{cpu(p.cpu_millicores)}<small>{format!("Req {} · limit {}",cpu(p.cpu_request_millicores),cpu(p.cpu_limit_millicores))}</small></td><td>{memory(p.memory_bytes)}<small>{format!("Req {} · limit {}",memory(p.memory_request_bytes),memory(p.memory_limit_bytes))}</small></td><td>{p.restarts}</td><td title=p.metrics_timestamp.unwrap_or_default()>{if measured{"Yes"}else{"—"}}</td></tr>}
+    let sampled_at = p.metrics_timestamp.as_deref().and_then(parse_timestamp);
+    let cpu_maximum = p
+        .cpu_limit_millicores
+        .map_or_else(|| "Not set".into(), |value| cpu(Some(value)));
+    let memory_maximum = p
+        .memory_limit_bytes
+        .map_or_else(|| "Not set".into(), |value| memory(Some(value)));
+    view! {<tr class="process-row"><td><strong>{p.container}</strong><small>{p.pod}</small></td><td><span class=if p.ready{"process-state ready"}else{"process-state"}>{p.state}</span></td><td><CpuUsage usage=p.cpu_millicores limit=p.cpu_limit_millicores /><small>{format!("Reserved: {}",cpu(p.cpu_request_millicores))}</small><small>{format!("Maximum: {cpu_maximum}")}</small></td><td>{memory(p.memory_bytes)}<small>{format!("Reserved: {}",memory(p.memory_request_bytes))}</small><small>{format!("Maximum: {memory_maximum}")}</small></td><td>{p.restarts}</td><td>{if measured {"Available"} else if p.running {"Unavailable"} else {"Not running"}}{measured.then(||sampled_at.map(|unix|view!{<small><UpdatedAgo unix /></small>}))}</td></tr>}
 }
 
 fn balance(
@@ -152,6 +174,6 @@ pub fn BalancePanel(
     component: String,
 ) -> impl IntoView {
     view! {{move ||balance(telemetry,&lab_id,&component).map(|b|view!{
-        <div class="balance-panel"><h4>"Latest observation"</h4>{b.error.map(|message|view!{<p>{message}</p>})}{b.block_height.map(|height|view!{<div class="balance-row"><span>"Block height"</span><strong>{sat(height)}</strong></div>})}{b.amounts.into_iter().map(|a|view!{<div class="balance-row"><span>{a.label}</span><strong>{sat(a.sat)}<small>"sat"</small></strong></div>}).collect_view()}<small>{format!("Observed {}",time(b.observed_at_unix))}</small></div>
+        <div class="balance-panel"><h4>"Latest observation"</h4>{b.error.clone().map(|message|view!{<p>{message}</p>})}{b.block_height.map(|height|view!{<div class="balance-row"><span>"Block height"</span><strong>{sat(height)}</strong></div>})}{b.amounts.into_iter().map(|a|view!{<div class="balance-row"><span>{a.label}</span><strong>{sat(a.sat)}<small>"sat"</small></strong></div>}).collect_view()}<small><UpdatedAgo unix=b.observed_at_unix label=if b.error.is_some() {"Checked"} else {"Updated"} /></small></div>
     })}}
 }

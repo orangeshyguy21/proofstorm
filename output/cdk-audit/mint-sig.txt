@@ -1,0 +1,101 @@
+=== melt.rs public fn signatures ===
+95:    pub fn new(proofs: Proofs, current_state: State) -> Self {
+219:    pub fn new(operation_kind: OperationKind, s: &str) -> Result<Self, Error> {
+230:    pub fn state(&self) -> &str {
+339:    pub fn new_swap(operation_id: Uuid, state: SwapSagaState) -> Self {
+353:    pub fn update_swap_state(&mut self, new_state: SwapSagaState) {
+359:    pub fn new_melt(operation_id: Uuid, state: MeltSagaState, quote_id: String) -> Self {
+373:    pub fn update_melt_state(&mut self, new_state: MeltSagaState) {
+379:    pub fn set_melt_finalization_data(&mut self, finalization_data: MeltFinalizationData) {
+404:    pub fn new(
+427:    pub fn new_mint(total_issued: Amount, payment_method: PaymentMethod) -> Self {
+442:    pub fn new_batch_mint(total_issued: Amount, payment_method: PaymentMethod) -> Self {
+459:    pub fn new_melt(
+478:    pub fn new_swap(total_issued: Amount, total_redeemed: Amount, fee_collected: Amount) -> Self {
+493:    pub fn id(&self) -> &Uuid {
+498:    pub fn kind(&self) -> OperationKind {
+503:    pub fn total_issued(&self) -> Amount {
+508:    pub fn total_redeemed(&self) -> Amount {
+513:    pub fn fee_collected(&self) -> Amount {
+518:    pub fn completed_at(&self) -> &Option<u64> {
+523:    pub fn add_change(&mut self, change: Amount) {
+528:    pub fn payment_amount(&self) -> Option<Amount> {
+533:    pub fn payment_fee(&self) -> Option<Amount> {
+538:    pub fn set_payment_details(&mut self, payment_amount: Amount, payment_fee: Amount) {
+544:    pub fn payment_method(&self) -> Option<PaymentMethod> {
+613:    pub fn new(
+655:    pub fn amount_paid(&self) -> Amount<CurrencyUnit> {
+682:    pub fn add_issuance(
+709:    pub fn amount_issued(&self) -> Amount<CurrencyUnit> {
+714:    pub fn updated_at(&self) -> u64 {
+719:    pub fn set_updated_at(&mut self, updated_at: u64) {
+724:    pub fn last_checked(&self) -> u64 {
+729:    pub fn set_last_checked(&mut self, last_checked: u64) {
+735:    pub fn state(&self) -> MintQuoteState {
+740:    pub fn payment_ids(&self) -> Vec<&String> {
+750:    pub fn amount_mintable(&self) -> Amount<CurrencyUnit> {
+765:    pub fn take_changes(&mut self) -> Option<MintQuoteChange> {
+789:    pub fn add_payment(
+853:    pub fn new(amount: Amount<CurrencyUnit>, payment_id: String, time: u64) -> Self {
+873:    pub fn new(amount: Amount<CurrencyUnit>, time: u64) -> Self {
+957:    pub fn new(
+1015:    pub fn new_onchain(
+1072:    pub fn fee_options(&self) -> &[MeltQuoteOnchainFeeOption] {
+1078:    pub fn amount(&self) -> Amount<CurrencyUnit> {
+1084:    pub fn fee_reserve(&self) -> Amount<CurrencyUnit> {
+1089:    pub fn select_onchain_fee_option(&mut self, fee_index: u32) -> Result<(), crate::Error> {
+1116:    pub fn into_response(
+1146:    pub fn total_needed(&self) -> Result<Amount, crate::Error> {
+1156:    pub fn from_db(
+1213:pub fn validate_onchain_fee_options(
+1287:    pub fn is_expired(&self) -> bool {
+1293:pub fn default_fee() -> u64 {
+1665:    pub fn serialize<S>(offer: &Offer, serializer: S) -> Result<S::Ok, S::Error>
+1673:    pub fn deserialize<'de, D>(deserializer: D) -> Result<Box<Offer>, D::Error>
+
+=== payment.rs trait ===
+87:    fn from(_: Infallible) -> Self {
+114:    pub fn new(kind: &str, identifier: &str) -> Result<Self, Error> {
+144:    pub fn kind(&self) -> String {
+158:    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+172:    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+199:    fn default() -> Self {
+375:    pub fn from_melt_quote_with_fee(
+445:    async fn start(&self) -> Result<(), Self::Err> {
+452:    async fn stop(&self) -> Result<(), Self::Err> {
+458:    async fn get_settings(&self) -> Result<SettingsResponse, Self::Err>;
+461:    async fn create_incoming_payment_request(
+468:    async fn get_payment_quote(
+475:    async fn make_payment(
+483:    async fn wait_payment_event(
+488:    fn is_payment_event_stream_active(&self) -> bool;
+491:    fn cancel_payment_event_stream(&self);
+494:    async fn check_incoming_payment_status(
+507:    async fn check_outgoing_payment(
+549:    pub fn unit(&self) -> &CurrencyUnit {
+598:    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+613:    pub fn unit(&self) -> &CurrencyUnit {
+659:    pub fn unit(&self) -> &CurrencyUnit {
+713:    fn from(value: SettingsResponse) -> Self {
+721:    fn try_from(value: Value) -> Result<Self, Self::Error> {
+742:    pub fn new(inner: T) -> Self {
+747:    pub fn inner(&self) -> &T {
+752:    pub fn into_inner(self) -> T {
+765:    async fn start(&self) -> Result<(), Self::Err> {
+775:    async fn stop(&self) -> Result<(), Self::Err> {
+784:    async fn get_settings(&self) -> Result<SettingsResponse, Self::Err> {
+794:    async fn create_incoming_payment_request(
+807:    async fn get_payment_quote(
+820:    async fn wait_payment_event(
+834:    async fn make_payment(
+850:    fn is_payment_event_stream_active(&self) -> bool {
+854:    fn cancel_payment_event_stream(&self) {
+858:    async fn check_incoming_payment_status(
+874:    async fn check_outgoing_payment(
+901:    fn make_payment_response_debug_redacts_payment_proof() {
+918:    fn test_payment_identifier_quote_id_roundtrip() {
+936:    fn test_payment_identifier_quote_id_base64_roundtrip() {
+951:    fn test_payment_identifier_unsupported_kind() {
+957:    fn test_payment_identifier_invalid_quote_id() {
+964:    fn test_payment_identifier_invalid_hash() {
+980:fn test_payment_identifier_hash_variants_roundtrip() {

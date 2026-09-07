@@ -16,6 +16,7 @@ use wasm_bindgen::{JsCast, closure::Closure};
     reason = "top-level view owns its subscription and refresh lifecycle"
 )]
 pub fn App() -> impl IntoView {
+    crate::freshness::provide_clock();
     let system_open = RwSignal::new(false);
     let navigation = RwSignal::new(
         web_sys::window()

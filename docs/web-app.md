@@ -88,8 +88,11 @@ One shared telemetry task samples the workspace’s labs every five seconds,
 with bounded concurrency and timeouts. It reads labelled pods and the Kubernetes
 Metrics API; missing, stale, or failed measurements remain unavailable rather
 than becoming zero. Totals exclude terminated containers. Missing lab inventories
-make aggregate usage unavailable. CPU is displayed in millicores and memory in
-binary units. Metrics require a working cluster Metrics API.
+make aggregate usage unavailable. CPU is displayed in cores and memory in binary units. Container CPU bars
+compare usage with the configured maximum; reservations and maximums are
+labelled separately. Coverage uses explicit container counts and partial labels.
+Measurement timestamps display “Updated … ago” and continue aging while
+disconnected. Metrics require a working cluster Metrics API.
 
 Fixed passive readers observe Bitcoin Core block height, LND/CLN balances, and
 supported pinned CDK, Coco and Nutshell wallet balances. Amounts are projected

@@ -106,16 +106,55 @@ pub fn merge_resources(target: &mut Option<ResourceDemand>, page: Option<Resourc
 }
 
 pub fn cpu(value: Option<f64>) -> String {
-    value.map_or_else(
-        || "—".into(),
-        |value| {
-            if value >= 1000.0 {
-                format!("{:.2} cores", value / 1000.0)
-            } else {
-                format!("{value:.1}m")
-            }
-        },
-    )
+    value
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map_or_else(
+            || "—".into(),
+            |value| format!("{} cores", cpu_amount(value)),
+        )
+}
+pub fn cpu_amount(millicores: f64) -> String {
+    if millicores > 0.0 && millicores < 1.0 {
+        "<0.001".into()
+    } else if millicores > 0.0 && millicores < 100.0 {
+        format!("{:.3}", millicores / 1000.0)
+    } else {
+        format!("{:.2}", millicores / 1000.0)
+    }
+}
+pub fn cpu_quantity(value: &str) -> String {
+    let (number, factor) = [
+        ("n", 1e-6),
+        ("u", 1e-3),
+        ("m", 1.0),
+        ("k", 1e6),
+        ("K", 1e6),
+        ("M", 1e9),
+        ("G", 1e12),
+        ("T", 1e15),
+        ("P", 1e18),
+        ("E", 1e21),
+    ]
+    .into_iter()
+    .find_map(|(suffix, factor)| value.strip_suffix(suffix).map(|number| (number, factor)))
+    .unwrap_or((value, 1000.0));
+    cpu(number.parse::<f64>().ok().map(|number| number * factor))
+}
+pub fn elapsed_time(timestamp: i64, now: i64) -> String {
+    let seconds = now.saturating_sub(timestamp).max(0);
+    if seconds == 0 {
+        return "just now".into();
+    }
+    let (amount, unit) = if seconds < 60 {
+        (seconds, "second")
+    } else if seconds < 3600 {
+        (seconds / 60, "minute")
+    } else if seconds < 86400 {
+        (seconds / 3600, "hour")
+    } else {
+        (seconds / 86400, "day")
+    };
+    format!("{amount} {unit}{} ago", if amount == 1 { "" } else { "s" })
 }
 pub fn memory(value: Option<f64>) -> String {
     value.map_or_else(
