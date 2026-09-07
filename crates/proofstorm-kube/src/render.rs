@@ -7,7 +7,6 @@ use k8s_openapi::{
             ResourceQuotaSpec, ServiceAccount,
         },
         networking::v1::{NetworkPolicy, NetworkPolicySpec},
-        rbac::v1::{Role, RoleBinding, RoleRef, Subject},
     },
     apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::ObjectMeta},
 };
@@ -22,8 +21,6 @@ pub struct RenderedSecuritySpine {
     pub limits: LimitRange,
     pub default_deny: NetworkPolicy,
     pub service_account: ServiceAccount,
-    pub role: Role,
-    pub role_binding: RoleBinding,
 }
 
 #[must_use]
@@ -82,33 +79,12 @@ pub fn render_security_spine(instance_key: &str) -> RenderedSecuritySpine {
         automount_service_account_token: Some(false),
         ..ServiceAccount::default()
     };
-    let role = Role {
-        metadata: namespaced_metadata("proofstorm-workload"),
-        rules: Some(vec![]),
-    };
-    let role_binding = RoleBinding {
-        metadata: namespaced_metadata("proofstorm-workload"),
-        role_ref: RoleRef {
-            api_group: "rbac.authorization.k8s.io".to_owned(),
-            kind: "Role".to_owned(),
-            name: "proofstorm-workload".to_owned(),
-        },
-        subjects: Some(vec![Subject {
-            kind: "ServiceAccount".to_owned(),
-            name: "proofstorm-workload".to_owned(),
-            namespace: Some(namespace_name),
-            api_group: None,
-        }]),
-    };
-
     RenderedSecuritySpine {
         namespace,
         quota,
         limits,
         default_deny,
         service_account,
-        role,
-        role_binding,
     }
 }
 
@@ -229,7 +205,6 @@ mod tests {
             rendered.service_account.automount_service_account_token,
             Some(false)
         );
-        assert!(rendered.role.rules.expect("rules").is_empty());
     }
 
     #[test]

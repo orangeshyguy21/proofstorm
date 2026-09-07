@@ -6,6 +6,7 @@
 mod environment;
 pub use environment::{EnvironmentEntry, PendingObservationPage};
 mod delegation;
+mod runs;
 #[cfg(test)]
 mod session_tests;
 mod sessions;
@@ -308,19 +309,6 @@ impl Store {
                instance_key TEXT NOT NULL UNIQUE,
                resource_name TEXT NOT NULL UNIQUE,
                PRIMARY KEY (workspace_id, id)
-             );
-             CREATE TABLE IF NOT EXISTS operations (
-               workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-               id TEXT NOT NULL,
-               instance_id TEXT NOT NULL,
-               kind_json TEXT NOT NULL,
-               resource_name TEXT NOT NULL UNIQUE,
-               request_digest TEXT NOT NULL,
-               phase_json TEXT NOT NULL,
-               artifact_json TEXT,
-               created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-               PRIMARY KEY (workspace_id, id),
-               FOREIGN KEY (workspace_id, instance_id) REFERENCES instances(workspace_id, id)
              );
              CREATE TABLE IF NOT EXISTS experiments (
                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -1471,6 +1459,23 @@ impl Store {
             ));
         }
         self.instance_unchecked(workspace, instance_id)?;
+        let implicit = experiment_id.is_empty();
+        let resolved_run = if implicit {
+            self.implicit_run_id(workspace, principal, instance_id)?
+        } else {
+            experiment_id.to_owned()
+        };
+        let experiment_id = resolved_run.as_str();
+        let mut normalized = request.clone();
+        if let Some(fields) = normalized.as_object_mut() {
+            if fields.contains_key("experiment_id") {
+                fields.insert(
+                    "experiment_id".into(),
+                    serde_json::Value::String(resolved_run.clone()),
+                );
+            }
+        }
+        let request = &normalized;
         let envelope = serde_json::json!({
             "instanceId": instance_id, "experimentId": experiment_id,
             "sessionId": session_id, "operationId": operation_id,
@@ -1486,6 +1491,9 @@ impl Store {
             return self.operation_unchecked(workspace, &response.id);
         }
         self.authorize_operation_access(workspace, principal, instance_id, kind, request)?;
+        if implicit {
+            self.ensure_implicit_run(workspace, principal, instance_id, experiment_id)?;
+        }
         let run = self.experiment_unchecked(workspace, experiment_id)?;
         if run.instance_id != instance_id || run.phase != ExperimentPhase::Active {
             return Err(StoreError::Validation(

@@ -260,3 +260,173 @@ fn private_permissions_survive_session_finish_but_explicit_revocation_still_work
         OperationPhase::Pending
     );
 }
+
+fn implicit_submit(store: &Store, actor: &str, id: &str) -> Result<LabOperation, StoreError> {
+    store.create_operation(
+        "workspace",
+        actor,
+        "instance",
+        "",
+        "",
+        id,
+        OperationKind::WalletBalance,
+        &json!({"wallet":"wallet-b","mint":"mint","experiment_id":""}),
+        id,
+        Capability::WalletControl,
+    )
+}
+
+#[test]
+fn implicit_runs_need_no_experiment_grant_and_retries_keep_original_attribution() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("runs.db");
+    let first = Store::open(&path).unwrap();
+    seed(&first);
+    first
+        .lock()
+        .unwrap()
+        .execute(
+            "DELETE FROM grants WHERE capability='experiment.create'",
+            [],
+        )
+        .unwrap();
+    let op = implicit_submit(&first, "sender", "implicit-one").unwrap();
+    assert_eq!(op.request["experiment_id"], op.experiment_id);
+    first
+        .finish_session("workspace", "sender", &op.session_id, "finish")
+        .unwrap();
+    let second = Store::open(&path).unwrap();
+    assert_eq!(
+        implicit_submit(&second, "sender", "implicit-one").unwrap(),
+        op
+    );
+    let next = implicit_submit(&second, "sender", "implicit-two").unwrap();
+    assert_eq!(next.experiment_id, op.experiment_id);
+    assert_ne!(next.session_id, op.session_id);
+    let other = implicit_submit(&second, "receiver", "implicit-three").unwrap();
+    assert_ne!(other.experiment_id, op.experiment_id);
+    assert_eq!(
+        second
+            .experiment_unchecked("workspace", &other.experiment_id)
+            .unwrap()
+            .owner_principal_id,
+        "receiver"
+    );
+    assert_eq!(
+        second
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='operations'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn concurrent_default_run_creation_converges_without_ownership_collisions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("runs.db");
+    let first = Store::open(&path).unwrap();
+    seed(&first);
+    let second = Store::open(&path).unwrap();
+    let worker =
+        std::thread::spawn(move || implicit_submit(&second, "sender", "concurrent-b").unwrap());
+    let a = implicit_submit(&first, "sender", "concurrent-a").unwrap();
+    let b = worker.join().unwrap();
+    assert_eq!(a.experiment_id, b.experiment_id);
+    assert_ne!(a.session_id, b.session_id);
+    assert_ne!(a.sequence, b.sequence);
+}
+
+#[test]
+fn denied_and_closed_default_runs_do_not_silently_create_a_new_group() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    store.replace_grants("workspace", "stranger", []).unwrap();
+    assert!(implicit_submit(&store, "stranger", "denied").is_err());
+    assert_eq!(
+        store
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM experiments WHERE owner_principal_id='stranger'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    let op = implicit_submit(&store, "sender", "before-close").unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE experiments SET phase_json='\"closed\"' WHERE id=?1",
+            [&op.experiment_id],
+        )
+        .unwrap();
+    assert!(
+        implicit_submit(&store, "sender", "after-close")
+            .unwrap_err()
+            .to_string()
+            .contains("closed")
+    );
+    assert_eq!(
+        implicit_submit(&store, "sender", "before-close").unwrap(),
+        op
+    );
+    let wrong = store.create_operation(
+        "workspace",
+        "sender",
+        "instance",
+        "missing-run",
+        "",
+        "wrong-run",
+        OperationKind::WalletBalance,
+        &json!({"wallet":"wallet-b","mint":"mint"}),
+        "wrong-run",
+        Capability::WalletControl,
+    );
+    assert!(wrong.is_err());
+}
+
+#[test]
+fn closing_and_recreation_preserve_the_lab_incarnation_boundary() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let op = implicit_submit(&store, "sender", "first-incarnation").unwrap();
+    store
+        .begin_instance_close("workspace", "sender", "instance")
+        .unwrap();
+    assert!(
+        implicit_submit(&store, "receiver", "while-closing")
+            .unwrap_err()
+            .to_string()
+            .contains("closing")
+    );
+    let instance = store.instance_unchecked("workspace", "instance").unwrap();
+    let _guard = store.try_lifecycle_guard().unwrap().unwrap();
+    store.purge_lab(&instance).unwrap();
+    assert!(store.operation_unchecked("workspace", &op.id).is_err());
+    assert!(
+        store
+            .experiment_unchecked("workspace", &op.experiment_id)
+            .is_err()
+    );
+    seed(&store);
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE instances SET instance_key='replacement-key' WHERE id='instance'",
+            [],
+        )
+        .unwrap();
+    let replacement = implicit_submit(&store, "sender", "replacement").unwrap();
+    assert_ne!(op.experiment_id, replacement.experiment_id);
+    assert_ne!(op.session_id, replacement.session_id);
+}

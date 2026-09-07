@@ -296,7 +296,9 @@ async fn environment_reads_are_passive_scoped_and_credential_free() {
         .start_session(
             "local",
             "developer",
-            &lab.run_id(),
+            &store
+                .default_run_id("local", "developer", &lab.instance_id)
+                .unwrap(),
             "second-session",
             "second-session",
         )
@@ -803,7 +805,9 @@ async fn recorded_network_faults_identify_both_components() {
             "local",
             "developer",
             &lab.instance_id,
-            &lab.run_id(),
+            &store
+                .default_run_id("local", "developer", &lab.instance_id)
+                .unwrap(),
             "",
             "fault",
             proofstorm_core::OperationKind::NetworkPartition,

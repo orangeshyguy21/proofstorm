@@ -24,8 +24,9 @@ Rules shared by all three profiles:
   above. Network access from inside lab pods is a lab property and stays
   default-deny except for cluster DNS; both native component execution modes
   run in-cluster and cannot reach the internet under any profile.
-- `PROOFSTORM_DB` and `PROOFSTORM_WORKSPACE` are relative to the repository
-  root. Use a fresh database path per run when runs must not share state.
+- `PROOFSTORM_DB` is relative to the process working directory;
+  `PROOFSTORM_WORKSPACE` is a logical identifier. The profiles explicitly select
+  `k3d-proofstorm`. Use an absolute database path when launching elsewhere.
 
 Host permissions and the MCP toolset are independent. These profiles default
 `PROOFSTORM_TOOLSET` to `native`, a slim experiment surface that uses the real
@@ -48,3 +49,12 @@ the returned digest. Unchanged components keep their state; inspect the restart
 and removal lists before applying. Use `expected_generation` in `lab_wait` and
 handle `superseded` or startup blockers explicitly. See the
 [edit contract](../../docs/dynamic-lab-edits.md).
+
+## Starting work without experiment setup
+
+Plan and apply the lab, then inspect status, logs or execute native commands.
+Ordinary native requests can omit `experiment_id` and `session_id`; attribution
+is automatic per actor and lab incarnation. Keep the operation ID and idempotency
+key when retrying. Explicit experiments are optional grouping for evidence work.
+Export any desired evidence before closing the lab: confirmed deletion removes
+its local history and releases its name. No leases or run budgets are required.

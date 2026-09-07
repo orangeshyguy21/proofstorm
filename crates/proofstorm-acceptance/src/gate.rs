@@ -71,6 +71,7 @@ impl GateContext {
                 ("PROOFSTORM_PRINCIPAL", principal),
                 ("PROOFSTORM_CAPABILITIES", joined.as_str()),
                 ("PROOFSTORM_CONTROL_NAMESPACE", CONTROL_NAMESPACE),
+                ("PROOFSTORM_CONTEXT", "k3d-proofstorm"),
             ],
         )
     }

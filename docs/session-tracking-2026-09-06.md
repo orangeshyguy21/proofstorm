@@ -18,16 +18,21 @@ Ordinary workspace capabilities remain independent from tracking. `lab.operate` 
 
 The private ecash handoff feature uses separate `private_access_issue/read/revoke` permissions. A grant names the issuer, recipient, lab, one wallet/mint/reference, and an approved receive command. It grants no general lab operation capability. Sessions neither grant nor revoke this access. The source must still bind ready custody to the grant using `private_transfer` handoff. Private payload retention and native command timeouts remain independent controls.
 
-## Upgrade
+## Automatic run context and alpha storage
 
-Upgrade CLI/MCP, generated CRDs and controller together. The public alpha API uses `session_id` and session tools in place of lease APIs. Update configured capabilities from `lease.acquire` to `lab.operate` and remove `lease.release`. Existing database capabilities are migrated automatically.
+Ordinary native commands and diagnostics may also omit `experiment_id`. The
+implicit run is scoped to workspace, lab incarnation and actor. Reconnecting
+continues that run with a new session; a live edit retains it. Explicit experiment
+IDs keep their validation and lifecycle rules. A closed run is never silently
+reopened. Session finish remains benign and never closes the run.
 
-The one-way SQLite migration removes the exclusive index, converts lease history into sessions, preserves inactive intervals as finished, removes retired limit fields, and separates stored recipient permissions. Action attribution, evidence and exact operation replay are retained. Historical request bodies and their digests are preserved. Historical exported files remain unchanged. Keep a database backup if rollback to an old binary is required.
-
-Finish pending private handoffs before upgrading the runtime: their old Kubernetes permission snapshots have a different schema. Ordinary stored action specs accept the previous attribution field when decoding. Custody storage upgrades owner bindings independently of sessions and preserves payload bytes and handles. If multiple former leases reused the same private preparation key, the now-ambiguous key is refused; existing handles remain available.
+Upgrade CLI/MCP and controller together when their contracts change. Proofstorm
+is unreleased and initializes the current schema directly; it has no historical
+database migration support. Tests use fresh databases. Explicit lab deletion
+purges its runs, sessions and action history; export wanted evidence first.
 
 ## Validation
 
-Core, application, MCP, store, private custody, Kubernetes contract/rendering, and controller tests pass. Migration regressions cover retained operation replay and private payload custody; session regressions cover concurrent clients, overlaps, explicit finish, and independent grant revocation. Formatting, strict workspace Clippy, and Helm lint pass.
+Core, application, MCP, store, private custody, Kubernetes contract/rendering, and controller tests pass. Historical validation below describes the initial session change. Current session regressions cover concurrent clients, overlaps, explicit finish, and independent grant revocation. Formatting, strict workspace Clippy, and Helm lint pass.
 
 The initial session change did not deploy a controller or run a live cluster gate. The subsequent [environment API verification](environment-api-2026-09-06.md#live-verification--september-6-2026) upgraded the local controller and verified concurrent operation by two principals.

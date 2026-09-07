@@ -294,7 +294,7 @@ async fn shutdown_latch_prevents_an_action_from_racing_finalization() {
         "local",
         "developer",
         &view.lab.instance_id,
-        &view.lab.run_id(),
+        &view.run.as_ref().unwrap().id,
         "",
         "race",
         proofstorm_core::OperationKind::ComponentExecLive,
@@ -610,7 +610,7 @@ async fn external_deletion_reclaims_name_and_purges_agent_history() {
     assert!(store.instance("local", "developer", &old.id).is_err());
     assert!(
         store
-            .experiment("local", "developer", &first.lab.run_id())
+            .experiment("local", "developer", &first.run.as_ref().unwrap().id)
             .is_err()
     );
 }
@@ -749,4 +749,32 @@ async fn one_pending_namespace_does_not_starve_cleanup_of_other_labs() {
     );
     assert!(store.instance("local", "developer", &blocked.id).is_ok());
     assert!(store.instance("local", "developer", &gone.id).is_err());
+}
+
+#[tokio::test]
+async fn named_lab_commands_do_not_require_experiment_creation_authority() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    store
+        .revoke("local", "developer", Capability::ExperimentCreate)
+        .unwrap();
+    let labs = service(store, Arc::new(Mutex::new(Cluster::default())));
+    let view = labs.up("automatic", &spec()).await.unwrap();
+    assert!(view.run.is_some());
+    assert_eq!(view.run.unwrap().owner_principal_id, "developer");
+}
+
+#[tokio::test]
+async fn inspecting_unmaterialized_intent_does_not_require_or_create_a_run() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    store
+        .reserve_lab("local", "developer", "reserved", "pending-config")
+        .unwrap();
+    let labs = service(store, Arc::new(Mutex::new(Cluster::default())));
+    let view = labs.inspect("reserved", 0).await.unwrap();
+    assert!(view.runtime.is_none());
+    assert!(view.run.is_none());
+    assert!(view.activity.is_empty());
+    assert!(labs.sync("reserved").await.unwrap().is_empty());
 }

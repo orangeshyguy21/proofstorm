@@ -38,6 +38,12 @@ impl McpClient {
         V: AsRef<OsStr>,
     {
         let mut command = Command::new(binary);
+        // A hermetic client must not inherit a user's live DB, mode or authority.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("PROOFSTORM_") {
+                command.env_remove(key);
+            }
+        }
         for (key, value) in env {
             command.env(key, value);
         }
@@ -71,9 +77,9 @@ impl McpClient {
         Ok(client)
     }
 
-    /// Spawn with no extra environment, for the unconfigured default surface.
+    /// Spawn the explicit ephemeral discovery surface.
     pub fn spawn_bare(binary: &Path, client_name: &str) -> Result<Self> {
-        Self::spawn::<&str, &str>(binary, client_name, &[])
+        Self::spawn::<&str, &str>(binary, client_name, &[("PROOFSTORM_MODE", "memory")])
     }
 
     /// The `initialize` result captured during [`McpClient::spawn`].

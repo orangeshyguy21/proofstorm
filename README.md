@@ -60,7 +60,7 @@ target/debug/proofstorm down demo
 `status` is a pure observation of current infrastructure and cached activity;
 `sync` records completed runtime results. Use `sync demo --watch` for ongoing
 collection while that process runs. `result <request-id>` reads a retained
-operation, including after teardown. `down` revokes managed actions, collects
+operation while its lab exists; export evidence before teardown. `down` revokes managed actions, collects
 or cancels outstanding work, and waits for verified absence. Repeat it after
 a timeout to finish cleanup. External application requests use native
 protocols and are not individually journaled.
@@ -77,13 +77,14 @@ Sessions are created automatically for CLI/MCP clients. `status` includes sessio
 records and attributes activity to each actor. Clean disconnects finish tracking;
 a crash leaves an unfinished record with its last activity time. Finishing a
 session never cancels work or revokes access. See [session tracking](docs/session-tracking-2026-09-06.md)
-for the read API and upgrade notes.
+for the read API and current alpha storage policy.
 
 State survives in `.proofstorm/proofstorm.sqlite3`. Cluster selection defaults
 to `k3d-proofstorm`; `--database`, `--workspace`, `--principal`, `--context`,
-and `--namespace` select another environment explicitly. Only `init` changes
-CLI permissions. Configuration changes require closing the current lab, then
-calling `up` again; the name is reused with a fresh instance and history.
+and `--namespace` select another environment explicitly. `init` provisions
+CLI permissions (and is included in `make serve`). Calling `up` with changed
+configuration edits the live lab and preserves unchanged components. Closing
+the lab purges its local activity; reusing its name creates a fresh instance.
 `make down` deletes the entire local cluster, while `proofstorm down demo`
 closes just that lab.
 
@@ -133,6 +134,28 @@ Use `make serve PORT=8788` to change the port. Global CLI options passed through
 `ARGS` apply to both initialization and serving. Each launch restores the
 selected identity's default developer permissions. A configured MCP server
 registers its own agent identity and grants at startup.
+
+## Environment selection
+
+CLI and MCP share database, workspace, context and namespace defaults. CLI flags
+override `PROOFSTORM_DB`, `PROOFSTORM_WORKSPACE`, `PROOFSTORM_CONTEXT` and
+`PROOFSTORM_CONTROL_NAMESPACE`. Both pin `k3d-proofstorm` unless overridden;
+changing your current kubeconfig context does not redirect Proofstorm. Relative
+DB paths resolve from the working directory; startup prints resolved configuration
+to stderr. Use the same working directory or an absolute DB path across clients.
+
+MCP requires `PROOFSTORM_PRINCIPAL` to identify the agent. An explicit operator
+`PROOFSTORM_CAPABILITIES` list provisions its grants; otherwise it uses existing
+grants. Missing configuration fails visibly. `PROOFSTORM_MODE=offline` explicitly
+selects durable authoring/cached reads, and `PROOFSTORM_MODE=memory` provides
+limited ephemeral discovery. Neither advertises runtime commands. The default is
+`connected`; failures never fall back to another cluster or temporary storage.
+
+Native commands, logs, restart, partition/heal, private transfer and reachability
+can omit `experiment_id` and `session_id`. Proofstorm records an actor-specific
+run and session automatically. Receipts contain their IDs for optional evidence
+grouping. Explicit experiments remain available; keep operation IDs and retry
+keys stable when resubmitting an interrupted request.
 
 ## Agent quick start
 

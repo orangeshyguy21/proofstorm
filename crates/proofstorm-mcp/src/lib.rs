@@ -1107,6 +1107,8 @@ pub struct OperationWaitManyResult {
 #[serde(deny_unknown_fields)]
 pub struct NodeControlRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1119,6 +1121,8 @@ pub struct NodeControlRequest {
 #[serde(deny_unknown_fields)]
 pub struct ComponentLogsRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1174,6 +1178,8 @@ pub struct AuthenticationReplayRequest {
 #[serde(deny_unknown_fields)]
 pub struct ComponentExecRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1198,6 +1204,8 @@ pub struct ComponentExecLiveRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_payload: Option<proofstorm_core::private_io::PayloadBinding>,
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1387,6 +1395,8 @@ fn validate_private_transfer_endpoints(
 #[serde(deny_unknown_fields)]
 pub struct PrivateTransferRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1661,6 +1671,8 @@ pub struct ChannelRebalanceRequest {
 #[serde(deny_unknown_fields)]
 pub struct NetworkPartitionRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1705,6 +1717,8 @@ pub struct NetworkLossRequest {
 #[serde(deny_unknown_fields)]
 pub struct NetworkHealRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1730,6 +1744,8 @@ pub struct WalletInitializeRequest {
 #[serde(deny_unknown_fields)]
 pub struct WalletBalanceRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -1849,6 +1865,8 @@ pub struct ConservationOracleRequest {
 #[serde(deny_unknown_fields)]
 pub struct ReachabilityOracleRequest {
     pub instance_id: String,
+    /// Optional; defaults to this actor's lab run.
+    #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
@@ -2514,11 +2532,42 @@ impl ProofstormMcp {
     }
 
     #[must_use]
-    pub fn with_kubernetes(mut self, client: Client, control_namespace: impl Into<String>) -> Self {
-        self.kubernetes = Some(KubernetesRuntime {
+    pub fn with_kubernetes(self, client: Client, control_namespace: impl Into<String>) -> Self {
+        self.with_runtime(proofstorm_app::Runtime::new(
             client,
-            control_namespace: control_namespace.into(),
+            control_namespace.into(),
+        ))
+    }
+
+    #[must_use]
+    pub fn with_runtime(mut self, runtime: proofstorm_app::Runtime) -> Self {
+        self.kubernetes = Some(KubernetesRuntime {
+            client: runtime.client,
+            control_namespace: runtime.control_namespace,
+            cluster_source: runtime.cluster_source,
         });
+        self
+    }
+
+    /// Explicit offline authoring and cached reads; no runtime commands are advertised.
+    #[must_use]
+    pub fn offline(mut self) -> Self {
+        for name in self.tool_names() {
+            let available = (ProofstormToolset::Design.includes(&name)
+                && !name.contains("candidate"))
+                || matches!(
+                    name.as_str(),
+                    "proofstorm_lab_plan"
+                        | "proofstorm_experiment_read"
+                        | "proofstorm_session_read"
+                        | "proofstorm_session_list"
+                        | "proofstorm_action_list"
+                        | "proofstorm_lab_diff"
+                );
+            if !available {
+                self.tool_router.disable_route(name);
+            }
+        }
         self
     }
 
@@ -2754,6 +2803,7 @@ impl ProofstormMcp {
 struct KubernetesRuntime {
     client: Client,
     control_namespace: String,
+    cluster_source: String,
 }
 
 #[tool_router(router = tool_router)]
@@ -2762,14 +2812,14 @@ impl ProofstormMcp {
         let runtime = self.runtime()?;
         Ok(proofstorm_app::lab::Labs::new(
             self.store.clone(),
-            proofstorm_app::Runtime::new(runtime.client.clone(), runtime.control_namespace.clone()),
+            runtime.shared(),
             self.workspace.clone(),
             self.principal.clone(),
         ))
     }
 
     #[tool(
-        description = "Start a named lab from its specification. Publication and materialization are resumable stages. A default run and its activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing lab requires finishing it first. Returns the same status shape as lab_inspect."
+        description = "Start a named lab from its specification. Publication and materialization are resumable stages. A default run and its activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing lab applies a live edit and preserves unchanged components. Returns the same status shape as lab_inspect."
     )]
     async fn proofstorm_lab_up(
         &self,
@@ -3254,10 +3304,7 @@ impl ProofstormMcp {
                 .map_err(store_error)?;
             let runtime = self.runtime()?;
             let status = proofstorm_app::updates::reconcile(
-                &proofstorm_app::Runtime::new(
-                    runtime.client.clone(),
-                    runtime.control_namespace.clone(),
-                ),
+                &runtime.shared(),
                 &self.store,
                 &self.workspace,
                 &self.principal,
@@ -3308,10 +3355,7 @@ impl ProofstormMcp {
                 .await
                 .map_err(app_error)?;
             proofstorm_app::lifecycle::reconcile_name(
-                &proofstorm_app::Runtime::new(
-                    runtime.client.clone(),
-                    runtime.control_namespace.clone(),
-                ),
+                &runtime.shared(),
                 &self.store,
                 &self.workspace,
                 &self.principal,
@@ -3335,10 +3379,7 @@ impl ProofstormMcp {
         let lock_digest = revision.lock.digest.clone();
         let runtime = self.runtime()?;
         let status = proofstorm_app::lifecycle::materialize(
-            &proofstorm_app::Runtime::new(
-                runtime.client.clone(),
-                runtime.control_namespace.clone(),
-            ),
+            &runtime.shared(),
             &self.store,
             &self.workspace,
             &self.principal,
@@ -3722,10 +3763,7 @@ impl ProofstormMcp {
         }
         let runtime = self.runtime()?;
         proofstorm_app::lifecycle::materialize(
-            &proofstorm_app::Runtime::new(
-                runtime.client.clone(),
-                runtime.control_namespace.clone(),
-            ),
+            &runtime.shared(),
             &self.store,
             &self.workspace,
             &self.principal,
@@ -3907,10 +3945,7 @@ impl ProofstormMcp {
         loop {
             let status = match tokio::time::timeout_at(deadline, async {
                 let runtime = self.runtime()?;
-                let shared = proofstorm_app::Runtime::new(
-                    runtime.client.clone(),
-                    runtime.control_namespace.clone(),
-                );
+                let shared = runtime.shared();
                 let current = match self.store.instance(
                     &self.workspace,
                     &self.principal,
@@ -3980,10 +4015,7 @@ impl ProofstormMcp {
                     .await
                     .map_err(app_error)?;
                 proofstorm_app::lifecycle::reconcile_name(
-                    &proofstorm_app::Runtime::new(
-                        runtime.client.clone(),
-                        runtime.control_namespace.clone(),
-                    ),
+                    &runtime.shared(),
                     &self.store,
                     &self.workspace,
                     &self.principal,
@@ -4069,10 +4101,7 @@ impl ProofstormMcp {
         if reached {
             let runtime = self.runtime()?;
             proofstorm_app::lifecycle::reconcile_name(
-                &proofstorm_app::Runtime::new(
-                    runtime.client.clone(),
-                    runtime.control_namespace.clone(),
-                ),
+                &runtime.shared(),
                 &self.store,
                 &self.workspace,
                 &self.principal,
@@ -4451,7 +4480,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Read a bounded tail of one lab component's own container log, journaled as an experiment artifact. This reads the selected running or failed component pod and keeps working while the component is unready, crash-looping, or stopped. The artifact also reports pod phase, container readiness, and restart count"
+        description = "Read a bounded tail of one lab component's own container log, journaled with automatic run and session attribution. This reads the selected running or failed component pod and keeps working while the component is unready, crash-looping, or stopped. The artifact also reports pod phase, container readiness, and restart count"
     )]
     async fn proofstorm_component_logs(
         &self,
@@ -5675,6 +5704,17 @@ impl ProofstormMcp {
         Parameters(request): Parameters<NetworkHealRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize(Capability::NetworkHeal)?;
+        let mut request = request;
+        request.experiment_id = self
+            .store
+            .operation_run_id(
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+                &request.experiment_id,
+                Capability::NetworkHeal,
+            )
+            .map_err(store_error)?;
         let (instance, _) = self
             .store
             .operation_context_for(
@@ -8192,7 +8232,7 @@ impl ServerHandler for ProofstormMcp {
         .with_instructions(if self.toolset == ProofstormToolset::Developer {
             "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named lab with lab_up, inspect runtime and cached activity with lab_inspect, and run native argv commands with lab_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use lab_sync to collect durable receipts; inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate lab is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with lab_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
         } else {
-            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. After readiness, create an experiment; session attribution is automatic and optional session IDs are metadata. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Close the experiment, export evidence, and close and await the lab. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection."
+            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the lab; deletion purges lab-owned activity. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection."
         }
         )
     }
@@ -8420,7 +8460,6 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
                 Capability::LabMaterialize,
                 Capability::LabStatus,
                 Capability::CatalogRead,
-                Capability::ExperimentCreate,
                 Capability::ExperimentRead,
                 Capability::LabOperate,
             ],
@@ -8443,7 +8482,6 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
                 Capability::LabStatus,
                 Capability::ComponentExecLive,
                 Capability::ArtifactRead,
-                Capability::ExperimentCreate,
                 Capability::ExperimentRead,
                 Capability::LabOperate,
             ],
@@ -10407,14 +10445,19 @@ fn unix_now() -> i64 {
 }
 
 impl KubernetesRuntime {
+    fn shared(&self) -> proofstorm_app::Runtime {
+        proofstorm_app::Runtime {
+            client: self.client.clone(),
+            control_namespace: self.control_namespace.clone(),
+            cluster_source: self.cluster_source.clone(),
+        }
+    }
+
     async fn private_access(
         &self,
         grant: &proofstorm_core::PrivateAccessGrant,
     ) -> Result<(), ErrorData> {
-        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
-            .private_access(grant)
-            .await
-            .map_err(app_error)
+        self.shared().private_access(grant).await.map_err(app_error)
     }
 
     async fn apply_candidate_build(&self, candidate: &CandidateBuild) -> Result<(), ErrorData> {
@@ -10538,7 +10581,7 @@ impl KubernetesRuntime {
         instance: &LabInstance,
         action: &ProofstormLabAction,
     ) -> Result<(), ErrorData> {
-        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+        self.shared()
             .apply_action(instance, action)
             .await
             .map_err(app_error)
@@ -10548,7 +10591,7 @@ impl KubernetesRuntime {
         &self,
         operation: &LabOperation,
     ) -> Result<Option<(OperationPhase, serde_json::Value)>, ErrorData> {
-        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+        self.shared()
             .action_status(operation)
             .await
             .map_err(app_error)
@@ -10562,24 +10605,18 @@ impl KubernetesRuntime {
         operation: &LabOperation,
         token: &str,
     ) -> Result<bool, ErrorData> {
-        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
+        self.shared()
             .request_action_cancellation(operation, token)
             .await
             .map_err(app_error)
     }
 
     async fn status(&self, instance: LabInstance) -> Result<LabInstanceStatus, ErrorData> {
-        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
-            .status(instance)
-            .await
-            .map_err(app_error)
+        self.shared().status(instance).await.map_err(app_error)
     }
 
     async fn close(&self, instance: LabInstance) -> Result<LabInstanceStatus, ErrorData> {
-        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
-            .close(instance)
-            .await
-            .map_err(app_error)
+        self.shared().close(instance).await.map_err(app_error)
     }
 }
 
@@ -12106,6 +12143,134 @@ mod tests {
             stale.data.expect("cursor error data")["code"],
             "catalog_cursor_invalid"
         );
+    }
+
+    #[test]
+    fn native_operation_schemas_do_not_require_bookkeeping() {
+        let schemas = [
+            schemars::schema_for!(ComponentLogsRequest),
+            schemars::schema_for!(ComponentExecLiveRequest),
+            schemars::schema_for!(ComponentExecRequest),
+            schemars::schema_for!(NodeControlRequest),
+            schemars::schema_for!(PrivateTransferRequest),
+            schemars::schema_for!(NetworkPartitionRequest),
+            schemars::schema_for!(NetworkHealRequest),
+            schemars::schema_for!(ReachabilityOracleRequest),
+            schemars::schema_for!(WalletBalanceRequest),
+        ];
+        for schema in schemas {
+            let value = serde_json::to_value(schema).unwrap();
+            let required = value["required"].as_array().unwrap();
+            assert!(
+                !required.contains(&serde_json::json!("experiment_id")),
+                "{value}"
+            );
+            assert!(
+                !required.contains(&serde_json::json!("session_id")),
+                "{value}"
+            );
+            assert!(required.contains(&serde_json::json!("operation_id")));
+            assert!(required.contains(&serde_json::json!("idempotency_key")));
+        }
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "raw requests and a mock cluster verify automatic admission, unready logs and replay end to end"
+    )]
+    async fn raw_native_requests_admit_without_experiment_setup_even_when_lab_is_unready() {
+        let store = seeded_store();
+        let spec = serde_json::from_value(serde_json::json!({
+            "api_version":"proofstorm/v1alpha1", "name":"automatic", "links":[],
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"30.0","config_version":"bitcoin-core/30/v1","control":"laboratory","config":{}}]
+        })).unwrap();
+        store
+            .create_draft("alpha", "designer", "automatic", &spec, "draft")
+            .unwrap();
+        let revision = store
+            .publish("alpha", "designer", "automatic", 1, "publish")
+            .unwrap();
+        let instance = store
+            .materialize("alpha", "designer", "automatic", &revision.digest, "apply")
+            .unwrap();
+        for capability in [
+            Capability::ComponentLogs,
+            Capability::ComponentExecLive,
+            Capability::LabOperate,
+            Capability::ExperimentRead,
+        ] {
+            store.grant("alpha", "designer", capability).unwrap();
+        }
+        assert!(
+            !store
+                .capabilities("alpha", "designer")
+                .unwrap()
+                .contains(&Capability::ExperimentCreate)
+        );
+        let resource = proofstorm_kube::ProofstormLab::new(
+            &instance.resource_name,
+            proofstorm_kube::ProofstormLabSpec {
+                workspace_id: "alpha".into(),
+                instance_id: instance.id,
+                instance_key: instance.instance_key,
+                revision_digest: revision.digest,
+                lock: revision.lock,
+                lab: revision.lab,
+            },
+        ); // No Ready status: diagnosis must still work.
+        let lab_json = serde_json::to_vec(&resource).unwrap();
+        let submissions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = submissions.clone();
+        let client = kube::Client::new(
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                let lab_json = lab_json.clone();
+                let count = count.clone();
+                async move {
+                    let response = if request.uri().path().contains("/proofstormlabs/") {
+                        http::Response::new(kube::client::Body::from(lab_json))
+                    } else if request.method() == http::Method::GET {
+                        http::Response::builder().status(404).body(kube::client::Body::from(r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"missing","code":404}"#.as_bytes().to_vec())).unwrap()
+                    } else {
+                        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let bytes = request.into_body().collect_bytes().await.unwrap();
+                        http::Response::new(kube::client::Body::from(bytes))
+                    };
+                    Ok::<_, std::io::Error>(response)
+                }
+            }),
+            "system",
+        );
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client.clone(), "system");
+        let logs = serde_json::json!({"instance_id":"automatic","component":"chain","tail_lines":20,"operation_id":"logs","idempotency_key":"logs"});
+        let first = service
+            .proofstorm_component_logs(Parameters(serde_json::from_value(logs.clone()).unwrap()))
+            .await
+            .unwrap()
+            .0;
+        assert!(!first.experiment_id.is_empty());
+        let exec = serde_json::json!({"instance_id":"automatic","component":"chain","argv":["bitcoin-cli","-version"],"timeout_seconds":10,"operation_id":"exec","idempotency_key":"exec"});
+        let second = service
+            .proofstorm_component_exec_live(Parameters(serde_json::from_value(exec).unwrap()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(first.experiment_id, second.experiment_id);
+        store
+            .finish_session("alpha", "designer", &first.session_id, "finish")
+            .unwrap();
+        let reconnect = ProofstormMcp::new(store, "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client, "system");
+        let replay = reconnect
+            .proofstorm_component_logs(Parameters(serde_json::from_value(logs).unwrap()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(first, replay);
+        assert_eq!(submissions.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

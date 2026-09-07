@@ -160,7 +160,6 @@ impl Labs {
             Capability::LabMaterialize,
             Capability::LabStatus,
             Capability::CatalogRead,
-            Capability::ExperimentCreate,
             Capability::ExperimentRead,
             Capability::LabOperate,
         ])?;
@@ -261,24 +260,28 @@ impl Labs {
         self.inspect(name, 0).await
     }
 
+    fn run(&self, lab: &LabHandle) -> Result<Option<proofstorm_core::Experiment>, Error> {
+        let Some(id) = optional(self.store.default_run_id(
+            &self.workspace,
+            &self.principal,
+            &lab.instance_id,
+        ))?
+        else {
+            return Ok(None);
+        };
+        optional(self.store.experiment(&self.workspace, &self.principal, &id))
+    }
+
     fn ensure_run(&self, lab: &LabHandle) -> Result<Session, Error> {
-        if optional(
-            self.store
-                .experiment(&self.workspace, &self.principal, &lab.run_id()),
-        )?
-        .is_none()
-        {
-            self.store.create_experiment(
-                &self.workspace,
-                &self.principal,
-                &lab.run_id(),
-                &lab.instance_id,
-                &format!("{}:create", lab.run_id()),
-            )?;
-        }
+        let run = self.store.ensure_default_run(
+            &self.workspace,
+            &self.principal,
+            &lab.instance_id,
+            Capability::LabOperate,
+        )?;
         Ok(self
             .store
-            .track_session(&self.workspace, &self.principal, &lab.run_id(), "")?)
+            .track_session(&self.workspace, &self.principal, &run.id, "")?)
     }
 
     /// Pure observation: no jobs, or journal synchronization.
@@ -299,19 +302,16 @@ impl Labs {
             Err(e) if e.kind == ErrorKind::Missing => None,
             Err(e) => return Err(e),
         };
-        let run = optional(
-            self.store
-                .experiment(&self.workspace, &self.principal, &lab.run_id()),
-        )?;
+        let run = self.run(&lab)?;
         let sessions =
             self.store
                 .sessions(&self.workspace, &self.principal, &lab.instance_id, "", 20)?;
-        let activity = if run.is_some() {
+        let activity = if let Some(run) = &run {
             self.store
                 .actions(
                     &self.workspace,
                     &self.principal,
-                    &lab.run_id(),
+                    &run.id,
                     after_sequence,
                     20,
                 )?
@@ -341,20 +341,15 @@ impl Labs {
         let lab = self
             .store
             .lab_handle(&self.workspace, &self.principal, name)?;
-        if optional(
-            self.store
-                .experiment(&self.workspace, &self.principal, &lab.run_id()),
-        )?
-        .is_none()
-        {
+        let Some(run) = self.run(&lab)? else {
             return Ok(Vec::new());
-        }
+        };
         journal::reconcile(
             &self.runtime,
             &self.store,
             &self.workspace,
             &self.principal,
-            &lab.run_id(),
+            &run.id,
         )
         .await
     }
@@ -385,7 +380,6 @@ impl Labs {
                 "new actions are not admitted while closing",
             ));
         }
-        self.ensure_run(&lab)?;
         let (instance, revision) = self.store.operation_context_for(
             &self.workspace,
             &self.principal,
@@ -405,7 +399,7 @@ impl Labs {
             &self.workspace,
             &self.principal,
             &instance.id,
-            &lab.run_id(),
+            "",
             "",
             request_id,
             OperationKind::ComponentExecLive,
@@ -518,17 +512,12 @@ impl Labs {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        if optional(
-            self.store
-                .experiment(&self.workspace, &self.principal, &lab.run_id()),
-        )?
-        .is_some()
-        {
+        if let Some(run) = self.run(&lab)? {
             self.store.close_experiment(
                 &self.workspace,
                 &self.principal,
-                &lab.run_id(),
-                &format!("{}:close", lab.run_id()),
+                &run.id,
+                &format!("{}:close", run.id),
             )?;
         }
         match self.instance(&lab) {

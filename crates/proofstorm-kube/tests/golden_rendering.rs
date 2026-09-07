@@ -1225,8 +1225,6 @@ fn full_baseline_lab_matches_its_golden_contract() {
                 "limits": spine.limits,
                 "defaultDeny": spine.default_deny,
                 "serviceAccount": spine.service_account,
-                "role": spine.role,
-                "roleBinding": spine.role_binding,
             },
             "crossTargetNativeExec": native_exec,
         }),

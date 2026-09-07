@@ -3927,43 +3927,6 @@
         }
       }
     },
-    "role": {
-      "apiVersion": "rbac.authorization.k8s.io/v1",
-      "kind": "Role",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-workload",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "rules": []
-    },
-    "roleBinding": {
-      "apiVersion": "rbac.authorization.k8s.io/v1",
-      "kind": "RoleBinding",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-workload",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "roleRef": {
-        "apiGroup": "rbac.authorization.k8s.io",
-        "kind": "Role",
-        "name": "proofstorm-workload"
-      },
-      "subjects": [
-        {
-          "kind": "ServiceAccount",
-          "name": "proofstorm-workload",
-          "namespace": "proofstorm-i-golden-b2"
-        }
-      ]
-    },
     "serviceAccount": {
       "apiVersion": "v1",
       "automountServiceAccountToken": false,

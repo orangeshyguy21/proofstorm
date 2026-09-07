@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use proofstorm_app::{Runtime, lab::Labs};
+use proofstorm_app::{
+    config::{DEFAULT_CONTEXT, DEFAULT_DATABASE, DEFAULT_NAMESPACE, DEFAULT_WORKSPACE},
+    lab::Labs,
+};
 use proofstorm_core::{
     Capability, InstancePhase, LabSpec, OperationPhase,
     native::{NativeCommand, NativeOutput, OutputMode},
@@ -15,15 +18,40 @@ mod server_restart;
     about = "Start protocol labs, connect your app, and inspect what happened"
 )]
 struct Args {
-    #[arg(long, global = true, default_value = ".proofstorm/proofstorm.sqlite3")]
+    #[arg(
+        long,
+        global = true,
+        env = "PROOFSTORM_DB",
+        default_value = DEFAULT_DATABASE
+    )]
     database: PathBuf,
-    #[arg(long, global = true, default_value = "local-lab")]
+    #[arg(
+        long,
+        global = true,
+        env = "PROOFSTORM_WORKSPACE",
+        default_value = DEFAULT_WORKSPACE
+    )]
     workspace: String,
-    #[arg(long, global = true, default_value = "developer")]
+    #[arg(
+        long,
+        global = true,
+        env = "PROOFSTORM_PRINCIPAL",
+        default_value = "developer"
+    )]
     principal: String,
-    #[arg(long, global = true, default_value = "k3d-proofstorm")]
+    #[arg(
+        long,
+        global = true,
+        env = "PROOFSTORM_CONTEXT",
+        default_value = DEFAULT_CONTEXT
+    )]
     context: String,
-    #[arg(long, global = true, default_value = "proofstorm-system")]
+    #[arg(
+        long,
+        global = true,
+        env = "PROOFSTORM_CONTROL_NAMESPACE",
+        default_value = DEFAULT_NAMESPACE
+    )]
     namespace: String,
     #[command(subcommand)]
     command: Command,
@@ -127,7 +155,20 @@ enum Command {
 )]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    let environment = proofstorm_app::config::Environment::resolve(
+        |key| match key {
+            "PROOFSTORM_DB" => Some(args.database.to_string_lossy().into_owned()),
+            "PROOFSTORM_WORKSPACE" => Some(args.workspace.clone()),
+            "PROOFSTORM_PRINCIPAL" => Some(args.principal.clone()),
+            "PROOFSTORM_CONTEXT" => Some(args.context.clone()),
+            "PROOFSTORM_CONTROL_NAMESPACE" => Some(args.namespace.clone()),
+            _ => None,
+        },
+        &std::env::current_dir()?,
+    )?;
+    args.database.clone_from(&environment.database);
+    environment.report();
     if let Some(parent) = args.database.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
@@ -171,20 +212,8 @@ async fn main() -> Result<()> {
         }
     }
     store.authorize(&args.workspace,&args.principal,Capability::LabStatus).context("developer is not configured; run proofstorm init explicitly to configure local permissions")?;
-    let config = kube::Config::from_kubeconfig(&kube::config::KubeConfigOptions {
-        context: Some(args.context.clone()),
-        ..Default::default()
-    })
-    .await
-    .context("read the selected Kubernetes context; run make setup first")?;
-    let mut runtime = Runtime::new(kube::Client::try_from(config)?, args.namespace);
-    runtime.cluster_source.clone_from(&args.context);
+    let runtime = environment.runtime().await?;
     let labs = Labs::new(store, runtime, args.workspace, args.principal);
-    eprintln!(
-        "database={} context={}",
-        args.database.display(),
-        args.context
-    );
     match args.command {
         Command::Up {
             file,

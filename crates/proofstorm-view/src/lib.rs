@@ -236,12 +236,6 @@ pub struct LabHandle {
     pub phase: LabHandlePhase,
     pub instance_id: String,
 }
-impl LabHandle {
-    #[must_use]
-    pub fn run_id(&self) -> String {
-        format!("run-{}", self.instance_id)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

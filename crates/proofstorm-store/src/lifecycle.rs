@@ -168,7 +168,7 @@ impl Store {
         let ws = &instance.workspace_id;
         let id = &instance.id;
         let mut ids = BTreeSet::from([id.clone()]);
-        for table in ["experiments", "sessions", "actions", "operations"] {
+        for table in ["experiments", "sessions", "actions"] {
             ids.extend(
                 tx.prepare(&format!(
                     "SELECT id FROM {table} WHERE workspace_id=?1 AND instance_id=?2"
@@ -236,7 +236,6 @@ impl Store {
             "wallet_payment_claims",
             "wallet_quote_observations",
             "actions",
-            "operations",
             "sessions",
             "experiments",
             "lab_updates",

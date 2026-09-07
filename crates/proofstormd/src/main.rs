@@ -15,7 +15,6 @@ use k8s_openapi::api::{
     },
     discovery::v1::EndpointSlice,
     networking::v1::NetworkPolicy,
-    rbac::v1::{Role, RoleBinding},
 };
 use kube::{
     Api, Client, ResourceExt,
@@ -2366,17 +2365,6 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             &Patch::Apply(&rendered.service_account),
         )
         .await?;
-    Api::<Role>::namespaced(client.clone(), &namespace_name)
-        .patch("proofstorm-workload", &patch, &Patch::Apply(&rendered.role))
-        .await?;
-    Api::<RoleBinding>::namespaced(client, &namespace_name)
-        .patch(
-            "proofstorm-workload",
-            &patch,
-            &Patch::Apply(&rendered.role_binding),
-        )
-        .await?;
-
     let client = context.client.clone();
     let secrets = Api::<Secret>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.secrets {

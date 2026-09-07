@@ -99,6 +99,7 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         binary(),
         "proofstorm-policy-test",
         &[
+            ("PROOFSTORM_MODE", "offline".as_ref()),
             ("PROOFSTORM_DB", database.as_os_str()),
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
@@ -132,12 +133,14 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
 #[test]
 fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
     let directory = tempfile::tempdir().expect("tempdir");
+    let kubeconfig = disconnected_kubeconfig(directory.path());
     let database = directory.path().join("proofstorm.sqlite3");
     let mut client = McpClient::spawn(
         binary(),
         "private-transfer-contract",
         &[
             ("PROOFSTORM_DB", database.as_os_str()),
+            ("KUBECONFIG", kubeconfig.as_os_str()),
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "agent".as_ref()),
             (
@@ -288,12 +291,14 @@ fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
 #[test]
 fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
     let directory = tempfile::tempdir().unwrap();
+    let kubeconfig = disconnected_kubeconfig(directory.path());
     let database = directory.path().join("developer.sqlite3");
     let mut client = McpClient::spawn(binary(), "developer-discovery", &[
         ("PROOFSTORM_DB", database.as_os_str()),
+            ("KUBECONFIG", kubeconfig.as_os_str()),
         ("PROOFSTORM_WORKSPACE", "local".as_ref()),
         ("PROOFSTORM_PRINCIPAL", "developer".as_ref()),
-        ("PROOFSTORM_CAPABILITIES", "catalog.read,lab.create,lab.read,lab.publish,lab.materialize,lab.status,lab.close,experiment.create,experiment.read,experiment.close,lab.operate,component.exec_live,artifact.read,action.cancel".as_ref()),
+        ("PROOFSTORM_CAPABILITIES", "catalog.read,lab.create,lab.read,lab.publish,lab.materialize,lab.status,lab.close,experiment.read,experiment.close,lab.operate,component.exec_live,artifact.read,action.cancel".as_ref()),
     ]).unwrap();
     let listed = client.request("tools/list", json!({})).unwrap();
     let names = listed["tools"]
@@ -330,4 +335,66 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
             .unwrap()
             .contains("lab_up")
     );
+}
+
+fn disconnected_kubeconfig(directory: &Path) -> std::path::PathBuf {
+    let path = directory.join("kubeconfig");
+    std::fs::write(&path, "apiVersion: v1\nkind: Config\ncurrent-context: other\ncontexts:\n- name: k3d-proofstorm\n  context: {cluster: test, user: test}\nclusters:\n- name: test\n  cluster: {server: 'http://127.0.0.1:1'}\nusers:\n- name: test\n  user: {}\n").unwrap();
+    path
+}
+
+#[test]
+fn offline_mode_uses_existing_grants_without_replacing_them() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("existing.db");
+    let store = proofstorm_store::Store::open(&database).unwrap();
+    store
+        .put_workspace(&proofstorm_store::Workspace {
+            id: "local-lab".into(),
+            name: "local-lab".into(),
+        })
+        .unwrap();
+    store.put_principal("reader").unwrap();
+    store
+        .grant("local-lab", "reader", proofstorm_core::Capability::LabRead)
+        .unwrap();
+    let mut client = McpClient::spawn(
+        binary(),
+        "existing-grants",
+        &[
+            ("PROOFSTORM_MODE", "offline".as_ref()),
+            ("PROOFSTORM_DB", database.as_os_str()),
+            ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
+            ("PROOFSTORM_TOOLSET", "all".as_ref()),
+        ],
+    )
+    .unwrap();
+    let listed = client.request("tools/list", json!({})).unwrap();
+    let names = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"proofstorm_lab_read"));
+    assert!(!names.contains(&"proofstorm_lab_apply"));
+    assert!(!names.contains(&"proofstorm_component_exec_live"));
+    assert_eq!(
+        store.capabilities("local-lab", "reader").unwrap(),
+        [proofstorm_core::Capability::LabRead].into()
+    );
+}
+
+#[test]
+fn missing_agent_identity_fails_instead_of_starting_an_ephemeral_service() {
+    let mut command = std::process::Command::new(binary());
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("PROOFSTORM_") {
+            command.env_remove(key);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("PROOFSTORM_PRINCIPAL"));
+    assert!(output.stdout.is_empty());
 }
