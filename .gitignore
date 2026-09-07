@@ -3,6 +3,7 @@
 *.log
 .DS_Store
 /dev/
+/output/
 /target/
 /.tools/
 /.proofstorm/

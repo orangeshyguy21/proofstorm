@@ -19,8 +19,7 @@ target/debug/proofstorm status demo
 
 Setup restores required local catalog images from the Docker cache, and doctor
 verifies image pulls from the cluster nodes. Missing exact artifacts fail setup
-explicitly. See [startup failures and image recovery](docs/startup-failures.md)
-for agent-visible error states and cold-machine prerequisites.
+explicitly, with startup errors available through component status and logs.
 
 The example starts Bitcoin Core and a Cashu mint with an embedded BDK backend.
 It uses Bitcoin regtest and the mint's on-chain NUT-30 support. It does not
@@ -76,8 +75,7 @@ an interrupted submission. Command output defaults to private; only use
 Sessions are created automatically for CLI/MCP clients. `status` includes session
 records and attributes activity to each actor. Clean disconnects finish tracking;
 a crash leaves an unfinished record with its last activity time. Finishing a
-session never cancels work or revokes access. See [session tracking](docs/session-tracking-2026-09-06.md)
-for the read API and current alpha storage policy.
+session never cancels work or revokes access.
 
 State survives in `.proofstorm/proofstorm.sqlite3`. Cluster selection defaults
 to `k3d-proofstorm`; `--database`, `--workspace`, `--principal`, `--context`,
@@ -94,8 +92,6 @@ Change the configuration and run `proofstorm up` with the same name. Unchanged
 components keep their state; `--preview` shows additions, restarts, and removals.
 Removed data is retained until explicitly deleted. Agents use the existing MCP
 plan/apply flow with an instance target and expected generation.
-
-See [dynamic lab edits](docs/dynamic-lab-edits.md) for the CLI and MCP contracts.
 
 ## See the environment
 
@@ -119,14 +115,14 @@ collector, including after an agent disconnects. The canvas shows live balances
 and the lab’s highest observed block height. Open System for measured CPU,
 memory and container state, expanded by lab and component. Appearance follows
 the system theme, with Dark and Light overrides. Use the same database and
-workspace as your agent. See the [live web app guide](docs/web-app.md) and the
-[environment API contract](docs/environment-api-2026-09-06.md) for scope,
-pagination, local HTTP access, and the JSON Schema.
+workspace as your agent. The checked-in
+[environment schema](schemas/v1alpha1/environment.schema.json) describes the
+response format.
 
 `make serve` builds the website and CLI, initializes the local developer
 permissions, then keeps the server running. No separate `init` is needed.
 Deleted labs are cleaned up automatically and their names become reusable. Export
-evidence before closing a lab; see [lab lifecycle](docs/lab-lifecycle.md).
+evidence before closing a lab.
 Running it again replaces this checkout's existing Proofstorm server, refreshing
 its cluster connection after a rebuild. Other applications using the port are
 left running and reported as a port conflict. Replacement uses `lsof` and `ps`.
@@ -342,17 +338,12 @@ waiting or cancellation; controller interruption does not replay the command.
 Use `argv` for direct invocation, or `script` for shell semantics. Output is private
 by default; opt into `public` for safe output or `json_fields` for selected typed
 receipt fields. Requests remain journaled, so never embed secrets in arguments.
-The [reliable native execution contract](docs/reliable-native-execution.md)
-describes receipts, uncertain outcomes and the next fuzzer checkpoint.
 `proofstorm_component_forensics` (`component.forensics`) instead creates a
 short-lived pod from the locked image and data mounts. It is useful for offline
 source/database inspection, but explicitly does not promise live CLI or socket
 connectivity. Forensics retains its separate bounded-output contract. Native CLIs are the
 normal surface for operating deployed software; use typed actions where they
 provide coordination, lifecycle guarantees, or useful portable observations.
-The [native-first validation plan](docs/native-first-experiments.md) describes
-how execution choices and evidence are evaluated; the
-[recovery round](docs/recovery-round-2026-09-04.md) records live findings.
 `proofstorm_component_restart`
 (`component.control`) rolls any primary component workload, including mints and
 wallets, while preserving its persistent state.
@@ -702,7 +693,7 @@ does not change wallet records or contact a mint. Typed wallet mutations and
 quote/oracle workflows remain unavailable for CDK and are refused before an
 operation is created. The initial local-registry image is Linux arm64; source,
 release-binary checksum, runtime image and recipe provenance are recorded in the
-catalog and resolved lock. See the [wallet expansion architecture](docs/wallet-expansion-architecture.md).
+catalog and resolved lock.
 In this CDK release, resume a paid mint quote with `mint <url> --quote-id <id>`;
 `mint-pending` checks pending proofs despite its quote-claiming help text.
 
@@ -714,8 +705,6 @@ verified teardown, retaining results under `dev/wallet-integration-runs/`.
 The `cdk-wallet-native-smoke` agent scenario is the subsequent usability gate;
 it is not run by the deterministic acceptance gate. The private ecash payload
 exchange remains a subsequent wallet-expansion phase.
-The [first fuzzer handoff](docs/cdk-wallet-fuzzer-handoff.md) records the tested
-scope, local image prerequisite, retained evidence and launch instructions.
 
 `cocod-wallet` is available as the exact experimental source build
 `0.0.17-dev.44e5101c`, with no default version. It runs the upstream foreground
@@ -727,14 +716,11 @@ the combined ready total. Typed wallet mutations remain unavailable.
 
 Run `make e2e-cocod-wallet` after provisioning its pinned local arm64 image.
 The deterministic checkpoint passed real funding, two payments, restart,
-two-wallet isolation, session lifecycle and verified teardown. See the
-[cocod fuzzer handoff](docs/cocod-wallet-fuzzer-handoff.md) for exact provenance,
-the protected native configuration workflow and evidence.
-Subsequent [agent execution hardening](docs/cocod-execution-hardening-2026-09-05.md)
-adds validated native lifecycle projections and more efficient teardown waits;
+two-wallet isolation, session lifecycle and verified teardown.
+Agent execution hardening adds validated native lifecycle projections and more efficient teardown waits;
 focused agent runs verified restart/unlock and 5,000-sat funding followed by a
 700-sat payment. Earlier benchmark failures remain recorded.
-[Structured invoice relay](docs/structured-invoice-relay.md) now validates native
+Structured invoice relay validates native
 cocod/LND invoice output and passed the deterministic money/restart gate. The
 focused agent relay target also held; its report accounting still failed review.
 Private ecash delivery remains the next build boundary.
@@ -759,5 +745,5 @@ bounded, idempotent recovery path and also supports externally paid invoices.
 ## Legacy Compose harness
 
 The original Docker Compose wallet-population runner and the regtest
-adversarial harness moved to [`docs/compose-harness.md`](docs/compose-harness.md).
-Its targets run through `make compose-<target>`.
+adversarial harness use [Makefile.compose](Makefile.compose).
+Their targets run through `make compose-<target>`.

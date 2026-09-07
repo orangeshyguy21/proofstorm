@@ -55,9 +55,7 @@ Host permissions and the MCP toolset are independent. These profiles default
 `PROOFSTORM_TOOLSET` to `native`, a slim experiment surface that uses the real
 component CLIs for funding, payments, peers, and channels. Keep `experiment` for
 typed-contract comparisons. Native commands run through `component_exec_live`
-inside a lab component; the host `bash` permission can remain denied. See the
-[validation plan](../../docs/native-first-experiments.md) for evaluation and
-cleanup requirements.
+inside a lab component; the host `bash` permission can remain denied.
 
 ## Growing an existing lab
 
@@ -66,8 +64,7 @@ instance ID to get complete configuration and its generation, then plan the full
 updated topology with `update.instance_id` and `update.expected_generation`. Apply
 the returned digest. Unchanged components keep their state; inspect the restart
 and removal lists before applying. Use `expected_generation` in `lab_wait` and
-handle `superseded` or startup blockers explicitly. See the
-[edit contract](../../docs/dynamic-lab-edits.md).
+handle `superseded` or startup blockers explicitly.
 
 ## Starting work without experiment setup
 
