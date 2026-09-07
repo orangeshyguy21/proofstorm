@@ -122,7 +122,7 @@ impl Labs {
         } else {
             (empty_runtime(ObservationState::NotMaterialized, None), None)
         };
-        let (resources, resource_error, endpoints) =
+        let (mut resources, resource_error, endpoints) =
             if let (Some(instance), Some(revision)) = (&instance, &revision) {
                 match resources::project(instance, revision) {
                     Ok((r, e)) => (Some(r), None, e),
@@ -131,6 +131,13 @@ impl Labs {
             } else {
                 (None, None, Vec::new())
             };
+        if let Some(resources) = resources.as_mut() {
+            resources.retained_storage = resource
+                .as_ref()
+                .and_then(|r| r.status.as_ref())
+                .map(|s| s.retained_storage.clone())
+                .unwrap_or_default();
+        }
         let (components, links) = topology(
             revision.as_ref(),
             resource.as_ref(),
@@ -144,7 +151,6 @@ impl Labs {
         };
         let components = section_page(components, &query.component_cursor, page_limit, |c| &c.id);
         let links = section_page(links, &query.link_cursor, page_limit, |l| &l.id);
-        let mut resources = resources;
         filter_resources(&mut resources, &components);
         let sessions = self.environment_sessions(&entry.id, &query.session_cursor, page_limit)?;
         let (ops, next_cursor) = self.store.instance_activity(
@@ -170,6 +176,11 @@ impl Labs {
             })
             .collect();
         Ok(EnvironmentLab {
+            desired_generation: instance.as_ref().map(|i| i.generation),
+            last_converged_revision: resource
+                .as_ref()
+                .and_then(|r| r.status.as_ref())
+                .and_then(|s| s.last_converged_revision.clone()),
             id: entry.id,
             handle: entry.handle,
             read_error: None,
@@ -253,8 +264,6 @@ impl Labs {
         if resource.spec.workspace_id != instance.workspace_id
             || resource.spec.instance_id != instance.id
             || resource.spec.instance_key != instance.instance_key
-            || resource.spec.revision_digest != instance.revision_digest
-            || resource.spec.lock.digest != instance.lock_digest
         {
             return (
                 empty_runtime(
@@ -266,13 +275,16 @@ impl Labs {
         }
         let status = resource.status.as_ref();
         let current = status.is_some_and(|s| {
-            s.observed_revision_digest == instance.revision_digest
+            s.observed_desired_generation == instance.generation
+                && s.observed_revision_digest == instance.revision_digest
                 && resource.metadata.generation.is_some()
                 && s.observed_generation == resource.metadata.generation
         });
         let phase =
             status.map(|_| crate::runtime::status_from_resource(instance.clone(), &resource).phase);
         let observation = RuntimeObservation {
+            message: status.and_then(|s| s.message.clone()),
+            observed_desired_generation: status.map(|s| s.observed_desired_generation),
             state: if current {
                 ObservationState::Available
             } else {
@@ -299,6 +311,8 @@ impl Labs {
 }
 fn unreadable_lab(id: String, handle: Option<proofstorm_store::LabHandle>) -> EnvironmentLab {
     EnvironmentLab {
+        desired_generation: None,
+        last_converged_revision: None,
         id,
         handle,
         read_error: Some("stored_record_incompatible".into()),
@@ -408,16 +422,28 @@ fn topology(
                         .as_ref()
                         .and_then(|r| r.status.as_ref())
                         .and_then(|s| {
-                            s.components
-                                .iter()
-                                .find(|s| s.id == c.id && s.observed_revision_digest == r.digest)
+                            s.components.iter().find(|s| {
+                                s.id == c.id
+                                    && r.lock.entries.iter().any(|e| {
+                                        e.component_id == c.id
+                                            && e.rollout_digest == s.observed_rollout_digest
+                                    })
+                            })
                         });
                     ComponentView {
                         id: c.id.clone(),
                         kind: c.kind,
                         implementation: c.implementation.clone(),
                         version: c.version.clone(),
-                        ready: status.filter(|_| current).map(|s| s.ready),
+                        ready: status
+                            .filter(|s| {
+                                current
+                                    || r.lock.entries.iter().any(|e| {
+                                        e.component_id == c.id
+                                            && e.rollout_digest == s.observed_rollout_digest
+                                    })
+                            })
+                            .map(|s| s.ready),
                         conditions: status
                             .map(|s| {
                                 s.conditions
@@ -462,6 +488,8 @@ fn topology(
 
 fn empty_runtime(state: ObservationState, error: Option<&str>) -> RuntimeObservation {
     RuntimeObservation {
+        message: None,
+        observed_desired_generation: None,
         state,
         fetched_at_unix: now(),
         source_updated_at_unix: None,

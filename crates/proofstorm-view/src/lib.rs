@@ -7,6 +7,8 @@ use proofstorm_core::{
     ComponentConditionReason, ComponentConditionState, ComponentConditionType, ComponentKind,
     InstancePhase, LabOperation, LinkKind, OperationKind, OperationPhase, Session,
 };
+mod telemetry;
+pub use telemetry::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -95,6 +97,10 @@ pub struct Coverage {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EnvironmentLab {
+    #[serde(default)]
+    pub desired_generation: Option<u64>,
+    #[serde(default)]
+    pub last_converged_revision: Option<String>,
     pub id: String,
     pub handle: Option<LabHandle>,
     /// A retained lab could not be decoded; empty sections are unavailable, not empty history.
@@ -122,6 +128,10 @@ pub enum ObservationState {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RuntimeObservation {
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub observed_desired_generation: Option<u64>,
     pub state: ObservationState,
     pub fetched_at_unix: i64,
     pub source_updated_at_unix: Option<i64>,
@@ -178,6 +188,9 @@ pub struct Endpoint {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ResourceDemand {
+    /// Retained PVC requests, keyed by claim name; included even after component removal.
+    #[serde(default)]
+    pub retained_storage: std::collections::BTreeMap<String, String>,
     pub workloads: Vec<WorkloadDemand>,
     pub storage: Vec<StorageDemand>,
 }
@@ -237,6 +250,8 @@ pub enum Authentication {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Activity {
+    #[serde(default)]
+    pub revision_digest: String,
     pub id: String,
     pub sequence: u64,
     pub kind: OperationKind,
@@ -255,6 +270,7 @@ pub struct Activity {
 impl From<LabOperation> for Activity {
     fn from(op: LabOperation) -> Self {
         Self {
+            revision_digest: op.revision_digest,
             run_id: op.experiment_id,
             native_exit_code: op
                 .artifact

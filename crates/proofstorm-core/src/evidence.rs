@@ -13,6 +13,9 @@ pub const EVIDENCE_MEDIA_TYPE: &str = "application/vnd.proofstorm.evidence.v1alp
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceBundleContent {
+    /// Immutable configurations actually used by the journal, including earlier lab generations.
+    #[serde(default)]
+    pub revisions: Vec<PublishedRevision>,
     pub api_version: String,
     pub workspace_id: String,
     pub experiment: Experiment,
@@ -33,6 +36,8 @@ pub struct EvidenceInstance {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAction {
+    #[serde(default)]
+    pub revision_digest: String,
     pub id: String,
     pub instance_id: String,
     pub experiment_id: String,
@@ -60,6 +65,7 @@ pub struct EvidenceAction {
 impl From<&LabOperation> for EvidenceAction {
     fn from(operation: &LabOperation) -> Self {
         Self {
+            revision_digest: operation.revision_digest.clone(),
             id: operation.id.clone(),
             instance_id: operation.instance_id.clone(),
             experiment_id: operation.experiment_id.clone(),

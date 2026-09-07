@@ -63,12 +63,19 @@ async fn configured_service() -> anyhow::Result<ProofstormMcp> {
     })?;
     store.put_principal(&principal)?;
     store.replace_grants(&workspace, &principal, capabilities)?;
-    let service = ProofstormMcp::new(store, workspace, principal)?.with_toolset(toolset);
+    let service = ProofstormMcp::new(store.clone(), workspace.clone(), principal.clone())?
+        .with_toolset(toolset);
     let Ok(control_namespace) = std::env::var("PROOFSTORM_CONTROL_NAMESPACE") else {
         return Ok(service);
     };
     let client = kube::Client::try_default()
         .await
         .context("connect to Kubernetes for Proofstorm materialization")?;
+    let _recovery = proofstorm_app::updates::start_recovery(
+        proofstorm_app::Runtime::new(client.clone(), control_namespace.clone()),
+        store,
+        workspace,
+        principal,
+    );
     Ok(service.with_kubernetes(client, control_namespace))
 }

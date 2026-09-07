@@ -58,7 +58,7 @@ pub fn position(components: &[ComponentView], id: &str) -> (i32, i32) {
         .count();
     (
         55 + column * 265,
-        65 + i32::try_from(row).unwrap_or(0) * 125,
+        65 + i32::try_from(row).unwrap_or(0) * 155,
     )
 }
 fn column(kind: ComponentKind) -> i32 {
@@ -72,9 +72,11 @@ fn column(kind: ComponentKind) -> i32 {
 pub fn merge_resources(target: &mut Option<ResourceDemand>, page: Option<ResourceDemand>) {
     if let Some(page) = page {
         let target = target.get_or_insert_with(|| ResourceDemand {
+            retained_storage: std::collections::BTreeMap::new(),
             workloads: vec![],
             storage: vec![],
         });
+        target.retained_storage.extend(page.retained_storage);
         for workload in page.workloads {
             if !target.workloads.iter().any(|w| w.name == workload.name) {
                 target.workloads.push(workload);
@@ -97,6 +99,7 @@ mod tests {
     #[test]
     fn merges_component_pages_without_duplicating_shared_demands() {
         let resource = || ResourceDemand {
+            retained_storage: std::collections::BTreeMap::new(),
             workloads: vec![proofstorm_view::WorkloadDemand {
                 name: "shared".into(),
                 component: None,
@@ -124,7 +127,21 @@ mod tests {
         assert_eq!(position(&nodes, "a"), (55, 65));
         assert_eq!(
             position(&[nodes[1].clone(), nodes[0].clone()], "b"),
-            (55, 190)
+            (55, 220)
         );
     }
+}
+
+pub fn cpu(value: Option<f64>) -> String {
+    value.map_or_else(|| "—".into(), |value| if value >= 1000.0 { format!("{:.2} cores", value / 1000.0) } else { format!("{value:.1}m") })
+}
+pub fn memory(value: Option<f64>) -> String {
+    value.map_or_else(|| "—".into(), |value| if value >= 1_073_741_824.0 { format!("{:.2} GiB",value / 1_073_741_824.0) } else { format!("{:.1} MiB",value / 1_048_576.0) })
+}
+pub fn sat(value: u64) -> String {
+    let raw = value.to_string();
+    raw.chars().enumerate().fold(String::new(), |mut result,(i,c)| {
+        if i > 0 && (raw.len()-i).is_multiple_of(3) { result.push(','); }
+        result.push(c); result
+    })
 }

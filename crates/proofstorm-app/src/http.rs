@@ -4,7 +4,7 @@ use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::Frame;
 use tokio::sync::{Semaphore, watch};
 type Body = BoxBody<Bytes, Infallible>;
-use proofstorm_view::ObserverStatus;
+use proofstorm_view::{ObserverStatus, SystemView};
 use std::sync::{Arc, RwLock};
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 use hyper::{
@@ -42,6 +42,7 @@ pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Err
     }
     let observer = crate::observer::Observer::start(labs.clone());
     let events = crate::events::Events::start(labs.clone(), observer.status.clone());
+    let telemetry = crate::telemetry::Telemetry::start(labs.clone());
     let streams = Arc::new(Semaphore::new(8));
     let mut tasks = JoinSet::new();
     loop {
@@ -52,9 +53,10 @@ pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Err
                 let labs=labs.clone();
                 let status=observer.status.clone();
                 let events=events.receiver.clone();
+                let telemetry=telemetry.receiver.clone();
                 let streams=streams.clone();
                 tasks.spawn(async move {
-                    let service=service_fn(move |request|handle(labs.clone(),status.clone(),events.clone(),streams.clone(),request));
+                    let service=service_fn(move |request|handle(labs.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),request));
                     let _=http1::Builder::new().timer(TokioTimer::new()).header_read_timeout(Duration::from_secs(10)).keep_alive(false).max_buf_size(8192).serve_connection(TokioIo::new(socket),service).await;
                 });
             },
@@ -66,6 +68,7 @@ async fn handle(
     labs: Labs,
     observer: Arc<RwLock<ObserverStatus>>,
     events: watch::Receiver<u64>,
+    telemetry: watch::Receiver<SystemView>,
     streams: Arc<Semaphore>,
     request: Request<Incoming>,
 ) -> Result<Response<Body>, Infallible> {
@@ -90,7 +93,17 @@ async fn handle(
         return Ok(error(StatusCode::METHOD_NOT_ALLOWED, "read_only"));
     }
     match request.uri().path() {
-        "/v1/events" => Ok(event_stream(labs, events, streams)),
+        "/v1/events" => Ok(event_stream(labs, events, telemetry, streams)),
+        "/v1/system" => {
+            if !can_observe(&labs) {
+                return Ok(error(StatusCode::FORBIDDEN, "access_denied"));
+            }
+            let mut snapshot = telemetry.borrow().clone();
+            if labs.store.authorize(&labs.workspace, &labs.principal, proofstorm_core::Capability::ComponentExecLive).is_err() {
+                for lab in &mut snapshot.labs { lab.balances.clear(); }
+            }
+            Ok(json(StatusCode::OK, &snapshot))
+        }
         "/v1/environment" => {
             let Ok(query) = serde_urlencoded::from_str::<EnvironmentQuery>(
                 request.uri().query().unwrap_or_default(),
@@ -216,6 +229,7 @@ fn can_observe(labs: &Labs) -> bool {
 fn event_stream(
     labs: Labs,
     events: watch::Receiver<u64>,
+    telemetry: watch::Receiver<SystemView>,
     streams: Arc<Semaphore>,
 ) -> Response<Body> {
     if !can_observe(&labs) {
@@ -227,28 +241,32 @@ fn event_stream(
     // Notifications are invalidations, not a durable event log. Always refresh on connect,
     // including reconnects carrying Last-Event-ID. No history buffer or replay required.
     let stream = futures::stream::unfold(
-        (events, true, labs, permit),
-        |(mut events, first, labs, permit)| async move {
+        (events, telemetry, true, labs, permit),
+        |(mut events, mut telemetry, first, labs, permit)| async move {
             let changed = if first {
-                true
+                1
             } else {
                 tokio::select! {
-                    result = events.changed() => { if result.is_err() { return None; } true },
-                    () = tokio::time::sleep(Duration::from_secs(2)) => false,
+                    result = events.changed() => { if result.is_err() { return None; } 1 },
+                    result = telemetry.changed() => { if result.is_err() { return None; } 2 },
+                    () = tokio::time::sleep(Duration::from_secs(2)) => 0,
                 }
             };
             if !can_observe(&labs) {
                 return None;
             }
-            let bytes = if changed {
+            let bytes = if changed == 1 {
                 let version = *events.borrow_and_update();
                 format!("event: environment\nid: {version}\ndata: {{\"refresh\":true}}\n\n")
+            } else if changed == 2 {
+                telemetry.borrow_and_update();
+                "event: telemetry\ndata: {\"refresh\":true}\n\n".into()
             } else {
                 ": keepalive\n\n".into()
             };
             Some((
                 Ok::<_, Infallible>(Frame::data(Bytes::from(bytes))),
-                (events, false, labs, permit),
+                (events, telemetry, false, labs, permit),
             ))
         },
     );

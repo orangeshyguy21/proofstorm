@@ -34,7 +34,7 @@ PLATFORM_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64
 GATES := private-transfer slice2 slice4 slice5 native-exec cross-lab-scheduler \
 	cross-implementation-wallet nutshell-mint nutshell-cln nutshell-postgres \
 	cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres \
-	failed-melt quote-composition
+	failed-melt quote-composition dynamic-lab
 # Excluded from `make e2e`: fails on a known upstream Nutshell defect.
 EXPECTED_FAIL_GATES := nutshell-oidc
 # Development checkpoints needing an image provisioned in the local registry.
@@ -79,7 +79,7 @@ build: web
 
 serve: web
 	cargo run --locked -p proofstorm-app -- init $(ARGS)
-	cargo run --locked -p proofstorm-app -- serve --port $(PORT) $(ARGS)
+	cargo run --locked -p proofstorm-app -- serve --replace --port $(PORT) $(ARGS)
 
 test:
 	cargo test --workspace --all-targets
@@ -213,8 +213,9 @@ down: tools
 
 # ---- live acceptance gates -------------------------------------------------
 #
-# Gates assert that zero instance namespaces exist anywhere, so they need the
-# cluster to themselves for their duration. Check before starting:
+# Most gates assert that zero instance namespaces exist and need an idle cluster.
+# dynamic-lab scopes cleanup to its own disposable lab and can coexist with other labs.
+# Check before running the other gates:
 #   kubectl --context k3d-proofstorm get ns -l proofstorm.dev/instance
 
 $(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES) $(LOCAL_IMAGE_GATES)): e2e-%: build

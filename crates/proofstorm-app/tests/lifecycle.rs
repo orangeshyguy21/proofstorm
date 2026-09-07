@@ -33,35 +33,46 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                 let mut cluster = cluster.lock().unwrap();
                 cluster.requests.push((method.clone(), path.clone()));
                 let (status,body)=match method.as_str() {
-                "PATCH"=> {
+                "PATCH" | "POST" | "PUT" => {
+                    let mut path=path.clone();
                     let mut value:Value=serde_json::from_slice(&bytes).unwrap();
-                    if value.get("spec").is_none() && cluster.conflict_lease {
+                    if method == "POST" {path=format!("{}/{}",path,value["metadata"]["name"].as_str().unwrap());}
+                    if value.get("spec").is_none() && value.get("data").is_none() && cluster.conflict_lease {
                         cluster.conflict_lease = false;
                         (409, json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"controller updated metadata","code":409}))
                     } else if value.get("spec").is_some() && path.contains("/proofstormlabs/") && cluster.fail_materialize {
                         cluster.fail_materialize=false;
                         (503,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Unavailable","message":"injected interruption","code":503}))
                     } else {
-                        if value.get("spec").is_none() {
+                        if value.get("spec").is_none() && value.get("data").is_none() {
                             let object=cluster.objects.get_mut(&path).unwrap();
                             for (key,v) in value["metadata"]["annotations"].as_object().unwrap() {if v.is_null() {object["metadata"]["annotations"].as_object_mut().unwrap().remove(key);} else {object["metadata"]["annotations"][key]=v.clone();}}
                             value=object.clone();
                         } else if path.contains("/proofstormlabs/") {
-                            value["metadata"]["annotations"]=json!({});
+                            if value["metadata"].get("annotations").is_none() {value["metadata"]["annotations"]=json!({});}
+                            value["metadata"]["uid"]=json!(format!("uid-{}",value["metadata"]["name"].as_str().unwrap()));
                             value["status"]=json!({"phase":"Pending","observedRevisionDigest":value["spec"]["revisionDigest"],"instanceNamespace":format!("proofstorm-{}",value["spec"]["instanceKey"].as_str().unwrap()),"components":[],"inventory":[]});
                         }
+                        if value["metadata"].get("uid").is_none() { value["metadata"]["uid"]=json!(format!("uid-{}",value["metadata"]["name"].as_str().unwrap())); }
                         cluster.objects.insert(path,value.clone());
                         (200,value)
                     }
+                },
+                "DELETE" if path.contains("/configmaps/")=> {
+                    cluster.objects.remove(&path);
+                    (200,json!({"apiVersion":"v1","kind":"Status","status":"Success","code":200}))
                 },
                 "DELETE"=> {
                     let lab=cluster.objects.remove(&path).unwrap();
                     let key=lab["spec"]["instanceKey"].as_str().unwrap();
                     let name=format!("proofstorm-teardown-{key}");
-                    cluster.objects.insert(format!("/api/v1/namespaces/system/configmaps/{name}"),json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":name},"data":{"instanceNamespace":format!("proofstorm-{key}"),"inventoryDigest":"digest","verifiedAbsent":"true"}}));
+                    cluster.objects.insert(format!("/api/v1/namespaces/system/configmaps/{name}"),json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":name,"uid":format!("uid-{name}")},"data":{"instanceNamespace":format!("proofstorm-{key}"),"inventoryDigest":"digest","verifiedAbsent":"true"}}));
                     (200,json!({"apiVersion":"v1","kind":"Status","status":"Success","code":200}))
                 },
                 "GET" if cluster.fail_reads => (503,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Unavailable","message":"PRIVATE-RUNTIME-DETAIL","code":503})),
+                "GET" if path=="/api/v1/namespaces/kube-system" => (200,cluster.objects.get(&path).cloned().unwrap_or(json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":"kube-system","uid":"test-cluster"}}))),
+                "GET" if path.ends_with("/configmaps") => (200,json!({"apiVersion":"v1","kind":"ConfigMapList","metadata":{},"items":cluster.objects.iter().filter(|(p,_)|p.contains("/configmaps/")).map(|(_,v)|v.clone()).collect::<Vec<_>>()})),
+                "GET" if path.ends_with("/proofstormlabactions") => (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormLabActionList","metadata":{},"items":[]})),
                 "GET" if path.ends_with("/proofstormlabs")=> {
                     let items=cluster.objects.iter().filter(|(p,_)|p.contains("/proofstormlabs/")).map(|(_,v)|v.clone()).collect::<Vec<_>>();
                     (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormLabList","metadata":{},"items":items}))
@@ -111,6 +122,7 @@ fn seed(store: &Store) {
     for cap in [
         Capability::CatalogRead,
         Capability::LabCreate,
+        Capability::LabEdit,
         Capability::LabRead,
         Capability::LabPublish,
         Capability::LabMaterialize,
@@ -222,13 +234,10 @@ async fn resume_observe_collect_close_and_reuse_name() {
             .unwrap()
             .verified_absent
     );
-    assert_eq!(
-        labs.down("demo", 1).await.unwrap().lab.phase,
-        LabHandlePhase::Closed
-    );
+    assert!(labs.store.lab_handle("local", "developer", "demo").is_err());
     let fresh = labs.up("demo", &spec()).await.unwrap();
     assert_ne!(fresh.lab.instance_id, first.lab.instance_id);
-    assert_eq!(fresh.lab.generation, 2);
+    assert_eq!(fresh.lab.generation, 1);
     assert!(fresh.activity.is_empty());
 }
 
@@ -247,7 +256,9 @@ async fn interrupted_up_resumes_and_finished_session_does_not_block_work() {
     assert_eq!(ready.lab.generation, 1);
     let mut changed = spec();
     changed.name = "different".into();
-    assert!(labs.up("demo", &changed).await.is_err());
+    let edited = labs.up("demo", &changed).await.unwrap();
+    assert_eq!(edited.runtime.as_ref().unwrap().instance.generation, 2);
+    assert_eq!(edited.lab.instance_id, ready.lab.instance_id);
     labs.store
         .finish_session(
             "local",
@@ -366,9 +377,10 @@ async fn partial_startup_can_be_inspected_and_closed_without_reprovisioning() {
             .verified_absent
     );
     assert!(cluster.lock().unwrap().objects.is_empty());
-    assert_eq!(
-        labs.down("interrupted", 2).await.unwrap().lab.phase,
-        LabHandlePhase::Closed
+    assert!(
+        labs.store
+            .lab_handle("local", "developer", "interrupted")
+            .is_err()
     );
 }
 
@@ -478,3 +490,263 @@ async fn two_principals_share_a_named_lab_with_independent_sessions() {
 
 #[path = "environment/mod.rs"]
 mod environment_tests;
+
+#[tokio::test]
+async fn retained_data_edits_cannot_converge_using_the_previous_configuration_status() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store, cluster.clone());
+    let handle = labs.up("generation-check", &spec()).await.unwrap().lab;
+    environment_tests::ready(&cluster);
+    let mut instance = labs
+        .store
+        .instance("local", "developer", &handle.instance_id)
+        .unwrap();
+    instance.generation = 2;
+    let value = cluster
+        .lock()
+        .unwrap()
+        .objects
+        .iter()
+        .find(|(path, _)| path.contains("/proofstormlabs/"))
+        .unwrap()
+        .1
+        .clone();
+    let mut resource: proofstorm_kube::ProofstormLab = serde_json::from_value(value).unwrap();
+    resource
+        .status
+        .as_mut()
+        .unwrap()
+        .observed_desired_generation = 1;
+    let pending = proofstorm_app::runtime::status_from_resource(instance.clone(), &resource);
+    assert_eq!(pending.phase, proofstorm_core::InstancePhase::Pending);
+    assert_eq!(pending.observed_generation, 1);
+    resource
+        .status
+        .as_mut()
+        .unwrap()
+        .observed_desired_generation = 2;
+    assert_eq!(
+        proofstorm_app::runtime::status_from_resource(instance, &resource).phase,
+        proofstorm_core::InstancePhase::Ready
+    );
+}
+
+#[tokio::test]
+async fn accepted_edits_resume_from_the_journal_after_the_control_client_restarts() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let handle = labs.up("resume-edit", &spec()).await.unwrap().lab;
+    let mut expanded = spec();
+    let mut second = expanded.components[0].clone();
+    second.id = "second-chain".into();
+    expanded.components.push(second);
+    let plan = labs
+        .plan_edit("resume-edit", &expanded, false, &[])
+        .unwrap();
+    let accepted = store
+        .accept_update("local", "developer", &plan, "accept-without-apply")
+        .unwrap();
+    assert_eq!(accepted.generation, 2);
+    assert!(
+        cluster
+            .lock()
+            .unwrap()
+            .objects
+            .values()
+            .filter(|v| v["kind"] == "ProofstormLab")
+            .all(|v| v["spec"]["revisionDigest"] != plan.target_revision)
+    );
+    let restarted = service(store.clone(), cluster.clone());
+    proofstorm_app::updates::reconcile(
+        &restarted.runtime,
+        &store,
+        "local",
+        "developer",
+        &handle.instance_id,
+    )
+    .await
+    .unwrap();
+    let desired = cluster
+        .lock()
+        .unwrap()
+        .objects
+        .values()
+        .find(|v| v["kind"] == "ProofstormLab")
+        .unwrap()
+        .clone();
+    assert_eq!(desired["spec"]["revisionDigest"], plan.target_revision);
+    assert_eq!(
+        desired["metadata"]["annotations"]["proofstorm.dev/desired-generation"],
+        "2"
+    );
+    assert_eq!(
+        store.pending_updates("local", "developer").unwrap(),
+        vec![handle.instance_id]
+    );
+}
+
+#[tokio::test]
+async fn external_deletion_reclaims_name_and_purges_agent_history() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let first = labs.up("reusable", &spec()).await.unwrap();
+    let old = first.runtime.unwrap().instance;
+    cluster
+        .lock()
+        .unwrap()
+        .objects
+        .retain(|path, _| !path.contains("/proofstormlabs/"));
+    let second = labs.up("reusable", &spec()).await.unwrap();
+    assert_ne!(
+        old.instance_key,
+        second.runtime.unwrap().instance.instance_key
+    );
+    assert!(store.instance("local", "developer", &old.id).is_err());
+    assert!(
+        store
+            .experiment("local", "developer", &first.lab.run_id())
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn cleanup_retains_records_on_failed_reads_and_remaining_namespace() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let old = labs
+        .up("keep", &spec())
+        .await
+        .unwrap()
+        .runtime
+        .unwrap()
+        .instance;
+    cluster.lock().unwrap().fail_reads = true;
+    assert!(
+        proofstorm_app::lifecycle::sweep(&labs.runtime, &store, "local", "developer", "")
+            .await
+            .is_err()
+    );
+    assert!(store.instance("local", "developer", &old.id).is_ok());
+    {
+        let mut c = cluster.lock().unwrap();
+        c.fail_reads = false;
+        c.objects
+            .retain(|path, _| !path.contains("/proofstormlabs/"));
+        let ns = proofstorm_kube::instance_namespace(&old.instance_key);
+        c.objects.insert(format!("/api/v1/namespaces/{ns}"),json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":ns,"uid":"remaining","deletionTimestamp":"2026-09-07T00:00:00Z"}}));
+    }
+    assert!(
+        proofstorm_app::lifecycle::sweep(&labs.runtime, &store, "local", "developer", "")
+            .await
+            .is_err()
+    );
+    assert!(store.instance("local", "developer", &old.id).is_ok());
+    cluster
+        .lock()
+        .unwrap()
+        .objects
+        .retain(|path, _| !path.starts_with("/api/v1/namespaces/proofstorm-"));
+    proofstorm_app::lifecycle::sweep(&labs.runtime, &store, "local", "developer", "")
+        .await
+        .unwrap();
+    assert!(store.instance("local", "developer", &old.id).is_err());
+}
+
+#[tokio::test]
+async fn rebuilt_cluster_reclaims_old_incarnation_but_switching_context_does_not() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let old = labs
+        .up("rebuild", &spec())
+        .await
+        .unwrap()
+        .runtime
+        .unwrap()
+        .instance;
+    cluster.lock().unwrap().objects.clear();
+    let mut elsewhere = labs.runtime.clone();
+    elsewhere.cluster_source = "other-context".into();
+    proofstorm_app::lifecycle::sweep(&elsewhere, &store, "local", "developer", "")
+        .await
+        .unwrap();
+    assert!(store.instance("local", "developer", &old.id).is_ok());
+    cluster.lock().unwrap().objects.insert("/api/v1/namespaces/kube-system".into(),json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":"kube-system","uid":"replacement-cluster"}}));
+    proofstorm_app::lifecycle::sweep(&labs.runtime, &store, "local", "developer", "")
+        .await
+        .unwrap();
+    assert!(store.instance("local", "developer", &old.id).is_err());
+}
+
+#[tokio::test]
+async fn concurrent_same_name_creation_converges_to_one_incarnation() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let first = service(store.clone(), cluster.clone());
+    let second = first.clone();
+    let spec = spec();
+    let (a, b) = tokio::join!(
+        first.up("concurrent", &spec),
+        second.up("concurrent", &spec)
+    );
+    assert_eq!(
+        a.unwrap().runtime.unwrap().instance,
+        b.unwrap().runtime.unwrap().instance
+    );
+    assert_eq!(
+        cluster
+            .lock()
+            .unwrap()
+            .objects
+            .keys()
+            .filter(|p| p.contains("/proofstormlabs/"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn one_pending_namespace_does_not_starve_cleanup_of_other_labs() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    let blocked = labs
+        .up("blocked-cleanup", &spec())
+        .await
+        .unwrap()
+        .runtime
+        .unwrap()
+        .instance;
+    let gone = labs
+        .up("gone", &spec())
+        .await
+        .unwrap()
+        .runtime
+        .unwrap()
+        .instance;
+    {
+        let mut c = cluster.lock().unwrap();
+        c.objects
+            .retain(|path, _| !path.contains("/proofstormlabs/"));
+        let namespace = proofstorm_kube::instance_namespace(&blocked.instance_key);
+        c.objects.insert(format!("/api/v1/namespaces/{namespace}"),json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":namespace,"uid":"still-deleting"}}));
+    }
+    assert!(
+        proofstorm_app::lifecycle::sweep(&labs.runtime, &store, "local", "developer", "")
+            .await
+            .is_err()
+    );
+    assert!(store.instance("local", "developer", &blocked.id).is_ok());
+    assert!(store.instance("local", "developer", &gone.id).is_err());
+}

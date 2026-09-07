@@ -35,6 +35,7 @@ pub struct ProofstormLabSpec {
 pub enum LabPhase {
     #[default]
     Pending,
+    Blocked,
     Ready,
     Closing,
     CleanupBlocked,
@@ -53,6 +54,12 @@ pub struct TeardownReceipt {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormLabStatus {
+    #[serde(default = "initial_desired_generation")]
+    pub observed_desired_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_converged_revision: Option<String>,
+    #[serde(default)]
+    pub retained_storage: BTreeMap<String, String>,
     pub phase: LabPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_namespace: Option<String>,
@@ -746,4 +753,8 @@ struct InputBindingSchema {
 enum InputBindingKindSchema {
     Stdin,
     Argv,
+}
+
+const fn initial_desired_generation() -> u64 {
+    1
 }

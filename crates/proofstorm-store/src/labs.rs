@@ -10,18 +10,17 @@ fn read(
     name: &str,
 ) -> Result<Option<LabHandle>, StoreError> {
     let row = db.query_row(
-        "SELECT generation,owner,config_digest,phase FROM lab_handles WHERE workspace_id=?1 AND name=?2",
-        params![workspace,name], |row| Ok((row.get::<_,u32>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?))
+        "SELECT generation,owner,config_digest,phase,instance_id FROM lab_handles WHERE workspace_id=?1 AND name=?2",
+        params![workspace,name], |row| Ok((row.get::<_,u32>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?))
     ).optional()?;
-    row.map(|(generation, owner, config_digest, phase)| {
-        let identity = proofstorm_core::digest_json(&(workspace, name, generation));
+    row.map(|(generation, owner, config_digest, phase, instance_id)| {
         Ok(LabHandle {
             name: name.into(),
             generation,
             owner,
             config_digest,
             phase: serde_json::from_str(&phase)?,
-            instance_id: format!("lab-{}", &identity[7..31]),
+            instance_id,
         })
     })
     .transpose()
@@ -64,7 +63,8 @@ impl Store {
                 .checked_add(1)
                 .ok_or_else(|| StoreError::Validation("lab generation exhausted".into()))
         })?;
-        let identity = proofstorm_core::digest_json(&(workspace, name, generation));
+        let nonce: String = tx.query_row("SELECT hex(randomblob(16))", [], |r| r.get(0))?;
+        let identity = proofstorm_core::digest_json(&(workspace, name, generation, nonce));
         let instance_id = format!("lab-{}", &identity[7..31]);
         tx.execute("INSERT INTO lab_handles(workspace_id,name,generation,owner,config_digest,phase,instance_id) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(workspace_id,name) DO UPDATE SET generation=excluded.generation,owner=excluded.owner,config_digest=excluded.config_digest,phase=excluded.phase,instance_id=excluded.instance_id",
             params![workspace,name,generation,principal,config_digest,serde_json::to_string(&LabHandlePhase::Open)?,instance_id])?;

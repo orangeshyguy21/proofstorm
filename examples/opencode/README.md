@@ -38,3 +38,13 @@ cleanup requirements.
 OpenCode resolves permission patterns with `*` matching any characters, so
 `tests/*` covers every file below `tests/`. Agent-level `permission` blocks
 override these globals if you add named agents to a profile.
+
+## Growing an existing lab
+
+Reconnect MCP after upgrading Proofstorm. Use `proofstorm_lab_read` with the
+instance ID to get complete configuration and its generation, then plan the full
+updated topology with `update.instance_id` and `update.expected_generation`. Apply
+the returned digest. Unchanged components keep their state; inspect the restart
+and removal lists before applying. Use `expected_generation` in `lab_wait` and
+handle `superseded` or startup blockers explicitly. See the
+[edit contract](../../docs/dynamic-lab-edits.md).

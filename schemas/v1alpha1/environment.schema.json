@@ -94,6 +94,10 @@
         "principal_id": {
           "type": "string"
         },
+        "revision_digest": {
+          "type": "string",
+          "default": ""
+        },
         "run_id": {
           "type": "string"
         },
@@ -382,6 +386,15 @@
         "components": {
           "$ref": "#/$defs/Page2"
         },
+        "desired_generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
         "handle": {
           "anyOf": [
             {
@@ -398,6 +411,13 @@
         "journal_read_at_unix": {
           "type": "integer",
           "format": "int64"
+        },
+        "last_converged_revision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "last_recorded_activity_at_unix": {
           "type": [
@@ -459,6 +479,7 @@
       "type": "string",
       "enum": [
         "pending",
+        "blocked",
         "ready",
         "closing",
         "closed",
@@ -702,6 +723,14 @@
     "ResourceDemand": {
       "type": "object",
       "properties": {
+        "retained_storage": {
+          "description": "Retained PVC requests, keyed by claim name; included even after component removal.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
         "storage": {
           "type": "array",
           "items": {
@@ -739,6 +768,22 @@
             "null"
           ],
           "format": "int64"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "observed_desired_generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
         },
         "observed_generation": {
           "type": [

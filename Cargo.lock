@@ -2295,6 +2295,7 @@ dependencies = [
  "clap",
  "proofstorm-core",
  "proofstorm-kube",
+ "proofstorm-store",
  "serde_json",
  "sha2",
  "tempfile",

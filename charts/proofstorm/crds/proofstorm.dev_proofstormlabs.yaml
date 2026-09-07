@@ -551,9 +551,17 @@ spec:
               inventoryDigest:
                 nullable: true
                 type: string
+              lastConvergedRevision:
+                nullable: true
+                type: string
               message:
                 nullable: true
                 type: string
+              observedDesiredGeneration:
+                default: 1
+                format: uint64
+                minimum: 0.0
+                type: integer
               observedGeneration:
                 format: int64
                 nullable: true
@@ -567,10 +575,16 @@ spec:
               phase:
                 enum:
                 - Pending
+                - Blocked
                 - Ready
                 - Closing
                 - CleanupBlocked
                 type: string
+              retainedStorage:
+                additionalProperties:
+                  type: string
+                default: {}
+                type: object
               teardownReceipt:
                 nullable: true
                 properties:

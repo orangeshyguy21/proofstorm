@@ -62,6 +62,9 @@ pub async fn environment() -> Result<EnvironmentView, String> {
 pub async fn observer() -> Result<ObserverStatus, String> {
     get("/v1/observer").await
 }
+pub async fn system() -> Result<proofstorm_view::SystemView, String> {
+    get("/v1/system").await
+}
 pub async fn lab(id: &str, history_pages: usize) -> Result<EnvironmentLab, String> {
     let base = format!("/v1/environment?limit=20&instance_id={}", encode(id));
     let view: EnvironmentView = get(&base).await?;

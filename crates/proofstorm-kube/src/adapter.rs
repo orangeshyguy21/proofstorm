@@ -900,8 +900,6 @@ fn workload_identity_matches(
     pod_annotations: Option<&BTreeMap<String, String>>,
 ) -> bool {
     annotations.and_then(|values| values.get(BACKEND_ID_ANNOTATION)) == Some(&plan.backend_id)
-        && annotations.and_then(|values| values.get(REVISION_DIGEST_ANNOTATION))
-            == Some(&plan.revision_digest)
         && pod_annotations.and_then(|values| values.get(ROLLOUT_DIGEST_ANNOTATION))
             == Some(&plan.rollout_digest)
 }

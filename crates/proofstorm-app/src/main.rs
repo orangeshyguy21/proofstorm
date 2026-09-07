@@ -7,6 +7,7 @@ use proofstorm_core::{
 };
 use proofstorm_store::{Store, Workspace};
 use std::{fmt::Write, path::PathBuf, time::Duration};
+mod server_restart;
 
 #[derive(Parser)]
 #[command(
@@ -32,8 +33,17 @@ struct Args {
 enum Command {
     /// Explicitly configure this local developer's permissions (no cluster changes).
     Init,
-    /// Publish and start a lab from JSON. Repeated calls resume the same generation.
+    /// Create or update a lab from JSON, preserving unchanged components.
     Up {
+        /// Preview a live edit without applying it.
+        #[arg(long)]
+        preview: bool,
+        /// Explicitly delete storage and credentials of removed components.
+        #[arg(long)]
+        delete_data: bool,
+        /// Explicitly purge data from components removed by earlier edits.
+        #[arg(long, value_delimiter = ',')]
+        delete_retained: Vec<String>,
         file: PathBuf,
         #[arg(long)]
         name: Option<String>,
@@ -67,6 +77,9 @@ enum Command {
     Serve {
         #[arg(long, default_value_t = 8787)]
         port: u16,
+        /// Replace this checkout's existing server on the selected port.
+        #[arg(long)]
+        replace: bool,
     },
     /// Collect operation receipts; --watch continues collecting while clients disconnect.
     Sync {
@@ -131,6 +144,7 @@ async fn main() -> Result<()> {
             [
                 Capability::CatalogRead,
                 Capability::LabCreate,
+                Capability::LabEdit,
                 Capability::LabRead,
                 Capability::LabPublish,
                 Capability::LabMaterialize,
@@ -163,7 +177,8 @@ async fn main() -> Result<()> {
     })
     .await
     .context("read the selected Kubernetes context; run make setup first")?;
-    let runtime = Runtime::new(kube::Client::try_from(config)?, args.namespace);
+    let mut runtime = Runtime::new(kube::Client::try_from(config)?, args.namespace);
+    runtime.cluster_source.clone_from(&args.context);
     let labs = Labs::new(store, runtime, args.workspace, args.principal);
     eprintln!(
         "database={} context={}",
@@ -171,10 +186,32 @@ async fn main() -> Result<()> {
         args.context
     );
     match args.command {
-        Command::Up { file, name, wait } => {
+        Command::Up {
+            file,
+            name,
+            wait,
+            preview,
+            delete_data,
+            delete_retained,
+        } => {
             let spec: LabSpec = serde_json::from_slice(&std::fs::read(file)?)?;
             let name = name.as_deref().unwrap_or(&spec.name);
-            let mut view = labs.up(name, &spec).await?;
+            if preview {
+                print(&labs.plan_edit(name, &spec, delete_data, &delete_retained)?)?;
+                return Ok(());
+            }
+            let mut view = if delete_data || !delete_retained.is_empty() {
+                labs.edit(name, &spec, delete_data, &delete_retained)
+                    .await?
+            } else {
+                labs.up(name, &spec).await?
+            };
+            let recovery = proofstorm_app::updates::start_recovery(
+                labs.runtime.clone(),
+                labs.store.clone(),
+                labs.workspace.clone(),
+                labs.principal.clone(),
+            );
             let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(wait));
             while !view
                 .runtime
@@ -184,6 +221,19 @@ async fn main() -> Result<()> {
             {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 view = labs.inspect(name, 0).await?;
+            }
+            recovery.abort();
+            if let Some(status) = view
+                .runtime
+                .as_ref()
+                .filter(|s| s.phase == InstancePhase::Ready)
+            {
+                labs.store.mark_update_applied(
+                    &labs.workspace,
+                    &status.instance.id,
+                    status.instance.generation,
+                    Some(&status.instance.revision_digest),
+                )?;
             }
             print(&view)?;
             if !view
@@ -217,7 +267,12 @@ async fn main() -> Result<()> {
                 })
                 .await?,
         )?,
-        Command::Serve { port } => proofstorm_app::http::serve(labs, port).await?,
+        Command::Serve { port, replace } => {
+            if replace {
+                server_restart::stop_previous(port).await?;
+            }
+            proofstorm_app::http::serve(labs, port).await?;
+        }
         Command::Status { name, after } => print(&labs.inspect(&name, after).await?)?,
         Command::Sync { name, watch } => loop {
             labs.sync(&name).await?;

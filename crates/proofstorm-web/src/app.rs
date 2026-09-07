@@ -1,5 +1,6 @@
 use crate::{
     client,
+    system::{SystemPanel, SystemSummary, NodeBalance, BalancePanel, toggle_fullscreen},
     model::{closed, health, lab_name, lab_phase, label, position},
 };
 use leptos::{prelude::*, task::spawn_local};
@@ -13,6 +14,11 @@ use wasm_bindgen::{JsCast, closure::Closure};
     reason = "top-level view owns its subscription and refresh lifecycle"
 )]
 pub fn App() -> impl IntoView {
+    let system_open = RwSignal::new(false);
+    let fullscreen = RwSignal::new(false);
+    let telemetry = RwSignal::new(None::<proofstorm_view::SystemView>);
+    let telemetry_error = RwSignal::new(false);
+    let telemetry_refresh = RwSignal::new(0_u64);
     let zoom = RwSignal::new(1.0_f64);
     let pan = RwSignal::new((0.0_f64, 0.0_f64));
     let environment = RwSignal::new(None::<EnvironmentView>);
@@ -83,19 +89,59 @@ pub fn App() -> impl IntoView {
             busy.set(false);
         });
     });
+    let telemetry_busy = Rc::new(Cell::new(false));
+    let telemetry_dirty = Rc::new(Cell::new(false));
+    Effect::new(move |_| {
+        telemetry_refresh.get();
+        telemetry_dirty.set(true);
+        if telemetry_busy.replace(true) { return; }
+        let busy = telemetry_busy.clone();
+        let dirty = telemetry_dirty.clone();
+        spawn_local(async move {
+            while dirty.replace(false) {
+                match client::system().await {
+                    Ok(view) => { telemetry.set(Some(view)); telemetry_error.set(false); }
+                    Err(_) => telemetry_error.set(true),
+                }
+            }
+            busy.set(false);
+        });
+    });
+    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+        let doc = document.clone();
+        let on_fullscreen = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            fullscreen.set(doc.fullscreen_element().is_some());
+        });
+        let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event| {
+            if event.key() == "Escape" { fullscreen.set(false); }
+        });
+        let _ = document.add_event_listener_with_callback("fullscreenchange", on_fullscreen.as_ref().unchecked_ref());
+        let _ = document.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
+        let listeners = StoredValue::new_local((document, on_fullscreen, on_key));
+        on_cleanup(move || listeners.with_value(|(doc, full, key)| {
+            let _ = doc.remove_event_listener_with_callback("fullscreenchange", full.as_ref().unchecked_ref());
+            let _ = doc.remove_event_listener_with_callback("keydown", key.as_ref().unchecked_ref());
+        }));
+    }
     // Native EventSource reconnects automatically. Every connection gets an invalidation.
     match web_sys::EventSource::new("/v1/events") {
         Ok(source) => {
             let on_event = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |_| {
                 connected.set(true);
                 refresher();
+                telemetry_refresh.update(|n| *n = n.wrapping_add(1));
             });
+            let on_telemetry = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |_| {
+                connected.set(true);
+                telemetry_refresh.update(|n| *n = n.wrapping_add(1));
+            });
+            let _ = source.add_event_listener_with_callback("telemetry", on_telemetry.as_ref().unchecked_ref());
             let on_error = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| connected.set(false));
             let _ = source
                 .add_event_listener_with_callback("environment", on_event.as_ref().unchecked_ref());
             source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-            let connection = StoredValue::new_local((source, on_event, on_error));
-            on_cleanup(move || connection.with_value(|(source, _, _)| source.close()));
+            let connection = StoredValue::new_local((source, on_event, on_error, on_telemetry));
+            on_cleanup(move || connection.with_value(|(source, _, _, _)| source.close()));
         }
         Err(_) => error.set(Some(
             "This browser could not open the live event stream.".into(),
@@ -103,6 +149,7 @@ pub fn App() -> impl IntoView {
     }
     // Retry failed snapshots even when an otherwise healthy stream is quiet.
     let retry = gloo_timers::callback::Interval::new(5000, move || {
+        if telemetry_error.get_untracked() { telemetry_refresh.update(|n| *n = n.wrapping_add(1)); }
         if error.get_untracked().is_some() {
             refresher();
         }
@@ -112,11 +159,12 @@ pub fn App() -> impl IntoView {
         <header class="app-header">
             <a class="brand" href="/" aria-label="Proofstorm home"><span class="brand-mark">"✳"</span>"proofstorm"</a>
             <span class="header-divider"></span><span class="header-context">"Environment"</span>
-            <div class="header-right"><span class=move || if connected.get() && error.get().is_none() { "live-state" } else { "live-state offline" }><i></i>{move || if error.get().is_some() { "Snapshot stale" } else if connected.get() { "Live · SSE" } else { "Reconnecting" }}</span><span class="read-only">"READ ONLY"</span></div>
+            <div class="header-right"><span class=move || if connected.get() && error.get().is_none() { "live-state" } else { "live-state offline" }><i></i>{move || if error.get().is_some() { "Update failed" } else if connected.get() { "Live" } else { "Reconnecting" }}</span><span class="read-only">"READ ONLY"</span></div>
         </header>
         <div class="workspace-shell">
             <aside class="sidebar">
                 <div class="sidebar-heading"><span class="eyebrow">"WORKSPACE"</span><strong>{move || environment.get().map_or_else(|| "Connecting…".into(), |v| v.workspace_id)}</strong></div>
+                <SystemSummary telemetry open=system_open />
                 <div class="section-label"><span>"LABS"</span><span>{move || environment.get().map_or(0, |v| v.labs.items.len())}</span></div>
                 <input class="search" aria-label="Find a lab" placeholder="Find a lab…" on:input=move |ev| search.set(event_target_value(&ev)) />
                 <nav class="lab-list" aria-label="Labs">{move || {
@@ -124,20 +172,23 @@ pub fn App() -> impl IntoView {
                     environment.get().map(|v| v.labs.items.into_iter().filter(|lab| lab_name(lab).to_lowercase().contains(&query)).map(|lab| {
                         let id = lab.id.clone(); let active_id = id.clone();
                         let name = lab_name(&lab); let status = lab_phase(&lab);
-                        view! { <button class=move || if selected.get() == active_id { "lab-item selected" } else { "lab-item" } on:click=move |_| { selected.set(id.clone()); detail.set(None); component.set(String::new()); history_pages.set(1); }><span class="lab-icon">"⬡"</span><span><strong>{name}</strong><small>{status}</small></span><span class="chevron">"›"</span></button> }
+                        view! { <button class=move || if !system_open.get() && selected.get() == active_id { "lab-item selected" } else { "lab-item" } on:click=move |_| { system_open.set(false); selected.set(id.clone()); detail.set(None); zoom.set(1.0); pan.set((0.0,0.0)); component.set(String::new()); history_pages.set(1); }><span class="lab-icon">"⬡"</span><span><strong>{name}</strong><small>{status}</small></span><span class="chevron">"›"</span></button> }
                     }).collect_view())
                 }}</nav>
-                <div class="sidebar-footer"><span class="tiny-dot"></span>"Local environment"<p>"Agents build. You observe."</p></div>
+                <div class="sidebar-footer">"Local workspace"</div>
             </aside>
             <main>
-                <Show when=move || !connected.get() && loaded.get()><div class="notice warning">"Live connection interrupted. Showing the last snapshot while the stream reconnects."</div></Show>
+                <Show when=move || !connected.get() && loaded.get()><div class="notice warning">"Connection lost. Reconnecting…"</div></Show>
                 {move || error.get().map(|message| view! { <div class="notice warning" role="status">{message}<button on:click=move |_| refresher()>"Retry"</button></div> })}
                 {move || observer.get().filter(|o| o.error.is_some()).map(|o| view! { <div class="notice warning">{o.error.unwrap_or_default()}</div> })}
-                {move || detail.get().map(|lab| view! { <LabPanel lab selected_component=component history_pages zoom pan /> })}
+                <Show when=move || telemetry_error.get()><div class="notice warning">"Measurements could not refresh."</div></Show>
+                <Show when=move || system_open.get()><SystemPanel telemetry selected_lab=selected open=system_open /></Show>
+                <Show when=move || !system_open.get()>
+                {move || detail.get().map(|lab| view! { <LabPanel lab selected_component=component history_pages zoom pan telemetry fullscreen /> })}
                 <Show when=move || detail.get().is_none()>
-                    <div class="empty-state"><span class="empty-mark">"✳"</span><span class="eyebrow">"YOUR LAB, IN VIEW"</span><h1>{move || if loaded.get() && selected.get().is_empty() { "Waiting for your first lab" } else { "Connecting to your environment" }}</h1><p>"Ask an agent to build a lab. Components, connections and activity appear here as it takes shape."</p><code>"proofstorm up examples/developer-lab.json --name demo"</code><small>"Use the same database and workspace as your agent."</small></div>
+                    <div class="empty-state"><span class="empty-mark">"✳"</span><h1>{move || if loaded.get() && selected.get().is_empty() { "No labs" } else { "Loading lab…" }}</h1><Show when=move || loaded.get() && selected.get().is_empty()><code>"proofstorm up examples/developer-lab.json --name demo"</code></Show></div>
                 </Show>
-                <footer class="main-footer"><span>"Topology & runtime status · Desired resources"</span><span>"Protocol traffic and resource usage are not collected"</span></footer>
+                </Show>
             </main>
         </div>
     }
@@ -150,12 +201,24 @@ fn LabPanel(
     history_pages: RwSignal<usize>,
     zoom: RwSignal<f64>,
     pan: RwSignal<(f64, f64)>,
+    telemetry: RwSignal<Option<proofstorm_view::SystemView>>,
+    fullscreen: RwSignal<bool>,
 ) -> impl IntoView {
+    let retained = lab
+        .resources
+        .as_ref()
+        .map(|r| r.retained_storage.clone())
+        .unwrap_or_default();
+    let configuration = lab
+        .desired_generation
+        .map(|g| format!("Configuration {g}"))
+        .unwrap_or_default();
     let name = lab_name(&lab);
     let state = label(&lab.runtime.state);
     let phase = lab_phase(&lab);
     let is_closed = closed(&lab);
     let warning_state = state.clone();
+    let runtime_message = lab.runtime.message.clone().filter(|_| phase == "blocked");
     let observation_state = if is_closed {
         "not running".into()
     } else {
@@ -173,23 +236,25 @@ fn LabPanel(
     let graph_lab = lab.clone();
     if lab.read_error.is_some() {
         return view! {
-            <div class="page-heading"><div><div class="breadcrumb">"ENVIRONMENT / LAB"</div><h1>{name}<span class="phase-badge">"History unavailable"</span></h1><p class="instance-id">{lab.id.clone()}</p></div></div>
-            <div class="notice warning">"This lab's stored history uses an incompatible record format. Its topology, activity, and runtime status could not be loaded. The stored data has been preserved; other labs can still be viewed."</div>
+            <div class="page-heading"><div><div class="breadcrumb">"LAB"</div><h1>{name}<span class="phase-badge">"History unavailable"</span></h1><p class="instance-id">{lab.id.clone()}" · "{configuration}</p></div></div>
+            <div class="notice warning">"This lab’s history uses an incompatible format."</div>
         }.into_any();
     }
     view! {
-        <div class="page-heading"><div><div class="breadcrumb">"ENVIRONMENT / LAB"</div><h1>{name}<span class="phase-badge">{phase}</span></h1><p class="instance-id">{lab.id.clone()}</p></div><div class="heading-note">"Updated "{time(lab.runtime.fetched_at_unix)}<small>"from your local cluster"</small></div></div>
-        <Show when=move || state != "available" && !is_closed><div class="notice warning">"Runtime observation: "{warning_state.clone()}". Component readiness is unknown until a current observation is available."</div></Show>
-        <div class="metrics"><div><span>"COMPONENTS"</span><strong>{count}</strong><small>{format!("{ready} ready")}</small></div><div><span>"CONNECTIONS"</span><strong>{links}</strong><small>"declared topology"</small></div><div><span>"SESSIONS"</span><strong>{format!("{}{}",lab.sessions.items.len(),if lab.sessions.next_cursor.is_some(){"+"}else{""})}</strong><small>"activity tracking"</small></div><div><span>"OBSERVATION"</span><strong class="metric-text">{observation_state}</strong><small>"cluster status"</small></div></div>
-        <section class="topology-section"><div class="panel-title"><h2>"Lab topology"</h2><span>"Select a component to inspect"</span><div class="legend"><i class="ready"></i>"Ready"<i class="pending"></i>"Pending"<i class="blocked"></i>"Blocked"<i class="unknown"></i>"Unknown"</div></div>
-            <div class="topology-body"><Graph lab=graph_lab selected=selected_component zoom pan /><aside class="inspector">{move || {
-                lab_for_detail.components.items.iter().find(|c| c.id == selected_component.get()).cloned().map_or_else(|| view! { <div class="inspector-empty"><span>"⌖"</span><h3>"Explore your lab"</h3><p>"Choose a node to see its endpoints, health and resource requests."</p><small>"Connections describe configuration. They do not represent observed traffic."</small></div> }.into_any(), |c| view! { <ComponentPanel component=c lab=lab_for_detail.clone() /> }.into_any())
+        <div class="page-heading"><div><div class="breadcrumb">"LAB"</div><h1>{name}<span class="phase-badge">{phase}</span></h1><p class="instance-id">{lab.id.clone()}" · "{configuration}</p></div><div class="heading-note">"Updated "{time(lab.runtime.fetched_at_unix)}</div></div>
+        <Show when=move || state != "available" && !is_closed><div class="notice warning">"Runtime observation: "{warning_state.clone()}". Showing last known readiness."</div></Show>
+        {runtime_message.map(|message|view!{<div class="notice warning">{message}</div>})}
+        <div class="metrics"><div><span>"COMPONENTS"</span><strong>{count}</strong><small>{format!("{ready} ready")}</small></div><div><span>"CONNECTIONS"</span><strong>{links}</strong></div><div><span>"SESSIONS"</span><strong>{format!("{}{}",lab.sessions.items.len(),if lab.sessions.next_cursor.is_some(){"+"}else{""})}</strong></div><div><span>"OBSERVATION"</span><strong class="metric-text">{observation_state}</strong></div></div>
+        {(!retained.is_empty()).then(||view!{<section class="notice"><strong>"Retained storage"</strong><p>"Data retained for removed components."</p>{retained.into_iter().map(|(name,size)|view!{<div>{name}" · "{size}</div>}).collect_view()}</section>})}
+        <section class=move || if fullscreen.get() { "topology-section is-fullscreen" } else { "topology-section" }><div class="panel-title"><h2>"Topology"</h2><div class="legend"><i class="ready"></i>"Ready"<i class="pending"></i>"Pending"<i class="blocked"></i>"Blocked"<i class="unknown"></i>"Unknown"</div><button class="fullscreen-button" aria-label=move || if fullscreen.get() { "Exit fullscreen" } else { "Fullscreen topology" } on:click=move |_| toggle_fullscreen(fullscreen)>{move || if fullscreen.get() { "↙  Exit fullscreen" } else { "⛶  Fullscreen" }}</button></div>
+            <div class="topology-body"><Graph lab=graph_lab selected=selected_component zoom pan telemetry /><aside class="inspector">{move || {
+                lab_for_detail.components.items.iter().find(|c| c.id == selected_component.get()).cloned().map_or_else(|| view! { <div class="inspector-empty"><span>"⌖"</span><p>"Select a component"</p></div> }.into_any(), |c| view! { <ComponentPanel component=c lab=lab_for_detail.clone() telemetry /> }.into_any())
             }}</aside></div>
         </section>
         <div class="history-grid"><section class="history-panel"><div class="panel-title"><h2>"Activity"</h2><span>"Latest first"</span></div><div class="activity-list">
             {lab.activity.items.iter().map(|a| { let phase = label(&a.phase); view! { <div class="activity-row"><span class=format!("activity-dot {phase}")></span><div><strong>{label(&a.kind)}</strong><small>{format!("{} · {}", a.principal_id, a.components.join(", "))}</small><code>{a.id.clone()}</code></div><div class="activity-outcome"><span>{phase}</span><small>{a.native_exit_code.map_or_else(|| time(a.accepted_at_unix), |code| format!("exit {code}"))}</small></div></div> } }).collect_view()}
-            {lab.activity.items.is_empty().then(|| view! { <p class="quiet-empty">"Agent actions will appear here. Receipts are collected automatically."</p> })}
-        </div></section><section class="history-panel"><div class="panel-title"><h2>"Sessions"</h2><span>"Informational"</span></div><div class="session-list">{lab.sessions.items.iter().map(|s| view! { <div class="session-row"><span class="avatar">"A"</span><div><strong>{s.session.principal_id.clone()}</strong><small>{format!("{} · {} overlaps",label(&s.session.phase),s.overlapping_session_count)}</small><code>{s.session.id.clone()}</code></div></div> }).collect_view()}{lab.sessions.items.is_empty().then(|| view! { <p class="quiet-empty">"No sessions recorded for this lab."</p> })}</div><p class="session-note">"Sessions track activity. They never lock or reserve the lab."</p></section></div>
+            {lab.activity.items.is_empty().then(|| view! { <p class="quiet-empty">"No activity"</p> })}
+        </div></section><section class="history-panel"><div class="panel-title"><h2>"Sessions"</h2></div><div class="session-list">{lab.sessions.items.iter().map(|s| view! { <div class="session-row"><span class="avatar">"A"</span><div><strong>{s.session.principal_id.clone()}</strong><small>{format!("{} · {} overlaps",label(&s.session.phase),s.overlapping_session_count)}</small><code>{s.session.id.clone()}</code></div></div> }).collect_view()}{lab.sessions.items.is_empty().then(|| view! { <p class="quiet-empty">"No sessions"</p> })}</div></section></div>
         {(lab.activity.next_cursor.is_some() || lab.sessions.next_cursor.is_some()).then(|| view! { <button class="load-more" on:click=move |_| history_pages.update(|pages| *pages += 1)>"Load more history"</button> })}
     }.into_any()
 }
@@ -200,6 +265,7 @@ fn Graph(
     selected: RwSignal<String>,
     zoom: RwSignal<f64>,
     pan: RwSignal<(f64, f64)>,
+    telemetry: RwSignal<Option<proofstorm_view::SystemView>>,
 ) -> impl IntoView {
     let drag = RwSignal::new(None::<(i32, i32)>);
     let height = lab
@@ -219,22 +285,23 @@ fn Graph(
         .unwrap_or(1100)
         .max(800);
     let nodes = lab.components.items.clone();
+    let lab_id = lab.id.clone();
     view! {
         <div class="graph"><svg viewBox=format!("0 0 {width} {height}") aria-label="Lab component topology" role="group"
             on:pointerdown=move |ev| { if ev.button() == 0 { drag.set(Some((ev.client_x(),ev.client_y()))); } }
             on:pointerup=move |_| drag.set(None) on:pointerleave=move |_| drag.set(None)
             on:pointermove=move |ev| { if let Some((x,y))=drag.get_untracked() { let scale = ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).map_or(1.0, |e| f64::from(width)/f64::from(e.client_width().max(1))); pan.update(|p| { p.0+=f64::from(ev.client_x()-x)*scale; p.1+=f64::from(ev.client_y()-y)*scale; }); drag.set(Some((ev.client_x(),ev.client_y()))); } }>
-            <defs><pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#dce0d9" /></pattern><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa59b" /></marker></defs>
+            <defs><pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#28313d" /></pattern><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#607188" /></marker></defs>
             <rect width="100%" height="100%" fill="url(#dots)" />
             <g transform=move || format!("translate({} {}) scale({})",pan.get().0,pan.get().1,zoom.get())>
-                {lab.links.items.iter().filter(|l| nodes.iter().any(|c| c.id==l.from) && nodes.iter().any(|c| c.id==l.to)).map(|link| { let (x1,y1)=position(&nodes,&link.from); let (x2,y2)=position(&nodes,&link.to); let (start,end) = match x2.cmp(&x1) { std::cmp::Ordering::Greater => ((x1+205,y1+42),(x2,y2+42)), std::cmp::Ordering::Less => ((x1,y1+42),(x2+205,y2+42)), std::cmp::Ordering::Equal => ((x1+102,y1+84),(x2+102,y2)) }; let mid=i32::midpoint(start.0,end.0); view! { <g><path class="connection" d=format!("M {} {} C {mid} {}, {mid} {}, {} {}",start.0,start.1,start.1,end.1,end.0,end.1) marker-end="url(#arrow)"/><title>{format!("{} → {} · {}", link.from,link.to,label(&link.kind))}</title></g> } }).collect_view()}
-                {lab.components.items.into_iter().map(|c| { let (x,y)=position(&nodes,&c.id); let id=c.id.clone();let active=id.clone();let key_id=id.clone();let status=health(&c);view! { <g class=move || format!("graph-node {} {}",status,if selected.get()==active{"active"}else{""}) transform=format!("translate({x} {y})") tabindex="0" role="button" aria-label=format!("Inspect {}",c.id) on:pointerdown=move |ev| ev.stop_propagation() on:click=move |_| selected.set(id.clone()) on:keydown=move |ev| {if matches!(ev.key().as_str(),"Enter"|" ") {ev.prevent_default();selected.set(key_id.clone());}}><rect width="205" height="84" rx="10"/><circle cx="184" cy="19" r="4"/><text class="node-kind" x="15" y="23">{label(&c.kind).to_uppercase()}</text><text class="node-name" x="15" y="46">{short(&c.id,24)}</text><text class="node-impl" x="15" y="65">{short(&c.implementation,28)}</text><title>{format!("{} · {} · {status}",c.id,c.implementation)}</title></g> } }).collect_view()}
+                {lab.links.items.iter().filter(|l| nodes.iter().any(|c| c.id==l.from) && nodes.iter().any(|c| c.id==l.to)).map(|link| { let (x1,y1)=position(&nodes,&link.from); let (x2,y2)=position(&nodes,&link.to); let (start,end) = match x2.cmp(&x1) { std::cmp::Ordering::Greater => ((x1+205,y1+58),(x2,y2+58)), std::cmp::Ordering::Less => ((x1,y1+58),(x2+205,y2+58)), std::cmp::Ordering::Equal => ((x1+102,y1+116),(x2+102,y2)) }; let mid=i32::midpoint(start.0,end.0); view! { <g><path class="connection" d=format!("M {} {} C {mid} {}, {mid} {}, {} {}",start.0,start.1,start.1,end.1,end.0,end.1) marker-end="url(#arrow)"/><title>{format!("{} → {} · {}", link.from,link.to,label(&link.kind))}</title></g> } }).collect_view()}
+                {lab.components.items.into_iter().map(|c| { let (x,y)=position(&nodes,&c.id); let id=c.id.clone();let active=id.clone();let key_id=id.clone();let status=health(&c);view! { <g class=move || format!("graph-node {} {}",status,if selected.get()==active{"active"}else{""}) transform=format!("translate({x} {y})") tabindex="0" role="button" aria-label=format!("Inspect {}",c.id) on:pointerdown=move |ev| ev.stop_propagation() on:click=move |_| selected.set(id.clone()) on:keydown=move |ev| {if matches!(ev.key().as_str(),"Enter"|" ") {ev.prevent_default();selected.set(key_id.clone());}}><rect width="205" height="116" rx="10"/><circle cx="184" cy="19" r="4"/><text class="node-kind" x="15" y="23">{label(&c.kind).to_uppercase()}</text><text class="node-name" x="15" y="46">{short(&c.id,24)}</text><text class="node-impl" x="15" y="65">{short(&c.implementation,28)}</text><NodeBalance telemetry lab_id=lab_id.clone() component=c.id.clone() /><title>{format!("{} · {} · {status}",c.id,c.implementation)}</title></g> } }).collect_view()}
             </g>
         </svg><div class="graph-toolbar"><button aria-label="Zoom out" on:click=move |_| zoom.update(|z| *z=(*z/1.2).max(0.3))>"−"</button><span>{move || format!("{:.0}%",zoom.get()*100.0)}</span><button aria-label="Zoom in" on:click=move |_| zoom.update(|z| *z=(*z*1.2).min(3.0))>"+"</button><button on:click=move |_| { zoom.set(1.0);pan.set((0.0,0.0)); }>"Reset"</button></div><span class="graph-caption">"Drag to pan · Select to inspect"</span></div>
     }
 }
 #[component]
-fn ComponentPanel(component: ComponentView, lab: EnvironmentLab) -> impl IntoView {
+fn ComponentPanel(component: ComponentView, lab: EnvironmentLab, telemetry: RwSignal<Option<proofstorm_view::SystemView>>) -> impl IntoView {
     let id = component.id.clone();
     let connection = component
         .endpoints
@@ -251,9 +318,10 @@ fn ComponentPanel(component: ComponentView, lab: EnvironmentLab) -> impl IntoVie
             )
         });
     view! { <div class="component-panel"><span class="eyebrow">{label(&component.kind)}</span><h3>{component.id.clone()}</h3><p>{component.implementation.clone()}" · "{health(&component)}</p>
-        <h4>"Connections"</h4>{component.endpoints.is_empty().then(|| view!{<p>"No service endpoints."</p>})}
+        <BalancePanel telemetry lab_id=lab.id.clone() component=component.id.clone() />
+        <h4>"Endpoints"</h4>{component.endpoints.is_empty().then(|| view!{<p>"No endpoints"</p>})}
         {component.endpoints.into_iter().map(|e| view!{<div class="endpoint"><strong>{e.name}</strong><code>{format!("{}:{}",e.cluster_host,e.port)}</code><small>{format!("{} · {}",e.transport,if e.local_connection_supported {"local connection available"} else {"cluster access"})}</small></div>}).collect_view()}
-        <h4>"Conditions"</h4>{component.conditions.is_empty().then(|| view!{<p>"No conditions observed yet."</p>})}{component.conditions.into_iter().map(|c|view!{<div class="condition"><strong>{label(&c.condition_type)}" · "{label(&c.state)}</strong><small>{label(&c.reason)}</small><p>{c.message}</p></div>}).collect_view()}
+        <h4>"Conditions"</h4>{component.conditions.is_empty().then(|| view!{<p>"No observations"</p>})}{component.conditions.into_iter().map(|c|view!{<div class="condition"><strong>{label(&c.condition_type)}" · "{label(&c.state)}</strong><small>{label(&c.reason)}</small><p>{c.message}</p></div>}).collect_view()}
         <h4>"Desired resources"</h4>{lab.resource_error.map(|_|view!{<p>"Resource demands unavailable."</p>})}
         {lab.resources.map(|r|view!{<div>{r.workloads.into_iter().filter(|w|w.component.as_deref()==Some(&id)).map(|w|view!{<div class="demand"><strong>{w.name}" × "{w.replicas}</strong>{w.containers.into_iter().map(|c|view!{<small>{c.name}{format!(" · requests {} · limits {}",quantities(&c.requests),quantities(&c.limits))}</small>}).collect_view()}</div>}).collect_view()}{r.storage.into_iter().filter(|s|s.component.as_deref()==Some(&id)).map(|s|view!{<div class="demand"><strong>"Storage · "{s.name}</strong><small>{quantities(&s.requests)}</small></div>}).collect_view()}</div>})}
         {connection.map(|command| view! {<small class="inspector-note">"Connect from your machine:"</small><code class="connect-command">{command}</code>})}
@@ -277,7 +345,7 @@ fn short(value: &str, max: usize) -> String {
         value.into()
     }
 }
-fn time(unix: i64) -> String {
+pub(crate) fn time(unix: i64) -> String {
     let seconds = unix.rem_euclid(86400);
     format!(
         "{:02}:{:02}:{:02} UTC",

@@ -14,7 +14,9 @@ mod operation;
 mod publication;
 mod quote;
 mod schema;
+mod update;
 mod validation;
+pub use update::{LabChanges, LabUpdatePlan, LabUpdateTarget};
 
 pub use backend::{
     BackendContractRegistry, BitcoinCoreConfig, CdkMintConfig, ClnConfig, ComponentBackendContract,

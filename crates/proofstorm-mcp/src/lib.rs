@@ -87,6 +87,8 @@ pub struct DeveloperExecRequest {
 #[serde(deny_unknown_fields)]
 pub struct DeveloperFinishRequest {
     pub name: String,
+    /// Copy `lab.instance_id` from `lab_inspect`.
+    pub expected_instance_id: String,
     #[serde(default = "default_wait_timeout_seconds")]
     pub timeout_seconds: u32,
 }
@@ -202,6 +204,9 @@ pub enum LabPlanConnectionInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabPlanRequest {
+    /// Edit an existing lab at the generation returned by `lab_status`. Supply the complete desired topology.
+    #[serde(default)]
+    pub update: Option<proofstorm_core::LabUpdateTarget>,
     pub plan_id: String,
     pub components: Vec<LabPlanComponentInput>,
     pub connections: Vec<LabPlanConnectionInput>,
@@ -260,6 +265,8 @@ pub struct LabPlanResolvedRuntimeEndpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabPlanReceipt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<proofstorm_core::LabUpdatePlan>,
     pub plan_id: String,
     pub plan_digest: String,
     pub version: u64,
@@ -282,6 +289,9 @@ pub struct LabApplyRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabApplyReceipt {
+    pub current_generation: u64,
+    pub superseded: bool,
+    pub generation: u64,
     pub plan_id: String,
     pub plan_digest: String,
     pub revision_digest: String,
@@ -295,7 +305,33 @@ pub struct LabApplyReceipt {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReadDraftRequest {
+    #[serde(default)]
     pub draft_id: String,
+    /// Read the complete desired configuration of a live lab; version is its generation.
+    #[serde(default)]
+    pub instance_id: Option<String>,
+}
+
+/// Full configuration is returned only on this explicit read, not expanded into every discovery profile.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabReadResponse {
+    pub id: String,
+    pub workspace_id: String,
+    pub version: u64,
+    /// Canonical complete lab document. Preserve all components, links and policy when editing.
+    #[schemars(with = "serde_json::Value")]
+    pub lab: LabSpec,
+}
+impl From<Draft> for LabReadResponse {
+    fn from(draft: Draft) -> Self {
+        Self {
+            id: draft.id,
+            workspace_id: draft.workspace_id,
+            version: draft.version,
+            lab: draft.lab,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -879,6 +915,8 @@ pub struct PublishDraftResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaterializeLabRequest {
+    /// Published draft/plan identity; consumed plans cannot resurrect deleted labs.
+    pub plan_id: String,
     pub instance_id: String,
     pub revision_digest: String,
     pub idempotency_key: String,
@@ -892,7 +930,22 @@ pub struct InstanceRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct CloseLabRequest {
+    pub instance_id: String,
+    /// Copy `instance_key` from `lab_status`; protects a same-name replacement from old requests.
+    pub expected_instance_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LabStatusSummary {
+    pub instance_key: String,
+    pub observed_generation: u64,
+    pub observed_revision_digest: String,
+    pub last_converged_revision: Option<String>,
+    pub retained_storage: BTreeMap<String, String>,
+
+    pub generation: u64,
     /// First eight startup failures; use `component_status_list` for all details.
     #[serde(default)]
     pub blockers: Vec<StartupBlocker>,
@@ -961,6 +1014,12 @@ pub struct LabInventoryListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabWaitRequest {
+    /// Copy from close/status to verify deletion even after local cleanup.
+    #[serde(default)]
+    pub expected_instance_key: Option<String>,
+    /// Wait for this desired generation; returns superseded if another edit replaces it.
+    #[serde(default)]
+    pub expected_generation: Option<u64>,
     pub instance_id: String,
     /// Phase that ends the wait successfully. `ready` and `closed` are the
     /// normal materialization and teardown targets.
@@ -972,6 +1031,14 @@ pub struct LabWaitRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabWaitResult {
+    pub instance_key: String,
+    pub observed_generation: u64,
+    pub observed_revision_digest: String,
+    pub last_converged_revision: Option<String>,
+    pub retained_storage: BTreeMap<String, String>,
+
+    pub generation: u64,
+    pub superseded: bool,
     /// First eight startup failures. For a ready target, these end the wait early.
     #[serde(default)]
     pub blockers: Vec<StartupBlocker>,
@@ -2180,6 +2247,7 @@ impl ProofstormToolset {
                 "proofstorm_catalog_list"
                     | "proofstorm_catalog_entry_read"
                     | "proofstorm_catalog_config_schema_read"
+                    | "proofstorm_lab_read"
                     | "proofstorm_lab_up"
                     | "proofstorm_lab_inspect"
                     | "proofstorm_environment_read"
@@ -2304,6 +2372,7 @@ fn experiment_tool(tool: &str) -> bool {
             | "proofstorm_candidate_wait"
             | "proofstorm_candidate_list"
             | "proofstorm_candidate_cancel"
+            | "proofstorm_lab_read"
             | "proofstorm_lab_plan"
             | "proofstorm_lab_apply"
             | "proofstorm_lab_status"
@@ -2641,7 +2710,20 @@ impl ProofstormMcp {
                 artifact,
             });
         }
+        let revisions = actions
+            .iter()
+            .map(|a| a.revision_digest.as_str())
+            .filter(|d| !d.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|digest| {
+                self.store
+                    .revision_for_evidence(&self.workspace, &self.principal, digest)
+                    .map_err(store_error)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let content = EvidenceBundleContent {
+            revisions,
             api_version: EVIDENCE_API_VERSION.to_owned(),
             workspace_id: self.workspace.clone(),
             experiment,
@@ -2772,7 +2854,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Finish a named lab: revoke new actions, cancel/collect owned work, close the run and verify teardown. Recorded evidence stays in the durable journal. A timeout leaves a closing lab; repeat this call to finish, without replaying commands. Returns the lab_inspect status shape."
+        description = "Finish a named lab: revoke new actions, cancel/collect owned work, close the run and verify teardown. Lab-owned records are removed after verified teardown; export evidence first. A timeout leaves a closing lab; repeat this call to finish, without replaying commands. Returns the lab_inspect status shape."
     )]
     async fn proofstorm_lab_finish(
         &self,
@@ -2782,7 +2864,11 @@ impl ProofstormMcp {
             return Err(invalid_operation("timeout_seconds must be in 1..=120"));
         }
         self.developer_labs()?
-            .down(&request.name, request.timeout_seconds)
+            .down_checked(
+                &request.name,
+                request.timeout_seconds,
+                Some(&request.expected_instance_id),
+            )
             .await
             .map_err(app_error)
             .and_then(|view| developer_result(compact_developer_view(view)))
@@ -3046,7 +3132,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Plan from catalog IDs and backend-role connections. Declare advertised endpoint controls in runtime_requirements. Verify component config in the receipt before lab_apply. Changed plans need a new plan_id and idempotency_key; exact retries reuse both. Versions, kinds and backend bindings are inferred"
+        description = "Plan a new lab or edit an existing lab with update={instance_id,expected_generation,delete_data}. Updates require complete desired topology; inspect the change summary. Unchanged components keep state and endpoints. Backend migrations are rejected. Plan from catalog IDs and backend-role connections. Declare advertised endpoint controls in runtime_requirements. Verify component config in the receipt before lab_apply. Changed plans need a new plan_id and idempotency_key; exact retries reuse both. Versions, kinds and backend bindings are inferred"
     )]
     fn proofstorm_lab_plan(
         &self,
@@ -3058,7 +3144,19 @@ impl ProofstormMcp {
             .store
             .effective_catalog(&self.workspace, &self.principal)
             .map_err(store_error)?;
-        let lab = compile_lab_plan_with_catalog(&request, &catalog)?;
+        let mut lab = compile_lab_plan_with_catalog(&request, &catalog)?;
+        if let Some(target) = &request.update {
+            let instance = self
+                .store
+                .instance(&self.workspace, &self.principal, &target.instance_id)
+                .map_err(store_error)?;
+            lab.name = self
+                .store
+                .revision(&self.workspace, &self.principal, &instance.revision_digest)
+                .map_err(store_error)?
+                .lab
+                .name;
+        }
         let validation = lab_validation_result_with_catalog(&lab, &catalog);
         if !validation.valid {
             return Err(ErrorData::invalid_request(
@@ -3097,9 +3195,21 @@ impl ProofstormMcp {
                 other => store_error(other),
             })
             .and_then(|draft| {
+                let update = if let Some(target) = request.update {
+                    let revision = self.store.publish(&self.workspace, &self.principal, &draft.id, draft.version, &format!("{}:update-publication", request.idempotency_key)).map_err(store_error)?;
+                    let plan = if let Some(existing) = self.store.update_plan(&self.workspace, &self.principal, &draft.id).map_err(store_error)? {
+                        if existing.target != target || existing.target_revision != revision.digest { return Err(coded_invalid_request("lab_plan_id_conflict", "Use a new plan ID for changed configuration")); }
+                        existing
+                    } else {
+                        self.store.plan_update(&self.workspace, &self.principal, target, &revision).map_err(store_error)?
+                    };
+                    self.store.save_update_plan(&self.workspace, &self.principal, &draft.id, &plan).map_err(store_error)?;
+                    Some(plan)
+                } else { None };
                 bounded_agent_response(LabPlanReceipt {
+                    plan_digest: update.as_ref().map_or(plan_digest, |p|p.digest.clone()),
+                    update,
                     plan_id: draft.id,
-                    plan_digest,
                     version: draft.version,
                     components,
                     runtime_endpoints,
@@ -3112,12 +3222,66 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Publish, then materialize the exact validated lab plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. These are separate resumable stages: replay the same request after interruption; both are idempotent. Then wait for ready"
+        description = "Apply a reviewed update in place, preserving unchanged components and retained storage, or publish and materialize a new lab plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. These are separate resumable stages: replay the same request after interruption; both are idempotent. Then wait for ready"
     )]
     async fn proofstorm_lab_apply(
         &self,
         Parameters(request): Parameters<LabApplyRequest>,
     ) -> Result<Json<LabApplyReceipt>, ErrorData> {
+        if let Some(plan) = self
+            .store
+            .update_plan(&self.workspace, &self.principal, &request.plan_id)
+            .map_err(store_error)?
+        {
+            if plan.digest != request.expected_plan_digest
+                || plan.target.instance_id != request.instance_id
+            {
+                return Err(coded_invalid_request(
+                    "lab_plan_digest_mismatch",
+                    "Update target or digest differs from the reviewed plan; nothing applied",
+                ));
+            }
+            self.store
+                .accept_update(
+                    &self.workspace,
+                    &self.principal,
+                    &plan,
+                    &request.idempotency_key,
+                )
+                .map_err(store_error)?;
+            let runtime = self.runtime()?;
+            let status = proofstorm_app::updates::reconcile(
+                &proofstorm_app::Runtime::new(
+                    runtime.client.clone(),
+                    runtime.control_namespace.clone(),
+                ),
+                &self.store,
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+            )
+            .await
+            .map_err(app_error)?;
+            return Ok(Json(LabApplyReceipt {
+                generation: plan.target.expected_generation + u64::from(!plan.is_noop()),
+                current_generation: status.instance.generation,
+                superseded: status.instance.generation
+                    != plan.target.expected_generation + u64::from(!plan.is_noop()),
+                plan_id: request.plan_id,
+                plan_digest: plan.digest,
+                revision_digest: plan.target_revision,
+                lock_digest: plan.target_lock,
+                instance_id: status.instance.id,
+                phase: status.phase,
+                component_count: u32::try_from(
+                    plan.changes.added.len()
+                        + plan.changes.unchanged.len()
+                        + plan.changes.restarted.len(),
+                )
+                .unwrap_or(u32::MAX),
+                next_tool: "proofstorm_lab_wait".into(),
+            }));
+        }
         let draft = self
             .store
             .read_draft(&self.workspace, &self.principal, &request.plan_id)
@@ -3135,6 +3299,24 @@ impl ProofstormMcp {
                 })),
             ));
         }
+        {
+            let runtime = self.runtime()?;
+            let _guard = proofstorm_app::lifecycle::guard(&self.store)
+                .await
+                .map_err(app_error)?;
+            proofstorm_app::lifecycle::reconcile_name(
+                &proofstorm_app::Runtime::new(
+                    runtime.client.clone(),
+                    runtime.control_namespace.clone(),
+                ),
+                &self.store,
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+            )
+            .await
+            .map_err(app_error)?;
+        }
         let revision = self
             .store
             .publish(
@@ -3148,15 +3330,26 @@ impl ProofstormMcp {
         let component_count = u32::try_from(revision.lab.components.len()).unwrap_or(u32::MAX);
         let revision_digest = revision.digest.clone();
         let lock_digest = revision.lock.digest.clone();
-        let status = self
-            .proofstorm_lab_materialize(Parameters(MaterializeLabRequest {
-                instance_id: request.instance_id.clone(),
-                revision_digest: revision.digest,
-                idempotency_key: format!("{}:materialize", request.idempotency_key),
-            }))
-            .await?
-            .0;
+        let runtime = self.runtime()?;
+        let status = proofstorm_app::lifecycle::materialize(
+            &proofstorm_app::Runtime::new(
+                runtime.client.clone(),
+                runtime.control_namespace.clone(),
+            ),
+            &self.store,
+            &self.workspace,
+            &self.principal,
+            &request.instance_id,
+            &revision.digest,
+            &format!("{}:materialize", request.idempotency_key),
+            Some(&request.plan_id),
+        )
+        .await
+        .map_err(app_error)?;
         Ok(Json(LabApplyReceipt {
+            current_generation: status.instance.generation,
+            superseded: false,
+            generation: status.instance.generation,
             plan_id: request.plan_id,
             plan_digest,
             revision_digest,
@@ -3237,15 +3430,39 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Read a lab draft from the selected workspace")]
+    #[tool(
+        description = "Read complete configuration. Supply instance_id for a live lab (version is its desired generation), or draft_id for a draft. Use this before planning an update; never reconstruct a lab from a partial environment page."
+    )]
     fn proofstorm_lab_read(
         &self,
         Parameters(request): Parameters<ReadDraftRequest>,
-    ) -> Result<Json<Draft>, ErrorData> {
+    ) -> Result<Json<LabReadResponse>, ErrorData> {
         self.authorize(Capability::LabRead)?;
+        if let Some(instance_id) = request.instance_id {
+            if !request.draft_id.is_empty() {
+                return Err(coded_invalid_request(
+                    "lab_read_target",
+                    "Specify instance_id or draft_id, not both",
+                ));
+            }
+            let instance = self
+                .store
+                .instance(&self.workspace, &self.principal, &instance_id)
+                .map_err(store_error)?;
+            let revision = self
+                .store
+                .revision(&self.workspace, &self.principal, &instance.revision_digest)
+                .map_err(store_error)?;
+            return Ok(Json(LabReadResponse {
+                id: instance.id,
+                workspace_id: instance.workspace_id,
+                version: instance.generation,
+                lab: revision.lab,
+            }));
+        }
         self.store
             .read_draft(&self.workspace, &self.principal, &request.draft_id)
-            .map(Json)
+            .map(|draft| Json(LabReadResponse::from(draft)))
             .map_err(store_error)
     }
 
@@ -3480,24 +3697,43 @@ impl ProofstormMcp {
         Parameters(request): Parameters<MaterializeLabRequest>,
     ) -> Result<Json<LabInstanceStatus>, ErrorData> {
         self.authorize(Capability::LabMaterialize)?;
-        let instance = self
+        let draft = self
             .store
-            .materialize(
+            .read_draft(&self.workspace, &self.principal, &request.plan_id)
+            .map_err(store_error)?;
+        let published = self
+            .store
+            .publish(
                 &self.workspace,
                 &self.principal,
-                &request.instance_id,
-                &request.revision_digest,
-                &request.idempotency_key,
+                &request.plan_id,
+                draft.version,
+                &format!("{}:verify-plan", request.idempotency_key),
             )
             .map_err(store_error)?;
-        let revision = self
-            .store
-            .revision_for_materialize(&self.workspace, &self.principal, &instance.revision_digest)
-            .map_err(store_error)?;
-        self.runtime()?
-            .materialize(instance, revision)
-            .await
-            .map(Json)
+        if published.digest != request.revision_digest {
+            return Err(coded_invalid_request(
+                "lab_plan_digest_mismatch",
+                "The requested revision does not belong to this plan",
+            ));
+        }
+        let runtime = self.runtime()?;
+        proofstorm_app::lifecycle::materialize(
+            &proofstorm_app::Runtime::new(
+                runtime.client.clone(),
+                runtime.control_namespace.clone(),
+            ),
+            &self.store,
+            &self.workspace,
+            &self.principal,
+            &request.instance_id,
+            &request.revision_digest,
+            &request.idempotency_key,
+            Some(&request.plan_id),
+        )
+        .await
+        .map(Json)
+        .map_err(app_error)
     }
 
     #[tool(
@@ -3619,15 +3855,95 @@ impl ProofstormMcp {
         Parameters(request): Parameters<LabWaitRequest>,
     ) -> Result<Json<LabWaitResult>, ErrorData> {
         validate_wait_timeout(request.timeout_seconds)?;
+        let tracked =
+            match self
+                .store
+                .instance(&self.workspace, &self.principal, &request.instance_id)
+            {
+                Ok(instance) => {
+                    if request
+                        .expected_instance_key
+                        .as_ref()
+                        .is_some_and(|key| key != &instance.instance_key)
+                    {
+                        return Err(coded_invalid_request(
+                            "stale_incarnation",
+                            "The lab was replaced; read its current status",
+                        ));
+                    }
+                    instance
+                }
+                Err(StoreError::NotFound { .. })
+                    if request.target_phase == InstancePhase::Closed
+                        && request.expected_instance_key.is_some() =>
+                {
+                    let key = request.expected_instance_key.clone().unwrap();
+                    if !(key.starts_with('i')
+                        && key.len() == 20
+                        && key[1..].bytes().all(|b| b.is_ascii_hexdigit()))
+                    {
+                        return Err(invalid_operation("invalid expected_instance_key"));
+                    }
+                    LabInstance {
+                        id: request.instance_id.clone(),
+                        workspace_id: self.workspace.clone(),
+                        resource_name: format!("lab-{key}"),
+                        instance_key: key,
+                        revision_digest: String::new(),
+                        lock_digest: String::new(),
+                        generation: 0,
+                    }
+                }
+                Err(e) => return Err(store_error(e)),
+            };
         let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
         let mut backoff = std::time::Duration::from_millis(250);
         let mut last_status = None;
+        let mut expected_generation = request.expected_generation;
         loop {
-            let status = match tokio::time::timeout_at(
-                deadline,
-                self.full_lab_status(&request.instance_id),
-            )
+            let status = match tokio::time::timeout_at(deadline, async {
+                let runtime = self.runtime()?;
+                let shared = proofstorm_app::Runtime::new(
+                    runtime.client.clone(),
+                    runtime.control_namespace.clone(),
+                );
+                let current = match self.store.instance(
+                    &self.workspace,
+                    &self.principal,
+                    &request.instance_id,
+                ) {
+                    Ok(current) if current.instance_key == tracked.instance_key => current,
+                    Ok(_) if request.target_phase != InstancePhase::Closed => {
+                        return Err(coded_invalid_request(
+                            "stale_incarnation",
+                            "The lab was replaced; read its current status",
+                        ));
+                    }
+                    Ok(_) | Err(StoreError::NotFound { .. })
+                        if request.target_phase == InstancePhase::Closed =>
+                    {
+                        return shared
+                            .verify_absent(tracked.clone())
+                            .await
+                            .map_err(app_error);
+                    }
+                    Err(e) => return Err(store_error(e)),
+                    Ok(_) => unreachable!(),
+                };
+                match shared.status(current).await {
+                    Err(e)
+                        if e.kind == proofstorm_app::ErrorKind::Missing
+                            && request.target_phase == InstancePhase::Closed =>
+                    {
+                        shared
+                            .verify_absent(tracked.clone())
+                            .await
+                            .map_err(app_error)
+                    }
+                    result => result.map_err(app_error),
+                }
+            })
             .await
             {
                 Ok(result) => result?,
@@ -3650,7 +3966,49 @@ impl ProofstormMcp {
                     );
                 }
             };
+            if status.phase == InstancePhase::Closed
+                && self
+                    .store
+                    .instance(&self.workspace, &self.principal, &request.instance_id)
+                    .is_ok_and(|i| i.instance_key == tracked.instance_key)
+            {
+                let runtime = self.runtime()?;
+                let _guard = proofstorm_app::lifecycle::guard(&self.store)
+                    .await
+                    .map_err(app_error)?;
+                proofstorm_app::lifecycle::reconcile_name(
+                    &proofstorm_app::Runtime::new(
+                        runtime.client.clone(),
+                        runtime.control_namespace.clone(),
+                    ),
+                    &self.store,
+                    &self.workspace,
+                    &self.principal,
+                    &request.instance_id,
+                )
+                .await
+                .map_err(app_error)?;
+            }
+            let expected = *expected_generation.get_or_insert(status.instance.generation);
+            if request.target_phase == InstancePhase::Ready
+                && expected != status.instance.generation
+            {
+                let mut result = compact_lab_wait(status, request.target_phase, false, false);
+                result.superseded = true;
+                result.message = Some("The requested generation was superseded; inspect the current lab before waiting again.".into());
+                return Ok(Json(result));
+            }
             let reached = status.phase == request.target_phase;
+            if reached && status.phase == InstancePhase::Ready {
+                self.store
+                    .mark_update_applied(
+                        &self.workspace,
+                        &request.instance_id,
+                        status.instance.generation,
+                        Some(&status.instance.revision_digest),
+                    )
+                    .map_err(store_error)?;
+            }
             if reached
                 || lab_wait_terminal(status.phase)
                 || (request.target_phase == InstancePhase::Ready
@@ -3679,20 +4037,47 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Begin verified Kubernetes teardown and return a compact closing receipt. Then call lab_wait with target_phase=closed; success includes teardown_receipt.verified_absent=true"
+        description = "Close the incarnation identified by expected_instance_key from lab_status. Export evidence first: verified teardown removes lab-owned records. Then lab_wait with target_phase=closed and the same expected_instance_key; success includes verified_absent=true"
     )]
     async fn proofstorm_lab_close(
         &self,
-        Parameters(request): Parameters<InstanceRequest>,
+        Parameters(request): Parameters<CloseLabRequest>,
     ) -> Result<Json<LabWaitResult>, ErrorData> {
         self.authorize(Capability::LabClose)?;
+        let _guard = proofstorm_app::lifecycle::guard(&self.store)
+            .await
+            .map_err(app_error)?;
         let instance = self
             .store
             .instance_for_close(&self.workspace, &self.principal, &request.instance_id)
             .map_err(store_error)?;
+        if instance.instance_key != request.expected_instance_key {
+            return Err(coded_invalid_request(
+                "stale_incarnation",
+                "The lab was replaced; read its status before closing",
+            ));
+        }
+        self.store
+            .begin_instance_close(&self.workspace, &self.principal, &request.instance_id)
+            .map_err(store_error)?;
         self.finalize_active_operations(&instance.id).await?;
         let status = self.runtime()?.close(instance).await?;
         let reached = status.phase == InstancePhase::Closed;
+        if reached {
+            let runtime = self.runtime()?;
+            proofstorm_app::lifecycle::reconcile_name(
+                &proofstorm_app::Runtime::new(
+                    runtime.client.clone(),
+                    runtime.control_namespace.clone(),
+                ),
+                &self.store,
+                &self.workspace,
+                &self.principal,
+                &request.instance_id,
+            )
+            .await
+            .map_err(app_error)?;
+        }
         Ok(Json(compact_lab_wait(
             status,
             InstancePhase::Closed,
@@ -4015,10 +4400,11 @@ impl ProofstormMcp {
         self.authorize(Capability::ComponentControl)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ComponentControl,
             )
             .map_err(store_error)?;
@@ -4030,6 +4416,7 @@ impl ProofstormMcp {
             .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
         component_image_any(&revision, &request.component, component.kind)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4073,10 +4460,11 @@ impl ProofstormMcp {
         }
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ComponentLogs,
             )
             .map_err(store_error)?;
@@ -4088,6 +4476,7 @@ impl ProofstormMcp {
             .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
         component_image_any(&revision, &request.component, component.kind)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4126,15 +4515,17 @@ impl ProofstormMcp {
         self.authorize(Capability::AuthenticationTest)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::AuthenticationTest,
             )
             .map_err(store_error)?;
         validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4173,15 +4564,17 @@ impl ProofstormMcp {
         self.authorize(Capability::AuthenticationTest)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::AuthenticationTest,
             )
             .map_err(store_error)?;
         validate_authentication_components(&revision, &request.mint, &request.identity_provider)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4220,10 +4613,11 @@ impl ProofstormMcp {
         self.authorize_all(&[Capability::AuthenticationTest, Capability::ArtifactRead])?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::AuthenticationTest,
             )
             .map_err(store_error)?;
@@ -4256,6 +4650,7 @@ impl ProofstormMcp {
         }
         let session_secret = format!("{}-auth-session", source.resource_name);
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4304,10 +4699,11 @@ impl ProofstormMcp {
         }
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ComponentForensics,
             )
             .map_err(store_error)?;
@@ -4333,6 +4729,7 @@ impl ProofstormMcp {
             })?;
         component_image_any(&revision, &target_component, target.kind)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4377,15 +4774,17 @@ impl ProofstormMcp {
         let transfer = request.transfer.action()?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ComponentExecLive,
             )
             .map_err(store_error)?;
         validate_private_transfer_endpoints(&transfer, &revision)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4437,10 +4836,11 @@ impl ProofstormMcp {
         .map_err(invalid_operation)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ComponentExecLive,
             )
             .map_err(store_error)?;
@@ -4452,6 +4852,7 @@ impl ProofstormMcp {
             .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
         component_image_any(&revision, &request.component, component.kind)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4791,10 +5192,11 @@ impl ProofstormMcp {
         validate_bootstrap_bounds(&request)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletFund,
             )
             .map_err(store_error)?;
@@ -4822,6 +5224,7 @@ impl ProofstormMcp {
             ));
         }
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4868,10 +5271,11 @@ impl ProofstormMcp {
         validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::PeerConnect,
             )
             .map_err(store_error)?;
@@ -4879,6 +5283,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.to_lightning, ComponentKind::Lightning)?;
         self.require_liquidity_bootstrap(&request.experiment_id, &request.instance_id)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4919,16 +5324,18 @@ impl ProofstormMcp {
         validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::PeerDisconnect,
             )
             .map_err(store_error)?;
         component_image_any(&revision, &request.from_lightning, ComponentKind::Lightning)?;
         component_image_any(&revision, &request.to_lightning, ComponentKind::Lightning)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -4972,10 +5379,11 @@ impl ProofstormMcp {
         validate_channel_bounds(request.channel_sat, request.push_sat)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ChannelOpen,
             )
             .map_err(store_error)?;
@@ -4986,6 +5394,7 @@ impl ProofstormMcp {
             self.require_liquidity_bootstrap(&request.experiment_id, &request.instance_id)?;
         validate_channel_funding_admission(&request, &bootstrap)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5043,10 +5452,11 @@ impl ProofstormMcp {
         })?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ChannelOpen,
             )
             .map_err(store_error)?;
@@ -5054,6 +5464,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.to_lightning, ComponentKind::Lightning)?;
         self.require_liquidity_bootstrap(&request.experiment_id, &request.instance_id)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5116,15 +5527,17 @@ impl ProofstormMcp {
         validate_rebalance_bounds(&request)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::ChannelRebalance,
             )
             .map_err(store_error)?;
         component_image_any(&revision, &request.lightning, ComponentKind::Lightning)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5172,10 +5585,11 @@ impl ProofstormMcp {
         }
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::NetworkPartition,
             )
             .map_err(store_error)?;
@@ -5192,6 +5606,7 @@ impl ProofstormMcp {
             }
         }
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5259,10 +5674,11 @@ impl ProofstormMcp {
         self.authorize(Capability::NetworkHeal)?;
         let (instance, _) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::NetworkHeal,
             )
             .map_err(store_error)?;
@@ -5284,6 +5700,7 @@ impl ProofstormMcp {
             ));
         }
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5322,10 +5739,11 @@ impl ProofstormMcp {
         self.authorize(Capability::WalletCreate)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletCreate,
             )
             .map_err(store_error)?;
@@ -5333,6 +5751,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_initialize")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5374,10 +5793,11 @@ impl ProofstormMcp {
         self.authorize(Capability::WalletControl)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletControl,
             )
             .map_err(store_error)?;
@@ -5385,6 +5805,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_balance")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5431,10 +5852,11 @@ impl ProofstormMcp {
         validate_wallet_amount(request.amount_sat)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletFund,
             )
             .map_err(store_error)?;
@@ -5460,6 +5882,7 @@ impl ProofstormMcp {
         validate_wallet_fund_payer(&revision.lab, &request.mint, &request.payer_lightning)?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_fund")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5509,10 +5932,11 @@ impl ProofstormMcp {
         }
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletFund,
             )
             .map_err(store_error)?;
@@ -5520,6 +5944,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_invoice")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5568,10 +5993,11 @@ impl ProofstormMcp {
         }
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletControl,
             )
             .map_err(store_error)?;
@@ -5593,6 +6019,7 @@ impl ProofstormMcp {
         let operation = self
             .store
             .create_wallet_pay_operation(
+                &instance.revision_digest,
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
@@ -5648,10 +6075,11 @@ impl ProofstormMcp {
         }
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletControl,
             )
             .map_err(store_error)?;
@@ -5659,6 +6087,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_quote_claim")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5708,10 +6137,11 @@ impl ProofstormMcp {
         }
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletControl,
             )
             .map_err(store_error)?;
@@ -5719,6 +6149,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.mint, ComponentKind::Mint)?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_melt_quote_refresh")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5766,10 +6197,11 @@ impl ProofstormMcp {
         validate_wallet_bounds(&request)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::WalletControl,
             )
             .map_err(store_error)?;
@@ -5783,6 +6215,7 @@ impl ProofstormMcp {
         )?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_round_trip")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5825,12 +6258,13 @@ impl ProofstormMcp {
         Parameters(request): Parameters<ConservationOracleRequest>,
     ) -> Result<Json<LabOperation>, ErrorData> {
         self.authorize_all(&[Capability::OracleRun, Capability::ArtifactRead])?;
-        let (_instance, revision) = self
+        let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::OracleRun,
             )
             .map_err(store_error)?;
@@ -5861,6 +6295,7 @@ impl ProofstormMcp {
         )?;
         self.require_wallet_action(&revision, &request.wallet, "conservation_oracle")?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -5895,10 +6330,11 @@ impl ProofstormMcp {
         validate_reachability_oracle_bounds(&request)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::OracleRun,
             )
             .map_err(store_error)?;
@@ -5931,6 +6367,7 @@ impl ProofstormMcp {
             )));
         }
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -7834,6 +8271,10 @@ fn tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     tools
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep the complete design capability mapping together"
+)]
 fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
         ("proofstorm_workspace_read", &[Capability::LabRead]),
@@ -7871,6 +8312,7 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
                 Capability::LabRead,
                 Capability::LabPublish,
                 Capability::LabMaterialize,
+                Capability::LabStatus,
             ],
         ),
         (
@@ -7907,7 +8349,15 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ),
         ("proofstorm_lab_diff", &[Capability::LabRead]),
         ("proofstorm_lab_publish", &[Capability::LabPublish]),
-        ("proofstorm_lab_materialize", &[Capability::LabMaterialize]),
+        (
+            "proofstorm_lab_materialize",
+            &[
+                Capability::LabMaterialize,
+                Capability::LabRead,
+                Capability::LabPublish,
+                Capability::LabStatus,
+            ],
+        ),
         ("proofstorm_lab_status", &[Capability::LabStatus]),
         (
             "proofstorm_lab_component_status_list",
@@ -7915,7 +8365,10 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ),
         ("proofstorm_lab_inventory_list", &[Capability::LabStatus]),
         ("proofstorm_lab_wait", &[Capability::LabStatus]),
-        ("proofstorm_lab_close", &[Capability::LabClose]),
+        (
+            "proofstorm_lab_close",
+            &[Capability::LabClose, Capability::LabStatus],
+        ),
         (
             "proofstorm_experiment_create",
             &[Capability::ExperimentCreate],
@@ -8206,10 +8659,11 @@ impl ProofstormMcp {
         validate_channel_id(&request.channel_id)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 capability,
             )
             .map_err(store_error)?;
@@ -8217,6 +8671,7 @@ impl ProofstormMcp {
         component_image_any(&revision, &request.from_lightning, ComponentKind::Lightning)?;
         component_image_any(&revision, &request.to_lightning, ComponentKind::Lightning)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -8261,10 +8716,11 @@ impl ProofstormMcp {
         self.authorize(Capability::NodeControl)?;
         let (instance, revision) = self
             .store
-            .operation_context(
+            .operation_context_for(
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
+                &request.operation_id,
                 Capability::NodeControl,
             )
             .map_err(store_error)?;
@@ -8284,6 +8740,7 @@ impl ProofstormMcp {
         }
         component_image_any(&revision, &request.component, component.kind)?;
         let operation = self.create_operation(
+            &instance.revision_digest,
             &request.instance_id,
             &request.experiment_id,
             &request.session_id,
@@ -8398,6 +8855,7 @@ impl ProofstormMcp {
     )]
     fn create_operation<R: Serialize>(
         &self,
+        expected_revision: &str,
         instance_id: &str,
         experiment_id: &str,
         session_id: &str,
@@ -8417,7 +8875,8 @@ impl ProofstormMcp {
             object.remove("idempotency_key");
         }
         self.store
-            .create_operation(
+            .create_operation_at_revision(
+                expected_revision,
                 &self.workspace,
                 &self.principal,
                 instance_id,
@@ -9286,7 +9745,10 @@ fn validate_operation_wait_many_request(
 }
 
 const fn lab_wait_terminal(phase: InstancePhase) -> bool {
-    matches!(phase, InstancePhase::Closed | InstancePhase::CleanupBlocked)
+    matches!(
+        phase,
+        InstancePhase::Closed | InstancePhase::CleanupBlocked | InstancePhase::Blocked
+    )
 }
 
 const fn operation_terminal(phase: OperationPhase) -> bool {
@@ -9420,6 +9882,12 @@ fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
         .count();
     status.inventory.sort_by_key(inventory_key);
     LabStatusSummary {
+        instance_key: status.instance.instance_key.clone(),
+        observed_generation: status.observed_generation,
+        observed_revision_digest: status.observed_revision_digest,
+        last_converged_revision: status.last_converged_revision,
+        retained_storage: status.retained_storage,
+        generation: status.instance.generation,
         blockers,
         instance_id: status.instance.id,
         revision_digest: status.instance.revision_digest,
@@ -9452,6 +9920,13 @@ fn compact_lab_wait(
         .filter(|component| component.ready)
         .count();
     LabWaitResult {
+        instance_key: status.instance.instance_key.clone(),
+        observed_generation: status.observed_generation,
+        observed_revision_digest: status.observed_revision_digest,
+        last_converged_revision: status.last_converged_revision,
+        retained_storage: status.retained_storage,
+        generation: status.instance.generation,
+        superseded: false,
         blockers,
         instance_id: status.instance.id,
         phase: status.phase,
@@ -9469,7 +9944,7 @@ fn compact_lab_wait(
 const fn runtime_guidance(phase: InstancePhase) -> Option<&'static str> {
     match phase {
         InstancePhase::Ready => Some(
-            "Ready means infrastructure/protocol availability only, not mature regtest blocks or Lightning liquidity. For a lab created from a server-owned recipe, create an experiment and session, then run and await lab_recipe_bootstrap followed by lab_recipe_route_channel_open; Proofstorm owns the exact component IDs and safe liquidity values. For custom labs, use liquidity_bootstrap followed by channel_open. Prefer typed channel_policy_set for routing policies; reserve live native CLI execution for behavior without a typed control.",
+            "Ready means infrastructure/protocol availability, not mature regtest blocks or Lightning liquidity. For recipe labs, create an experiment and session, then run and await lab_recipe_bootstrap and lab_recipe_route_channel_open. For custom labs, use liquidity_bootstrap then channel_open. Use native CLIs for software behavior and typed actions for provisioning, faults, and coordinated flows.",
         ),
         _ => None,
     }
@@ -10090,17 +10565,6 @@ impl KubernetesRuntime {
             .map_err(app_error)
     }
 
-    async fn materialize(
-        &self,
-        instance: LabInstance,
-        revision: PublishedRevision,
-    ) -> Result<LabInstanceStatus, ErrorData> {
-        proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
-            .materialize(instance, revision)
-            .await
-            .map_err(app_error)
-    }
-
     async fn status(&self, instance: LabInstance) -> Result<LabInstanceStatus, ErrorData> {
         proofstorm_app::Runtime::new(self.client.clone(), self.control_namespace.clone())
             .status(instance)
@@ -10619,6 +11083,7 @@ mod tests {
         assert!(
             service
                 .proofstorm_lab_read(Parameters(ReadDraftRequest {
+                    instance_id: None,
                     draft_id: "invalid-alias".into(),
                 }))
                 .is_err(),
@@ -10645,6 +11110,7 @@ mod tests {
 
         let draft = service
             .proofstorm_lab_read(Parameters(ReadDraftRequest {
+                instance_id: None,
                 draft_id: "routing-fees".into(),
             }))
             .expect("created recipe draft")
@@ -10738,6 +11204,7 @@ mod tests {
     #[test]
     fn generic_lab_plan_resolves_catalog_versions_kinds_and_bindings() {
         let request = LabPlanRequest {
+            update: None,
             plan_id: "generic-plan".into(),
             components: vec![
                 LabPlanComponentInput {
@@ -10812,6 +11279,7 @@ mod tests {
     #[test]
     fn generic_lab_plan_infers_the_exact_catalog_payment_binding() {
         let request = LabPlanRequest {
+            update: None,
             plan_id: "payment-plan".into(),
             components: vec![
                 LabPlanComponentInput {
@@ -10859,6 +11327,7 @@ mod tests {
             "catalog growth must not require an MCP schema change"
         );
         let request = LabPlanRequest {
+            update: None,
             plan_id: "unknown-plan".into(),
             components: vec![LabPlanComponentInput {
                 id: "future-mint".into(),
@@ -10919,6 +11388,7 @@ mod tests {
         );
 
         let request = LabPlanRequest {
+            update: None,
             plan_id: "embedded-ldk-control-plan".into(),
             components: vec![LabPlanComponentInput {
                 id: "mint".into(),
@@ -11069,6 +11539,7 @@ mod tests {
         }
         let service = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("service");
         let request = LabPlanRequest {
+            update: None,
             plan_id: "durable-plan".into(),
             components: vec![LabPlanComponentInput {
                 id: "chain".into(),
@@ -11773,6 +12244,7 @@ mod tests {
 
         let draft = service
             .proofstorm_lab_read(Parameters(ReadDraftRequest {
+                instance_id: None,
                 draft_id: "compact-draft".into(),
             }))
             .expect("explicit full draft")
@@ -11879,6 +12351,7 @@ mod tests {
                          kind: OperationKind,
                          request: serde_json::Value,
                          artifact: serde_json::Value| LabOperation {
+            revision_digest: String::new(),
             id: id.into(),
             workspace_id: "alpha".into(),
             instance_id: "instance".into(),
@@ -12147,13 +12620,15 @@ mod tests {
             "fully authorized tool discovery is {} bytes",
             encoded.len()
         );
+        let mut oversized = vec![];
         for (toolset, maximum) in [
             // Startup reasons and blocker receipts add up to 4 KiB to readiness profiles.
             (ProofstormToolset::Developer, 64 * 1024),
-            (ProofstormToolset::Experiment, 164 * 1024),
+            // Full configuration reads, update previews, and revision/generation receipts.
+            (ProofstormToolset::Experiment, 172 * 1024),
             (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 216 * 1024),
+            (ProofstormToolset::Runtime, 218 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);
@@ -12165,9 +12640,15 @@ mod tests {
                 "{toolset:?} tool discovery: {} tools, {size} bytes",
                 tools.len()
             );
-            assert!(size < maximum, "{toolset:?} discovery is {size} bytes");
+            if size >= maximum {
+                oversized.push(format!("{toolset:?}: {size} >= {maximum}"));
+            }
             assert!(tools.contains(&"proofstorm_catalog_list".to_owned()));
         }
+        assert!(
+            oversized.is_empty(),
+            "oversized tool profiles: {oversized:?}"
+        );
         assert_native_toolset(&service);
         let design = service.clone().with_toolset(ProofstormToolset::Design);
         assert!(
@@ -12480,12 +12961,17 @@ mod tests {
     #[test]
     fn lab_status_receipt_and_page_cursors_are_compact_and_snapshot_bound() {
         let status = LabInstanceStatus {
+            observed_generation: 1,
+            observed_revision_digest: String::new(),
+            last_converged_revision: None,
+            retained_storage: BTreeMap::new(),
             instance: LabInstance {
+                generation: 1,
                 id: "instance-one".into(),
                 workspace_id: "alpha".into(),
                 revision_digest: "sha256:revision".into(),
                 lock_digest: "sha256:lock".into(),
-                instance_key: "secret-routing-key".into(),
+                instance_key: "i0123456789abcdef0123".into(),
                 resource_name: "proofstorm-resource".into(),
             },
             phase: InstancePhase::Ready,
@@ -12513,7 +12999,7 @@ mod tests {
         let encoded = serde_json::to_string(&receipt).expect("status receipt");
         assert!(!encoded.contains("\"components\":["));
         assert!(!encoded.contains("inventory\":"));
-        assert!(!encoded.contains("secret-routing-key"));
+        assert_eq!(receipt.instance_key, "i0123456789abcdef0123");
         assert!(serialized_size(&receipt).expect("status size") < 1024);
 
         let close_receipt = compact_lab_wait(status, InstancePhase::Closed, false, false);
@@ -12523,7 +13009,7 @@ mod tests {
         let encoded = serde_json::to_string(&close_receipt).expect("close receipt");
         assert!(!encoded.contains("\"components\":["));
         assert!(!encoded.contains("inventory\":"));
-        assert!(!encoded.contains("secret-routing-key"));
+        assert_eq!(receipt.instance_key, "i0123456789abcdef0123");
         assert!(serialized_size(&close_receipt).expect("close receipt size") < 1024);
 
         let items = vec!["alpha", "beta", "gamma"];
@@ -12550,6 +13036,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one complete startup blocker fixture exercises the wait contract"
+    )]
     async fn lab_wait_returns_startup_blockers_without_waiting_for_timeout() {
         use proofstorm_core::{
             ComponentCondition, ComponentConditionReason as Reason, ComponentConditionState,
@@ -12613,6 +13103,8 @@ mod tests {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(1),
             service.proofstorm_lab_wait(Parameters(LabWaitRequest {
+                expected_instance_key: None,
+                expected_generation: None,
                 instance_id: "blocked".into(),
                 target_phase: InstancePhase::Ready,
                 timeout_seconds: 120,

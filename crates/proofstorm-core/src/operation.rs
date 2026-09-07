@@ -54,6 +54,9 @@ pub enum OperationPhase {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabOperation {
+    /// Immutable configuration captured atomically at admission.
+    #[serde(default)]
+    pub revision_digest: String,
     pub id: String,
     pub workspace_id: String,
     pub instance_id: String,

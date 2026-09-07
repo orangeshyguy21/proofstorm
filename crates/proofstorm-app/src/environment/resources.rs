@@ -12,6 +12,10 @@ pub use proofstorm_view::{
     ContainerDemand, Endpoint, Quantities, ResourceDemand, StorageDemand, WorkloadDemand,
 };
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one resource projection keeps workload, storage and endpoint demand consistent"
+)]
 pub(super) fn project(
     instance: &LabInstance,
     revision: &PublishedRevision,
@@ -112,7 +116,14 @@ pub(super) fn project(
         }
     }
     endpoints.sort_by(|a, b| (&a.component, &a.name).cmp(&(&b.component, &b.name)));
-    Ok((ResourceDemand { workloads, storage }, endpoints))
+    Ok((
+        ResourceDemand {
+            retained_storage: std::collections::BTreeMap::new(),
+            workloads,
+            storage,
+        },
+        endpoints,
+    ))
 }
 fn component(meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> Option<String> {
     meta.labels

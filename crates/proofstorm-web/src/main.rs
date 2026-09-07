@@ -2,6 +2,8 @@
 mod app;
 #[cfg(target_arch = "wasm32")]
 mod client;
+#[cfg(target_arch = "wasm32")]
+mod system;
 mod model;
 
 #[cfg(target_arch = "wasm32")]

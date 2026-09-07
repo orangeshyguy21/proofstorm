@@ -11,8 +11,11 @@ mod session_tests;
 mod sessions;
 pub use sessions::SessionPage;
 mod labs;
-mod migration;
+mod lifecycle;
+pub use lifecycle::{LifecycleGuard, RuntimeBinding};
+mod updates;
 pub use labs::{LabHandle, LabHandlePhase};
+pub use updates::LabUpdateState;
 
 use std::{
     collections::BTreeSet,
@@ -49,6 +52,8 @@ struct PaymentClaimInput<'a> {
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("{code}: {message}")]
+    LabUpdate { code: &'static str, message: String },
     #[error("filesystem failure: {0}")]
     Io(#[from] std::io::Error),
     #[error("store failure: {0}")]
@@ -113,6 +118,7 @@ impl StoreError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::LabUpdate { code, .. } => code,
             Self::Io(_)
             | Self::Database(_)
             | Self::Serialization(_)
@@ -221,6 +227,7 @@ pub struct Store {
     connection: Arc<Mutex<Connection>>,
     context_id: Arc<String>,
     context_sessions: Arc<Mutex<BTreeSet<(String, String)>>>,
+    lifecycle_busy: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Store {
@@ -244,9 +251,8 @@ impl Store {
         clippy::too_many_lines,
         reason = "the complete SQLite schema is intentionally visible as one atomic initialization contract"
     )]
-    fn from_connection(mut connection: Connection) -> Result<Self, StoreError> {
+    fn from_connection(connection: Connection) -> Result<Self, StoreError> {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        migration::prepare(&mut connection)?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
@@ -428,6 +434,10 @@ impl Store {
                FOREIGN KEY (workspace_id, session_id) REFERENCES sessions(workspace_id, id),
                FOREIGN KEY (workspace_id, operation_id) REFERENCES actions(workspace_id, id)
              );
+             CREATE TABLE IF NOT EXISTS private_access_grants (
+               workspace_id TEXT NOT NULL, id TEXT NOT NULL, grant_json TEXT NOT NULL,
+               PRIMARY KEY(workspace_id,id)
+             );
              CREATE TABLE IF NOT EXISTS idempotency (
                workspace_id TEXT NOT NULL,
                principal_id TEXT NOT NULL,
@@ -438,8 +448,10 @@ impl Store {
                PRIMARY KEY (workspace_id, principal_id, key)
              );",
         )?;
-        migration::upgrade(&mut connection)?;
+        updates::initialize_schema(&connection)?;
+        lifecycle::initialize_schema(&connection)?;
         Ok(Self {
+            lifecycle_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             context_sessions: Arc::new(Mutex::new(BTreeSet::new())),
             context_id: Arc::new(format!(
                 "{}-{}",
@@ -970,8 +982,8 @@ impl Store {
             lock,
         };
         self.lock()?.execute(
-            "INSERT OR IGNORE INTO revisions(digest, workspace_id, draft_id, draft_version, revision_json)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO revisions(digest, workspace_id, draft_id, draft_version, revision_json)
+             VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(digest) DO UPDATE SET draft_id=excluded.draft_id,draft_version=excluded.draft_version WHERE NOT EXISTS(SELECT 1 FROM drafts WHERE workspace_id=revisions.workspace_id AND id=revisions.draft_id)",
             params![digest, workspace, draft_id, sql_version(draft.version)?, serde_json::to_string(&revision)?],
         )?;
         self.record_idempotency(
@@ -1023,21 +1035,46 @@ impl Store {
                 "instance id must be a lowercase kebab-case identifier of 1..=63 bytes".into(),
             ));
         }
+        if updates::state(&*self.lock()?, workspace, instance_id)?.closing {
+            return Err(StoreError::LabUpdate { code: "lab_closing", message: "Closed lab cannot be recreated by replaying materialize; start a new lab incarnation".into() });
+        }
         let request =
             serde_json::json!({"instanceId": instance_id, "revisionDigest": revision_digest});
-        if let Some(response) = self.idempotent_response(
+        if let Some(_response) = self.idempotent_response::<LabInstance, _>(
             workspace,
             principal,
             idempotency_key,
             "lab.materialize",
             &request,
         )? {
-            return Ok(response);
+            return self.instance_unchecked(workspace, instance_id);
+        }
+        if let Ok(existing) = self.instance_unchecked(workspace, instance_id) {
+            if existing.revision_digest != revision_digest {
+                return Err(StoreError::Conflict {
+                    resource: "instance",
+                    id: instance_id.into(),
+                });
+            }
+            return Ok(existing);
         }
         let revision = self.revision_unchecked(workspace, revision_digest)?;
-        let identity = proofstorm_core::digest_json(&(workspace, instance_id, revision_digest));
+        // Deleted labs consume their plans. A stale low-level materialize request
+        // must not resurrect one through a shared immutable revision.
+        let has_plan: bool = self.lock()?.query_row("SELECT EXISTS(SELECT 1 FROM revisions r JOIN drafts d ON d.workspace_id=r.workspace_id AND d.id=r.draft_id WHERE r.workspace_id=?1 AND r.digest=?2)", params![workspace, revision_digest], |r|r.get(0))?;
+        if !has_plan {
+            return Err(StoreError::NotFound {
+                resource: "creation plan; create a fresh plan",
+                id: revision_digest.into(),
+            });
+        }
+        let nonce: String = self
+            .lock()?
+            .query_row("SELECT hex(randomblob(16))", [], |r| r.get(0))?;
+        let identity = proofstorm_core::digest_json(&(workspace, instance_id, nonce));
         let instance_key = format!("i{}", &identity[7..26]);
         let instance = LabInstance {
+            generation: 1,
             id: instance_id.to_owned(),
             workspace_id: workspace.to_owned(),
             revision_digest: revision_digest.to_owned(),
@@ -1066,6 +1103,7 @@ impl Store {
                 });
             }
         }
+        self.record_plan_use(&instance, None)?;
         self.record_idempotency(
             workspace,
             principal,
@@ -1242,6 +1280,16 @@ impl Store {
         self.revision_unchecked(workspace, digest)
     }
 
+    pub fn revision_for_evidence(
+        &self,
+        workspace: &str,
+        principal: &str,
+        digest: &str,
+    ) -> Result<PublishedRevision, StoreError> {
+        self.authorize(workspace, principal, Capability::ArtifactRead)?;
+        self.revision_unchecked(workspace, digest)
+    }
+
     pub fn operation_context(
         &self,
         workspace: &str,
@@ -1253,6 +1301,35 @@ impl Store {
         let instance = self.instance_unchecked(workspace, instance_id)?;
         let revision = self.revision_unchecked(workspace, &instance.revision_digest)?;
         Ok((instance, revision))
+    }
+
+    /// A replay validates and renders against the configuration admitted with the operation.
+    pub fn operation_context_for(
+        &self,
+        workspace: &str,
+        principal: &str,
+        instance_id: &str,
+        operation_id: &str,
+        capability: Capability,
+    ) -> Result<(LabInstance, PublishedRevision), StoreError> {
+        let (mut instance, current) =
+            self.operation_context(workspace, principal, instance_id, capability)?;
+        match self.operation_unchecked(workspace, operation_id) {
+            Ok(operation) => {
+                if operation.instance_id != instance_id || operation.principal_id != principal {
+                    return Err(StoreError::Conflict {
+                        resource: "operation",
+                        id: operation_id.into(),
+                    });
+                }
+                let revision = self.revision_unchecked(workspace, &operation.revision_digest)?;
+                instance.revision_digest.clone_from(&revision.digest);
+                instance.lock_digest.clone_from(&revision.lock.digest);
+                Ok((instance, revision))
+            }
+            Err(StoreError::NotFound { .. }) => Ok((instance, current)),
+            Err(error) => Err(error),
+        }
     }
 
     #[allow(
@@ -1285,12 +1362,45 @@ impl Store {
             idempotency_key,
             capability,
             None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_operation_at_revision(
+        &self,
+        expected_revision: &str,
+        workspace: &str,
+        principal: &str,
+        instance_id: &str,
+        experiment_id: &str,
+        session_id: &str,
+        operation_id: &str,
+        kind: OperationKind,
+        request: &serde_json::Value,
+        idempotency_key: &str,
+        capability: Capability,
+    ) -> Result<LabOperation, StoreError> {
+        self.create_operation_inner(
+            workspace,
+            principal,
+            instance_id,
+            experiment_id,
+            session_id,
+            operation_id,
+            kind,
+            request,
+            idempotency_key,
+            capability,
+            None,
+            Some(expected_revision),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn create_wallet_pay_operation(
         &self,
+        expected_revision: &str,
         workspace: &str,
         principal: &str,
         instance_id: &str,
@@ -1330,6 +1440,7 @@ impl Store {
                 payer_wallet: payer_wallet_id,
                 payer_mint: payer_mint_id,
             }),
+            Some(expected_revision),
         )
     }
 
@@ -1351,6 +1462,7 @@ impl Store {
         idempotency_key: &str,
         capability: Capability,
         payment_claim: Option<PaymentClaimInput<'_>>,
+        expected_revision: Option<&str>,
     ) -> Result<LabOperation, StoreError> {
         self.authorize(workspace, principal, capability)?;
         if !is_slug(operation_id) {
@@ -1414,7 +1526,19 @@ impl Store {
         )?;
         let sequence = u64::try_from(last_sequence + 1)
             .map_err(|_| StoreError::InvalidStoredVersion(last_sequence))?;
+        let revision_digest = updates::admit_operation(
+            &transaction,
+            workspace,
+            instance_id,
+            operation_id,
+            request,
+            kind,
+        )?;
+        if expected_revision.is_some_and(|expected| expected != revision_digest) {
+            return Err(StoreError::LabUpdate {code:"lab_update_conflict", message:"Configuration changed during operation admission; retry against current configuration".into()});
+        }
         let operation = LabOperation {
+            revision_digest,
             id: operation_id.to_owned(),
             workspace_id: workspace.to_owned(),
             instance_id: instance_id.to_owned(),
@@ -2035,11 +2159,12 @@ impl Store {
     fn instance_unchecked(&self, workspace: &str, id: &str) -> Result<LabInstance, StoreError> {
         self.lock()?
             .query_row(
-                "SELECT revision_digest, lock_digest, instance_key, resource_name
+                "SELECT revision_digest, lock_digest, instance_key, resource_name, COALESCE((SELECT generation FROM lab_update_state s WHERE s.workspace_id=instances.workspace_id AND s.instance_id=instances.id),1)
                  FROM instances WHERE workspace_id = ?1 AND id = ?2",
                 params![workspace, id],
                 |row| {
                     Ok(LabInstance {
+                        generation: updates::generation_column(row, 4)?,
                         id: id.to_owned(),
                         workspace_id: workspace.to_owned(),
                         revision_digest: row.get(0)?,
@@ -2061,7 +2186,8 @@ impl Store {
             .query_row(
                 "SELECT instance_id, experiment_id, session_id, principal_id, sequence, kind_json,
                         capability_json, resource_name, request_digest, request_json, phase_json,
-                        accepted_at, started_at, completed_at, artifact_json
+                        accepted_at, started_at, completed_at, artifact_json,
+                        (SELECT revision_digest FROM operation_revisions r WHERE r.workspace_id=actions.workspace_id AND r.operation_id=actions.id)
                  FROM actions WHERE workspace_id = ?1 AND id = ?2",
                 params![workspace, id],
                 |row| {
@@ -2081,6 +2207,7 @@ impl Store {
                         row.get::<_, Option<i64>>(12)?,
                         row.get::<_, Option<i64>>(13)?,
                         row.get::<_, Option<String>>(14)?,
+                        row.get::<_, String>(15)?,
                     ))
                 },
             )
@@ -2102,10 +2229,12 @@ impl Store {
                     started_at_unix,
                     completed_at_unix,
                     artifact,
+                    revision_digest,
                 )| {
                     let sequence = u64::try_from(sequence)
                         .map_err(|_| StoreError::InvalidStoredVersion(sequence))?;
                     Ok::<LabOperation, StoreError>(LabOperation {
+                        revision_digest,
                         id: id.to_owned(),
                         workspace_id: workspace.to_owned(),
                         instance_id,

@@ -1,3 +1,4 @@
+mod lab_updates;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -42,7 +43,7 @@ use proofstorm_kube::{
     ProofstormLabAction, ProofstormLabActionStatus, ProofstormLabStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_component_network_policy,
-    render_lab, render_lab_action_cleanup_job, render_lab_action_job, render_security_spine,
+    render_lab, render_lab_action_cleanup_job, render_lab_action_job, render_lab_security_spine,
     schedule_protocol_probers,
 };
 use thiserror::Error;
@@ -452,6 +453,18 @@ async fn reconcile_action(
     }
     let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
     let lab = labs.get(&action.spec.lab_name).await?;
+    if action
+        .annotations()
+        .get("proofstorm.dev/action-revision")
+        .is_none_or(String::is_empty)
+        && lab
+            .annotations()
+            .get("proofstorm.dev/desired-generation")
+            .is_some_and(|g| g != "1")
+    {
+        return patch_invalid_action(&action, &context, "Operation does not identify its configuration revision. Reconnect the MCP server and submit a new operation.").await;
+    }
+    let lab = lab_updates::action_lab(&action, lab, &context).await?;
     // Existing native handles only reconcile owned work; changed readiness must
     // not discard a completed native receipt or turn collection into a new start.
     if matches!(action.spec.action, LabAction::ComponentExecLive(_))
@@ -1724,7 +1737,22 @@ async fn reconcile(lab: Arc<ProofstormLab>, context: Arc<Context>) -> Result<Act
     let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &namespace);
     finalizer(&labs, FINALIZER, lab, |event| async {
         match event {
-            Event::Apply(lab) => apply(lab, &context).await,
+            Event::Apply(lab) => {
+                let result = apply(lab.clone(), &context).await;
+                if let Err(Error::Kube(kube::Error::Api(error))) = &result {
+                    if matches!(error.code, 400 | 403 | 422) {
+                        let mut status = lab.status.clone().unwrap_or_default();
+                        status.phase = LabPhase::Blocked;
+                        status.message = Some(format!(
+                            "Reconciliation blocked (Kubernetes {}): {}",
+                            error.code,
+                            error.message.chars().take(1024).collect::<String>()
+                        ));
+                        let _ = patch_status(&lab, &context, status).await;
+                    }
+                }
+                result
+            }
             Event::Cleanup(lab) => cleanup(lab, &context).await,
         }
     })
@@ -2275,7 +2303,34 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         &lab.spec.lab,
         &lab.spec.lock,
     )?;
-    let rendered = render_security_spine(&lab.spec.instance_key);
+    // Persist the intended inventory before the first component write. If the process
+    // stops halfway through, the next edit can still identify and prune partial additions.
+    let desired_generation = lab
+        .annotations()
+        .get("proofstorm.dev/desired-generation")
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(1);
+    let mut lab = lab.as_ref().clone();
+    if lab.status.as_ref().is_none_or(|s| {
+        s.observed_revision_digest != lab.spec.revision_digest
+            || s.observed_desired_generation != desired_generation
+    }) {
+        let mut status = lab.status.clone().unwrap_or_default();
+        for resource in workloads.inventory() {
+            if !status.inventory.contains(&resource) {
+                status.inventory.push(resource);
+            }
+        }
+        status.phase = LabPhase::Pending;
+        patch_status(&lab, context, status.clone()).await?;
+        lab.status = Some(status);
+    }
+    let lab = Arc::new(lab);
+    let rendered = render_lab_security_spine(
+        &lab.spec.instance_key,
+        lab.spec.lab.components.len(),
+        lab.status.as_ref().map_or(0, |s| s.retained_storage.len()),
+    );
     let client = context.client.clone();
     let namespace_name = instance_namespace(&lab.spec.instance_key);
     let patch = PatchParams::apply(FIELD_MANAGER).force();
@@ -2463,17 +2518,36 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             .await?;
     apply_network_fault_policies(&lab, &network_actions.items, None, context).await?;
 
-    let inventory = workloads.inventory();
+    let (pruned, retained, retained_storage) = lab_updates::prune(&lab, context).await?;
+    let mut inventory = workloads.inventory();
+    inventory.extend(retained);
     let inventory_digest = proofstorm_core::digest_json(&inventory);
     let inventory_name = format!("proofstorm-inventory-{}", lab.spec.instance_key);
     let inventory_resource = serde_json::json!({
         "apiVersion": "v1", "kind": "ConfigMap",
         "metadata": {"name": inventory_name, "namespace": namespace_name,
             "labels": {"proofstorm.dev/instance": lab.spec.instance_key, "proofstorm.dev/inventory": "true"}},
-        "immutable": true,
         "data": {"inventory.json": serde_json::to_string(&inventory).expect("inventory serializes"),
             "inventoryDigest": inventory_digest}
     });
+    if let Some(old) = configs.get_opt(&inventory_name).await? {
+        if old.immutable == Some(true)
+            && old.labels().get("proofstorm.dev/instance") == Some(&lab.spec.instance_key)
+        {
+            configs
+                .delete(
+                    &inventory_name,
+                    &DeleteParams {
+                        preconditions: Some(kube::api::Preconditions {
+                            uid: old.metadata.uid.clone(),
+                            resource_version: old.metadata.resource_version.clone(),
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+    }
     configs
         .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
         .await?;
@@ -2513,9 +2587,10 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         &stopped_components,
         now_unix(),
     );
-    let ready = components
-        .iter()
-        .all(|component| component.ready || stopped_components.contains(&component.id));
+    let ready = pruned
+        && components
+            .iter()
+            .all(|component| component.ready || stopped_components.contains(&component.id));
     let blocked = components.iter().any(|component| {
         component.conditions.iter().any(|condition| {
             condition.state == proofstorm_core::ComponentConditionState::False
@@ -2532,6 +2607,19 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         lab.as_ref(),
         context,
         ProofstormLabStatus {
+            observed_desired_generation: lab
+                .annotations()
+                .get("proofstorm.dev/desired-generation")
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(1),
+            retained_storage,
+            last_converged_revision: if ready {
+                Some(lab.spec.revision_digest.clone())
+            } else {
+                lab.status
+                    .as_ref()
+                    .and_then(|s| s.last_converged_revision.clone())
+            },
             phase: if ready {
                 LabPhase::Ready
             } else {
@@ -2671,6 +2759,13 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
         lab.as_ref(),
         context,
         ProofstormLabStatus {
+            observed_desired_generation: lab
+                .annotations()
+                .get("proofstorm.dev/desired-generation")
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(1),
+            last_converged_revision: None,
+            retained_storage: BTreeMap::new(),
             phase: LabPhase::Closing,
             instance_namespace: Some(instance_namespace.clone()),
             observed_generation: lab.metadata.generation,
@@ -3871,6 +3966,9 @@ mod tests {
             })
             .collect();
         let status = ProofstormLabStatus {
+            observed_desired_generation: 1,
+            last_converged_revision: None,
+            retained_storage: BTreeMap::new(),
             phase: LabPhase::Pending,
             instance_namespace: Some("proofstorm-i0123456789012345678".into()),
             observed_generation: Some(1),

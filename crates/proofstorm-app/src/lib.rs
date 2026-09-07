@@ -10,8 +10,11 @@ mod events;
 pub mod http;
 pub mod journal;
 pub mod lab;
+pub mod lifecycle;
 pub mod observer;
 pub mod runtime;
+pub mod telemetry;
+pub mod updates;
 
 pub use error::{Error, ErrorKind};
 pub use runtime::Runtime;

@@ -845,6 +845,10 @@ fn payment_claims_are_idempotent_and_single_flight() {
     let store = quote_observation_store();
     let admit = |store: &Store, operation: &str, quote: &str| {
         store.create_wallet_pay_operation(
+            &store
+                .instance("alpha", "designer", "quote-observation-instance")
+                .unwrap()
+                .revision_digest,
             "alpha",
             "designer",
             "quote-observation-instance",
@@ -921,6 +925,10 @@ fn payment_claims_are_idempotent_and_single_flight() {
         std::thread::spawn(move || {
             barrier.wait();
             store.create_wallet_pay_operation(
+                &store
+                    .instance("alpha", "designer", "quote-observation-instance")
+                    .unwrap()
+                    .revision_digest,
                 "alpha",
                 "designer",
                 "quote-observation-instance",

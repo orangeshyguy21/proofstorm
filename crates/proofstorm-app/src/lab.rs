@@ -69,7 +69,89 @@ impl Labs {
             .instance(&self.workspace, &self.principal, &lab.instance_id)?)
     }
 
+    pub fn plan_edit(
+        &self,
+        name: &str,
+        spec: &LabSpec,
+        delete_data: bool,
+        delete_retained: &[String],
+    ) -> Result<proofstorm_core::LabUpdatePlan, Error> {
+        let handle = self
+            .store
+            .lab_handle(&self.workspace, &self.principal, name)?;
+        let instance = self.instance(&handle)?;
+        let draft_id = format!(
+            "edit-{}",
+            &proofstorm_core::digest_json(&(
+                instance.id.clone(),
+                instance.generation,
+                spec,
+                delete_data,
+                delete_retained
+            ))[7..39]
+        );
+        self.store.create_draft(
+            &self.workspace,
+            &self.principal,
+            &draft_id,
+            spec,
+            &format!("{draft_id}:draft"),
+        )?;
+        let revision = self.store.publish(
+            &self.workspace,
+            &self.principal,
+            &draft_id,
+            1,
+            &format!("{draft_id}:publish"),
+        )?;
+        let plan = self.store.plan_update(
+            &self.workspace,
+            &self.principal,
+            proofstorm_core::LabUpdateTarget {
+                delete_retained: delete_retained.to_vec(),
+                instance_id: instance.id,
+                expected_generation: instance.generation,
+                delete_data,
+            },
+            &revision,
+        )?;
+        self.store
+            .save_update_plan(&self.workspace, &self.principal, &draft_id, &plan)?;
+        Ok(plan)
+    }
+
+    pub async fn edit(
+        &self,
+        name: &str,
+        spec: &LabSpec,
+        delete_data: bool,
+        delete_retained: &[String],
+    ) -> Result<LabView, Error> {
+        let plan = self.plan_edit(name, spec, delete_data, delete_retained)?;
+        if !plan.is_noop() {
+            self.store.accept_update(
+                &self.workspace,
+                &self.principal,
+                &plan,
+                &format!("edit:{}", plan.digest),
+            )?;
+        }
+        crate::updates::reconcile(
+            &self.runtime,
+            &self.store,
+            &self.workspace,
+            &self.principal,
+            &plan.target.instance_id,
+        )
+        .await?;
+        self.inspect(name, 0).await
+    }
+
     /// Stages are idempotent and resumable, not a cross-system transaction.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "creation stages share one lifecycle guard"
+    )]
     pub async fn up(&self, name: &str, spec: &LabSpec) -> Result<LabView, Error> {
         self.authorize(&[
             Capability::LabCreate,
@@ -82,6 +164,33 @@ impl Labs {
             Capability::ExperimentRead,
             Capability::LabOperate,
         ])?;
+        let _lifecycle = crate::lifecycle::guard(&self.store).await?;
+        if let Ok(handle) = self
+            .store
+            .lab_handle(&self.workspace, &self.principal, name)
+        {
+            crate::lifecycle::reconcile_name(
+                &self.runtime,
+                &self.store,
+                &self.workspace,
+                &self.principal,
+                &handle.instance_id,
+            )
+            .await?;
+        }
+        if let Ok(handle) = self
+            .store
+            .lab_handle(&self.workspace, &self.principal, name)
+        {
+            if handle.phase == LabHandlePhase::Open
+                && self.instance(&handle).is_ok_and(|instance| {
+                    instance.generation > 1
+                        || handle.config_digest != proofstorm_core::digest_json(spec)
+                })
+            {
+                return self.edit(name, spec, false, &[]).await;
+            }
+        }
         let catalog = self
             .store
             .effective_catalog(&self.workspace, &self.principal)?;
@@ -145,7 +254,7 @@ impl Labs {
             &revision.digest,
             &format!("{}:materialize", lab.instance_id),
         )?;
-        self.runtime.materialize(instance,revision).await.map_err(|mut e| {
+        crate::lifecycle::materialize_locked(&self.runtime,&self.store,instance,revision).await.map_err(|mut e| {
             e.details=Some(serde_json::json!({"code":"lab_materialization_incomplete","lab":name,"stage":"published","recovery":"repeat up with the same name and configuration"}));e
         })?;
         self.ensure_run(&lab)?;
@@ -277,10 +386,11 @@ impl Labs {
             ));
         }
         self.ensure_run(&lab)?;
-        let (instance, revision) = self.store.operation_context(
+        let (instance, revision) = self.store.operation_context_for(
             &self.workspace,
             &self.principal,
             &lab.instance_id,
+            request_id,
             Capability::ComponentExecLive,
         )?;
         if !revision.lab.components.iter().any(|c| c.id == component) {
@@ -290,7 +400,8 @@ impl Labs {
             ));
         }
         let request = serde_json::json!({"component":component,"script":command.script,"argv":command.argv,"timeout_seconds":command.timeout_seconds,"output":command.output});
-        let op = self.store.create_operation(
+        let op = self.store.create_operation_at_revision(
+            &revision.digest,
             &self.workspace,
             &self.principal,
             &instance.id,
@@ -334,6 +445,19 @@ impl Labs {
         reason = "keep the ordered, resumable shutdown stages visible together"
     )]
     pub async fn down(&self, name: &str, timeout_seconds: u32) -> Result<LabView, Error> {
+        self.down_checked(name, timeout_seconds, None).await
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "shutdown and purge are one serialized lifecycle transition"
+    )]
+    pub async fn down_checked(
+        &self,
+        name: &str,
+        timeout_seconds: u32,
+        expected_instance: Option<&str>,
+    ) -> Result<LabView, Error> {
         self.authorize(&[
             Capability::LabClose,
             Capability::ExperimentRead,
@@ -342,10 +466,20 @@ impl Labs {
             Capability::ArtifactRead,
             Capability::ActionCancel,
         ])?;
+        let _lifecycle = crate::lifecycle::guard(&self.store).await?;
         let lab = self.owned(name)?;
+        if expected_instance.is_some_and(|id| id != lab.instance_id) {
+            return Err(Error::problem(
+                "stale_incarnation",
+                "The named lab was replaced; inspect it before closing",
+            ));
+        }
+
         if lab.phase == LabHandlePhase::Closed {
             return self.inspect(name, 0).await;
         }
+        self.store
+            .begin_instance_close(&self.workspace, &self.principal, &lab.instance_id)?;
         self.store.set_lab_phase(
             &self.workspace,
             &self.principal,
@@ -435,7 +569,16 @@ impl Labs {
             &lab,
             LabHandlePhase::Closed,
         )?;
-        self.inspect(name, 0).await
+        let view = self.inspect(name, 0).await?;
+        crate::lifecycle::reconcile_name(
+            &self.runtime,
+            &self.store,
+            &self.workspace,
+            &self.principal,
+            &lab.instance_id,
+        )
+        .await?;
+        Ok(view)
     }
 }
 

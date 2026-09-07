@@ -17,7 +17,7 @@ fn observer(labs: &Labs) -> Labs {
         "viewer".into(),
     )
 }
-fn ready(cluster: &Arc<Mutex<Cluster>>) {
+pub(super) fn ready(cluster: &Arc<Mutex<Cluster>>) {
     for (path, object) in &mut cluster.lock().unwrap().objects {
         if path.contains("/proofstormlabs/") {
             object["metadata"]["generation"] = json!(1);
@@ -26,7 +26,7 @@ fn ready(cluster: &Arc<Mutex<Cluster>>) {
                 json!([{"subresource":"status","time":"2026-09-06T12:00:00Z"}]);
             object["status"]["observedGeneration"] = json!(1);
             object["status"]["phase"] = json!("Ready");
-            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":"rollout","conditions":[],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
+            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":object["spec"]["lock"]["entries"][0]["rollout_digest"],"conditions":[],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
         }
     }
 }
@@ -534,7 +534,7 @@ async fn environment_paging_crosses_runs_and_preserves_unknown_outcomes() {
 }
 
 #[tokio::test]
-async fn stale_missing_and_wrong_runtime_identity_never_claim_ready() {
+async fn stale_generation_keeps_unchanged_components_ready_but_rejects_wrong_identity() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
@@ -558,7 +558,11 @@ async fn stale_missing_and_wrong_runtime_identity_never_claim_ready() {
         view.labs.items[0].runtime.state,
         ObservationState::Stale
     ));
-    assert_eq!(view.labs.items[0].components.items[0].ready, None);
+    assert_eq!(view.labs.items[0].components.items[0].ready, Some(true));
+    assert_eq!(
+        view.labs.items[0].runtime.phase,
+        Some(proofstorm_core::InstancePhase::Pending)
+    );
     cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["workspaceId"] = json!("other");
     let view = labs
         .environment(&EnvironmentQuery::default())

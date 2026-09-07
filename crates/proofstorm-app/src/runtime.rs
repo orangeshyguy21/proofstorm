@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 pub struct Runtime {
     pub client: Client,
     pub control_namespace: String,
+    pub cluster_source: String,
 }
 impl Runtime {
     /// Current cluster inventory; a failed list must never look like an empty cluster.
@@ -50,6 +51,10 @@ impl Runtime {
     pub fn new(client: Client, control_namespace: String) -> Self {
         Self {
             client,
+            cluster_source: kube::config::Kubeconfig::read()
+                .ok()
+                .and_then(|c| c.current_context)
+                .unwrap_or_else(|| "default".into()),
             control_namespace,
         }
     }
@@ -252,14 +257,27 @@ impl Runtime {
             },
         );
         resource.metadata.namespace = Some(self.control_namespace.clone());
+        if let Some(existing) = labs
+            .get_opt(&instance.resource_name)
+            .await
+            .map_err(kube_error)?
+        {
+            proofstorm_kube::require_open_lab(&existing)
+                .map_err(|e| coded_invalid_request(e.code(), e.to_string()))?;
+            if existing.spec != resource.spec {
+                return Err(coded_invalid_request(
+                    "lab_update_conflict",
+                    "Existing desired configuration differs; resume the accepted update instead of materializing an older revision",
+                ));
+            }
+            crate::updates::snapshot(self, &existing).await?;
+            return Ok(status_from_resource(instance, &existing));
+        }
         let applied = labs
-            .patch(
-                &instance.resource_name,
-                &PatchParams::apply("proofstorm-mcp").force(),
-                &Patch::Apply(&resource),
-            )
+            .create(&kube::api::PostParams::default(), &resource)
             .await
             .map_err(kube_error)?;
+        crate::updates::snapshot(self, &applied).await?;
         Ok(status_from_resource(instance, &applied))
     }
     pub async fn status(&self, instance: LabInstance) -> Result<LabInstanceStatus, Error> {
@@ -269,6 +287,15 @@ impl Runtime {
             .await
             .map_err(kube_error)?
         {
+            if resource.spec.instance_key != instance.instance_key
+                || resource.spec.workspace_id != instance.workspace_id
+                || resource.spec.instance_id != instance.id
+            {
+                return Err(Error::problem(
+                    "stale_incarnation",
+                    "Runtime resource belongs to a different lab incarnation",
+                ));
+            }
             return Ok(status_from_resource(instance, &resource));
         }
         let receipts = Api::<ConfigMap>::namespaced(self.client.clone(), &self.control_namespace);
@@ -285,6 +312,10 @@ impl Runtime {
         };
         let data = receipt.data.unwrap_or_default();
         Ok(LabInstanceStatus {
+            observed_generation: 0,
+            observed_revision_digest: String::new(),
+            last_converged_revision: None,
+            retained_storage: BTreeMap::new(),
             instance: instance.clone(),
             phase: InstancePhase::Closed,
             instance_namespace: data.get("instanceNamespace").cloned().unwrap_or_default(),
@@ -313,9 +344,29 @@ impl Runtime {
             return Ok(status);
         }
         let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        labs.delete(&instance.resource_name, &DeleteParams::default())
+        if let Some(resource) = labs.get_opt(&instance.resource_name).await? {
+            if resource.spec.instance_key != instance.instance_key {
+                return Err(Error::problem(
+                    "stale_incarnation",
+                    "Lab incarnation changed",
+                ));
+            }
+            let uid = resource
+                .uid()
+                .ok_or_else(|| Error::problem("runtime_identity_missing", "Lab UID missing"))?;
+            labs.delete(
+                &instance.resource_name,
+                &DeleteParams {
+                    preconditions: Some(kube::api::Preconditions {
+                        uid: Some(uid),
+                        resource_version: resource.resource_version(),
+                    }),
+                    ..Default::default()
+                },
+            )
             .await
             .map_err(kube_error)?;
+        }
         status.phase = InstancePhase::Closing;
         status.message = Some("deleting instance namespace and verifying absence".into());
         Ok(status)
@@ -338,6 +389,10 @@ impl Runtime {
             ));
         }
         Ok(LabInstanceStatus {
+            observed_generation: 0,
+            observed_revision_digest: String::new(),
+            last_converged_revision: None,
+            retained_storage: BTreeMap::new(),
             instance: instance.clone(),
             phase: InstancePhase::Closed,
             instance_namespace: namespace.clone(),
@@ -357,11 +412,27 @@ impl Runtime {
 }
 #[must_use]
 pub fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> LabInstanceStatus {
-    let status = resource.status.clone().unwrap_or_default();
+    let mut status = resource.status.clone().unwrap_or_default();
+    if status.observed_desired_generation != instance.generation
+        || status.observed_revision_digest != instance.revision_digest
+        || status.observed_generation != resource.metadata.generation
+    {
+        if status.phase == LabPhase::Ready {
+            status.phase = LabPhase::Pending;
+        }
+        if status.phase != LabPhase::Blocked {
+            status.message = Some("Reconciling the desired lab revision; readiness from an older generation is not completion.".into());
+        }
+    }
     LabInstanceStatus {
+        observed_generation: status.observed_desired_generation,
+        observed_revision_digest: status.observed_revision_digest,
+        last_converged_revision: status.last_converged_revision,
+        retained_storage: status.retained_storage,
         instance,
         phase: match status.phase {
             LabPhase::Pending => InstancePhase::Pending,
+            LabPhase::Blocked => InstancePhase::Blocked,
             LabPhase::Ready => InstancePhase::Ready,
             LabPhase::Closing => InstancePhase::Closing,
             LabPhase::CleanupBlocked => InstancePhase::CleanupBlocked,
@@ -458,6 +529,10 @@ pub fn runtime_action_resource(
         },
     );
     resource.metadata.namespace = Some(control_namespace.to_owned());
+    resource.annotations_mut().insert(
+        "proofstorm.dev/action-revision".into(),
+        operation.revision_digest.clone(),
+    );
     resource.metadata.labels = Some(std::collections::BTreeMap::from([
         (
             "proofstorm.dev/instance".to_owned(),

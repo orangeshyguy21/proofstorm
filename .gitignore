@@ -10,3 +10,4 @@ __pycache__/
 *.pyc
 
 /crates/proofstorm-web/dist/
+/.codex

@@ -13,6 +13,8 @@ pub const MAX_CONDITION_MESSAGE_BYTES: usize = 160;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabInstance {
+    #[serde(default = "initial_generation")]
+    pub generation: u64,
     pub id: String,
     pub workspace_id: String,
     pub revision_digest: String,
@@ -26,6 +28,7 @@ pub struct LabInstance {
 pub enum InstancePhase {
     #[default]
     Pending,
+    Blocked,
     Ready,
     Closing,
     Closed,
@@ -90,6 +93,14 @@ pub struct TeardownReceipt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabInstanceStatus {
+    #[serde(default)]
+    pub observed_generation: u64,
+    #[serde(default)]
+    pub observed_revision_digest: String,
+    #[serde(default)]
+    pub last_converged_revision: Option<String>,
+    #[serde(default)]
+    pub retained_storage: BTreeMap<String, String>,
     pub instance: LabInstance,
     pub phase: InstancePhase,
     pub instance_namespace: String,
@@ -99,4 +110,8 @@ pub struct LabInstanceStatus {
     pub teardown_receipt: Option<TeardownReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+fn initial_generation() -> u64 {
+    1
 }

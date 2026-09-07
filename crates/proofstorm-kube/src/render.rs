@@ -112,6 +112,37 @@ pub fn render_security_spine(instance_key: &str) -> RenderedSecuritySpine {
     }
 }
 
+/// Grow the namespace allowance with the lab instead of silently stopping at twelve volumes.
+/// This is a namespace ceiling, not a claim that the cluster can schedule the demand.
+#[must_use]
+pub fn render_lab_security_spine(
+    instance_key: &str,
+    components: usize,
+    retained_volumes: usize,
+) -> RenderedSecuritySpine {
+    let mut spine = render_security_spine(instance_key);
+    let units = components
+        .saturating_add(retained_volumes)
+        .div_ceil(8)
+        .max(1);
+    if let Some(hard) = spine.quota.spec.as_mut().and_then(|s| s.hard.as_mut()) {
+        for (name, amount, suffix) in [
+            ("requests.cpu", 2, ""),
+            ("requests.memory", 4, "Gi"),
+            ("limits.cpu", 8, ""),
+            ("limits.memory", 8, "Gi"),
+            ("pods", 40, ""),
+            ("persistentvolumeclaims", 12, ""),
+        ] {
+            hard.insert(
+                name.into(),
+                Quantity(format!("{}{suffix}", units.saturating_mul(amount))),
+            );
+        }
+    }
+    spine
+}
+
 fn restricted_namespace(instance_key: &str, namespace_name: &str) -> Namespace {
     Namespace {
         metadata: ObjectMeta {

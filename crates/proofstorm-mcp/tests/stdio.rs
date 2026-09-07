@@ -302,11 +302,12 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 14);
+    assert_eq!(names.len(), 15);
     for name in [
         "proofstorm_session_list",
         "proofstorm_lab_up",
         "proofstorm_lab_inspect",
+        "proofstorm_lab_read",
         "proofstorm_environment_read",
         "proofstorm_lab_exec",
         "proofstorm_lab_sync",

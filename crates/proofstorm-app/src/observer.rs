@@ -23,6 +23,7 @@ impl Observer {
         let shared = status.clone();
         let task = tokio::spawn(async move {
             let mut cursor = String::new();
+            let mut lifecycle_cursor = String::new();
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -30,7 +31,31 @@ impl Observer {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-                let result = collect(&labs, &cursor).await;
+                let cleanup = crate::lifecycle::sweep(
+                    &labs.runtime,
+                    &labs.store,
+                    &labs.workspace,
+                    &labs.principal,
+                    &lifecycle_cursor,
+                )
+                .await;
+                let collected = collect(&labs, &cursor).await;
+                let result = match cleanup {
+                    Ok(next) => {
+                        lifecycle_cursor = next;
+                        collected
+                    }
+                    Err(error) => {
+                        if let Some(next) = error
+                            .details
+                            .as_ref()
+                            .and_then(|d| d["next_cursor"].as_str())
+                        {
+                            lifecycle_cursor = next.into();
+                        }
+                        Err(error)
+                    }
+                };
                 let Ok(mut status) = shared.write() else {
                     break;
                 };
@@ -53,11 +78,13 @@ impl Observer {
                         status.last_success_at_unix = Some(now);
                     }
                 } else if let Err(error) = result {
+                    eprintln!("lab observation failed: {error}");
                     status.state = "unavailable".into();
                     status.error = Some(match error.details.as_ref().and_then(|details| details["code"].as_str()) {
                         Some("access_denied") => "Receipt collection needs lab.status, experiment.read and artifact.read in this workspace.",
                         Some("runtime_failure") => "Receipt collection cannot read the current cluster; retrying automatically.",
-                        _ => "Receipt collection cannot read the workspace journal; check the server terminal.",
+                        Some("cleanup_unverified") => "Lab cleanup is pending: its namespace or runtime resources still exist.",
+                        _ => "Lab reconciliation failed; check the server terminal.",
                     }.into());
                 }
             }
@@ -79,6 +106,21 @@ async fn collect(labs: &Labs, cursor: &str) -> Result<(String, u64, bool, bool),
     ] {
         labs.store
             .authorize(&labs.workspace, &labs.principal, cap)?;
+    }
+    if let Ok(pending) = labs.store.pending_updates(&labs.workspace, &labs.principal) {
+        for id in pending {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(3),
+                crate::updates::reconcile(
+                    &labs.runtime,
+                    &labs.store,
+                    &labs.workspace,
+                    &labs.principal,
+                    &id,
+                ),
+            )
+            .await;
+        }
     }
     let live = labs.runtime.current_instance_ids(&labs.workspace).await?;
     let page =

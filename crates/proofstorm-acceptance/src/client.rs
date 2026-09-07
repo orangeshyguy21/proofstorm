@@ -26,6 +26,8 @@ pub struct McpClient {
     stdout: BufReader<ChildStdout>,
     next_id: u64,
     initialize_result: Value,
+    incarnations: std::collections::BTreeMap<String, String>,
+    published_plans: std::collections::BTreeMap<String, String>,
 }
 
 impl McpClient {
@@ -54,6 +56,8 @@ impl McpClient {
             stdout,
             next_id: 0,
             initialize_result: Value::Null,
+            incarnations: std::collections::BTreeMap::default(),
+            published_plans: std::collections::BTreeMap::default(),
         };
         client.initialize_result = client.request(
             "initialize",
@@ -110,12 +114,60 @@ impl McpClient {
     /// Invoke a tool and parse its first text content block as JSON.
     ///
     /// This mirrors what every Python client did: `json.loads(result["content"][0]["text"])`.
-    pub fn call(&mut self, tool: &str, arguments: Value) -> Result<Value> {
+    pub fn call(&mut self, tool: &str, mut arguments: Value) -> Result<Value> {
+        // Gate convenience: follow the same status -> close -> wait token contract as agents.
+        // Raw envelope helpers intentionally do not fill fields, for contract refusal tests.
+        if (tool == "proofstorm_lab_close"
+            || (tool == "proofstorm_lab_wait" && arguments["target_phase"] == "closed"))
+            && arguments.get("expected_instance_key").is_none()
+        {
+            let id = arguments["instance_id"]
+                .as_str()
+                .context("instance_id required")?
+                .to_owned();
+            if !self.incarnations.contains_key(&id) {
+                self.call("proofstorm_lab_status", json!({"instance_id":id}))?;
+            }
+            arguments["expected_instance_key"] = json!(
+                self.incarnations
+                    .get(&id)
+                    .context("lab status did not return instance_key")?
+            );
+        }
+        if tool == "proofstorm_lab_materialize" && arguments.get("plan_id").is_none() {
+            let revision = arguments["revision_digest"]
+                .as_str()
+                .context("revision_digest required")?;
+            arguments["plan_id"] = json!(
+                self.published_plans
+                    .get(revision)
+                    .context("publish the plan before materializing")?
+            );
+        }
+        let published_draft = (tool == "proofstorm_lab_publish")
+            .then(|| arguments["draft_id"].as_str().map(str::to_owned))
+            .flatten();
         let result = self.request("tools/call", tool_params(tool, arguments))?;
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
             bail!("tool {tool} failed: {result}");
         }
-        tool_content(tool, &result)
+        let value = tool_content(tool, &result)?;
+        if let (Some(draft), Some(digest)) = (
+            published_draft,
+            value["revision_digest"]
+                .as_str()
+                .or_else(|| value["digest"].as_str()),
+        ) {
+            self.published_plans.insert(digest.into(), draft);
+        }
+
+        if let (Some(id), Some(key)) = (
+            value["instance_id"].as_str(),
+            value["instance_key"].as_str(),
+        ) {
+            self.incarnations.insert(id.into(), key.into());
+        }
+        Ok(value)
     }
 
     /// Invoke a tool and return the whole JSON-RPC envelope.

@@ -366,6 +366,10 @@
         "request_digest": {
           "type": "string"
         },
+        "revision_digest": {
+          "default": "",
+          "type": "string"
+        },
         "sequence": {
           "format": "uint64",
           "minimum": 0,
@@ -450,6 +454,14 @@
         },
         "revision": {
           "$ref": "#/$defs/PublishedRevision"
+        },
+        "revisions": {
+          "default": [],
+          "description": "Immutable configurations actually used by the journal, including earlier lab generations.",
+          "items": {
+            "$ref": "#/$defs/PublishedRevision"
+          },
+          "type": "array"
         },
         "workspace_id": {
           "type": "string"

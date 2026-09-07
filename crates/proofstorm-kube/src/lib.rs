@@ -60,7 +60,8 @@ pub use operation::{
     require_open_lab,
 };
 pub use render::{
-    INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_security_spine,
+    INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_lab_security_spine,
+    render_security_spine,
 };
 pub use scheduler::{
     MAX_ACTIVE_PROTOCOL_PROBER_LABS, MAX_GLOBAL_PROTOCOL_PROBES, MAX_PROTOCOL_PROBES_PER_LAB,

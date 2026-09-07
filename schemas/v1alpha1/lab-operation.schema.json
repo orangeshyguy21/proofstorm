@@ -183,6 +183,11 @@
     "resource_name": {
       "type": "string"
     },
+    "revision_digest": {
+      "default": "",
+      "description": "Immutable configuration captured atomically at admission.",
+      "type": "string"
+    },
     "sequence": {
       "format": "uint64",
       "minimum": 0,

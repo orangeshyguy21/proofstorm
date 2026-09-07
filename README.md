@@ -87,6 +87,15 @@ calling `up` again; the name is reused with a fresh instance and history.
 `make down` deletes the entire local cluster, while `proofstorm down demo`
 closes just that lab.
 
+## Edit a running lab
+
+Change the configuration and run `proofstorm up` with the same name. Unchanged
+components keep their state; `--preview` shows additions, restarts, and removals.
+Removed data is retained until explicitly deleted. Agents use the existing MCP
+plan/apply flow with an instance target and expected generation.
+
+See [dynamic lab edits](docs/dynamic-lab-edits.md) for the CLI and MCP contracts.
+
 ## See the environment
 
 ```bash
@@ -112,6 +121,11 @@ pagination, local HTTP access, and the JSON Schema.
 
 `make serve` builds the website and CLI, initializes the local developer
 permissions, then keeps the server running. No separate `init` is needed.
+Deleted labs are cleaned up automatically and their names become reusable. Export
+evidence before closing a lab; see [lab lifecycle](docs/lab-lifecycle.md).
+Running it again replaces this checkout's existing Proofstorm server, refreshing
+its cluster connection after a rebuild. Other applications using the port are
+left running and reported as a port conflict. Replacement uses `lsof` and `ps`.
 Use `make serve PORT=8788` to change the port. Global CLI options passed through
 `ARGS` apply to both initialization and serving. Each launch restores the
 selected identity's default developer permissions. A configured MCP server
