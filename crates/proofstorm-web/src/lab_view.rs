@@ -21,7 +21,7 @@ pub fn LabPanel(
         <Show when=move || lab.get().is_some()>
             <section class="lab-workspace">
                 <div class="canvas-heading">
-                    {move || lab.get().map(|lab| view! {<h1 title=lab.id.clone()>{lab_name(&lab)}</h1><span class="phase-badge">{lab_phase(&lab)}</span><span class="lab-count">{format!("{} components · {} links",lab.components.items.len(),lab.links.items.len())}</span>})}
+                    {move || lab.get().map(|lab| view! {<h1 title=lab.id.clone()>{lab_name(&lab)}</h1><span class="phase-badge">{lab_phase(&lab)}</span><span class="lab-count">{format!("{} components · {} embedded · {} links",lab.components.items.len(),lab.components.items.iter().filter_map(|c|c.details.as_ref()).map(|d|d.embedded.len()).sum::<usize>(),lab.links.items.len())}</span>})}
                     <BlockHeight telemetry lab />
                 </div>
                 {move || lab.get().and_then(|lab| lab.read_error).map(|_|view!{<div class="notice warning">"This lab’s history uses an incompatible format."</div>})}
@@ -31,7 +31,7 @@ pub fn LabPanel(
                     <Show when=move || !selected_component.get().is_empty()>
                         <aside class="inspector" aria-label="Component details">
                             <div class="inspector-heading"><span>"Component"</span><button class="icon-button" aria-label="Close component details" on:click=move |_| selected_component.set(String::new())>"×"</button></div>
-                            {move || lab.get().and_then(|lab| lab.components.items.iter().find(|component| component.id == selected_component.get()).cloned().map(|component| (lab,component))).map(|(lab,component)| view!{<ComponentPanel component lab telemetry />})}
+                            {move || lab.get().and_then(|lab| crate::canvas_model::selected_owner(&lab, &selected_component.get()).cloned().map(|component| (lab,component))).map(|(lab,component)| view!{<ComponentPanel component lab telemetry selection=selected_component.get() />})}
                         </aside>
                     </Show>
                 </div>

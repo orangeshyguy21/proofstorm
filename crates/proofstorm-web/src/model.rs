@@ -1,6 +1,5 @@
 //! Pure presentation helpers, also checked by native tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-use proofstorm_core::ComponentKind;
 use proofstorm_view::{ComponentView, EnvironmentLab, ResourceDemand};
 
 pub fn label(value: &impl serde::Serialize) -> String {
@@ -45,39 +44,6 @@ pub fn health(component: &ComponentView) -> &'static str {
         Some(true) => "ready",
         Some(false) => "pending",
         None => "unknown",
-    }
-}
-pub fn position(components: &[ComponentView], id: &str) -> (i32, i32) {
-    let Some(component) = components.iter().find(|c| c.id == id) else {
-        return (0, 0);
-    };
-    let group = column(component.kind);
-    let row = components
-        .iter()
-        .filter(|c| group == column(c.kind) && c.id.as_str() < id)
-        .count();
-    let previous_columns: usize = (0..group)
-        .map(|group| {
-            components
-                .iter()
-                .filter(|c| column(c.kind) == group)
-                .count()
-                .div_ceil(4)
-                .max(1)
-        })
-        .sum();
-    (
-        40 + i32::try_from(previous_columns + row / 4).unwrap_or(0) * 292,
-        40 + i32::try_from(row % 4).unwrap_or(0) * 170,
-    )
-}
-
-fn column(kind: ComponentKind) -> i32 {
-    match kind {
-        ComponentKind::Bitcoin | ComponentKind::Database | ComponentKind::IdentityProvider => 0,
-        ComponentKind::Lightning | ComponentKind::Proxy => 1,
-        ComponentKind::Mint | ComponentKind::Oracle => 2,
-        ComponentKind::Wallet | ComponentKind::Attacker => 3,
     }
 }
 pub fn merge_resources(target: &mut Option<ResourceDemand>, page: Option<ResourceDemand>) {
@@ -230,26 +196,6 @@ mod tests {
         assert_eq!(block_height(&lab), None);
     }
     #[test]
-    fn large_layouts_wrap_each_kind_without_overlapping_tiles() {
-        let nodes = (0..10)
-            .map(|i| ComponentView {
-                id: format!("node-{i}"),
-                kind: ComponentKind::Lightning,
-                implementation: "lnd".into(),
-                version: None,
-                ready: None,
-                conditions: vec![],
-                endpoints: vec![],
-            })
-            .collect::<Vec<_>>();
-        let positions = nodes
-            .iter()
-            .map(|n| position(&nodes, &n.id))
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(positions.len(), 10);
-        assert!(positions.iter().all(|(_, y)| *y <= 550));
-    }
-    #[test]
     fn merges_component_pages_without_duplicating_shared_demands() {
         let resource = || ResourceDemand {
             retained_storage: std::collections::BTreeMap::new(),
@@ -264,23 +210,5 @@ mod tests {
         let mut result = Some(resource());
         merge_resources(&mut result, Some(resource()));
         assert_eq!(result.unwrap().workloads.len(), 1);
-    }
-    #[test]
-    fn layout_is_stable_when_input_order_changes() {
-        let node = |id: &str| ComponentView {
-            id: id.into(),
-            kind: ComponentKind::Bitcoin,
-            implementation: "bitcoind".into(),
-            version: None,
-            ready: None,
-            conditions: vec![],
-            endpoints: vec![],
-        };
-        let nodes = vec![node("b"), node("a")];
-        assert_eq!(position(&nodes, "a"), (40, 40));
-        assert_eq!(
-            position(&[nodes[1].clone(), nodes[0].clone()], "b"),
-            (40, 210)
-        );
     }
 }

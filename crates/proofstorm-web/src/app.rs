@@ -113,11 +113,11 @@ pub fn App() -> impl IntoView {
                         } else {
                             match client::lab(&id, history_pages.get_untracked()).await {
                                 Ok(lab) if selected.get_untracked() == id => {
-                                    if !lab
-                                        .components
-                                        .items
-                                        .iter()
-                                        .any(|c| c.id == component.get_untracked())
+                                    if crate::canvas_model::selected_owner(
+                                        &lab,
+                                        &component.get_untracked(),
+                                    )
+                                    .is_none()
                                     {
                                         component.set(String::new());
                                     }

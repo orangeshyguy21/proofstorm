@@ -184,6 +184,45 @@
         "experiment_controllable"
       ]
     },
+    "ComponentDetails": {
+      "type": "object",
+      "properties": {
+        "adapter_version": {
+          "type": "string"
+        },
+        "embedded": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EmbeddedResourceView"
+          }
+        },
+        "image": {
+          "type": "string"
+        },
+        "observed_version": {
+          "description": "Resolved version confirmed by a ready observation of the matching rollout.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resolved_version": {
+          "type": "string"
+        },
+        "source_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "resolved_version",
+        "image",
+        "adapter_version",
+        "embedded"
+      ]
+    },
     "ComponentKind": {
       "type": "string",
       "enum": [
@@ -206,6 +245,17 @@
           "items": {
             "$ref": "#/$defs/ConditionView"
           }
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComponentDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "endpoints": {
           "type": "array",
@@ -331,6 +381,32 @@
         "attached_clients"
       ]
     },
+    "EmbeddedResourceView": {
+      "description": "A logical resource sharing its parent component's process; it is not another workload.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind"
+      ]
+    },
     "Endpoint": {
       "type": "object",
       "properties": {
@@ -425,6 +501,14 @@
             "null"
           ],
           "format": "int64"
+        },
+        "layout_id": {
+          "description": "Stable workspace and lab incarnation identity for browser-local layouts.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "links": {
           "$ref": "#/$defs/Page3"

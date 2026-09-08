@@ -99,6 +99,9 @@ pub struct Coverage {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EnvironmentLab {
+    /// Stable workspace and lab incarnation identity for browser-local layouts.
+    #[serde(default)]
+    pub layout_id: Option<String>,
     #[serde(default)]
     pub desired_generation: Option<u64>,
     #[serde(default)]
@@ -146,6 +149,8 @@ pub struct RuntimeObservation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ComponentView {
+    #[serde(default)]
+    pub details: Option<ComponentDetails>,
     pub id: String,
     pub kind: ComponentKind,
     pub implementation: String,
@@ -153,6 +158,24 @@ pub struct ComponentView {
     pub ready: Option<bool>,
     pub conditions: Vec<ConditionView>,
     pub endpoints: Vec<Endpoint>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComponentDetails {
+    pub resolved_version: String,
+    /// Resolved version confirmed by a ready observation of the matching rollout.
+    pub observed_version: Option<String>,
+    pub image: String,
+    pub adapter_version: String,
+    pub source_commit: Option<String>,
+    pub embedded: Vec<EmbeddedResourceView>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// A logical resource sharing its parent component's process; it is not another workload.
+pub struct EmbeddedResourceView {
+    pub id: String,
+    pub name: String,
+    pub kind: ComponentKind,
+    pub version: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConditionView {
