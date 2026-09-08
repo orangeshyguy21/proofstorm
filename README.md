@@ -357,6 +357,37 @@ make e2e-slice5
 make down
 ```
 
+The former all-in-one Slice 5 test is now four independent gates, all included
+in `make e2e`:
+
+| Gate | Coverage |
+| --- | --- |
+| `slice5` | Composer, invalid-action refusal, funding, Nutshell wallet/mint round trip, private invoice/payment, conservation |
+| `controller-recovery` | Bootstrap retry/restart, lost-job replay fencing, cancellation during downtime, node stop/start/restart |
+| `network-faults` | Real traffic isolation, overlapping partitions, reconstruction after controller restart, selective healing |
+| `channel-lifecycle` | LND/CLN peering, rebalancing, cooperative and forced channel closure |
+
+Run an individual gate with `make e2e-<gate>`. These tests require an idle local
+cluster and refuse to start if labs are present; some restart the shared
+controller. Each creates a uniquely scoped disposable lab, checks its named
+operations and deterministic evidence, verifies that stale close requests are
+rejected, and closes with an active session using the correct incarnation token.
+Controller-restoration guards and scoped fallback teardown run on returned
+errors and panic unwinding. Cleanup failures fail the gate; forced process kills
+or a lost Docker daemon can still require manual recovery.
+
+The smoke test measures conservation across `wallet_pay`, using a balance
+captured immediately beforehand and the Nutshell mint's authoritative fee row.
+A minting round trip is not a balance-invariant treatment. Conservation evaluates
+recorded receipts and must create no runtime job. The other three
+fixtures retain CDK; CDK payment interoperability remains covered separately by
+the existing wallet gates. Missing fee evidence is never treated as zero.
+
+To exercise the failure path deliberately, run
+`PROOFSTORM_ACCEPTANCE_INJECT_FAILURE=controller-stopped target/debug/proofstorm-acceptance controller-recovery`
+after building. It must exit nonzero, restore the controller, and remove its own
+lab. This is a test-only failure injection, not a normal acceptance run.
+
 Proofstorm exposes two deliberately different native shell primitives.
 `component_exec_live` (`component.exec_live`) runs inside the
 selected running container, so native CLIs see the component's real localhost,

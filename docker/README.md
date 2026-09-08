@@ -79,10 +79,17 @@ passed fresh Compose funding and channel-opening checks with Bitcoin 31.1.
 Bitcoin packaging was built and release-verified for amd64 and arm64; live
 integration checks ran on the local arm64 cluster.
 
-The broader legacy `slice5` gate is not passing: after its link request fixture
-was updated, it stopped at an obsolete session-leasing/close expectation. That
-test still needs a lifecycle-contract refresh; the focused wallet checkpoint
-provides the payment integration coverage for this migration.
+The migration initially exposed obsolete `slice5` lifecycle and conservation
+expectations. The follow-up refactor replaced that monolith with independently
+runnable `slice5`, `controller-recovery`, `network-faults`, and
+`channel-lifecycle` gates. All four passed live checks, including named-operation
+journals, deterministic evidence, and incarnation-fenced teardown. Seven harness
+unit tests, Clippy with warnings denied, and formatting checks passed as well.
+A deliberately injected error while the controller was stopped restored it and
+reclaimed the test lab; the idle-cluster safeguard also refused a concurrent run.
+See the main README for the fixture boundaries and commands. In particular,
+the conservation smoke fixture uses Nutshell's authoritative fee database;
+the existing CDK wallet checkpoint remains the CDK payment integration check.
 
 The two pre-existing disposable test labs and all migration-created labs were
 removed, including their persistent test storage. Historical reports were kept.
