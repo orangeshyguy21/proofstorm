@@ -1,5 +1,8 @@
 //! One bounded sampler per server. HTTP reads only return its cached snapshot.
 mod balances;
+mod channels;
+mod holdings;
+mod retention;
 use crate::{Error, lab::Labs};
 use futures::{StreamExt, stream};
 use k8s_openapi::api::core::v1::Pod;
@@ -27,13 +30,14 @@ impl Telemetry {
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 timer.tick().await;
-                let snapshot = match labs.system().await {
+                let mut snapshot = match labs.system().await {
                     Ok(snapshot) => snapshot,
                     Err(_) => SystemView {
                         error: Some("System measurements unavailable.".into()),
                         ..SystemView::default()
                     },
                 };
+                retention::retain(&mut snapshot, &sender.borrow());
                 sender.send_replace(snapshot);
             }
         });
@@ -105,6 +109,7 @@ impl Labs {
 
     async fn sample_lab(&self, lab: &ProofstormLab, name: Option<String>) -> LabUsage {
         let mut usage = LabUsage {
+            incarnation: format!("{}:{}", lab.spec.workspace_id, lab.spec.instance_key),
             id: lab.spec.instance_id.clone(),
             name: name.unwrap_or_else(|| lab.spec.instance_id.clone()),
             ..LabUsage::default()

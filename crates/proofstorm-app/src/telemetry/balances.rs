@@ -3,109 +3,97 @@ use futures::{StreamExt, stream};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, ResourceExt, api::AttachParams};
 use proofstorm_kube::{COMPONENT_LABEL, ProofstormLab, ROLLOUT_DIGEST_ANNOTATION};
-use proofstorm_view::{BalanceAmount, ComponentBalance};
+use proofstorm_view::{BalanceAmount, ComponentBalance, HoldingsObservation, LightningObservation};
 use serde_json::Value;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-
-const CDK_READER: &str = include_str!("../../../proofstorm-kube/drivers/cdk_wallet_balance.py");
-const COCO_READER: &str = include_str!("../../../proofstorm-kube/drivers/cocod_wallet_balance.py");
 
 pub(super) async fn sample(
     lab: &ProofstormLab,
     pods: &Api<Pod>,
     inventory: &[Pod],
 ) -> Vec<ComponentBalance> {
-    let components = lab
-        .spec
-        .lab
-        .components
-        .iter()
-        .filter(|c| {
-            matches!(
-                c.implementation.as_str(),
-                "bitcoin-core"
-                    | "lnd"
-                    | "cln"
-                    | "cdk-cli-wallet"
-                    | "cocod-wallet"
-                    | "nutshell-wallet"
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    stream::iter(components)
-        .map(|component| async move {
-            let pod = inventory.iter().find(|pod| {
-                pod.labels().get(COMPONENT_LABEL) == Some(&component.id)
-                    && pod.metadata.deletion_timestamp.is_none()
-                    && pod
-                        .status
-                        .as_ref()
-                        .and_then(|s| s.container_statuses.as_ref())
-                        .is_some_and(|statuses| {
-                            statuses.iter().any(|s| s.name == "component" && s.ready)
-                        })
-                    && lab
-                        .spec
-                        .lock
-                        .entries
-                        .iter()
-                        .find(|entry| entry.component_id == component.id)
-                        .is_some_and(|entry| {
-                            pod.annotations().get(ROLLOUT_DIGEST_ANNOTATION)
-                                == Some(&entry.rollout_digest)
-                                && matches_adapter(
-                                    &component.implementation,
-                                    entry.protocol_action_adapter_version.as_deref(),
-                                )
-                        })
-            });
-            let (amounts, block_height) = if let Some(pod) = pod {
-                if component.implementation == "bitcoin-core" {
-                    let height = read(
-                        pods,
-                        &pod.name_any(),
-                        vec![
-                            "bitcoin-cli".into(),
-                            "-regtest".into(),
-                            format!("-rpcuser={}", proofstorm_kube::BITCOIN_RPC_USER),
-                            format!("-rpcpassword={}", proofstorm_kube::BITCOIN_RPC_PASSWORD),
-                            "getblockchaininfo".into(),
-                        ],
-                    )
-                    .await
-                    .and_then(|value| value["blocks"].as_u64());
-                    (None, height)
-                } else {
-                    (
-                        observe(
-                            pods,
-                            &pod.name_any(),
-                            &component.id,
+    stream::iter(
+        lab.spec
+            .lab
+            .components
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.implementation.as_str(),
+                    "bitcoin-core"
+                        | "lnd"
+                        | "cln"
+                        | "cdk-cli-wallet"
+                        | "cocod-wallet"
+                        | "nutshell-wallet"
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .map(|component| async move {
+        let entry = lab
+            .spec
+            .lock
+            .entries
+            .iter()
+            .find(|e| e.component_id == component.id);
+        let pod = inventory.iter().find(|pod| {
+            pod.labels().get(COMPONENT_LABEL) == Some(&component.id)
+                && pod.metadata.deletion_timestamp.is_none()
+                && pod
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.container_statuses.as_ref())
+                    .is_some_and(|statuses| {
+                        statuses.iter().any(|s| s.name == "component" && s.ready)
+                    })
+                && entry.is_some_and(|entry| {
+                    pod.annotations().get(ROLLOUT_DIGEST_ANNOTATION) == Some(&entry.rollout_digest)
+                        && matches_adapter(
                             &component.implementation,
+                            entry.protocol_action_adapter_version.as_deref(),
                         )
-                        .await,
-                        None,
-                    )
+                })
+        });
+        let mut result = ComponentBalance {
+            component: component.id.clone(),
+            rollout_digest: entry.map(|e| e.rollout_digest.clone()),
+            observed_at_unix: super::now(),
+            error: Some("Observation unavailable".into()),
+            amounts: vec![],
+            block_height: None,
+            lightning: matches!(component.implementation.as_str(), "lnd" | "cln").then(|| {
+                LightningObservation {
+                    error: Some("Channel observation unavailable".into()),
+                    ..Default::default()
                 }
-            } else {
-                (None, None)
-            };
-            ComponentBalance {
-                component: component.id.clone(),
-                observed_at_unix: super::now(),
-                error: (amounts.is_none() && block_height.is_none())
-                    .then(|| "Observation unavailable".into()),
-                amounts: amounts.unwrap_or_default(),
-                block_height,
-            }
-        })
-        .buffer_unordered(4)
-        .collect()
-        .await
+            }),
+            holdings: component
+                .implementation
+                .ends_with("wallet")
+                .then(|| HoldingsObservation {
+                    error: Some("Holdings observation unavailable".into()),
+                    ..Default::default()
+                }),
+        };
+        if let Some(pod) = pod {
+            observe(
+                lab,
+                pods,
+                &pod.name_any(),
+                &component.implementation,
+                &mut result,
+            )
+            .await;
+        }
+        result
+    })
+    .buffer_unordered(4)
+    .collect()
+    .await
 }
-
 fn matches_adapter(implementation: &str, version: Option<&str>) -> bool {
     match implementation {
         "cdk-cli-wallet" => version == Some("cdk-cli/0.18/observations/v1"),
@@ -114,121 +102,137 @@ fn matches_adapter(implementation: &str, version: Option<&str>) -> bool {
         _ => true,
     }
 }
-
 async fn observe(
+    lab: &ProofstormLab,
     pods: &Api<Pod>,
     pod: &str,
-    component: &str,
     implementation: &str,
-) -> Option<Vec<BalanceAmount>> {
+    result: &mut ComponentBalance,
+) {
     match implementation {
-        "lnd" => {
-            let base = ["lncli", "--lnddir=/home/lnd/.lnd", "--network=regtest"];
-            let wallet = read(
+        "bitcoin-core" => {
+            result.block_height = read(
                 pods,
                 pod,
-                base.into_iter()
-                    .chain(["walletbalance"])
-                    .map(str::to_owned)
-                    .collect(),
+                vec![
+                    "bitcoin-cli".into(),
+                    "-regtest".into(),
+                    format!("-rpcuser={}", proofstorm_kube::BITCOIN_RPC_USER),
+                    format!("-rpcpassword={}", proofstorm_kube::BITCOIN_RPC_PASSWORD),
+                    "getblockchaininfo".into(),
+                ],
             )
-            .await?;
-            let channels = read(
-                pods,
-                pod,
-                base.into_iter()
-                    .chain(["channelbalance"])
-                    .map(str::to_owned)
-                    .collect(),
-            )
-            .await?;
-            Some(vec![
-                amount("On-chain", integer(&wallet["total_balance"])?),
-                amount("Local", integer(&channels["local_balance"]["sat"])?),
-                amount("Remote", integer(&channels["remote_balance"]["sat"])?),
-            ])
+            .await
+            .and_then(|v| v["blocks"].as_u64());
+            if result.block_height.is_some() {
+                result.error = None;
+            }
         }
-        "cln" => {
-            let funds = read(
-                pods,
-                pod,
-                [
-                    "lightning-cli",
-                    "--lightning-dir=/home/cln/.lightning",
-                    "--network=regtest",
-                    "listfunds",
-                ]
-                .map(str::to_owned)
-                .to_vec(),
-            )
-            .await?;
-            cln_amounts(&funds)
-        }
-        "cdk-cli-wallet" | "cocod-wallet" => {
-            let (reader, database, query) = if implementation == "cdk-cli-wallet" {
-                (
-                    CDK_READER,
-                    "/wallet/cdk/cdk-cli.sqlite",
-                    "SELECT DISTINCT mint_url FROM proof WHERE unit='sat'",
-                )
-            } else {
-                (
-                    COCO_READER,
-                    "/wallet/.cocod/coco.db",
-                    "SELECT mintUrl FROM coco_cashu_mints",
-                )
+        "lnd" | "cln" => {
+            let lnd = implementation == "lnd";
+            let command = |action: &str| {
+                let base = if lnd {
+                    ["lncli", "--lnddir=/home/lnd/.lnd", "--network=regtest"]
+                } else {
+                    [
+                        "lightning-cli",
+                        "--lightning-dir=/home/cln/.lightning",
+                        "--network=regtest",
+                    ]
+                };
+                base.into_iter()
+                    .chain([action])
+                    .map(str::to_owned)
+                    .collect()
             };
-            // Reuse the pinned readers, invoking their functions without their CLI entrypoints.
-            let script = format!(
-                "__name__='dashboard_reader'\n{reader}\nimport sys\ndatabase={database:?}\nwith sqlite3.connect(Path(database).as_uri()+'?mode=ro', uri=True, timeout=1) as db:\n urls=[r[0] for r in db.execute({query:?})]\nrows=[observe(database,sys.argv[1],'',url) for url in urls]\nprint(json.dumps({{k:sum(r.get(k,0) for r in rows) for k in ['balance_sat','reserved_sat','pending_sat','inflight_sat']}}))"
-            );
-            let result = read(
-                pods,
-                pod,
-                vec!["python3".into(), "-c".into(), script, component.into()],
-            )
-            .await?;
-            Some(vec![
-                amount("Spendable", integer(&result["balance_sat"])?),
-                amount("Reserved", integer(&result["reserved_sat"])?),
-                amount(
-                    "Pending",
-                    integer(&result["pending_sat"])?
-                        .checked_add(integer(&result["inflight_sat"])?)?,
+            let (info, channels, funds) = tokio::join!(
+                read(pods, pod, command("getinfo")),
+                read(
+                    pods,
+                    pod,
+                    command(if lnd {
+                        "listchannels"
+                    } else {
+                        "listpeerchannels"
+                    })
                 ),
-            ])
+                read(
+                    pods,
+                    pod,
+                    command(if lnd { "walletbalance" } else { "listfunds" })
+                )
+            );
+            if let Some(observation) = info
+                .zip(channels)
+                .and_then(|(i, c)| super::channels::project(implementation, &i, &c))
+            {
+                result.lightning = Some(observation);
+            }
+            let amounts = funds.and_then(|funds| {
+                if lnd {
+                    lnd_amounts(&funds, result.lightning.as_ref()?)
+                } else {
+                    cln_amounts(&funds)
+                }
+            });
+            if let Some(amounts) = amounts {
+                result.amounts = amounts;
+                result.error = None;
+            }
         }
-        "nutshell-wallet" => {
-            let result = read(
+        _ => {
+            let data = read(
                 pods,
                 pod,
                 vec![
                     "python3".into(),
                     "-c".into(),
-                    include_str!("nutshell_balance.py").into(),
-                    component.into(),
+                    super::holdings::script(implementation),
+                    result.component.clone(),
                 ],
             )
-            .await?;
-            Some(vec![
-                amount("Spendable", integer(&result["balance_sat"])?),
-                amount("Reserved", integer(&result["reserved_sat"])?),
-            ])
+            .await;
+            if let Some((amounts, holdings)) =
+                data.and_then(|v| super::holdings::project(lab, implementation, &v))
+            {
+                result.amounts = amounts;
+                result.holdings = Some(holdings);
+                result.error = None;
+            }
         }
-        _ => None,
     }
 }
+fn lnd_amounts(funds: &Value, observation: &LightningObservation) -> Option<Vec<BalanceAmount>> {
+    if observation.error.is_some() {
+        return None;
+    }
+    let (local, remote) =
+        observation
+            .channels
+            .iter()
+            .try_fold((0_u64, 0_u64), |(local, remote), c| {
+                Some((
+                    local.checked_add(c.local_msat)?,
+                    remote.checked_add(c.remote_msat)?,
+                ))
+            })?;
+    Some(vec![
+        amount("On-chain", integer(&funds["total_balance"])?),
+        amount("Local", local / 1000),
+        amount("Remote", remote / 1000),
+    ])
+}
 
-fn amount(label: &str, sat: u64) -> BalanceAmount {
+pub(super) fn amount(label: &str, sat: u64) -> BalanceAmount {
     BalanceAmount {
         label: label.into(),
         sat,
     }
 }
-fn integer(value: &Value) -> Option<u64> {
+pub(super) fn integer(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
-fn millisats(value: &Value) -> Option<u64> {
+pub(super) fn millisats(value: &Value) -> Option<u64> {
     integer(value).or_else(|| value.as_str()?.strip_suffix("msat")?.parse().ok())
 }
 fn cln_amounts(funds: &Value) -> Option<Vec<BalanceAmount>> {

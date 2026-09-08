@@ -175,6 +175,9 @@ mod tests {
     #[test]
     fn height_tracks_the_current_lab_and_can_decrease() {
         let observation = |height, error| proofstorm_view::ComponentBalance {
+            rollout_digest: None,
+            lightning: None,
+            holdings: None,
             component: "chain".into(),
             observed_at_unix: 1,
             error,

@@ -51,6 +51,8 @@ impl UsageTotals {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct LabUsage {
+    #[serde(default)]
+    pub incarnation: String,
     pub id: String,
     pub name: String,
     pub error: Option<String>,
@@ -82,8 +84,14 @@ pub struct ProcessUsage {
     pub memory_limit_bytes: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ComponentBalance {
+    #[serde(default)]
+    pub rollout_digest: Option<String>,
+    #[serde(default)]
+    pub lightning: Option<LightningObservation>,
+    #[serde(default)]
+    pub holdings: Option<HoldingsObservation>,
     pub component: String,
     pub observed_at_unix: i64,
     pub error: Option<String>,
@@ -92,8 +100,48 @@ pub struct ComponentBalance {
     pub block_height: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BalanceAmount {
     pub label: String,
     pub sat: u64,
+}
+
+/// Open channels observed from one node, including disconnected channels.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LightningObservation {
+    pub observed_at_unix: i64,
+    pub error: Option<String>,
+    pub node_pubkey: Option<String>,
+    pub channels: Vec<ObservedChannel>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ObservedChannel {
+    pub funding_outpoint: String,
+    pub peer_pubkey: String,
+    pub active: bool,
+    pub capacity_msat: u64,
+    pub local_msat: u64,
+    pub remote_msat: u64,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HoldingsObservation {
+    pub observed_at_unix: i64,
+    pub error: Option<String>,
+    pub mints: Vec<MintHolding>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MintHolding {
+    /// Opaque identity; raw wallet URLs and credentials are not exposed.
+    pub id: String,
+    pub mint: Option<String>,
+    pub amounts: Vec<BalanceAmount>,
+}
+impl MintHolding {
+    #[must_use]
+    pub fn held_sat(&self) -> u64 {
+        self.amounts
+            .iter()
+            .filter(|a| matches!(a.label.as_str(), "Spendable" | "Reserved"))
+            .fold(0_u64, |sum, a| sum.saturating_add(a.sat))
+    }
 }

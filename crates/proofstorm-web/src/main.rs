@@ -4,6 +4,8 @@ mod canvas_model;
 #[cfg(target_arch = "wasm32")]
 mod client;
 #[cfg(target_arch = "wasm32")]
+mod edges;
+#[cfg(target_arch = "wasm32")]
 mod freshness;
 #[cfg(target_arch = "wasm32")]
 mod graph;
@@ -12,6 +14,11 @@ mod inspector;
 #[cfg(target_arch = "wasm32")]
 mod lab_view;
 mod model;
+#[cfg(target_arch = "wasm32")]
+mod motion;
+#[cfg(target_arch = "wasm32")]
+mod relationship_panel;
+mod relationships;
 #[cfg(target_arch = "wasm32")]
 mod system;
 #[cfg(target_arch = "wasm32")]

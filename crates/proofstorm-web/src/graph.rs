@@ -32,17 +32,54 @@ pub fn Graph(
             .map(|l| canvas_model::nodes(&l))
             .unwrap_or_default()
     });
+    let relationships = Memo::new(move |_| {
+        let now = crate::freshness::now();
+        lab.get()
+            .map(|lab| {
+                let system = telemetry.get();
+                let usage = system
+                    .as_ref()
+                    .and_then(|s| s.labs.iter().find(|l| l.id == lab.id));
+                crate::relationships::edges(&lab, usage, now)
+            })
+            .unwrap_or_default()
+    });
     let positions = RwSignal::new(Positions::new());
     let camera = RwSignal::new((0.0, 0.0, 900.0, 500.0));
+    let interacted = RwSignal::new(false);
+    let fitted_observations = RwSignal::new(false);
     let storage_key = RwSignal::new(String::new());
     let save_error = RwSignal::new(false);
     let drag = RwSignal::new(None::<Drag>);
     let suppress_click = RwSignal::new(false);
     let fit = move || {
-        camera.set(canvas_model::bounds(
-            &nodes.get_untracked(),
-            &positions.get_untracked(),
-        ));
+        let items = nodes.get_untracked();
+        let p = positions.get_untracked();
+        let (mut left, mut top, width, height) = canvas_model::bounds(&items, &p);
+        let mut right = left + width;
+        let mut bottom = top + height;
+        for edge in relationships
+            .get_untracked()
+            .iter()
+            .filter(|e| !matches!(e.kind, crate::relationships::EdgeKind::Declared))
+        {
+            if let Some((from, to)) = items
+                .iter()
+                .find(|n| n.id == edge.from)
+                .zip(items.iter().find(|n| n.id == edge.to))
+            {
+                let g = crate::relationships::geometry(
+                    canvas_model::world_position(from, &p),
+                    canvas_model::world_position(to, &p),
+                    edge.lane,
+                );
+                left = left.min(g.extent.0 - 20.0);
+                right = right.max(g.extent.0 + 20.0);
+                top = top.min(g.extent.1 - 20.0);
+                bottom = bottom.max(g.extent.1 + 20.0);
+            }
+        }
+        camera.set((left, top, right - left, bottom - top));
         zoom.set(1.0);
         pan.set((0.0, 0.0));
     };
@@ -63,6 +100,12 @@ pub fn Graph(
             return;
         };
         let current = nodes.get();
+        relationships.get();
+        let sampled = telemetry.get().is_some_and(|s| {
+            s.labs
+                .iter()
+                .any(|u| lab.layout_id.as_deref() == Some(u.incarnation.as_str()))
+        });
         let key = format!(
             "proofstorm.canvas.v1:{}",
             lab.layout_id.as_deref().unwrap_or(&lab.id)
@@ -84,7 +127,14 @@ pub fn Graph(
         }
         if changed {
             storage_key.set(key);
+            interacted.set(false);
+            fitted_observations.set(sampled);
             fit();
+        } else if sampled && !fitted_observations.get_untracked() {
+            fitted_observations.set(true);
+            if !interacted.get_untracked() {
+                fit();
+            }
         }
     });
     let finish = move |event: web_sys::PointerEvent| {
@@ -109,6 +159,7 @@ pub fn Graph(
             <svg viewBox=move ||{let (x,y,w,h)=camera.get();format!("{x} {y} {w} {h}")} aria-label="Lab component topology" role="group"
                 on:pointerdown=move |event| {
                     if event.button()!=0{return;}
+                    interacted.set(true);
                     let node=event.target().and_then(|t|t.dyn_into::<web_sys::Element>().ok()).and_then(|e|e.closest("[data-node-id]").ok().flatten()).and_then(|e|e.get_attribute("data-node-id"));
                     let point=(event.client_x(),event.client_y());
                     suppress_click.set(false);drag.set(Some(Drag{node,last:point,start:point,moved:false}));
@@ -131,17 +182,21 @@ pub fn Graph(
                 on:pointerup=finish on:pointercancel=move |_|{drag.set(None);save();}>
                 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrow-head" d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
                 <g transform=move ||{let (left,top,width,height)=camera.get();let scale=zoom.get();let offset=pan.get();format!("translate({} {}) scale({scale})",offset.0+(left+width/2.0)*(1.0-scale),offset.1+(top+height/2.0)*(1.0-scale))}>
-                    <For each=move ||lab.get().map(|l|l.links.items).unwrap_or_default() key=|link|link.id.clone() children=move |link| {
+                    <For each=move ||{relationships.get().into_iter().filter(|e|matches!(e.kind,crate::relationships::EdgeKind::Declared)).collect::<Vec<_>>()} key=|link|link.id.clone() children=move |link| {
                         let id=link.id;
                         view!{<path class="connection" marker-end="url(#arrow)" d=move ||{
                             let items=nodes.get();let p=positions.get();
-                            lab.get().and_then(|l|l.links.items.into_iter().find(|l|l.id==id)).and_then(|link|{
+                            relationships.get().into_iter().find(|l|l.id==id).and_then(|link|{
                                 let from=items.iter().find(|n|n.id==link.from)?;let to=items.iter().find(|n|n.id==link.to)?;
                                 let a=canvas_model::world_position(from,&p);let b=canvas_model::world_position(to,&p);
                                 let (sx,ex)=if b.0>=a.0 {(a.0+260.0,b.0)}else{(a.0,b.0+260.0)};let mid=f64::midpoint(sx,ex);
                                 Some(format!("M {sx} {} C {mid} {}, {mid} {}, {ex} {}",a.1+72.0,a.1+72.0,b.1+72.0,b.1+72.0))
                             }).unwrap_or_default()
                         } />}
+                    } />
+                    <For each=move ||{relationships.get().into_iter().filter(|e|!matches!(e.kind,crate::relationships::EdgeKind::Declared)).collect::<Vec<_>>()} key=|edge|edge.id.clone() children=move |edge| {
+                        let id=edge.id;let data=Memo::new(move |_|relationships.get().into_iter().find(|e|e.id==id));
+                        view!{<crate::edges::ObservedEdge data nodes positions selected />}
                     } />
                     <For each=move ||nodes.get() key=|node|node.id.clone() children=move |node| {
                         let id=node.id;
@@ -150,7 +205,7 @@ pub fn Graph(
                     } />
                 </g>
             </svg>
-            <div class="graph-toolbar"><button aria-label="Zoom out" on:click=move |_|zoom.update(|z|*z=(*z/1.2).max(0.15))>"−"</button><span>{move ||format!("{:.0}%",zoom.get()*100.0)}</span><button aria-label="Zoom in" on:click=move |_|zoom.update(|z|*z=(*z*1.2).min(6.0))>"+"</button><button on:click=move |_|fit()>"Fit to lab"</button><button on:click=move |_|{let mut next=Positions::new();canvas_model::ensure_positions(&nodes.get_untracked(),&mut next);positions.set(next);fit();save();}>"Reset layout"</button></div>
+            <div class="graph-toolbar"><button aria-label="Zoom out" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z/1.2).max(0.15));}>"−"</button><span>{move ||format!("{:.0}%",zoom.get()*100.0)}</span><button aria-label="Zoom in" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z*1.2).min(6.0));}>"+"</button><button on:click=move |_|fit()>"Fit to lab"</button><button on:click=move |_|{let mut next=Positions::new();canvas_model::ensure_positions(&nodes.get_untracked(),&mut next);positions.set(next);fit();save();}>"Reset layout"</button></div>
             <Show when=move ||save_error.get()><div class="layout-notice" role="status">"Layout could not be saved in this browser."</div></Show>
             <div class="graph-legend"><span>"Drag to arrange · arrow keys to move selected items"</span></div>
         </div>
@@ -194,7 +249,7 @@ fn CanvasTile(
             <text class="node-name" x="17" y="52">{move ||data.get().map(|n|short(&n.name,26))}</text>
             <text class="node-impl" x="17" y="73">{move ||data.get().map(|n|if n.parent.is_some(){"Embedded · shares parent process".into()}else{short(&n.implementation,30)})}</text>
             <Show when=move ||data.get().is_some_and(|n|n.parent.is_none())>
-                {move ||data.get().zip(lab.get()).map(|(n,l)|view!{<NodeBalance telemetry lab_id=l.id component=n.owner kind=n.kind />})}
+                <NodeBalance telemetry lab data />
                 <text class="node-health" x="17" y="132">{status}</text><circle class=move ||format!("status-dot {}",status()) cx="241" cy="127" r="4" />
             </Show>
         </g>

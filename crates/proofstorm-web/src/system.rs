@@ -118,7 +118,7 @@ fn ProcessRow(process: ProcessUsage) -> impl IntoView {
     view! {<tr class="process-row"><td><strong>{p.container}</strong><small>{p.pod}</small></td><td><span class=if p.ready{"process-state ready"}else{"process-state"}>{p.state}</span></td><td><CpuUsage usage=p.cpu_millicores limit=p.cpu_limit_millicores /><small>{format!("Reserved: {}",cpu(p.cpu_request_millicores))}</small><small>{format!("Maximum: {cpu_maximum}")}</small></td><td>{memory(p.memory_bytes)}<small>{format!("Reserved: {}",memory(p.memory_request_bytes))}</small><small>{format!("Maximum: {memory_maximum}")}</small></td><td>{p.restarts}</td><td>{if measured {"Available"} else if p.running {"Unavailable"} else {"Not running"}}{measured.then(||sampled_at.map(|unix|view!{<small><UpdatedAgo unix /></small>}))}</td></tr>}
 }
 
-fn balance(
+pub(crate) fn balance(
     telemetry: RwSignal<Option<SystemView>>,
     lab: &str,
     component: &str,
@@ -149,23 +149,52 @@ pub fn BlockHeight(
 #[component]
 pub fn NodeBalance(
     telemetry: RwSignal<Option<SystemView>>,
-    lab_id: String,
-    component: String,
-    kind: ComponentKind,
+    lab: RwSignal<Option<EnvironmentLab>>,
+    data: Memo<Option<crate::canvas_model::CanvasNode>>,
 ) -> impl IntoView {
-    view! {<g class="node-balance">{move ||{
-        let observation=balance(telemetry,&lab_id,&component);
-        let (value,label)=if kind==ComponentKind::Bitcoin {
-            (observation.as_ref().and_then(|b|b.block_height).map_or_else(||"—".into(),sat),"Block height".into())
-        }else if matches!(kind,ComponentKind::Wallet|ComponentKind::Lightning){
-            let amount=observation.as_ref().and_then(|b|b.amounts.iter().find(|a|a.label=="Spendable"||a.label=="Local").or_else(||b.amounts.first()));
-            (amount.map_or_else(||"—".into(),|a|format!("{} sat",sat(a.sat))),amount.map_or_else(||"Balance".into(),|a|a.label.clone()))
-        }else{
-            let memory=telemetry.get().and_then(|s|s.labs.into_iter().find(|l|l.id==lab_id)).and_then(|l|{let processes=l.processes.iter().filter(|p|p.component.as_deref()==Some(component.as_str())).collect::<Vec<_>>();(!processes.is_empty()).then(||UsageTotals::from_processes(processes.into_iter()))}).and_then(|t|t.memory_bytes);
-            (crate::model::memory(memory),"Memory".into())
+    let displayed = Memo::new(move |_| {
+        let Some((lab, node)) = lab.get().zip(data.get()) else {
+            return ("—".into(), "Balance".into());
         };
-        view!{<line x1="17" y1="87" x2="215" y2="87"/><text class="node-amount" x="17" y="111">{value}</text><text class="node-balance-label" x="215" y="111" text-anchor="end">{label}</text>}
-    }}</g>}
+        let observation = balance(telemetry, &lab.id, &node.owner);
+        if node.kind == ComponentKind::Bitcoin {
+            (
+                observation
+                    .as_ref()
+                    .and_then(|b| b.block_height)
+                    .map_or_else(|| "—".into(), sat),
+                "Block height".into(),
+            )
+        } else if matches!(node.kind, ComponentKind::Wallet | ComponentKind::Lightning) {
+            let amount = observation.as_ref().and_then(|b| {
+                b.amounts
+                    .iter()
+                    .find(|a| a.label == "Spendable" || a.label == "Local")
+                    .or_else(|| b.amounts.first())
+            });
+            (
+                amount.map_or_else(|| "—".into(), |a| format!("{} sat", sat(a.sat))),
+                amount.map_or_else(|| "Balance".into(), |a| a.label.clone()),
+            )
+        } else {
+            let memory = telemetry
+                .get()
+                .and_then(|s| s.labs.into_iter().find(|l| l.id == lab.id))
+                .and_then(|l| {
+                    let processes = l
+                        .processes
+                        .iter()
+                        .filter(|p| p.component.as_deref() == Some(node.owner.as_str()))
+                        .collect::<Vec<_>>();
+                    (!processes.is_empty())
+                        .then(|| UsageTotals::from_processes(processes.into_iter()))
+                })
+                .and_then(|t| t.memory_bytes);
+            (crate::model::memory(memory), "Memory".into())
+        }
+    });
+    let pulse = crate::motion::pulse(displayed);
+    view! {<g class=move ||format!("node-balance {}",pulse.get())><line x1="17" y1="87" x2="243" y2="87"/><text class="node-amount" x="17" y="111">{move ||displayed.get().0}</text><text class="node-balance-label" x="243" y="111" text-anchor="end">{move ||displayed.get().1}</text></g>}
 }
 #[component]
 pub fn BalancePanel(

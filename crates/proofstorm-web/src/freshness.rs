@@ -27,3 +27,7 @@ pub fn UpdatedAgo(unix: i64, #[prop(default = "Updated")] label: &'static str) -
         format!("{label} {}", crate::model::elapsed_time(unix, clock.0.get()))
     } else { "Update time unavailable".into() }}</span>}
 }
+
+pub fn now() -> i64 {
+    expect_context::<ObservationClock>().0.get()
+}
