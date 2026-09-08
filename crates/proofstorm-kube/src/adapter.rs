@@ -1862,13 +1862,14 @@ pub fn render_cdk_component(
             "env": runtime.env,
             "ports": runtime.ports,
             "securityContext": container_security(),
-            "readinessProbe": {"httpGet": {"path": "/v1/info", "port": http_port}, "periodSeconds": 3, "failureThreshold": 40},
+            "readinessProbe": {"exec": {"command": ["sh", "-ec", format!("wget -q -T 1 -O /dev/null http://127.0.0.1:{http_port}/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null")]}, "timeoutSeconds": 3, "periodSeconds": 3, "failureThreshold": 40},
             "volumeMounts": runtime.volume_mounts
         }], "volumes": runtime.volumes
     });
     if !runtime.init_containers.is_empty() {
         pod_spec["initContainers"] = Value::Array(runtime.init_containers);
     }
+    add_mint_management(plan, &mut rendered, &mut pod_spec)?;
     // Configuration is persisted by the initializer. Stop the previous mint
     // before applying the accepted document or opening the same wallet database.
     rendered.deployments.push(resource(json!({
@@ -1894,7 +1895,46 @@ struct CdkRuntimeResources {
 // including its persisted mint constraints. A failed read must never authorize
 // overwriting an existing mint: --new-mint refuses an already initialized DB.
 // Keep stderr from every step so storage and configuration errors reach logs.
-const CDK_INITIALIZE_CONFIG: &str = "cdk-mintd config validate --file /config/config.toml; if cdk-mintd config show >/dev/null; then exec cdk-mintd config apply --file /config/config.toml; else exec cdk-mintd config init --new-mint --file /config/config.toml; fi";
+const CDK_INITIALIZE_CONFIG: &str = include_str!("../drivers/cdk_initialize_config.sh");
+
+/// Loopback management is reachable only within this pod's network namespace.
+/// Separate projections keep server keys out of the native client's TLS directory.
+fn add_mint_management(
+    plan: &ComponentPlanContract,
+    rendered: &mut RenderedComponent,
+    pod_spec: &mut Value,
+) -> Result<(), AdapterError> {
+    let name = format!("{}-management-tls", plan.component_id);
+    rendered.secrets.push(resource(json!({
+        "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+        "metadata": metadata(&name, &plan.instance_key, &instance_namespace(&plan.instance_key), Some(&plan.component_id)),
+        "stringData": {"PROOFSTORM_SECRET_KIND": "mint-management-tls"}
+    }))?);
+    for (role, path) in [
+        ("server", "/management-server/tls"),
+        ("client", "/management-client/tls"),
+    ] {
+        let volume = format!("management-{role}");
+        pod_spec["volumes"]
+            .as_array_mut()
+            .expect("mint volumes")
+            .push(json!({
+                "name": volume,
+                "secret": {"secretName": name, "defaultMode": 288, "items": [
+                    {"key": "ca.pem", "path": "ca.pem"},
+                    {"key": format!("{role}.pem"), "path": format!("{role}.pem")},
+                    {"key": format!("{role}.key"), "path": format!("{role}.key")}
+                ]}
+            }));
+        pod_spec["containers"][0]["volumeMounts"]
+            .as_array_mut()
+            .expect("mint mounts")
+            .push(json!({
+                "name": volume, "mountPath": path, "readOnly": true
+            }));
+    }
+    Ok(())
+}
 
 #[allow(
     clippy::too_many_lines,
@@ -2273,10 +2313,10 @@ pub fn render_nutshell_mint_component(
                     "readinessProbe": {
                         "exec": {"command": [
                             "python3", "-c",
-                            "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()",
+                            include_str!("../drivers/nutshell_management_ready.py"),
                             format!("http://127.0.0.1:{http_port}/v1/info")
                         ]},
-                        "timeoutSeconds": 2,
+                        "timeoutSeconds": 3,
                         "periodSeconds": 3,
                         "failureThreshold": 40
                     },
@@ -2291,6 +2331,11 @@ pub fn render_nutshell_mint_component(
             }
         }}
     });
+    add_mint_management(
+        plan,
+        &mut rendered,
+        &mut deployment["spec"]["template"]["spec"],
+    )?;
     add_nutshell_cache_init_container(&mut deployment, cache);
     add_nutshell_auth_init_container(&mut deployment, authentication);
     rendered.deployments.push(resource(deployment)?);
@@ -2580,7 +2625,22 @@ fn nutshell_mint_environment(
             "MINT_REQUIRE_AUTH".into(),
             bool_string(oidc_discovery_url.is_some()),
         ),
-        ("MINT_RPC_SERVER_ENABLE".into(), "FALSE".into()),
+        ("MINT_RPC_SERVER_ENABLE".into(), "TRUE".into()),
+        ("MINT_RPC_SERVER_ADDR".into(), "127.0.0.1".into()),
+        ("MINT_RPC_SERVER_PORT".into(), "8086".into()),
+        ("MINT_RPC_SERVER_MUTUAL_TLS".into(), "TRUE".into()),
+        (
+            "MINT_RPC_SERVER_CA".into(),
+            "/management-server/tls/ca.pem".into(),
+        ),
+        (
+            "MINT_RPC_SERVER_CERT".into(),
+            "/management-server/tls/server.pem".into(),
+        ),
+        (
+            "MINT_RPC_SERVER_KEY".into(),
+            "/management-server/tls/server.key".into(),
+        ),
         (
             "MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE".into(),
             config.transaction_rate_limit_per_minute.to_string(),
@@ -3237,6 +3297,7 @@ fn mint_common_config(component: &str, http_port: u16, config: &CdkMintConfig) -
         config.max_inputs, config.max_outputs
     )
     .expect("writing native configuration to a String cannot fail");
+    rendered.push_str("[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n");
     rendered
 }
 
@@ -4433,7 +4494,7 @@ mod tests {
                 .as_array()
                 .expect("mounts")
                 .len(),
-            3
+            5
         );
     }
 

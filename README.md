@@ -363,6 +363,45 @@ provide coordination, lifecycle guarantees, or useful portable observations.
 (`component.control`) rolls any primary component workload, including mints and
 wallets, while preserving its persistent state.
 
+Mint management uses these same native exec paths. CDK, CDK-LDK, CDK-BDK, and
+Nutshell start management RPC on `127.0.0.1:8086` with mandatory mutual TLS.
+Proofstorm provisions separate server/client identities per mint automatically;
+agents need no enablement step. No management port is published through a Service,
+ingress, or host mapping. Invoke the native CLI directly, without a new MCP tool
+or common command alias:
+
+```sh
+proofstorm exec demo mint -- cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info
+proofstorm exec demo mint -- mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info
+```
+
+The first invocation is for CDK variants, the second for Nutshell. Use native
+`--help` for commands. Client credentials are projected read-only under
+`/management-client/tls`, server credentials under `/management-server/tls`, with
+restricted file permissions. CA signing keys are discarded after issuance.
+Certificates last 365 days, survive component/controller restarts, and are removed
+when the lab closes. Missing or expired credentials fail authentication; there
+is no plaintext fallback. Full live exec remains administrative mint access.
+Never put certificate/key contents in command arguments or public output.
+
+Ordinary CDK restarts preserve durable RPC mutations. A changed authored lab
+configuration is applied on rollout; its last successfully applied digest is
+recorded on the mint volume. The upstream quote-payment override switch remains
+disabled. Nutshell 0.20.3 metadata and settings mutations are process-local and
+reset to authored values on restart; keyset/quote mutations use upstream database
+semantics. Some native methods are unimplemented, and Nutshell may print RPC errors
+while exiting zero. Verify actual state after mutations.
+
+The management images are pinned Linux amd64 and arm64 builds. Recipes are in
+`docker/mint/Dockerfile.kube-*`; `make images` restores the exact catalog images.
+CDK candidate builds include a client from their own frozen source revision.
+Older locks without the `mint_management_rpc` feature are rejected before workload
+rendering: resolve a new lab revision and rebuild old candidates under a new
+candidate ID to adopt the new images. Existing locks are not silently redirected
+to different image contents.
+Run `make e2e-mint-management` for native read/update, authentication, network
+isolation, restart, and teardown acceptance.
+
 Run the live native-protocol acceptance gate with:
 
 ```bash
@@ -600,8 +639,8 @@ CDK 0.18 makes the database, rather than a startup TOML, authoritative for mint
 configuration. Proofstorm therefore validates the immutable generated document
 and runs `config init --new-mint` in a dedicated init container before starting
 `cdk-mintd` without the legacy `--config` flag. On restart, the initializer
-reads the stored configuration and refuses to start if it differs from the
-resolved Proofstorm lock; it never silently reapplies changed settings. Secrets
+preserves management changes when the authored configuration is unchanged;
+a changed authored document is validated and applied before startup. Secrets
 use CDK's `env:` and `file:` references, and PostgreSQL receives only its
 bootstrap connection setting through a Secret. Locks from the 0.17 configuration
 contract are rejected rather than reinterpreted as 0.18. Retained 0.17 databases
@@ -650,8 +689,8 @@ disposable test-user credentials. The generated public client includes the
 standard subject-bearing scopes and optional offline access. Native BAT
 issuance remains blocked by an upstream Nutshell 0.20.3 auth-ledger migration
 defect: its auth `promises` table does not match the shared CRUD write path.
-Proofstorm does not rewrite that schema. Non-LND/non-CLN payment backends and management RPC are not
-advertised until matching dependency and secret contracts exist. The current
+Proofstorm does not rewrite that schema. Non-LND/non-CLN payment backends are not
+advertised until matching dependency contracts exist. The current
 live acceptance gates are:
 
 ```sh

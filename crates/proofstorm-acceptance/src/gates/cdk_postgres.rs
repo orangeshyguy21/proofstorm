@@ -220,10 +220,22 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("CDK did not initialize its PostgreSQL schema: only {tables} public tables");
     }
 
+    let management_args = [
+        "get",
+        "secret/mint-management-tls",
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.data}",
+    ];
+    let management_digest = context.kubectl.digest(&management_args)?;
     context
         .kubectl
         .rollout_restart(CONTROL_NAMESPACE, "deployment/proofstormd")?;
     sleep(Duration::from_secs(5));
+    if context.kubectl.digest(&management_args)? != management_digest {
+        bail!("controller restart rotated management TLS credentials");
+    }
     if context.kubectl.digest(&secret_args)? != secret_digest {
         bail!("controller reconciliation rotated or mutated the generated database Secret");
     }

@@ -170,10 +170,22 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("Nutshell did not initialize its PostgreSQL schema: {tables} tables");
     }
 
+    let management_args = [
+        "get",
+        "secret/mint-management-tls",
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.data}",
+    ];
+    let management_digest = context.kubectl.digest(&management_args)?;
     context
         .kubectl
         .rollout_restart(CONTROL_NAMESPACE, "deployment/proofstormd")?;
     sleep(Duration::from_secs(5));
+    if context.kubectl.digest(&management_args)? != management_digest {
+        bail!("controller restart rotated management TLS credentials");
+    }
     if context.kubectl.digest(&database_secret_args)? != database_digest {
         bail!("controller restart rotated the PostgreSQL Secret");
     }

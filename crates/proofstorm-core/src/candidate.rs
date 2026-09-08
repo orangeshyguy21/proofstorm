@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use crate::{CatalogEntry, CatalogResponse, ReleaseChannel, SupportLifecycle, digest_json};
 
@@ -48,6 +49,9 @@ pub struct CandidateBuild {
     pub pull_request_url: String,
     pub resource_name: String,
     pub request_digest: String,
+    /// Packaging guarantees recorded at admission; old builds inherit none.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub build_features: BTreeSet<crate::CatalogFeature>,
     pub phase: CandidateBuildPhase,
     pub accepted_at_unix: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,6 +130,14 @@ pub fn candidate_catalog_entry(
     entry.support_lifecycle = SupportLifecycle::Experimental;
     entry.image.clone_from(image);
     entry.build_provenance = None;
+    if !candidate
+        .build_features
+        .contains(&crate::CatalogFeature::MintManagementRpc)
+    {
+        entry
+            .features
+            .remove(&crate::CatalogFeature::MintManagementRpc);
+    }
     entry.source_digest = digest_json(&(
         base.source_digest.as_str(),
         source.candidate_id.as_str(),
@@ -220,6 +232,7 @@ mod tests {
             pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
             resource_name: "candidate-aabbccdd".into(),
             request_digest: "sha256:request".into(),
+            build_features: BTreeSet::from([crate::CatalogFeature::MintManagementRpc]),
             phase: CandidateBuildPhase::Succeeded,
             accepted_at_unix: 1,
             started_at_unix: Some(2),
@@ -234,6 +247,31 @@ mod tests {
             error_code: None,
             error_message: None,
         }
+    }
+
+    #[test]
+    fn old_candidates_cannot_inherit_new_management_packaging_guarantees() {
+        let candidate = succeeded_candidate();
+        let mut old_json = serde_json::to_value(&candidate).unwrap();
+        old_json.as_object_mut().unwrap().remove("build_features");
+        let old: CandidateBuild = serde_json::from_value(old_json).unwrap();
+        let base = default_catalog()
+            .entries
+            .iter()
+            .find(|e| e.id == "nutshell")
+            .unwrap();
+        assert!(
+            !candidate_catalog_entry(base, &old)
+                .unwrap()
+                .features
+                .contains(&crate::CatalogFeature::MintManagementRpc)
+        );
+        assert!(
+            candidate_catalog_entry(base, &candidate)
+                .unwrap()
+                .features
+                .contains(&crate::CatalogFeature::MintManagementRpc)
+        );
     }
 
     #[test]

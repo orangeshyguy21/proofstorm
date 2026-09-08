@@ -38,6 +38,7 @@ pub enum SupportLifecycle {
 #[serde(rename_all = "snake_case")]
 pub enum CatalogFeature {
     NativeCli,
+    MintManagementRpc,
     Regtest,
     PersistentState,
     Bolt11,
@@ -250,7 +251,7 @@ pub fn default_catalog() -> &'static CatalogResponse {
 fn build_default_catalog() -> CatalogResponse {
     let adapter_version = "0.1.0-alpha.1";
     let backends = default_backend_registry();
-    let entries = vec![
+    let mut entries = vec![
         catalog_entry(
             "bitcoin-core",
             backends,
@@ -379,7 +380,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+            "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::PersistentState,
@@ -423,7 +424,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/mintd@sha256:2b0e9ff0430710b5c3df93cfaccdea01ffa2efc6d66c50daca4730f0c542d9be",
+            "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -462,7 +463,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+            "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -501,7 +502,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.20.3",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+            "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -665,6 +666,25 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Attacker],
         ),
     ];
+    for entry in &mut entries {
+        if matches!(
+            entry.id.as_str(),
+            "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
+        ) {
+            entry.features.insert(CatalogFeature::MintManagementRpc);
+        }
+        let encoded = match entry.id.as_str() {
+            "cdk" | "cdk-bdk" => {
+                include_str!("../../../docker/mint/cdk-management-provenance.json")
+            }
+            "cdk-ldk" => include_str!("../../../docker/mint/cdk-ldk-management-provenance.json"),
+            _ => continue,
+        };
+        let provenance: BuildProvenance =
+            serde_json::from_str(encoded).expect("pinned mint management build provenance");
+        entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
+        entry.build_provenance = Some(provenance);
+    }
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
 }
 
@@ -1193,6 +1213,8 @@ fn runtime_endpoint(
 )]
 fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint> {
     const OBSERVE: &[&str] = &["component_logs", "reachability_oracle"];
+    const CDK_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info; use --help for native commands. Client certificates are mounted in /management-client/tls; never copy their contents into arguments or public output. Invoke through component_exec_live, not forensics. Durable RPC changes survive ordinary restarts; a changed authored lab configuration is applied on the next rollout. Mint quote payment override is disabled by the upstream server policy. CLI success is not proof of the intended state: verify the result independently. Management images support Linux amd64 and arm64.";
+    const NUTSHELL_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info; use --help for native commands. Invoke through component_exec_live, not forensics. Never copy credentials into arguments or public output. Nutshell 0.20.3 can print RPC errors while exiting zero: verify state independently. Metadata/settings mutations can be process-local and reset from authored configuration on restart; persistent keyset/quote changes follow upstream database semantics. Management images support Linux amd64 and arm64.";
     match implementation {
         "bitcoin-core" => vec![runtime_endpoint(
             "component",
@@ -1253,7 +1275,11 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "wallet_invoice",
                 "wallet_pay",
             ],
-            &[],
+            &[if implementation == "cdk" {
+                CDK_MANAGEMENT
+            } else {
+                NUTSHELL_MANAGEMENT
+            }],
         )],
         "cdk-ldk" => vec![
             runtime_endpoint(
@@ -1269,6 +1295,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                     "wallet_pay",
                 ],
                 &[
+                    CDK_MANAGEMENT,
                     "wallet_fund is unavailable because the installed embedded-LDK driver cannot provision an inbound Lightning route",
                 ],
             ),
@@ -1282,7 +1309,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
             ),
         ],
         "cdk-bdk" => vec![
-            runtime_endpoint("component", "mint", OBSERVE, &[]),
+            runtime_endpoint("component", "mint", OBSERVE, &[CDK_MANAGEMENT]),
             runtime_endpoint(
                 "bdk",
                 "onchain",
@@ -1515,6 +1542,29 @@ pub fn validate_catalog_component<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn management_clients_have_matching_build_provenance() {
+        use sha2::{Digest, Sha256};
+        let recipe = include_bytes!("../../../docker/mint/Dockerfile.kube-cdk");
+        for id in ["cdk", "cdk-ldk", "cdk-bdk"] {
+            let entry = default_catalog()
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            let provenance = entry.build_provenance.as_ref().unwrap();
+            assert_eq!(
+                provenance.recipe_digest,
+                format!("sha256:{:x}", Sha256::digest(recipe))
+            );
+            assert!(entry.features.contains(&CatalogFeature::MintManagementRpc));
+            assert_eq!(
+                provenance.commit_sha,
+                "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
+            );
+        }
+    }
 
     #[test]
     fn packaged_wallet_provenance_and_observation_surface_are_explicit() {

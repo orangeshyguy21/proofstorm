@@ -3098,6 +3098,16 @@ impl ProofstormMcp {
         );
         let request_digest = digest_json(&identity);
         let resource_name = format!("candidate-{}", &request_digest[7..26]);
+        let build_features = if matches!(
+            request.implementation.as_str(),
+            "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
+        ) {
+            [proofstorm_core::CatalogFeature::MintManagementRpc]
+                .into_iter()
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
         let candidate = CandidateBuild {
             api_version: proofstorm_core::CANDIDATE_BUILD_API_VERSION.into(),
             id: request.candidate_id,
@@ -3108,6 +3118,7 @@ impl ProofstormMcp {
             pull_request_url: request.pull_request_url,
             resource_name,
             request_digest,
+            build_features,
             phase: CandidateBuildPhase::Pending,
             accepted_at_unix: unix_now(),
             started_at_unix: None,

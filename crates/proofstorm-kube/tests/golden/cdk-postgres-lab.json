@@ -699,7 +699,7 @@
           "CDK_MINTD_WORK_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+        "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
         "mounts": [
           {
             "mount_path": "/config",
@@ -842,7 +842,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:aafb690acf52596299b4b5d708d031cd33db389ae9cfd643541be3429407cb29",
+      "rollout_digest": "sha256:b353c3647ec209a8a84d68c18911b56b33a93f9befd81b206de6180ec16ddf73",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -869,7 +869,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = \"env:CDK_MINTD_POSTGRES_URL\"\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = \"env:CDK_MINTD_POSTGRES_URL\"\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -919,7 +919,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:aafb690acf52596299b4b5d708d031cd33db389ae9cfd643541be3429407cb29"
+                "proofstorm.dev/rollout-digest": "sha256:b353c3647ec209a8a84d68c18911b56b33a93f9befd81b206de6180ec16ddf73"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -968,7 +968,7 @@
                       }
                     }
                   ],
-                  "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -978,12 +978,16 @@
                     }
                   ],
                   "readinessProbe": {
-                    "failureThreshold": 40,
-                    "httpGet": {
-                      "path": "/v1/info",
-                      "port": 3338
+                    "exec": {
+                      "command": [
+                        "sh",
+                        "-ec",
+                        "wget -q -T 1 -O /dev/null http://127.0.0.1:3338/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null"
+                      ]
                     },
-                    "periodSeconds": 3
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 3
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -1012,6 +1016,16 @@
                       "mountPath": "/lnd",
                       "name": "lnd",
                       "readOnly": true
+                    },
+                    {
+                      "mountPath": "/management-server/tls",
+                      "name": "management-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/management-client/tls",
+                      "name": "management-client",
+                      "readOnly": true
                     }
                   ]
                 }
@@ -1022,7 +1036,7 @@
                   "command": [
                     "sh",
                     "-ec",
-                    "cdk-mintd config validate --file /config/config.toml; if cdk-mintd config show >/dev/null; then exec cdk-mintd config apply --file /config/config.toml; else exec cdk-mintd config init --new-mint --file /config/config.toml; fi"
+                    "set -eu\ncdk-mintd config validate --file /config/config.toml\nwork_dir=${CDK_MINTD_WORK_DIR:-/app/data}\nmarker=\"$work_dir/.proofstorm-config.sha256\"\ndigest=$(sha256sum /config/config.toml | cut -d ' ' -f 1)\nif cdk-mintd config show >/dev/null; then\n    # A process/pod restart must not undo management RPC mutations. Apply only\n    # when the controller's authored document changes (or on first adoption).\n    if [ ! -f \"$marker\" ] || [ \"$(cat \"$marker\")\" != \"$digest\" ]; then\n        cdk-mintd config apply --file /config/config.toml\n    fi\nelse\n    # --new-mint refuses to overwrite an existing database after a failed read.\n    cdk-mintd config init --new-mint --file /config/config.toml\nfi\n# Record only successful applications, atomically, on the persistent volume.\nprintf '%s\\n' \"$digest\" > \"$marker.tmp\"\nmv \"$marker.tmp\" \"$marker\"\n"
                   ],
                   "env": [
                     {
@@ -1043,7 +1057,7 @@
                       }
                     }
                   ],
-                  "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "securityContext": {
@@ -1111,6 +1125,48 @@
                   "persistentVolumeClaim": {
                     "claimName": "data-lightning-0"
                   }
+                },
+                {
+                  "name": "management-server",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "server.pem",
+                        "path": "server.pem"
+                      },
+                      {
+                        "key": "server.key",
+                        "path": "server.key"
+                      }
+                    ],
+                    "secretName": "mint-management-tls"
+                  }
+                },
+                {
+                  "name": "management-client",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "client.pem",
+                        "path": "client.pem"
+                      },
+                      {
+                        "key": "client.key",
+                        "path": "client.key"
+                      }
+                    ],
+                    "secretName": "mint-management-tls"
+                  }
                 }
               ]
             }
@@ -1122,7 +1178,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:6259cb7f56e286c58a44337b3541b708c168454def24007be4af3948100bf106",
+            "proofstorm.dev/prober-digest": "sha256:1633504c8f2b46633ce9a8dd3cc36e5b0815cf5a635c6060ed28a19720e1658e",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -1149,7 +1205,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:6259cb7f56e286c58a44337b3541b708c168454def24007be4af3948100bf106",
+                "proofstorm.dev/prober-digest": "sha256:1633504c8f2b46633ce9a8dd3cc36e5b0815cf5a635c6060ed28a19720e1658e",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {
@@ -1782,6 +1838,24 @@
         "stringData": {
           "POSTGRES_DB": "cdk_mint",
           "POSTGRES_USER": "proofstorm"
+        },
+        "type": "Opaque"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-management-tls",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "mint-management-tls"
         },
         "type": "Opaque"
       },

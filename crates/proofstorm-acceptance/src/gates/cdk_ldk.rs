@@ -16,7 +16,7 @@ const INSTANCE: &str = "cdk-ldk-instance";
 const DRAFT: &str = "cdk-ldk";
 const DATABASE: &str = "proofstorm_ldk";
 const MARKER: &str = "ldk-persistent";
-const IMAGE: &str = "docker.io/cashubtc/mintd@sha256:2b0e9ff0430710b5c3df93cfaccdea01ffa2efc6d66c50daca4730f0c542d9be";
+const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
 
 fn lab_document(postgres_enabled: bool) -> Value {
     let mut lab = json!({

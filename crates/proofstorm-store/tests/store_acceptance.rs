@@ -37,6 +37,9 @@ fn successful_candidate_becomes_a_workspace_catalog_version() {
         pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
         resource_name: "candidate-aabbccdd".into(),
         request_digest: "sha256:request".into(),
+        build_features: [proofstorm_core::CatalogFeature::MintManagementRpc]
+            .into_iter()
+            .collect(),
         phase: CandidateBuildPhase::Pending,
         accepted_at_unix: 1,
         started_at_unix: None,

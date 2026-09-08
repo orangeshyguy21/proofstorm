@@ -1118,6 +1118,7 @@ async fn reconcile_component_restart(
     Ok(Action::await_change())
 }
 
+mod management_tls;
 mod native_exec;
 mod private_transfer;
 const LIVE_EXEC_OUTPUT_LIMIT: usize = 256 * 1024;
@@ -2306,6 +2307,9 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
             .map(String::as_str);
         match secret_kind {
+            Some("mint-management-tls") => {
+                management_tls::ensure(&secrets, resource).await?;
+            }
             Some("cdk-mint") => {
                 secrets
                     .patch(

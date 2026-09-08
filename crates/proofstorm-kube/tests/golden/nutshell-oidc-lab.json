@@ -535,7 +535,7 @@
           "CASHU_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+        "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
         "mounts": [
           {
             "mount_path": "/app/data",
@@ -650,7 +650,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:d5edbf2033f08b2d249c885a08ad8b5760f0d739dec3e7f671b81a845c1bba8d",
+      "rollout_digest": "sha256:3fbf839a76ed6d275551f2361015d43254c664b94265cb7d2fb21879925f3929",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -725,7 +725,13 @@
           "MINT_REDIS_CACHE_TTL": "604800",
           "MINT_REGULAR_TASKS_INTERVAL_SECONDS": "3600",
           "MINT_REQUIRE_AUTH": "TRUE",
-          "MINT_RPC_SERVER_ENABLE": "FALSE",
+          "MINT_RPC_SERVER_ADDR": "127.0.0.1",
+          "MINT_RPC_SERVER_CA": "/management-server/tls/ca.pem",
+          "MINT_RPC_SERVER_CERT": "/management-server/tls/server.pem",
+          "MINT_RPC_SERVER_ENABLE": "TRUE",
+          "MINT_RPC_SERVER_KEY": "/management-server/tls/server.key",
+          "MINT_RPC_SERVER_MUTUAL_TLS": "TRUE",
+          "MINT_RPC_SERVER_PORT": "8086",
           "MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE": "20",
           "MINT_WATCHDOG_BALANCE_CHECK_INTERVAL_SECONDS": "60",
           "MINT_WATCHDOG_ENABLED": "FALSE",
@@ -777,7 +783,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:d5edbf2033f08b2d249c885a08ad8b5760f0d739dec3e7f671b81a845c1bba8d"
+                "proofstorm.dev/rollout-digest": "sha256:3fbf839a76ed6d275551f2361015d43254c664b94265cb7d2fb21879925f3929"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -827,7 +833,7 @@
                       }
                     }
                   ],
-                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+                  "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -841,13 +847,13 @@
                       "command": [
                         "python3",
                         "-c",
-                        "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()",
+                        "\"\"\"Bounded authenticated management + HTTP readiness, without CLI error parsing.\"\"\"\nimport pathlib\nimport sys\nimport urllib.request\n\nimport grpc\nfrom cashu.mint.management_rpc.protos import management_pb2, management_pb2_grpc\n\ntls = pathlib.Path('/management-client/tls')\ncredentials = grpc.ssl_channel_credentials(\n    root_certificates=(tls / 'ca.pem').read_bytes(),\n    private_key=(tls / 'client.key').read_bytes(),\n    certificate_chain=(tls / 'client.pem').read_bytes(),\n)\nwith grpc.secure_channel('127.0.0.1:8086', credentials) as channel:\n    management_pb2_grpc.MintStub(channel).GetInfo(management_pb2.GetInfoRequest(), timeout=1)\nurllib.request.urlopen(sys.argv[1], timeout=1).read()\n",
                         "http://127.0.0.1:3338/v1/info"
                       ]
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3,
-                    "timeoutSeconds": 2
+                    "timeoutSeconds": 3
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -865,6 +871,16 @@
                     {
                       "mountPath": "/lnd",
                       "name": "lnd",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/management-server/tls",
+                      "name": "management-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/management-client/tls",
+                      "name": "management-client",
                       "readOnly": true
                     }
                   ]
@@ -893,6 +909,48 @@
                   "persistentVolumeClaim": {
                     "claimName": "data-lightning-0"
                   }
+                },
+                {
+                  "name": "management-server",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "server.pem",
+                        "path": "server.pem"
+                      },
+                      {
+                        "key": "server.key",
+                        "path": "server.key"
+                      }
+                    ],
+                    "secretName": "mint-management-tls"
+                  }
+                },
+                {
+                  "name": "management-client",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "client.pem",
+                        "path": "client.pem"
+                      },
+                      {
+                        "key": "client.key",
+                        "path": "client.key"
+                      }
+                    ],
+                    "secretName": "mint-management-tls"
+                  }
                 }
               ]
             }
@@ -904,7 +962,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:ec8624556201720c09e0fa276f39492e174dc911c3550a24f1a3bb27ec44bfa5",
+            "proofstorm.dev/prober-digest": "sha256:37b81749542c201b5cfd20c04ddc0638968275ae5f8a0474a80afb4f1a8c8d85",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -931,7 +989,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:ec8624556201720c09e0fa276f39492e174dc911c3550a24f1a3bb27ec44bfa5",
+                "proofstorm.dev/prober-digest": "sha256:37b81749542c201b5cfd20c04ddc0638968275ae5f8a0474a80afb4f1a8c8d85",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {
@@ -1445,6 +1503,24 @@
         },
         "stringData": {
           "PROOFSTORM_SECRET_KIND": "nutshell-mint"
+        },
+        "type": "Opaque"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "mint",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "mint"
+          },
+          "name": "mint-management-tls",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "mint-management-tls"
         },
         "type": "Opaque"
       }

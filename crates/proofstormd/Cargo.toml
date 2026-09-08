@@ -10,6 +10,8 @@ repository.workspace = true
 proofstorm-transfer = { path = "../proofstorm-transfer" }
 futures.workspace = true
 getrandom.workspace = true
+rcgen = "=0.13.2"
+time = "0.3"
 k8s-openapi.workspace = true
 kube.workspace = true
 proofstorm-kube = { path = "../proofstorm-kube" }

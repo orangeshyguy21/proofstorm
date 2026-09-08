@@ -2295,7 +2295,7 @@ pub fn render_peer_connect_job(spec: &PeerConnectJobSpec<'_>) -> Result<Job, ser
             mount("shared", "/shared", false), mount("to", "/to", true)
         ])],
         "containers": [container("result", from_image, &script, &[
-            mount("shared", "/shared", true), mount("from", "/from", true)
+            mount("shared", "/shared", false), mount("from", "/from", true)
         ])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},

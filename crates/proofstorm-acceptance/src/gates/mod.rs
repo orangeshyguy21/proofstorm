@@ -14,6 +14,7 @@ pub mod cross_implementation_wallet;
 pub mod cross_lab_scheduler;
 pub mod dynamic_lab;
 pub mod failed_melt;
+pub mod mint_management;
 pub mod native_exec;
 pub mod nutshell_cln;
 pub mod nutshell_mint;
@@ -29,6 +30,7 @@ pub mod slice5;
 
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
+    "mint-management",
     "dynamic-lab",
     "nutshell-mint",
     "cdk-cln",
@@ -60,6 +62,7 @@ pub const NAMES: &[&str] = &[
 /// Dispatch a gate by the name its Makefile target uses.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
+        "mint-management" => mint_management::run(context),
         "dynamic-lab" => dynamic_lab::run(context),
         "nutshell-mint" => nutshell_mint::run(context),
         "cdk-cln" => cdk_cln::run(context),

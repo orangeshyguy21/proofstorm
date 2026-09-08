@@ -13,7 +13,7 @@ const SETTINGS_DRIVER: &str = include_str!("../../drivers/nutshell_settings.py")
 
 const INSTANCE: &str = "nutshell-mint-instance";
 const DRAFT: &str = "nutshell-mint";
-const IMAGE: &str = "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed";
+const IMAGE: &str = "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d";
 
 fn lab_document() -> Value {
     json!({

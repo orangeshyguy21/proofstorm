@@ -16,7 +16,7 @@ const INSTANCE: &str = "cdk-bdk-instance";
 const DRAFT: &str = "cdk-bdk";
 const DATABASE: &str = "proofstorm_bdk";
 const MARKER: &str = "bdk-persistent";
-const IMAGE: &str = "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0";
+const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
 const PUBKEY: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const QUOTES: usize = 24;
 

@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:6f679f1e140266a8d01dfd720d937b68bc6f38cc1404dd5c5c4ea2d51c6f59eb",
+  "catalog_digest": "sha256:810cb63342b3ba2f11d875288805b60efa83db121f438d2cfb42022a0a12e2eb",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -113,8 +113,8 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd/0.18/v1",
-      "config_schema_digest": "sha256:9e7839870cd95fc053e97cf8dc82dfe72f40ea82511c009b6c0988438fa4d628",
-      "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+      "config_schema_digest": "sha256:92c3b69fd7d2b84b17fc3c9c5a200b9c18bae0cbe2f472ce32ae596e24aa3dae",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
       "fields": {
         "contact_email": {
           "classification": "agent_authorable",
@@ -174,6 +174,14 @@
         },
         "listen_address": {
           "classification": "topology_derived",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
           "required": true
         },
         "max_inputs": {
@@ -339,8 +347,8 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd-bdk/0.18/v1",
-      "config_schema_digest": "sha256:190541bab32f4faa1eb8625af8ab1fb8e76ac9ea29c2311b2f17f88af29cd872",
-      "image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+      "config_schema_digest": "sha256:aed34da9bfba6516c60a11354f1e42ecf46b92ea0b8e05e24389ce23fe8dfbba",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
       "fields": {
         "bdk_mnemonic": {
           "classification": "runtime_policy",
@@ -404,6 +412,14 @@
         },
         "listen_address": {
           "classification": "topology_derived",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
           "required": true
         },
         "max_inputs": {
@@ -588,8 +604,8 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd-ldk/0.18/v1",
-      "config_schema_digest": "sha256:93030590b158dd0f7c336a7e7fe28b1f85e808ea874bf68c844f1f16cccb2ae3",
-      "image": "docker.io/cashubtc/mintd@sha256:2b0e9ff0430710b5c3df93cfaccdea01ffa2efc6d66c50daca4730f0c542d9be",
+      "config_schema_digest": "sha256:3ba4589673b0da6165027081ba43e70983b1a8da6a248114a63d3e0fa408515d",
+      "image": "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
       "fields": {
         "chain_backend_credentials": {
           "classification": "runtime_policy",
@@ -661,6 +677,14 @@
         },
         "listen_address": {
           "classification": "topology_derived",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
           "required": true
         },
         "max_inputs": {
@@ -1181,8 +1205,8 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
-      "config_schema_digest": "sha256:60e97661e243d5733b37af04de5417b6b1dc3b201343620c9bfe936bbdfc312e",
-      "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+      "config_schema_digest": "sha256:220bcdc404f06eeefd4b4ab7ebb8b7f545b294e3167e42be4b59f970b50f432d",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
       "fields": {
         "auth_max_blind_tokens": {
           "classification": "agent_authorable",
@@ -1286,6 +1310,10 @@
         },
         "lnd_enable_mpp": {
           "classification": "agent_authorable",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
           "required": true
         },
         "management_rpc": {
