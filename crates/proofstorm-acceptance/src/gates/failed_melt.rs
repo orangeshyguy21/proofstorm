@@ -82,32 +82,32 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("failed-melt-live", "experiment-agent", CAPABILITIES)?;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-failed-melt"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-failed-melt", "include_revision": true}),
     )?;
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-failed-melt"}),
     )?;
     lab::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
 
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-failed-melt-experiment"}),
     )?;
     client.call(
-        "proofstorm_session_start",
+        "session_start",
         json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-failed-melt-session"}),
     )?;
 
     // Liquidity is opened between the funder and the payer only. The island
     // node is funded by nobody and peers with nobody.
     client.call(
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-bootstrap", "chain": "chain",
@@ -130,7 +130,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         ),
     ] {
         client.call(
-            "proofstorm_wallet_initialize",
+            "wallet_initialize",
             json!({
                 "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
                 "operation_id": operation, "wallet": wallet, "mint": mint,
@@ -147,7 +147,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // real ecash. A later failure therefore cannot be blamed on an empty
     // wallet.
     client.call(
-        "proofstorm_wallet_fund",
+        "wallet_fund",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-fund", "wallet": "payer-wallet", "mint": "payer-mint",
@@ -161,7 +161,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-balance-before", "wallet": "payer-wallet", "mint": "payer-mint",
@@ -172,7 +172,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let before = expect::integer(lab::artifact_content(&balance_before)?, "/balance_sat")?;
 
     client.call(
-        "proofstorm_wallet_invoice",
+        "wallet_invoice",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-invoice",
@@ -192,7 +192,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // channels. The operation still succeeds, because an authoritative "did
     // not happen" is an observation, not an infrastructure failure.
     client.call(
-        "proofstorm_wallet_pay",
+        "wallet_pay",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-pay", "mint_quote_id": mint_quote_id,
@@ -221,7 +221,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         json!({
             "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "failed-melt-balance-after", "wallet": "payer-wallet", "mint": "payer-mint",
@@ -237,7 +237,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // The recipient's quote must never be promoted by a payment that did not
     // happen. This is the specific corruption the gate exists to prevent.
     let quote = client.call(
-        "proofstorm_wallet_quote_status",
+        "wallet_quote_status",
         json!({"instance_id": INSTANCE, "wallet": "recipient-wallet", "mint": "recipient-mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
     if quote.get("phase").is_some()
@@ -247,17 +247,17 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_session_finish",
+        "session_finish",
         json!({"session_id": LEASE, "idempotency_key": "release-failed-melt-session"}),
     )?;
     let closed_experiment = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id": EXPERIMENT, "idempotency_key": "close-failed-melt-experiment"}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
     let evidence = client.call(
-        "proofstorm_artifact_export",
+        "artifact_export",
         json!({
             "experiment_id": EXPERIMENT,
             "include_oracle_artifacts": false,
@@ -278,7 +278,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("the exported evidence disagrees with the observation: {exported}");
     }
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     let closed = lab::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {
         bail!("failed melt lab teardown was not verified: {closed}");

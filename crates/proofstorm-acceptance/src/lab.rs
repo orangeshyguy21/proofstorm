@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::{McpClient, json as expect};
 
-/// Poll `proofstorm_lab_status` until the lab reports `phase`.
+/// Poll `lab_status` until the lab reports `phase`.
 ///
 /// Mirrors the fixed-attempt, fixed-delay loop every Python client used, so a
 /// hung lab fails the gate rather than hanging the run.
@@ -20,7 +20,7 @@ pub fn wait_phase(
 ) -> Result<Value> {
     let mut last = Value::Null;
     for attempt in 0..attempts {
-        last = client.call("proofstorm_lab_status", json!({"instance_id": instance_id}))?;
+        last = client.call("lab_status", json!({"instance_id": instance_id}))?;
         if expect::string(&last, "/phase")? == phase {
             return Ok(last);
         }
@@ -41,16 +41,13 @@ pub fn wait_closed(client: &mut McpClient, instance_id: &str) -> Result<Value> {
     wait_phase(client, instance_id, "closed", 60, Duration::from_secs(3))
 }
 
-/// Poll `proofstorm_operation_status` until the operation reaches a terminal phase.
+/// Poll `operation_status` until the operation reaches a terminal phase.
 ///
 /// A `failed` or `cancelled` phase aborts immediately rather than burning the
 /// remaining attempts, matching the Python helper.
 pub fn wait_operation(client: &mut McpClient, operation_id: &str, attempts: u32) -> Result<Value> {
     for attempt in 0..attempts {
-        let operation = client.call(
-            "proofstorm_operation_status",
-            json!({"operation_id": operation_id}),
-        )?;
+        let operation = client.call("operation_status", json!({"operation_id": operation_id}))?;
         match expect::string(&operation, "/phase")? {
             "succeeded" => return Ok(operation),
             "failed" | "cancelled" => {
@@ -74,10 +71,7 @@ pub fn wait_operation_phase(
     attempts: u32,
 ) -> Result<Value> {
     for attempt in 0..attempts {
-        let operation = client.call(
-            "proofstorm_operation_status",
-            json!({"operation_id": operation_id}),
-        )?;
+        let operation = client.call("operation_status", json!({"operation_id": operation_id}))?;
         let phase = expect::string(&operation, "/phase")?;
         if phase == expected {
             return Ok(operation);

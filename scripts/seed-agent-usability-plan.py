@@ -12,7 +12,7 @@ def main():
     config_path, fixture_path, run_id = sys.argv[1:]
     config_path = Path(config_path)
     output = config_path.parent
-    config = json.loads(config_path.read_text())['mcp']['proofstorm']
+    config = json.loads(config_path.read_text())['mcp']['pst']
     request = json.loads(Path(fixture_path).read_text())
     request.update(plan_id=run_id + '-plan', idempotency_key=run_id + '-seed')
     (output / 'seed-plan.request.json').write_text(json.dumps(request, indent=2) + '\n')
@@ -40,7 +40,7 @@ def main():
             rpc(1, 'initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                                  'clientInfo': {'name': 'fixture-plan-seeder', 'version': '1'}})
             send({'jsonrpc': '2.0', 'method': 'notifications/initialized', 'params': {}})
-            result = rpc(2, 'tools/call', {'name': 'proofstorm_lab_plan', 'arguments': request})
+            result = rpc(2, 'tools/call', {'name': 'lab_plan', 'arguments': request})
             if result.get('isError'):
                 raise RuntimeError(result)
             receipt = result.get('structuredContent') or json.loads(result['content'][0]['text'])

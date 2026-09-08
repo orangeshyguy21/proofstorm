@@ -116,11 +116,11 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     let mut client = context.session("cdk-bdk-stress-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": lab_document(postgres_enabled), "idempotency_key": "create-cdk-bdk"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cdk-bdk", "include_revision": true}),
     )?;
     let entry = lab::lock_entry(&published, "cdk-bdk")?;
@@ -129,7 +129,7 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cdk-bdk"}),
     )?;
     let ready = lab::wait_ready(&mut client, INSTANCE)?;
@@ -317,7 +317,7 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
 
     drop(forward);
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     lab::wait_closed(&mut client, INSTANCE)?;
 
     if postgres_enabled {

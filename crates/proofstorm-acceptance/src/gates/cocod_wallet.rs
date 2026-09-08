@@ -83,9 +83,7 @@ pub(super) fn operation(
     let result = match lab::wait_operation(client, id, 60) {
         Ok(result) => result,
         Err(error) => {
-            if let Ok(failed) =
-                client.call("proofstorm_operation_status", json!({"operation_id": id}))
-            {
+            if let Ok(failed) = client.call("operation_status", json!({"operation_id": id})) {
                 save(directory, id, &failed)?;
             }
             return Err(error);
@@ -105,7 +103,7 @@ pub(super) fn native(
     let result = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         id,
         json!({"component":wallet,"script":format!("umask 077; {script}"),"timeout_seconds":60,"output":{"mode":"public"}}),
     )?;
@@ -154,13 +152,7 @@ pub(super) fn private(
     let mut args = args;
     args["component"] = json!(wallet);
     args["timeout_seconds"] = json!(60);
-    let receipt = operation(
-        client,
-        directory,
-        "proofstorm_component_exec_live",
-        id,
-        args,
-    )?;
+    let receipt = operation(client, directory, "component_exec_live", id, args)?;
     if receipt["exit_code"] != exit
         || receipt["cleanup_verified"] != true
         || receipt["timed_out"] != false
@@ -184,7 +176,7 @@ pub(super) fn balance(
     let receipt = operation(
         client,
         directory,
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         id,
         json!({"wallet":wallet,"mint":"mint"}),
     )?;
@@ -221,7 +213,7 @@ pub(super) fn restart(
     operation(
         client,
         directory,
-        "proofstorm_component_restart",
+        "component_restart",
         id,
         json!({"component":wallet}),
     )?;
@@ -356,7 +348,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
         &python("session('running'); print('original session running')"),
     )?;
     client.call_refused(
-        "proofstorm_wallet_initialize",
+        "wallet_initialize",
         scoped(
             "unsupported-initialize",
             json!({"wallet":"wallet-a","mint":"mint"}),
@@ -366,14 +358,14 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
     operation(
         client,
         directory,
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         "bootstrap",
         json!({"chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd","funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000}),
     )?;
     let invoice = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "funding-invoice",
         json!({"component":"wallet-a","argv":["cocod","receive","bolt11","5000","--mint-url","http://mint:3338"],"timeout_seconds":60,"output":{"mode":"bolt11"}}),
     )?;
@@ -381,7 +373,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
     let paid = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "funding-payment",
         json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","payinvoice","--force","--json",request],"timeout_seconds":60,"output":{"mode":"json_fields","fields":["status","value_sat"]}}),
     )?;
@@ -438,7 +430,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
         let invoice = operation(
             client,
             directory,
-            "proofstorm_component_exec_live",
+            "component_exec_live",
             &format!("{id}-invoice"),
             json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","addinvoice",format!("--amt={amount}")],"timeout_seconds":60,"output":{"mode":"lnd_invoice"}}),
         )?;
@@ -455,7 +447,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
         let settled = operation(
             client,
             directory,
-            "proofstorm_component_exec_live",
+            "component_exec_live",
             &format!("{id}-recipient"),
             json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","lookupinvoice","--rhash",hash],"timeout_seconds":60,"output":{"mode":"json_fields","fields":["state","settled"]}}),
         )?;
@@ -535,7 +527,7 @@ fn projection_checkpoint(client: &mut McpClient, directory: &Path) -> Result<()>
         let receipt = operation(
             client,
             directory,
-            "proofstorm_component_exec_live",
+            "component_exec_live",
             id,
             json!({"component":"wallet-a","argv":argv,"timeout_seconds":30,"output":{"mode":"json_fields","fields":fields}}),
         )?;
@@ -553,7 +545,7 @@ fn projection_checkpoint(client: &mut McpClient, directory: &Path) -> Result<()>
     let receipt = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "project-locked",
         json!({"component":"wallet-a","argv":["cocod","status"],"timeout_seconds":30,"output":{"mode":"json_fields","fields":["seedAccess.state","seedAccess.requiresPassphrase","cocoSession.state"]}}),
     )?;
@@ -565,7 +557,7 @@ fn projection_checkpoint(client: &mut McpClient, directory: &Path) -> Result<()>
     let failed = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "project-fail-closed",
         json!({"component":"wallet-a","script":"printf '%s' '{\"cocoSession\":{\"state\":\"unknown-canary\",\"lastFailure\":{\"message\":\"private-canary\"}}}'; exit 3","timeout_seconds":30,"output":{"mode":"json_fields","fields":["cocoSession.state"]}}),
     )?;
@@ -639,10 +631,10 @@ fn run_scoped(
         document["links"] = json!([]);
     }
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id":"cocod-wallet","lab":document,"idempotency_key":"create"}),
     )?;
-    let published=client.call("proofstorm_lab_publish",json!({"draft_id":"cocod-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published=client.call("lab_publish",json!({"draft_id":"cocod-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
     save(&directory, "published", &published)?;
     let lock = lab::lock_entry(&published, "cocod-wallet")?;
     if lock.pointer("/build_provenance/commit_sha")
@@ -650,13 +642,13 @@ fn run_scoped(
     {
         bail!("cocod provenance lost from lock");
     }
-    client.call("proofstorm_lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
     let result = (|| -> Result<()> {
         let ready = lab::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
-        client.call("proofstorm_experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
+        client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
-            "proofstorm_session_start",
+            "session_start",
             json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
         )?;
         if transfer {
@@ -682,15 +674,15 @@ fn run_scoped(
         )
     })();
     let _ = client.call(
-        "proofstorm_session_finish",
+        "session_finish",
         json!({"session_id":LEASE,"idempotency_key":"release"}),
     );
     let _ = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
     );
     let evidence = client.call(
-        "proofstorm_artifact_export",
+        "artifact_export",
         json!({"experiment_id":EXPERIMENT,"include_content":true}),
     );
     if let Ok(value) = &evidence {
@@ -701,7 +693,7 @@ fn run_scoped(
         "outcome",
         &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(ToString::to_string)}),
     )?;
-    client.call("proofstorm_lab_close", json!({"instance_id":INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
     let closed = lab::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {

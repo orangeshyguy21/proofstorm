@@ -54,7 +54,7 @@ def proposal(output, run_id):
     for role in ['source', 'recipient']:
         config = copy.deepcopy(base)
         config['model'] = MODEL
-        server = config['mcp']['proofstorm']
+        server = config['mcp']['pst']
         server.update(command=[str(ROOT/'target/release/proofstorm-mcp')], enabled=False)
         env = server['environment']
         env.update(PROOFSTORM_DB=str(output/'authority.sqlite3'),

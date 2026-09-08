@@ -61,7 +61,7 @@ pub fn check(
         "failed addition would restart existing workloads"
     );
     super::apply(client, &plan, "failed-addition-apply")?;
-    let status = client.call("proofstorm_lab_wait", json!({"instance_id":super::INSTANCE,"target_phase":"ready","expected_generation":6,"timeout_seconds":120}))?;
+    let status = client.call("lab_wait", json!({"instance_id":super::INSTANCE,"target_phase":"ready","expected_generation":6,"timeout_seconds":120}))?;
     ensure!(
         status["reached"] == false && status["timed_out"] == false,
         "missing image did not end the wait with a blocker: {status}"

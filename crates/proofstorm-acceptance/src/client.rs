@@ -123,8 +123,7 @@ impl McpClient {
     pub fn call(&mut self, tool: &str, mut arguments: Value) -> Result<Value> {
         // Gate convenience: follow the same status -> close -> wait token contract as agents.
         // Raw envelope helpers intentionally do not fill fields, for contract refusal tests.
-        if (tool == "proofstorm_lab_close"
-            || (tool == "proofstorm_lab_wait" && arguments["target_phase"] == "closed"))
+        if (tool == "lab_close" || (tool == "lab_wait" && arguments["target_phase"] == "closed"))
             && arguments.get("expected_instance_key").is_none()
         {
             let id = arguments["instance_id"]
@@ -132,7 +131,7 @@ impl McpClient {
                 .context("instance_id required")?
                 .to_owned();
             if !self.incarnations.contains_key(&id) {
-                self.call("proofstorm_lab_status", json!({"instance_id":id}))?;
+                self.call("lab_status", json!({"instance_id":id}))?;
             }
             arguments["expected_instance_key"] = json!(
                 self.incarnations
@@ -140,7 +139,7 @@ impl McpClient {
                     .context("lab status did not return instance_key")?
             );
         }
-        if tool == "proofstorm_lab_materialize" && arguments.get("plan_id").is_none() {
+        if tool == "lab_materialize" && arguments.get("plan_id").is_none() {
             let revision = arguments["revision_digest"]
                 .as_str()
                 .context("revision_digest required")?;
@@ -150,7 +149,7 @@ impl McpClient {
                     .context("publish the plan before materializing")?
             );
         }
-        let published_draft = (tool == "proofstorm_lab_publish")
+        let published_draft = (tool == "lab_publish")
             .then(|| arguments["draft_id"].as_str().map(str::to_owned))
             .flatten();
         let result = self.request("tools/call", tool_params(tool, arguments))?;

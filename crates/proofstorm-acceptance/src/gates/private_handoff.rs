@@ -76,7 +76,7 @@ fn delegate(
     receive: &Value,
 ) -> Result<()> {
     let value = client.call(
-        "proofstorm_private_access_issue",
+        "private_access_issue",
         json!({"instance_id":INSTANCE,"recipient_principal_id":principal,
         "recipient_grant_id":session,"component":wallet,"mint":"mint","reference":reference,
         "receive":receive,"idempotency_key":session}),
@@ -199,7 +199,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             &id("parent-release-denied"),
             "validation_failed",
-            "proofstorm_session_finish",
+            "session_finish",
             json!({"session_id":PARENT,"idempotency_key":id("parent-release-denied")}),
         )?;
         refused(
@@ -207,7 +207,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             &id("sender-balance-denied"),
             "access_denied",
-            "proofstorm_wallet_balance",
+            "wallet_balance",
             scoped(
                 session,
                 &id("sender-balance-denied"),
@@ -219,7 +219,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             &id("unbound-exec-denied"),
             "access_denied",
-            "proofstorm_component_exec_live",
+            "component_exec_live",
             scoped(
                 session,
                 &id("unbound-exec-denied"),
@@ -244,7 +244,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             &id("command-denied"),
             "access_denied",
-            "proofstorm_component_exec_live",
+            "component_exec_live",
             scoped(
                 session,
                 &id("command-denied"),
@@ -253,17 +253,14 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             "private_payload":{"kind":"consume","reference":reference,"input":input}}),
             ),
         )?;
-        let read = recipient.call(
-            "proofstorm_private_access_read",
-            json!({"grant_id":session}),
-        )?;
+        let read = recipient.call("private_access_read", json!({"grant_id":session}))?;
         save(directory, &id("recipient-scope"), &read)?;
         let delivered = child_operation(
             recipient,
             directory,
             session,
             &id("deliver"),
-            "proofstorm_private_transfer",
+            "private_transfer",
             json!({"transfer":{"transferMethod":"deliver","component":destination,"reference":reference}}),
         )?;
         if delivered["transfer"]["delivered"] != true {
@@ -274,7 +271,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             session,
             &id("receive"),
-            "proofstorm_component_exec_live",
+            "component_exec_live",
             json!({"component":destination,"argv":receive,"timeout_seconds":60,"output":{"mode":"private"},
             "private_payload":{"kind":"consume","reference":reference,"input":input}}),
         )?;
@@ -293,23 +290,20 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             session,
             &id("balance"),
-            "proofstorm_wallet_balance",
+            "wallet_balance",
             json!({"wallet":destination,"mint":"mint"}),
         )?;
         if balance["balance_sat"] != expected {
             bail!("delegated {amount} sat receipt did not reach expected balance");
         }
-        let released = parent.call(
-            "proofstorm_private_access_revoke",
-            json!({"grant_id":session}),
-        )?;
+        let released = parent.call("private_access_revoke", json!({"grant_id":session}))?;
         save(directory, &id("revoke"), &released)?;
         refused(
             recipient,
             directory,
             &id("revoked-balance-denied"),
             "access_denied",
-            "proofstorm_wallet_balance",
+            "wallet_balance",
             scoped(
                 session,
                 &id("revoked-balance-denied"),
@@ -335,14 +329,14 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
     let final_cdk = operation(
         parent,
         directory,
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         "handoff-cdk-final",
         json!({"wallet":"wallet-b","mint":"mint"}),
     )?;
     let final_coco = operation(
         parent,
         directory,
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         "handoff-coco-final",
         json!({"wallet":"wallet-a","mint":"mint"}),
     )?;
@@ -449,7 +443,7 @@ fn revoked_before_receive(
         directory,
         "handoff-revoked",
         "handoff-after-restart",
-        "proofstorm_private_transfer",
+        "private_transfer",
         json!({"transfer":{"transferMethod":"status","component":"wallet-a","reference":reference}}),
     )?;
     if restored["transfer"]["sha256"] != captured["transfer"]["sha256"]
@@ -458,7 +452,7 @@ fn revoked_before_receive(
         bail!("recipient custody did not survive controller replacement");
     }
     parent.call(
-        "proofstorm_private_access_revoke",
+        "private_access_revoke",
         json!({"grant_id":"handoff-revoked"}),
     )?;
     refused(
@@ -466,7 +460,7 @@ fn revoked_before_receive(
         directory,
         "handoff-revoked-deliver",
         "access_denied",
-        "proofstorm_private_transfer",
+        "private_transfer",
         scoped(
             "handoff-revoked",
             "handoff-revoked-deliver",

@@ -17,7 +17,7 @@ Give the agent this request:
 > CDK mint linked to LND, and a Nutshell wallet. Include `component.exec_live` in the
 > lab policy. Omit experiment_id and session_id for ordinary native commands;
 > Proofstorm supplies attribution automatically. Use
-> `proofstorm_component_exec_live` to run `bitcoin-cli --help`, then use the native
+> `pst_component_exec_live` to run `bitcoin-cli --help`, then use the native
 > Bitcoin CLI with the lab-provided RPC environment to call
 > `getblockchaininfo` on each Bitcoin node. Prove explicit multi-node selection
 > by executing a command in each selected live Bitcoin component. Run
@@ -26,16 +26,16 @@ Give the agent this request:
 > artifact and report its exit code and a concise output summary. Also prove
 > the exec workload has no Kubernetes service-account token at
 > `/var/run/secrets/kubernetes.io/serviceaccount/token`; treat the expected
-> missing file as experiment data. Use `proofstorm_lab_wait` for readiness and
+> missing file as experiment data. Use `pst_lab_wait` for readiness and
 > teardown, and use the paged component-status tool only when exact component
-> conditions are needed. Use `proofstorm_operation_wait` for every submitted
+> conditions are needed. Use `pst_operation_wait` for every submitted
 > command; do not tightly poll status tools. Do not print mnemonics, macaroons, proofs, or
 > private keys. Export evidence before closing
 > the lab, since verified deletion purges its local history. Read
-> the canonical journal through `proofstorm_action_list` and confirm its
+> the canonical journal through `pst_action_list` and confirm its
 > object-wrapped `actions` page. Reuse an idempotency key only for an identical
-> retry. Get expected_instance_key from lab_status, then pass it to lab_close
-> and lab_wait with target_phase=closed. Report the exported evidence digest
+> retry. Get expected_instance_key from pst_lab_status, then pass it to pst_lab_close
+> and pst_lab_wait with target_phase=closed. Report the exported evidence digest
 > and verified teardown receipt.
 
 Passing evidence:

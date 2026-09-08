@@ -51,16 +51,16 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
     assert_eq!(
         names,
         vec![
-            "proofstorm_catalog_config_schema_read",
-            "proofstorm_catalog_entry_read",
-            "proofstorm_catalog_list",
+            "catalog_config_schema_read",
+            "catalog_entry_read",
+            "catalog_list",
         ]
     );
 
     assert_resource_contract(&mut client);
 
     let catalog = client
-        .call_response("proofstorm_catalog_list", json!({}))
+        .call_response("catalog_list", json!({}))
         .expect("list catalog");
     let structured = catalog
         .pointer("/result/structuredContent")
@@ -115,17 +115,10 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         .iter()
         .map(|tool| expect::string(tool, "/name").expect("tool name"))
         .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        vec![
-            "proofstorm_lab_diff",
-            "proofstorm_lab_read",
-            "proofstorm_workspace_read"
-        ]
-    );
+    assert_eq!(names, vec!["lab_diff", "lab_read", "workspace_read"]);
 
     let refused = client
-        .call_error("proofstorm_lab_create", json!({}))
+        .call_error("lab_create", json!({}))
         .expect("lab create must be refused");
     expect::equals(&refused, "/message", &Value::from("tool not found")).expect("refusal message");
 }
@@ -156,7 +149,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "proofstorm_private_transfer")
+        .find(|tool| tool["name"] == "private_transfer")
         .unwrap();
     assert_private_transfer_schema(tool);
     let request = |transfer| {
@@ -165,7 +158,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
     };
     for (transfer, field) in invalid_private_transfer_requests() {
         let response = client
-            .call_response("proofstorm_private_transfer", request(transfer))
+            .call_response("private_transfer", request(transfer))
             .unwrap();
         // rmcp returns parameter decoding failures as a textual tool error.
         assert_eq!(response["result"]["isError"], true, "{response}");
@@ -178,7 +171,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
         );
     }
     for size in [0, 1_048_577] {
-        let error = client.call_error("proofstorm_private_transfer", request(json!({
+        let error = client.call_error("private_transfer", request(json!({
             "transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":size
         }))).unwrap();
         assert!(
@@ -188,7 +181,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
     }
     // A complete synthetic request passes decoding and static validation, then
     // reaches the expected missing-instance boundary without a live cluster.
-    let error = client.call_error("proofstorm_private_transfer", request(json!({
+    let error = client.call_error("private_transfer", request(json!({
         "transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536
     }))).unwrap();
     assert_eq!(error["data"]["code"], "not_found", "{error}");
@@ -309,22 +302,22 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .collect::<Vec<_>>();
     assert_eq!(names.len(), 15);
     for name in [
-        "proofstorm_session_list",
-        "proofstorm_lab_up",
-        "proofstorm_lab_inspect",
-        "proofstorm_lab_read",
-        "proofstorm_environment_read",
-        "proofstorm_lab_exec",
-        "proofstorm_lab_sync",
-        "proofstorm_lab_finish",
+        "session_list",
+        "lab_up",
+        "lab_inspect",
+        "lab_read",
+        "environment_read",
+        "lab_exec",
+        "lab_sync",
+        "lab_finish",
     ] {
         assert!(names.contains(&name));
     }
     for name in [
-        "proofstorm_experiment_create",
-        "proofstorm_session_start",
-        "proofstorm_lab_recipe_bootstrap",
-        "proofstorm_wallet_pay",
+        "experiment_create",
+        "session_start",
+        "lab_recipe_bootstrap",
+        "wallet_pay",
     ] {
         assert!(!names.contains(&name));
     }
@@ -376,9 +369,9 @@ fn offline_mode_uses_existing_grants_without_replacing_them() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert!(names.contains(&"proofstorm_lab_read"));
-    assert!(!names.contains(&"proofstorm_lab_apply"));
-    assert!(!names.contains(&"proofstorm_component_exec_live"));
+    assert!(names.contains(&"lab_read"));
+    assert!(!names.contains(&"lab_apply"));
+    assert!(!names.contains(&"component_exec_live"));
     assert_eq!(
         store.capabilities("local-lab", "reader").unwrap(),
         [proofstorm_core::Capability::LabRead].into()

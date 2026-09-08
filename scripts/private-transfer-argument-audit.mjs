@@ -25,7 +25,7 @@ function snapshot(args) {
 export default async function argumentAudit() {
   return {
     'tool.execute.before': async (input, output) => {
-      if (!input.tool.endsWith('proofstorm_private_transfer')) return;
+      if (!input.tool.endsWith('private_transfer')) return;
       const file = process.env.PROOFSTORM_ARGUMENT_AUDIT;
       if (!file) return;
       appendFileSync(file, JSON.stringify({ boundary: 'opencode_tool_execute_before',

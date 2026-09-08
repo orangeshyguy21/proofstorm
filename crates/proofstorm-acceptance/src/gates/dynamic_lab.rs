@@ -30,14 +30,14 @@ fn plan(
     connections: &[Value],
     target: &Value,
 ) -> Result<Value> {
-    client.call("proofstorm_lab_plan",json!({"plan_id":id,"components":components,"connections":connections,"runtime_requirements":[],"update":target,"idempotency_key":id}))
+    client.call("lab_plan",json!({"plan_id":id,"components":components,"connections":connections,"runtime_requirements":[],"update":target,"idempotency_key":id}))
 }
 fn apply(client: &mut McpClient, plan: &Value, key: &str) -> Result<Value> {
-    client.call("proofstorm_lab_apply",json!({"plan_id":plan["plan_id"],"expected_plan_digest":plan["plan_digest"],"instance_id":INSTANCE,"idempotency_key":key}))
+    client.call("lab_apply",json!({"plan_id":plan["plan_id"],"expected_plan_digest":plan["plan_digest"],"instance_id":INSTANCE,"idempotency_key":key}))
 }
 fn ready(client: &mut McpClient, generation: u64) -> Result<Value> {
     println!("Waiting for configuration {generation}");
-    let value=client.call("proofstorm_lab_wait",json!({"instance_id":INSTANCE,"target_phase":"ready","expected_generation":generation,"timeout_seconds":120}))?;
+    let value=client.call("lab_wait",json!({"instance_id":INSTANCE,"target_phase":"ready","expected_generation":generation,"timeout_seconds":120}))?;
     ensure!(value["reached"] == true, "lab did not converge: {value}");
     println!("Configuration {generation} ready");
     Ok(value)
@@ -56,7 +56,7 @@ fn operation(client: &mut McpClient, tool: &str, id: &str, mut fields: Value) ->
 fn balance(client: &mut McpClient, id: &str) -> Result<i64> {
     let result = operation(
         client,
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         id,
         json!({"wallet":"wallet","mint":"mint"}),
     )?;
@@ -122,28 +122,28 @@ fn exercise(
     directory: &std::path::Path,
 ) -> Result<()> {
     ready(client, 1)?;
-    let status = client.call("proofstorm_lab_status", json!({"instance_id":INSTANCE}))?;
+    let status = client.call("lab_status", json!({"instance_id":INSTANCE}))?;
     let namespace = status["instance_namespace"].as_str().unwrap();
     context.kubectl.apply_stdin(&serde_json::to_string(&json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"external-app-state","namespace":namespace,"labels":{"proofstorm.dev/instance":namespace.trim_start_matches("proofstorm-"),"app.kubernetes.io/managed-by":"proofstormd","proofstorm.dev/component":"extra-lnd"}},"data":{"sentinel":"keep-me"}}))?)?;
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"instance_id":INSTANCE,"experiment_id":RUN,"idempotency_key":"run"}),
     )?;
     operation(
         client,
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         "bootstrap",
         json!({"chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd","funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000}),
     )?;
     operation(
         client,
-        "proofstorm_wallet_initialize",
+        "wallet_initialize",
         "wallet-init",
         json!({"wallet":"wallet","mint":"mint"}),
     )?;
     operation(
         client,
-        "proofstorm_wallet_fund",
+        "wallet_fund",
         "wallet-fund",
         json!({"wallet":"wallet","mint":"mint","payer_lightning":"payer-lnd","amount_sat":1000}),
     )?;
@@ -316,7 +316,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(|e|format!("{e:#}"))}),
         )?,
     )?;
-    client.call("proofstorm_lab_close", json!({"instance_id":INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
     let closed = lab::wait_closed(&mut client, INSTANCE)?;
     ensure!(
         closed["teardown_receipt"]["verified_absent"] == true,

@@ -20,7 +20,7 @@ fn request(id: &str, command: Value) -> Value {
 
 fn terminal(client: &mut McpClient, root: &std::path::Path, id: &str) -> Result<Value> {
     let result = client.call(
-        "proofstorm_operation_wait",
+        "operation_wait",
         json!({"operation_id":id,"timeout_seconds":120}),
     )?;
     fs::write(
@@ -46,7 +46,7 @@ fn execute(
     id: &str,
     command: Value,
 ) -> Result<Value> {
-    client.call("proofstorm_component_exec_live", request(id, command))?;
+    client.call("component_exec_live", request(id, command))?;
     terminal(client, root, id)
 }
 
@@ -85,20 +85,20 @@ pub fn run(context: &GateContext) -> Result<()> {
         ],"links":[{"id":"chain-link","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}],
         "policy":{"allow":["component.exec_live"],"limits":{"max_components":4,"max_links":4,"max_config_bytes":16384}}});
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id":"reliable-exec","lab":document,"idempotency_key":"create"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id":"reliable-exec","expected_version":1,"idempotency_key":"publish"}),
     )?;
-    client.call("proofstorm_lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"apply"}))?;
+    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"apply"}))?;
     let result = (|| -> Result<()> {
         let ready = lab::wait_ready(&mut client, INSTANCE)?;
         let namespace = expect::string(&ready, "/instance_namespace")?;
-        client.call("proofstorm_experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
+        client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
-            "proofstorm_session_start",
+            "session_start",
             json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
         )?;
         for (id, component, argv) in [
@@ -182,7 +182,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             bail!("deadline missing: {timeout}");
         }
         client.call(
-            "proofstorm_component_exec_live",
+            "component_exec_live",
             request(
                 "cancel",
                 json!({"argv":["sh","-c","printf x > /tmp/reliable-cancel-started; exec sleep 120"],"timeout_seconds":120}),
@@ -190,7 +190,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?;
         wait_for_marker(context, namespace, "/tmp/reliable-cancel-started")?;
         client.call(
-            "proofstorm_action_cancel",
+            "action_cancel",
             json!({"operation_id":"cancel","idempotency_key":"cancel-owned"}),
         )?;
         let cancelled = terminal(&mut client, &root, "cancel")?;
@@ -201,8 +201,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "once",
             json!({"script":"printf x >> /tmp/reliable-once; sleep 20", "timeout_seconds":30}),
         );
-        let first = client.call("proofstorm_component_exec_live", once.clone())?;
-        let replay = client.call("proofstorm_component_exec_live", once)?;
+        let first = client.call("component_exec_live", once.clone())?;
+        let replay = client.call("component_exec_live", once)?;
         if first["resource_name"] != replay["resource_name"] {
             bail!("replay identity changed");
         }
@@ -221,14 +221,14 @@ pub fn run(context: &GateContext) -> Result<()> {
             bail!("native command replayed: {count}");
         }
         client.call(
-            "proofstorm_session_finish",
+            "session_finish",
             json!({"session_id":LEASE,"idempotency_key":"release"}),
         )?;
         client.call(
-            "proofstorm_experiment_close",
+            "experiment_close",
             json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
         )?;
-        let evidence=client.call("proofstorm_artifact_export",json!({"experiment_id":EXPERIMENT,"include_content":true,"artifact_operation_ids":["private","projection","format-failure","native-exit","deadline","cancel","once"]}))?;
+        let evidence=client.call("artifact_export",json!({"experiment_id":EXPERIMENT,"include_content":true,"artifact_operation_ids":["private","projection","format-failure","native-exit","deadline","cancel","once"]}))?;
         if evidence.to_string().contains(canary) {
             bail!("evidence export disclosed private output");
         }
@@ -239,14 +239,14 @@ pub fn run(context: &GateContext) -> Result<()> {
         Ok(())
     })();
     let _ = client.call(
-        "proofstorm_session_finish",
+        "session_finish",
         json!({"session_id":LEASE,"idempotency_key":"release"}),
     );
     let _ = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
     );
-    client.call("proofstorm_lab_close", json!({"instance_id":INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
     let closed = lab::wait_closed(&mut client, INSTANCE)?;
     fs::write(
         root.join("closed.json"),

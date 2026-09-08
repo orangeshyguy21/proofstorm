@@ -47,7 +47,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("cdk-postgres-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     let catalog = client.call(
-        "proofstorm_catalog_list",
+        "catalog_list",
         json!({"implementations": ["cdk", "postgresql"]}),
     )?;
     let items = expect::array(&catalog, "/items")?;
@@ -59,7 +59,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("PostgreSQL 17.11 is absent from the catalog: {postgres}");
     }
     let postgres_detail = client.call(
-        "proofstorm_catalog_entry_read",
+        "catalog_entry_read",
         json!({"id": "postgresql", "version": "17.11"}),
     )?;
 
@@ -68,7 +68,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         .find(|entry| entry.get("id").and_then(Value::as_str) == Some("cdk"))
         .ok_or_else(|| anyhow::anyhow!("CDK is absent from the catalog"))?;
     let cdk = client.call(
-        "proofstorm_catalog_entry_read",
+        "catalog_entry_read",
         json!({
             "id": "cdk",
             "version": expect::string(cdk_summary, "/version")?
@@ -85,11 +85,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-cdk-postgres"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cdk-postgres", "include_revision": true}),
     )?;
 
@@ -102,7 +102,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cdk-postgres"}),
     )?;
     let ready = lab::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
@@ -247,7 +247,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     lab::wait_phase(&mut client, INSTANCE, "ready", 60, Duration::from_secs(3))?;
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     lab::wait_phase(&mut client, INSTANCE, "closed", 60, Duration::from_secs(3))?;
 
     println!(

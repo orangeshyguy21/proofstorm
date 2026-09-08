@@ -123,20 +123,20 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session(&workspace, "experiment-agent", CAPABILITIES)?;
 
     let tools = client.request("tools/list", json!({}))?;
-    let advertised = expect::array(&tools, "/tools")?.iter().any(|tool| {
-        tool.get("name").and_then(Value::as_str) == Some("proofstorm_component_exec_live")
-    });
+    let advertised = expect::array(&tools, "/tools")?
+        .iter()
+        .any(|tool| tool.get("name").and_then(Value::as_str) == Some("component_exec_live"));
     if !advertised {
         bail!("component exec was not advertised for an authorized principal: {tools}");
     }
 
     let created = client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": draft, "lab": lab_document(), "idempotency_key": format!("create-{run_id}")}),
     )?;
-    let document = client.call("proofstorm_lab_read", json!({"draft_id": draft}))?;
+    let document = client.call("lab_read", json!({"draft_id": draft}))?;
     let validation = client.call(
-        "proofstorm_lab_validate",
+        "lab_validate",
         json!({"lab": document.get("lab").cloned().unwrap_or(Value::Null)}),
     )?;
     if !expect::boolean(&validation, "/valid")? {
@@ -144,7 +144,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({
             "draft_id": draft,
             "expected_version": expect::integer(&created, "/version")?,
@@ -168,25 +168,25 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": instance, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": format!("materialize-{run_id}")}),
     )?;
     let waited = client.call(
-        "proofstorm_lab_wait",
+        "lab_wait",
         json!({"instance_id": instance, "target_phase": "ready", "timeout_seconds": 120}),
     )?;
     if !expect::boolean(&waited, "/reached")? || expect::boolean(&waited, "/timed_out")? {
         bail!("native exec lab did not become ready: {waited}");
     }
-    let status = client.call("proofstorm_lab_status", json!({"instance_id": instance}))?;
+    let status = client.call("lab_status", json!({"instance_id": instance}))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"experiment_id": experiment, "instance_id": instance, "idempotency_key": format!("create-experiment-{run_id}")}),
     )?;
     client.call(
-        "proofstorm_session_start",
+        "session_start",
         json!({"experiment_id": experiment, "session_id": session, "idempotency_key": format!("acquire-session-{run_id}")}),
     )?;
 
@@ -204,8 +204,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "timeout_seconds": 30,
             "idempotency_key": format!("{operation}-native-exec")
         });
-        let accepted = client.call("proofstorm_component_exec_live", request.clone())?;
-        let replayed = client.call("proofstorm_component_exec_live", request)?;
+        let accepted = client.call("component_exec_live", request.clone())?;
+        let replayed = client.call("component_exec_live", request)?;
         if expect::string(&replayed, "/resource_name")?
             != expect::string(&accepted, "/resource_name")?
             || expect::integer(&replayed, "/sequence")? != expect::integer(&accepted, "/sequence")?
@@ -214,7 +214,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
 
         let finished = client.call(
-            "proofstorm_operation_wait",
+            "operation_wait",
             json!({"operation_id": operation, "timeout_seconds": 120}),
         )?;
         if expect::boolean(&finished, "/timed_out")? || !expect::boolean(&finished, "/terminal")? {
@@ -272,7 +272,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // the pod state that explains the log.
     let logs_operation = format!("native-exec-logs-{run_id}");
     client.call(
-        "proofstorm_component_logs",
+        "component_logs",
         json!({
             "instance_id": instance,
             "experiment_id": experiment,
@@ -284,7 +284,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         }),
     )?;
     let logs = client.call(
-        "proofstorm_operation_wait",
+        "operation_wait",
         json!({"operation_id": logs_operation, "timeout_seconds": 60}),
     )?;
     if expect::boolean(&logs, "/timed_out")? || expect::string(&logs, "/phase")? != "succeeded" {
@@ -334,7 +334,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let journal_page = client.call(
-        "proofstorm_action_list",
+        "action_list",
         json!({"experiment_id": experiment, "after_sequence": 0, "limit": 10}),
     )?;
     let journal = expect::array(&journal_page, "/actions")?;
@@ -360,11 +360,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_session_finish",
+        "session_finish",
         json!({"session_id": session, "idempotency_key": format!("release-session-{run_id}")}),
     )?;
     let closed_experiment = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id": experiment, "idempotency_key": format!("close-experiment-{run_id}")}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
@@ -373,7 +373,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut operation_ids: Vec<&str> = records.iter().map(|(id, _, _, _)| id.as_str()).collect();
     operation_ids.push(logs_operation.as_str());
     let evidence = client.call(
-        "proofstorm_artifact_export",
+        "artifact_export",
         json!({
             "experiment_id": experiment,
             "include_oracle_artifacts": false,
@@ -388,9 +388,9 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("native exec evidence is incomplete: {evidence}");
     }
 
-    client.call("proofstorm_lab_close", json!({"instance_id": instance}))?;
+    client.call("lab_close", json!({"instance_id": instance}))?;
     let closed = client.call(
-        "proofstorm_lab_wait",
+        "lab_wait",
         json!({"instance_id": instance, "target_phase": "closed", "timeout_seconds": 120}),
     )?;
     if !expect::boolean(&closed, "/reached")? || expect::boolean(&closed, "/timed_out")? {

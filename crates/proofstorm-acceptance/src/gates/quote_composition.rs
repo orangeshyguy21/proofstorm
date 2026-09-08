@@ -114,31 +114,31 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session(&workspace, "quote-agent", CAPABILITIES)?;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": draft, "lab": lab_document(), "idempotency_key": format!("create-{run}")}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": draft, "expected_version": 1, "idempotency_key": format!("publish-{run}"), "include_revision": true}),
     )?;
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": instance, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": format!("materialize-{run}")}),
     )?;
     lab::wait_phase(&mut client, &instance, "ready", 200, Duration::from_secs(3))?;
-    let status = client.call("proofstorm_lab_status", json!({"instance_id": instance}))?;
+    let status = client.call("lab_status", json!({"instance_id": instance}))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_owned();
 
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"experiment_id": experiment, "instance_id": instance, "idempotency_key": format!("experiment-{run}")}),
     )?;
     client.call(
-        "proofstorm_session_start",
+        "session_start",
         json!({"experiment_id": experiment, "session_id": session, "idempotency_key": format!("session-{run}")}),
     )?;
     client.call(
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         scoped(
             &instance,
             &experiment,
@@ -158,7 +158,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         ("initialize-recipient", "recipient-wallet"),
     ] {
         client.call(
-            "proofstorm_wallet_initialize",
+            "wallet_initialize",
             scoped(&instance, &experiment, &session, operation, json!({
                 "wallet": wallet, "mint": "mint", "idempotency_key": format!("{operation}-{run}")
             })),
@@ -166,7 +166,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         lab::wait_operation(&mut client, operation, 120)?;
     }
     client.call(
-        "proofstorm_wallet_fund",
+        "wallet_fund",
         scoped(
             &instance,
             &experiment,
@@ -182,7 +182,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
     client.call(
-        "proofstorm_component_forensics",
+        "component_forensics",
         scoped(&instance, &experiment, &session, "compose-invoice", json!({
             "component": "recipient-wallet", "target_component": "mint", "script": compose_script,
             "timeout_seconds": 60, "idempotency_key": format!("compose-{run}")
@@ -202,9 +202,9 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": format!("compose-pay-{run}")
         }),
     );
-    let accepted_pay = client.call("proofstorm_wallet_pay", pay_request)?;
+    let accepted_pay = client.call("wallet_pay", pay_request)?;
     client.call_refused(
-        "proofstorm_wallet_pay",
+        "wallet_pay",
         scoped(
             &instance,
             &experiment,
@@ -240,7 +240,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let accepted_invoice = client.call(
-        "proofstorm_wallet_invoice",
+        "wallet_invoice",
         scoped(
             &instance,
             &experiment,
@@ -261,7 +261,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "python3 -c 'import glob,sqlite3; print(next(r[0] for p in glob.glob(\"/wallet/.cashu/recipient-wallet/*.sqlite3\") for r in [sqlite3.connect(p).execute(\"SELECT request FROM bolt11_mint_quotes WHERE quote = ?\", (\"{external_quote}\",)).fetchone()] if r))'"
     );
     client.call(
-        "proofstorm_component_forensics",
+        "component_forensics",
         scoped(
             &instance,
             &experiment,
@@ -282,7 +282,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "set -eu; attempt=0; until lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=payer-lnd:10009 getinfo >/dev/null 2>&1; do attempt=$((attempt+1)); test \"$attempt\" -lt 30; sleep 1; done; lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=payer-lnd:10009 payinvoice --force '{external_invoice}'"
     );
     client.call(
-        "proofstorm_component_forensics",
+        "component_forensics",
         scoped(
             &instance,
             &experiment,
@@ -300,7 +300,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let accepted_claim = client.call(
-        "proofstorm_wallet_quote_claim",
+        "wallet_quote_claim",
         scoped(
             &instance,
             &experiment,
@@ -319,15 +319,15 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let quote_status = client.call(
-        "proofstorm_wallet_quote_status",
+        "wallet_quote_status",
         json!({"instance_id": instance, "wallet": "recipient-wallet", "mint": "mint", "direction": "receive", "quote_id": external_quote}),
     )?;
     let quote_list = client.call(
-        "proofstorm_wallet_quote_list",
+        "wallet_quote_list",
         json!({"experiment_id": experiment, "limit": 20}),
     )?;
     let journal = client.call(
-        "proofstorm_action_list",
+        "action_list",
         json!({"experiment_id": experiment, "after_sequence": 0, "limit": 100}),
     )?;
     for (value, label) in [
@@ -368,15 +368,15 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_session_finish",
+        "session_finish",
         json!({"session_id": session, "idempotency_key": format!("release-{run}")}),
     )?;
     client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id": experiment, "idempotency_key": format!("close-experiment-{run}")}),
     )?;
     let evidence = client.call(
-        "proofstorm_artifact_export",
+        "artifact_export",
         json!({
             "experiment_id": experiment, "include_oracle_artifacts": false, "include_content": true,
             "artifact_operation_ids": ["compose-pay", "external-invoice", "external-claim"]
@@ -399,7 +399,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "typed evidence outside component_forensics requests",
     )?;
 
-    client.call("proofstorm_lab_close", json!({"instance_id": instance}))?;
+    client.call("lab_close", json!({"instance_id": instance}))?;
     let closed = lab::wait_phase(
         &mut client,
         &instance,

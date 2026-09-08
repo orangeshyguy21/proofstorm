@@ -21,7 +21,7 @@ def emit(event):
  print(json.dumps(event),flush=True)
 if p.get('errors'):
  for i in range(2):
-  emit({'type':'tool_use','part':{'tool':'proofstorm_component_exec_live','state':{'status':'completed','input':{'operation_id':str(i),'argv':['unchanged']},'output':json.dumps({'isError':True})}}})
+  emit({'type':'tool_use','part':{'tool':'pst_component_exec_live','state':{'status':'completed','input':{'operation_id':str(i),'argv':['unchanged']},'output':json.dumps({'isError':True})}}})
 else:
  for i in range(p.get('steps',1)):
   emit({'type':'step_finish','part':{'tokens':{'total':p.get('tokens',100)},'cost':.01}})

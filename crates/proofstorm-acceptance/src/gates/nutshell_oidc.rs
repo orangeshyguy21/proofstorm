@@ -75,11 +75,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     let kubectl = &context.kubectl;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-nutshell-oidc"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-oidc", "include_revision": true}),
     )?;
     for (catalog_id, version, config_version) in [
@@ -96,7 +96,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-oidc"}),
     )?;
     let status = lab::wait_phase(&mut client, INSTANCE, "ready", 240, Duration::from_secs(3))?;
@@ -178,15 +178,15 @@ pub fn run(context: &GateContext) -> Result<()> {
     let database_digest = kubectl.digest(&database_args)?;
 
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-nutshell-oidc-experiment"}),
     )?;
     client.call(
-        "proofstorm_session_start",
+        "session_start",
         json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-nutshell-oidc-session"}),
     )?;
     client.call(
-        "proofstorm_authentication_conformance",
+        "authentication_conformance",
         json!({
             "instance_id": INSTANCE,
             "experiment_id": EXPERIMENT,
@@ -207,7 +207,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     expect::equals(baseline, "/mint", &Value::from("mint"))?;
     expect::equals(baseline, "/identity_provider", &Value::from("identity"))?;
     if !expect::boolean(baseline, "/conformant")? {
-        client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+        client.call("lab_close", json!({"instance_id": INSTANCE}))?;
         lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC baseline reported a conformance finding: {baseline}");
     }
@@ -230,7 +230,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_authentication_protected_spend",
+        "authentication_protected_spend",
         json!({
             "instance_id": INSTANCE,
             "experiment_id": EXPERIMENT,
@@ -251,7 +251,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     if !expect::boolean(protected, "/conformant")?
         || !expect::boolean(protected, "/protected_request")?
     {
-        client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+        client.call("lab_close", json!({"instance_id": INSTANCE}))?;
         lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC protected spend reported a conformance finding: {protected}");
     }
@@ -259,7 +259,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     kubectl.rollout_restart(&namespace, "deployment/mint")?;
 
     client.call(
-        "proofstorm_authentication_replay",
+        "authentication_replay",
         json!({
             "instance_id": INSTANCE,
             "experiment_id": EXPERIMENT,
@@ -279,14 +279,14 @@ pub fn run(context: &GateContext) -> Result<()> {
         &Value::from("proofstorm/authentication-replay/v1"),
     )?;
     if !expect::boolean(replay, "/conformant")? || !expect::boolean(replay, "/protected_request")? {
-        client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+        client.call("lab_close", json!({"instance_id": INSTANCE}))?;
         lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC replay reported a conformance finding: {replay}");
     }
 
     lab::wait_phase(&mut client, INSTANCE, "ready", 100, Duration::from_secs(3))?;
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
 
     println!(

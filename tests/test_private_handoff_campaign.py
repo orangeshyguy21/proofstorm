@@ -16,8 +16,8 @@ SPEC.loader.exec_module(campaign)
 class OfflineHandoffTests(unittest.TestCase):
     def test_separate_identities_share_one_canonical_authority_with_bounded_grants(self):
         contract, configs = campaign.proposal(ROOT/'dev'/'..'/'dev'/'proposal', 'handoff-offline')
-        source = configs['source']['mcp']['proofstorm']
-        recipient = configs['recipient']['mcp']['proofstorm']
+        source = configs['source']['mcp']['pst']
+        recipient = configs['recipient']['mcp']['pst']
         a, b = source['environment'], recipient['environment']
         self.assertEqual(a['PROOFSTORM_DB'], b['PROOFSTORM_DB'])
         self.assertEqual(a['PROOFSTORM_DB'], str((ROOT/'dev/proposal/authority.sqlite3').resolve()))
@@ -26,7 +26,7 @@ class OfflineHandoffTests(unittest.TestCase):
         self.assertEqual(set(b['PROOFSTORM_CAPABILITIES'].split(',')), set(campaign.RECIPIENT_CAPABILITIES))
         self.assertNotIn('lease.acquire', b['PROOFSTORM_CAPABILITIES'])
         for config in configs.values():
-            self.assertFalse(config['mcp']['proofstorm']['enabled'])
+            self.assertFalse(config['mcp']['pst']['enabled'])
             self.assertTrue(all(v == 'deny' for v in config['permission'].values()))
         self.assertIsNone(contract['required_immutable_pins'])
 

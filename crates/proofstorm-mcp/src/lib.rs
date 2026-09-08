@@ -2273,117 +2273,117 @@ impl ProofstormToolset {
         match self {
             Self::Developer => matches!(
                 tool,
-                "proofstorm_catalog_list"
-                    | "proofstorm_catalog_entry_read"
-                    | "proofstorm_catalog_config_schema_read"
-                    | "proofstorm_lab_read"
-                    | "proofstorm_lab_up"
-                    | "proofstorm_lab_inspect"
-                    | "proofstorm_environment_read"
-                    | "proofstorm_session_list"
-                    | "proofstorm_lab_exec"
-                    | "proofstorm_lab_finish"
-                    | "proofstorm_lab_sync"
-                    | "proofstorm_lab_component_status_list"
-                    | "proofstorm_operation_status"
-                    | "proofstorm_operation_wait_many"
-                    | "proofstorm_action_cancel"
+                "catalog_list"
+                    | "catalog_entry_read"
+                    | "catalog_config_schema_read"
+                    | "lab_read"
+                    | "lab_up"
+                    | "lab_inspect"
+                    | "environment_read"
+                    | "session_list"
+                    | "lab_exec"
+                    | "lab_finish"
+                    | "lab_sync"
+                    | "lab_component_status_list"
+                    | "operation_status"
+                    | "operation_wait_many"
+                    | "action_cancel"
             ),
             Self::All => true,
             Self::Experiment => experiment_tool(tool),
             Self::Native => {
-                (experiment_tool(tool) || tool == "proofstorm_network_capabilities")
+                (experiment_tool(tool) || tool == "network_capabilities")
                     && !matches!(
                         tool,
-                        "proofstorm_wallet_initialize"
-                            | "proofstorm_liquidity_bootstrap"
-                            | "proofstorm_peer_connect"
-                            | "proofstorm_channel_open"
-                            | "proofstorm_wallet_fund"
-                            | "proofstorm_wallet_invoice"
-                            | "proofstorm_wallet_pay"
-                            | "proofstorm_wallet_melt_quote_refresh"
-                            | "proofstorm_channel_policy_set"
-                            | "proofstorm_node_restart"
-                            | "proofstorm_authentication_conformance"
-                            | "proofstorm_authentication_protected_spend"
-                            | "proofstorm_authentication_replay"
-                            | "proofstorm_conservation_oracle"
+                        "wallet_initialize"
+                            | "liquidity_bootstrap"
+                            | "peer_connect"
+                            | "channel_open"
+                            | "wallet_fund"
+                            | "wallet_invoice"
+                            | "wallet_pay"
+                            | "wallet_melt_quote_refresh"
+                            | "channel_policy_set"
+                            | "node_restart"
+                            | "authentication_conformance"
+                            | "authentication_protected_spend"
+                            | "authentication_replay"
+                            | "conservation_oracle"
                     )
             }
             Self::Design => matches!(
                 tool,
-                "proofstorm_workspace_read"
-                    | "proofstorm_catalog_list"
-                    | "proofstorm_catalog_entry_read"
-                    | "proofstorm_catalog_config_schema_read"
-                    | "proofstorm_candidate_build"
-                    | "proofstorm_candidate_wait"
-                    | "proofstorm_candidate_list"
-                    | "proofstorm_candidate_cancel"
-                    | "proofstorm_network_capabilities"
-                    | "proofstorm_lab_create"
-                    | "proofstorm_lab_read"
-                    | "proofstorm_lab_edit"
-                    | "proofstorm_component_add"
-                    | "proofstorm_component_update"
-                    | "proofstorm_component_remove"
-                    | "proofstorm_link_add"
-                    | "proofstorm_link_remove"
-                    | "proofstorm_lab_clone"
-                    | "proofstorm_lab_validate"
-                    | "proofstorm_lab_diff"
-                    | "proofstorm_lab_publish"
+                "workspace_read"
+                    | "catalog_list"
+                    | "catalog_entry_read"
+                    | "catalog_config_schema_read"
+                    | "candidate_build"
+                    | "candidate_wait"
+                    | "candidate_list"
+                    | "candidate_cancel"
+                    | "network_capabilities"
+                    | "lab_create"
+                    | "lab_read"
+                    | "lab_edit"
+                    | "component_add"
+                    | "component_update"
+                    | "component_remove"
+                    | "link_add"
+                    | "link_remove"
+                    | "lab_clone"
+                    | "lab_validate"
+                    | "lab_diff"
+                    | "lab_publish"
             ),
             Self::Runtime => !matches!(
                 tool,
-                "proofstorm_lab_up"
-                    | "proofstorm_lab_inspect"
-                    | "proofstorm_environment_read"
-                    | "proofstorm_lab_exec"
-                    | "proofstorm_lab_sync"
-                    | "proofstorm_lab_finish"
-                    | "proofstorm_lab_plan"
-                    | "proofstorm_candidate_build"
-                    | "proofstorm_lab_apply"
-                    | "proofstorm_lab_create"
-                    | "proofstorm_lab_edit"
-                    | "proofstorm_component_add"
-                    | "proofstorm_component_update"
-                    | "proofstorm_component_remove"
-                    | "proofstorm_link_add"
-                    | "proofstorm_link_remove"
-                    | "proofstorm_lab_clone"
-                    | "proofstorm_lab_validate"
-                    | "proofstorm_lab_diff"
-                    | "proofstorm_lab_publish"
-                    | "proofstorm_artifact_export"
-                    | "proofstorm_evidence_section_read"
+                "lab_up"
+                    | "lab_inspect"
+                    | "environment_read"
+                    | "lab_exec"
+                    | "lab_sync"
+                    | "lab_finish"
+                    | "lab_plan"
+                    | "candidate_build"
+                    | "lab_apply"
+                    | "lab_create"
+                    | "lab_edit"
+                    | "component_add"
+                    | "component_update"
+                    | "component_remove"
+                    | "link_add"
+                    | "link_remove"
+                    | "lab_clone"
+                    | "lab_validate"
+                    | "lab_diff"
+                    | "lab_publish"
+                    | "artifact_export"
+                    | "evidence_section_read"
             ),
             Self::Evidence => matches!(
                 tool,
-                "proofstorm_workspace_read"
-                    | "proofstorm_catalog_list"
-                    | "proofstorm_catalog_entry_read"
-                    | "proofstorm_catalog_config_schema_read"
-                    | "proofstorm_candidate_wait"
-                    | "proofstorm_candidate_list"
-                    | "proofstorm_lab_read"
-                    | "proofstorm_lab_status"
-                    | "proofstorm_lab_component_status_list"
-                    | "proofstorm_lab_inventory_list"
-                    | "proofstorm_lab_wait"
-                    | "proofstorm_experiment_read"
-                    | "proofstorm_session_read"
-                    | "proofstorm_operation_status"
-                    | "proofstorm_operation_wait"
-                    | "proofstorm_operation_wait_many"
-                    | "proofstorm_action_list"
-                    | "proofstorm_artifact_export"
-                    | "proofstorm_evidence_section_read"
-                    | "proofstorm_action_status"
-                    | "proofstorm_wallet_quote_status"
-                    | "proofstorm_wallet_quote_list"
+                "workspace_read"
+                    | "catalog_list"
+                    | "catalog_entry_read"
+                    | "catalog_config_schema_read"
+                    | "candidate_wait"
+                    | "candidate_list"
+                    | "lab_read"
+                    | "lab_status"
+                    | "lab_component_status_list"
+                    | "lab_inventory_list"
+                    | "lab_wait"
+                    | "experiment_read"
+                    | "session_read"
+                    | "operation_status"
+                    | "operation_wait"
+                    | "operation_wait_many"
+                    | "action_list"
+                    | "artifact_export"
+                    | "evidence_section_read"
+                    | "action_status"
+                    | "wallet_quote_status"
+                    | "wallet_quote_list"
             ),
         }
     }
@@ -2394,59 +2394,59 @@ fn experiment_tool(tool: &str) -> bool {
         tool,
         // Stable generic one-session control plane. Catalog and scenario
         // growth must not require new MCP tools.
-        "proofstorm_workspace_read"
-            | "proofstorm_catalog_list"
-            | "proofstorm_catalog_entry_read"
-            | "proofstorm_candidate_build"
-            | "proofstorm_candidate_wait"
-            | "proofstorm_candidate_list"
-            | "proofstorm_candidate_cancel"
-            | "proofstorm_lab_read"
-            | "proofstorm_lab_plan"
-            | "proofstorm_lab_apply"
-            | "proofstorm_lab_status"
-            | "proofstorm_lab_component_status_list"
-            | "proofstorm_lab_wait"
-            | "proofstorm_lab_close"
-            | "proofstorm_experiment_create"
-            | "proofstorm_experiment_read"
-            | "proofstorm_experiment_close"
-            | "proofstorm_session_start"
-            | "proofstorm_session_list"
-            | "proofstorm_private_access_read"
-            | "proofstorm_private_access_revoke"
-            | "proofstorm_private_access_issue"
-            | "proofstorm_session_read"
-            | "proofstorm_session_finish"
-            | "proofstorm_node_restart"
-            | "proofstorm_component_restart"
-            | "proofstorm_component_exec_live"
-            | "proofstorm_private_transfer"
-            | "proofstorm_component_forensics"
-            | "proofstorm_component_logs"
-            | "proofstorm_liquidity_bootstrap"
-            | "proofstorm_peer_connect"
-            | "proofstorm_channel_open"
-            | "proofstorm_channel_policy_set"
-            | "proofstorm_network_partition"
-            | "proofstorm_network_heal"
-            | "proofstorm_wallet_initialize"
-            | "proofstorm_wallet_balance"
-            | "proofstorm_wallet_fund"
-            | "proofstorm_wallet_invoice"
-            | "proofstorm_wallet_melt_quote_refresh"
-            | "proofstorm_wallet_pay"
-            | "proofstorm_conservation_oracle"
-            | "proofstorm_reachability_oracle"
-            | "proofstorm_authentication_conformance"
-            | "proofstorm_authentication_protected_spend"
-            | "proofstorm_authentication_replay"
-            | "proofstorm_operation_status"
-            | "proofstorm_operation_wait_many"
-            | "proofstorm_action_cancel"
-            | "proofstorm_action_list"
-            | "proofstorm_artifact_export"
-            | "proofstorm_evidence_section_read"
+        "workspace_read"
+            | "catalog_list"
+            | "catalog_entry_read"
+            | "candidate_build"
+            | "candidate_wait"
+            | "candidate_list"
+            | "candidate_cancel"
+            | "lab_read"
+            | "lab_plan"
+            | "lab_apply"
+            | "lab_status"
+            | "lab_component_status_list"
+            | "lab_wait"
+            | "lab_close"
+            | "experiment_create"
+            | "experiment_read"
+            | "experiment_close"
+            | "session_start"
+            | "session_list"
+            | "private_access_read"
+            | "private_access_revoke"
+            | "private_access_issue"
+            | "session_read"
+            | "session_finish"
+            | "node_restart"
+            | "component_restart"
+            | "component_exec_live"
+            | "private_transfer"
+            | "component_forensics"
+            | "component_logs"
+            | "liquidity_bootstrap"
+            | "peer_connect"
+            | "channel_open"
+            | "channel_policy_set"
+            | "network_partition"
+            | "network_heal"
+            | "wallet_initialize"
+            | "wallet_balance"
+            | "wallet_fund"
+            | "wallet_invoice"
+            | "wallet_melt_quote_refresh"
+            | "wallet_pay"
+            | "conservation_oracle"
+            | "reachability_oracle"
+            | "authentication_conformance"
+            | "authentication_protected_spend"
+            | "authentication_replay"
+            | "operation_status"
+            | "operation_wait_many"
+            | "action_cancel"
+            | "action_list"
+            | "artifact_export"
+            | "evidence_section_read"
     )
 }
 
@@ -2514,7 +2514,7 @@ impl ProofstormMcp {
         // Whole-document replacement is retained in the store for non-agent
         // callers, but is intentionally absent from MCP. Stable-ID component
         // and link mutations are the safe agent editing contract.
-        tool_router.disable_route("proofstorm_lab_edit");
+        tool_router.disable_route("lab_edit");
         for (tool, required) in tool_capabilities() {
             if !required
                 .iter()
@@ -2568,12 +2568,12 @@ impl ProofstormMcp {
                 && !name.contains("candidate"))
                 || matches!(
                     name.as_str(),
-                    "proofstorm_lab_plan"
-                        | "proofstorm_experiment_read"
-                        | "proofstorm_session_read"
-                        | "proofstorm_session_list"
-                        | "proofstorm_action_list"
-                        | "proofstorm_lab_diff"
+                    "lab_plan"
+                        | "experiment_read"
+                        | "session_read"
+                        | "session_list"
+                        | "action_list"
+                        | "lab_diff"
                 );
             if !available {
                 self.tool_router.disable_route(name);
@@ -2830,6 +2830,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_up",
         description = "Start a named lab from its specification. Publication and materialization are resumable stages. A default run and its activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing lab applies a live edit and preserves unchanged components. Returns the same status shape as lab_inspect."
     )]
     async fn proofstorm_lab_up(
@@ -2844,6 +2845,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "environment_read",
         description = "Read the workspace environment: labs currently present in the selected cluster, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. Deleted and unmaterialized labs are excluded. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page labs, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one lab's sections. Same JSON contract as proofstorm environment and GET /v1/environment."
     )]
     async fn proofstorm_environment_read(
@@ -2863,6 +2865,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_inspect",
         description = "Read named lab runtime status, run, owner and cached activity. This read does not execute commands or synchronize receipts. Use lab_sync for fresh action results."
     )]
     async fn proofstorm_lab_inspect(
@@ -2877,6 +2880,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_exec",
         description = "Run one native argv command in a named lab without managing experiment or session IDs. Reuse request_id for an exact retry, and choose a new request_id for a new action. Output defaults to private. The returned operation can be waited or cancelled; command exit does not prove payment settlement. Returns the operation_status record shape."
     )]
     async fn proofstorm_lab_exec(
@@ -2903,6 +2907,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_sync",
         description = "Synchronize runtime receipts into durable activity for a named lab, without executing a new action. Then returns status and the first activity page. Unknown outcomes remain explicit. Returns the lab_inspect status shape."
     )]
     async fn proofstorm_lab_sync(
@@ -2918,6 +2923,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_finish",
         description = "Finish a named lab: revoke new actions, cancel/collect owned work, close the run and verify teardown. Lab-owned records are removed after verified teardown; export evidence first. A timeout leaves a closing lab; repeat this call to finish, without replaying commands. Returns the lab_inspect status shape."
     )]
     async fn proofstorm_lab_finish(
@@ -2938,7 +2944,10 @@ impl ProofstormMcp {
             .and_then(|view| developer_result(compact_developer_view(view)))
     }
 
-    #[tool(description = "Read the selected Proofstorm workspace")]
+    #[tool(
+        name = "workspace_read",
+        description = "Read the selected Proofstorm workspace"
+    )]
     fn proofstorm_workspace_read(&self) -> Result<Json<Workspace>, ErrorData> {
         self.authorize(Capability::LabRead)?;
         self.store
@@ -2948,6 +2957,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "catalog_list",
         description = "List compact installed component identities, exact versions, config versions, and valid controls. Read exact entry details only for components you select; read a config schema only for constraints on a non-default field"
     )]
     fn proofstorm_catalog_list(
@@ -2963,6 +2973,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "catalog_entry_read",
         description = "Read exact authoring metadata for one selected component version: compatibility, immutable image, controls, authorable and required config fields, and safe defaults. Read its config schema only for constraints on a non-default field"
     )]
     fn proofstorm_catalog_entry_read(
@@ -2983,6 +2994,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "catalog_config_schema_read",
         description = "Read the complete configuration JSON Schema or one RFC 6901 fragment for an exact installed component version"
     )]
     fn proofstorm_catalog_config_schema_read(
@@ -3000,6 +3012,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "candidate_build",
         description = "Build a durable candidate image from a public GitHub PR; then wait. On success, copy the returned catalog_entry fields verbatim into a lab_plan component"
     )]
     async fn proofstorm_candidate_build(
@@ -3119,7 +3132,10 @@ impl ProofstormMcp {
         Ok(Json(compact_candidate_build(&candidate, false)))
     }
 
-    #[tool(description = "Wait up to 120 seconds for a candidate build; repeat after timeout")]
+    #[tool(
+        name = "candidate_wait",
+        description = "Wait up to 120 seconds for a candidate build; repeat after timeout"
+    )]
     async fn proofstorm_candidate_wait(
         &self,
         Parameters(request): Parameters<CandidateWaitRequest>,
@@ -3145,7 +3161,10 @@ impl ProofstormMcp {
         }
     }
 
-    #[tool(description = "List the 20 most recent durable candidate builds for recovery")]
+    #[tool(
+        name = "candidate_list",
+        description = "List the 20 most recent durable candidate builds for recovery"
+    )]
     async fn proofstorm_candidate_list(&self) -> Result<Json<CandidateListResponse>, ErrorData> {
         self.authorize(Capability::CandidateRead)?;
         let candidates = self
@@ -3163,7 +3182,10 @@ impl ProofstormMcp {
         bounded_agent_response(CandidateListResponse { items }).map(Json)
     }
 
-    #[tool(description = "Cancel a pending or running durable candidate build")]
+    #[tool(
+        name = "candidate_cancel",
+        description = "Cancel a pending or running durable candidate build"
+    )]
     async fn proofstorm_candidate_cancel(
         &self,
         Parameters(request): Parameters<CandidateCancelRequest>,
@@ -3188,6 +3210,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "network_capabilities",
         description = "Discover the installed network-fault backend, features, directions, and bounds"
     )]
     fn proofstorm_network_capabilities(&self) -> Result<Json<NetworkFaultBackend>, ErrorData> {
@@ -3196,6 +3219,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_plan",
         description = "Plan a new lab or edit an existing lab with update={instance_id,expected_generation,delete_data}. Updates require complete desired topology; inspect the change summary. Unchanged components keep state and endpoints. Backend migrations are rejected. Plan from catalog IDs and backend-role connections. Declare advertised endpoint controls in runtime_requirements. Verify component config in the receipt before lab_apply. Changed plans need a new plan_id and idempotency_key; exact retries reuse both. Versions, kinds and backend bindings are inferred"
     )]
     fn proofstorm_lab_plan(
@@ -3279,13 +3303,14 @@ impl ProofstormMcp {
                     runtime_endpoints,
                     connections,
                     validation,
-                    next_tool: "proofstorm_lab_apply".into(),
+                    next_tool: "lab_apply".into(),
                 })
             })
             .map(Json)
     }
 
     #[tool(
+        name = "lab_apply",
         description = "Apply a reviewed update in place, preserving unchanged components and retained storage, or publish and materialize a new lab plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. These are separate resumable stages: replay the same request after interruption; both are idempotent. Then wait for ready"
     )]
     async fn proofstorm_lab_apply(
@@ -3369,7 +3394,7 @@ impl ProofstormMcp {
                         + plan.changes.restarted.len(),
                 )
                 .unwrap_or(u32::MAX),
-                next_tool: "proofstorm_lab_wait".into(),
+                next_tool: "lab_wait".into(),
                 reconciliation_error,
             }));
         }
@@ -3442,12 +3467,13 @@ impl ProofstormMcp {
             instance_id: status.instance.id,
             phase: status.phase,
             component_count,
-            next_tool: "proofstorm_lab_wait".into(),
+            next_tool: "lab_wait".into(),
             reconciliation_error: None,
         }))
     }
 
     #[tool(
+        name = "lab_create",
         description = "Create a publication-ready versioned lab draft and return a compact receipt. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Invalid catalog configuration is rejected before any draft is written"
     )]
     fn proofstorm_lab_create(
@@ -3468,7 +3494,7 @@ impl ProofstormMcp {
                 Some(serde_json::json!({
                     "code": "lab_validation_failed",
                     "validation": validation,
-                    "next_tool": "proofstorm_lab_validate"
+                    "next_tool": "lab_validate"
                 })),
             ));
         }
@@ -3485,7 +3511,8 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Create a validated lab draft from a server-owned recipe; no catalog lookup, manual topology JSON, or separate validation call is needed. nutshell_lnd_cln_routing_fees creates bitcoin-core, lnd-backend, lnd-router, cln-backend, mint-lnd, mint-cln, payer-lnd, recipient-lnd, payer-cln, and recipient-cln with exact preferred versions and typed backend bindings. Initialize all four wallets, fund only payer-lnd and payer-cln, and create invoices only on the opposite recipient so both directions can run concurrently without cross-crediting baselines. Next call proofstorm_lab_publish"
+        name = "lab_recipe_create",
+        description = "Create a validated lab draft from a server-owned recipe; no catalog lookup, manual topology JSON, or separate validation call is needed. nutshell_lnd_cln_routing_fees creates bitcoin-core, lnd-backend, lnd-router, cln-backend, mint-lnd, mint-cln, payer-lnd, recipient-lnd, payer-cln, and recipient-cln with exact preferred versions and typed backend bindings. Initialize all four wallets, fund only payer-lnd and payer-cln, and create invoices only on the opposite recipient so both directions can run concurrently without cross-crediting baselines. Next call lab_publish"
     )]
     fn proofstorm_lab_recipe_create(
         &self,
@@ -3517,6 +3544,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_read",
         description = "Read complete configuration. Supply instance_id for a live lab (version is its desired generation), or draft_id for a draft. Use this before planning an update; never reconstruct a lab from a partial environment page."
     )]
     fn proofstorm_lab_read(
@@ -3553,6 +3581,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_edit",
         description = "Replace a lab draft using optimistic version and idempotency checks, returning a compact mutation receipt"
     )]
     fn proofstorm_lab_edit(
@@ -3576,6 +3605,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "component_add",
         description = "Add an installed, versioned component and return a compact draft mutation receipt"
     )]
     fn proofstorm_component_add(
@@ -3600,6 +3630,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "component_update",
         description = "Update an existing logical component and return a compact draft mutation receipt"
     )]
     fn proofstorm_component_update(
@@ -3624,6 +3655,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "component_remove",
         description = "Remove an unlinked component and return a compact draft mutation receipt"
     )]
     fn proofstorm_component_remove(
@@ -3648,6 +3680,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "link_add",
         description = "Add a uniquely named typed link. Backend qualifiers are required flat fields selected by kind: chain_backend uses network; payment_backend uses method and unit; database_backend uses role; authentication_backend uses protocol. Never send a nested binding object"
     )]
     fn proofstorm_link_add(
@@ -3671,7 +3704,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Remove one link from a lab draft by its stable link_id")]
+    #[tool(
+        name = "link_remove",
+        description = "Remove one link from a lab draft by its stable link_id"
+    )]
     fn proofstorm_link_remove(
         &self,
         Parameters(request): Parameters<RemoveLinkRequest>,
@@ -3703,7 +3739,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Clone a lab draft and return a compact mutation receipt")]
+    #[tool(
+        name = "lab_clone",
+        description = "Clone a lab draft and return a compact mutation receipt"
+    )]
     fn proofstorm_lab_clone(
         &self,
         Parameters(request): Parameters<CloneDraftRequest>,
@@ -3722,6 +3761,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_validate",
         description = "Validate structural, catalog, configuration, and publication contracts for a complete Proofstorm v1alpha1 lab. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Resolve every returned warning before creating the draft"
     )]
     fn proofstorm_lab_validate(
@@ -3738,7 +3778,10 @@ impl ProofstormMcp {
         Ok(Json(lab_validation_result_with_catalog(&lab, &catalog)))
     }
 
-    #[tool(description = "Compare two lab drafts in the selected workspace")]
+    #[tool(
+        name = "lab_diff",
+        description = "Compare two lab drafts in the selected workspace"
+    )]
     fn proofstorm_lab_diff(
         &self,
         Parameters(request): Parameters<DiffDraftRequest>,
@@ -3756,6 +3799,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_publish",
         description = "Publish an immutable lab revision and return a compact digest receipt. Set include_revision only for an explicit bulk read of the lab and resolved lock"
     )]
     fn proofstorm_lab_publish(
@@ -3776,6 +3820,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_materialize",
         description = "Materialize an immutable published lab revision in the configured Kubernetes runtime"
     )]
     async fn proofstorm_lab_materialize(
@@ -3820,6 +3865,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_status",
         description = "Read lab readiness counts and up to eight startup blockers with reasons and recovery guidance. Use component-status and inventory list tools for paged detail"
     )]
     async fn proofstorm_lab_status(
@@ -3833,6 +3879,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_component_status_list",
         description = "List component readiness and startup failure reasons with recovery guidance. Image pull failures are blocked startup, not build progress; no experiment or logs operation is needed to diagnose these conditions. Results use bounded cursor pages"
     )]
     async fn proofstorm_lab_component_status_list(
@@ -3882,6 +3929,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_inventory_list",
         description = "List sanitized Kubernetes inventory for a lab instance in bounded cursor pages"
     )]
     async fn proofstorm_lab_inventory_list(
@@ -3931,6 +3979,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_wait",
         description = "Wait for a lab to reach a target phase. A ready wait returns early with blockers when image pulls, scheduling or container startup are failing; reached=false and timed_out=false means blocked, not still loading. Inspect blocker reasons and recovery messages instead of repeating waits. timeout_seconds must be 1..=120"
     )]
     async fn proofstorm_lab_wait(
@@ -4114,6 +4163,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_close",
         description = "Close the incarnation identified by expected_instance_key from lab_status. Export evidence first: verified teardown removes lab-owned records. Then lab_wait with target_phase=closed and the same expected_instance_key; success includes verified_absent=true"
     )]
     async fn proofstorm_lab_close(
@@ -4195,7 +4245,10 @@ impl ProofstormMcp {
         Ok(())
     }
 
-    #[tool(description = "Create a durable experiment bound to one lab instance")]
+    #[tool(
+        name = "experiment_create",
+        description = "Create a durable experiment bound to one lab instance"
+    )]
     fn proofstorm_experiment_create(
         &self,
         Parameters(request): Parameters<CreateExperimentRequest>,
@@ -4213,7 +4266,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Read a durable experiment in the selected workspace")]
+    #[tool(
+        name = "experiment_read",
+        description = "Read a durable experiment in the selected workspace"
+    )]
     fn proofstorm_experiment_read(
         &self,
         Parameters(request): Parameters<ExperimentRequest>,
@@ -4226,6 +4282,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "experiment_close",
         description = "Close an experiment after its actions are terminal. Proofstorm first reconciles completed runtime actions into the journal; if any are still active, wait for the returned operation IDs. Finalization order: operation waits, experiment_close, artifact_export; sessions do not block finalization"
     )]
     async fn proofstorm_experiment_close(
@@ -4303,6 +4360,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "session_start",
         description = "Start a passive activity session. Optional: actions automatically create sessions. Other sessions and finished sessions never block work."
     )]
     fn proofstorm_session_start(
@@ -4321,6 +4379,7 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
     #[tool(
+        name = "session_read",
         description = "Read a session's actor and activity timestamps. An unfinished session is not proof the actor is still running."
     )]
     fn proofstorm_session_read(
@@ -4333,6 +4392,7 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
     #[tool(
+        name = "session_finish",
         description = "Finish an activity interval. This does not stop actions, revoke access or close the lab. Further work automatically starts another session."
     )]
     fn proofstorm_session_finish(
@@ -4350,6 +4410,7 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
     #[tool(
+        name = "session_list",
         description = "List sessions in a lab, or temporal overlaps with session_id. Bounded pagination; no expiry or liveness inference. Overlap is advisory and never blocks work."
     )]
     fn proofstorm_session_list(
@@ -4381,6 +4442,7 @@ impl ProofstormMcp {
         }
     }
     #[tool(
+        name = "private_access_issue",
         description = "Authorize a different principal to receive one private transfer using the exact approved wallet command. Independent of sessions. No broad lab permissions are granted; handoff must still bind the captured transfer."
     )]
     async fn proofstorm_private_access_issue(
@@ -4411,6 +4473,7 @@ impl ProofstormMcp {
         Ok(Json(grant))
     }
     #[tool(
+        name = "private_access_revoke",
         description = "Revoke one private-transfer permission. Does not finish or restrict any session."
     )]
     async fn proofstorm_private_access_revoke(
@@ -4424,7 +4487,10 @@ impl ProofstormMcp {
         self.runtime()?.private_access(&grant).await?;
         Ok(Json(grant))
     }
-    #[tool(description = "Read one private-transfer permission and its explicit revocation state.")]
+    #[tool(
+        name = "private_access_read",
+        description = "Read one private-transfer permission and its explicit revocation state."
+    )]
     fn proofstorm_private_access_read(
         &self,
         Parameters(request): Parameters<PrivateAccessIdRequest>,
@@ -4435,7 +4501,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Start a stopped logical Bitcoin or Lightning node")]
+    #[tool(
+        name = "node_start",
+        description = "Start a stopped logical Bitcoin or Lightning node"
+    )]
     async fn proofstorm_node_start(
         &self,
         Parameters(request): Parameters<NodeControlRequest>,
@@ -4444,7 +4513,10 @@ impl ProofstormMcp {
             .await
     }
 
-    #[tool(description = "Stop a logical Bitcoin or Lightning node without deleting its state")]
+    #[tool(
+        name = "node_stop",
+        description = "Stop a logical Bitcoin or Lightning node without deleting its state"
+    )]
     async fn proofstorm_node_stop(
         &self,
         Parameters(request): Parameters<NodeControlRequest>,
@@ -4454,6 +4526,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "node_restart",
         description = "Restart a running logical Bitcoin or Lightning node with sequence fencing"
     )]
     async fn proofstorm_node_restart(
@@ -4465,6 +4538,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "component_restart",
         description = "Restart any running lab component, whether its workload is a Deployment or StatefulSet, and wait for the exact accepted rollout to become ready. Use this for mints and wallets as well as Bitcoin and Lightning nodes"
     )]
     async fn proofstorm_component_restart(
@@ -4522,6 +4596,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "component_logs",
         description = "Read current/previous logs, selecting a blocking initializer first. Reports log availability and serving pods. Works while unready; run/session attribution is automatic"
     )]
     async fn proofstorm_component_logs(
@@ -4580,6 +4655,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "authentication_conformance",
         description = "Run the fixed Nutshell and Keycloak OIDC/CAT/BAT baseline using the controller-generated disposable test identity. Credentials and issued bearer material remain inside the bounded Job; the terminal artifact contains only typed conformance observations"
     )]
     async fn proofstorm_authentication_conformance(
@@ -4629,6 +4705,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "authentication_protected_spend",
         description = "Mint valid BATs with the disposable test identity, spend one against a protected mint endpoint, and retain the spent bearer token as an opaque in-lab session. MCP returns only typed conformance observations and the source operation identity"
     )]
     async fn proofstorm_authentication_protected_spend(
@@ -4678,6 +4755,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "authentication_replay",
         description = "After a mint restart, replay a BAT retained by a successful protected-spend operation, require spent-token rejection, then mint and spend a fresh BAT. Test credentials and bearer tokens remain inside fixed Proofstorm jobs"
     )]
     async fn proofstorm_authentication_replay(
@@ -4756,6 +4834,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "component_forensics",
         description = "Run bounded offline forensics in a disposable pod built from a component's pinned image and declared data mounts. This is not the running component and does not promise its localhost, Unix sockets, process identity, or live CLI connectivity. Use it for source and database inspection; use component_exec_live for a running component's native CLI"
     )]
     async fn proofstorm_component_forensics(
@@ -4838,6 +4917,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "private_transfer",
         description = "Reserve, inspect, deliver or release private byte custody between wallets with independent private-transfer permissions. prepare requires component, destinationComponent and maximumBytes; status/deliver/release require component and reference; handoff also requires recipientGrantId from private_access_issue, and binds a completed capture before delivery. Invalid input creates no operation. Returns an operation whose artifact contains metadata and an opaque reference. Use component_exec_live.private_payload for native export/import. Delivery and native exit do not establish redemption."
     )]
     async fn proofstorm_private_transfer(
@@ -4892,6 +4972,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "component_exec_live",
         description = "Run argv (command exit) or script (shell exit) in the live component. Wait/cancel the operation ID. Check exit_code/exit_signal, timed_out, cancelled, cleanup_verified and projection_succeeded separately from phase. Cancellation does not undo mutations."
     )]
     async fn proofstorm_component_exec_live(
@@ -4967,7 +5048,8 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "First runtime action for a lab made by proofstorm_lab_recipe_create. Proofstorm supplies the recipe's exact Bitcoin/LND component IDs and safe funding/channel amounts. Await success, then call proofstorm_lab_recipe_route_channel_open; do not call generic liquidity or channel tools for this recipe"
+        name = "lab_recipe_bootstrap",
+        description = "First runtime action for a lab made by lab_recipe_create. Proofstorm supplies the recipe's exact Bitcoin/LND component IDs and safe funding/channel amounts. Await success, then call lab_recipe_route_channel_open; do not call generic liquidity or channel tools for this recipe"
     )]
     async fn proofstorm_lab_recipe_bootstrap(
         &self,
@@ -4978,7 +5060,8 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Second runtime action for a lab made by proofstorm_lab_recipe_create. After recipe bootstrap succeeds, Proofstorm opens the remaining router-to-CLN channel with server-owned IDs, safe capacity, and balanced directional liquidity. Await success, then call proofstorm_lab_recipe_fee_matrix_run once"
+        name = "lab_recipe_route_channel_open",
+        description = "Second runtime action for a lab made by lab_recipe_create. After recipe bootstrap succeeds, Proofstorm opens the remaining router-to-CLN channel with server-owned IDs, safe capacity, and balanced directional liquidity. Await success, then call lab_recipe_fee_matrix_run once"
     )]
     async fn proofstorm_lab_recipe_route_channel_open(
         &self,
@@ -4989,6 +5072,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "lab_recipe_fee_matrix_run",
         description = "Run the complete auditable payment matrix for a ready nutshell_lnd_cln_routing_fees recipe after both recipe setup operations succeed. Proofstorm initializes the four role wallets, funds only the two payers, applies known below- and above-reserve routing policies, pays in both directions, and runs four exact conservation oracles. All 26 child actions remain individually journaled. The call returns a compact scientific summary; replay the same matrix_id after interruption"
     )]
     #[allow(
@@ -5250,6 +5334,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "liquidity_bootstrap",
         description = "Optional convenience workflow for two distinct LND nodes: mine 101 blocks, fund them, and open their channel. Required only by the typed peer_connect/channel_open helpers, not by native CLI operations or arbitrary lab topologies. Use native Bitcoin and Lightning CLIs for other funding and channel arrangements"
     )]
     async fn proofstorm_liquidity_bootstrap(
@@ -5335,6 +5420,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "peer_connect",
         description = "Connect Lightning peers. Requires a succeeded liquidity_bootstrap in this experiment; premature calls are rejected without creating an operation"
     )]
     async fn proofstorm_peer_connect(
@@ -5389,7 +5475,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Disconnect two logical Lightning peers through their locked adapters")]
+    #[tool(
+        name = "peer_disconnect",
+        description = "Disconnect two logical Lightning peers through their locked adapters"
+    )]
     async fn proofstorm_peer_disconnect(
         &self,
         Parameters(request): Parameters<PeerDisconnectRequest>,
@@ -5442,7 +5531,8 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Connect two Lightning endpoints in a custom lab, then open and confirm a channel. Requires a succeeded liquidity_bootstrap. Proofstorm rejects unproven funding sources and channel amounts above the bootstrapped node's safe remaining on-chain budget. Labs created from a recipe should use proofstorm_lab_recipe_route_channel_open instead"
+        name = "channel_open",
+        description = "Connect two Lightning endpoints in a custom lab, then open and confirm a channel. Requires a succeeded liquidity_bootstrap. Proofstorm rejects unproven funding sources and channel amounts above the bootstrapped node's safe remaining on-chain budget. Labs created from a recipe should use lab_recipe_route_channel_open instead"
     )]
     async fn proofstorm_channel_open(
         &self,
@@ -5504,6 +5594,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "channel_policy_set",
         description = "Set the outgoing routing policy from one Lightning node to its peer. base_fee_sat is in satoshis (like all other agent-facing amounts); fee_rate_ppm is parts per million. Proofstorm converts the base fee to native millisatoshis and resolves the channel/adapter; prefer this typed operation over a native CLI"
     )]
     async fn proofstorm_channel_policy_set(
@@ -5572,7 +5663,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Cooperatively close and confirm an opaque logical Lightning channel")]
+    #[tool(
+        name = "channel_close",
+        description = "Cooperatively close and confirm an opaque logical Lightning channel"
+    )]
     async fn proofstorm_channel_close(
         &self,
         Parameters(request): Parameters<ChannelCloseRequest>,
@@ -5580,7 +5674,10 @@ impl ProofstormMcp {
         self.submit_channel_close(request, false).await
     }
 
-    #[tool(description = "Force close and confirm an opaque logical Lightning channel")]
+    #[tool(
+        name = "channel_force_close",
+        description = "Force close and confirm an opaque logical Lightning channel"
+    )]
     async fn proofstorm_channel_force_close(
         &self,
         Parameters(request): Parameters<ChannelCloseRequest>,
@@ -5589,6 +5686,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "channel_rebalance",
         description = "Move bounded local liquidity between two opaque channels using a circular payment"
     )]
     async fn proofstorm_channel_rebalance(
@@ -5647,6 +5745,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "network_partition",
         description = "Bidirectionally partition two components with a durable bounded fault. Existing connections can survive; for immediate interruption use native disconnect or restart, then verify application state"
     )]
     async fn proofstorm_network_partition(
@@ -5713,6 +5812,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "network_delay",
         description = "Apply bounded directional latency between logical components when the installed backend supports shaping"
     )]
     fn proofstorm_network_delay(
@@ -5727,6 +5827,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "network_loss",
         description = "Apply bounded directional packet loss between logical components when the installed backend supports shaping"
     )]
     fn proofstorm_network_loss(
@@ -5740,7 +5841,10 @@ impl ProofstormMcp {
         Err(network_fault_contract_violation(NetworkFaultFeature::Loss))
     }
 
-    #[tool(description = "Heal the durable network partition created by a prior operation")]
+    #[tool(
+        name = "network_heal",
+        description = "Heal the durable network partition created by a prior operation"
+    )]
     async fn proofstorm_network_heal(
         &self,
         Parameters(request): Parameters<NetworkHealRequest>,
@@ -5816,7 +5920,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Initialize a persistent logical wallet through its locked adapter")]
+    #[tool(
+        name = "wallet_initialize",
+        description = "Initialize a persistent logical wallet through its locked adapter"
+    )]
     async fn proofstorm_wallet_initialize(
         &self,
         Parameters(request): Parameters<WalletInitializeRequest>,
@@ -5869,6 +5976,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_balance",
         description = "Read a sanitized wallet-local balance using its locked observation adapter; CDK uses a passive SQLite transaction and Nutshell uses a disposable snapshot"
     )]
     async fn proofstorm_wallet_balance(
@@ -5927,6 +6035,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_fund",
         description = "Fund a logical wallet with a bounded quote paid by a named LND node. The payer must be distinct from the mint's own payment backend; CLN and self-payment choices are rejected before an operation is created"
     )]
     async fn proofstorm_wallet_fund(
@@ -6002,6 +6111,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_invoice",
         description = "Create a bounded receive quote whose Lightning payment request remains private to the recipient wallet"
     )]
     async fn proofstorm_wallet_invoice(
@@ -6064,6 +6174,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_pay",
         description = "Pay a durable private receive quote from a distinct logical wallet without exposing its Lightning invoice"
     )]
     async fn proofstorm_wallet_pay(
@@ -6146,6 +6257,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_quote_claim",
         description = "Refresh and claim an exact recipient mint quote without attempting payment"
     )]
     async fn proofstorm_wallet_quote_claim(
@@ -6207,6 +6319,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_melt_quote_refresh",
         description = "Refresh an exact payer melt quote through the wallet's mint round-trip. An UNPAID response releases that quote's reserved proofs. Receipt: wallet-local state before, mint state after, reserved counts/amounts and available balances. Unknown fees are null"
     )]
     async fn proofstorm_wallet_melt_quote_refresh(
@@ -6268,7 +6381,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Mint to a persistent Cashu wallet and perform a bounded self swap")]
+    #[tool(
+        name = "wallet_round_trip",
+        description = "Mint to a persistent Cashu wallet and perform a bounded self swap"
+    )]
     async fn proofstorm_wallet_round_trip(
         &self,
         Parameters(request): Parameters<WalletRoundTripRequest>,
@@ -6336,6 +6452,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "conservation_oracle",
         description = "Verify one wallet_pay debit exactly from immutable artifacts. Capture wallet_balance immediately before one wallet_pay with no intervening wallet mutation, then pass both operation IDs. Proofstorm derives the expected post-payment balance from authoritative melt amount/state/Lightning fee plus the exact NUT-02 input fee derived from the spent proofs and keysets. There is no caller-controlled tolerance. Negative findings return conserved=false evidence, not execution failures. Round trips are invalid because they mint external value first"
     )]
     async fn proofstorm_conservation_oracle(
@@ -6405,6 +6522,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "reachability_oracle",
         description = "Observe bounded service reachability between two lab components using the source component's actual network-policy identity"
     )]
     async fn proofstorm_reachability_oracle(
@@ -6487,7 +6605,10 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    #[tool(description = "Read an operation and persist its bounded terminal artifact")]
+    #[tool(
+        name = "operation_status",
+        description = "Read an operation and persist its bounded terminal artifact"
+    )]
     async fn proofstorm_operation_status(
         &self,
         Parameters(request): Parameters<OperationRequest>,
@@ -6530,6 +6651,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "operation_wait",
         description = "Wait with bounded server-side exponential backoff for an operation to become terminal, returning compact identity, phase, and terminal artifact. timeout_seconds must be 1..=120"
     )]
     async fn proofstorm_operation_wait(
@@ -6577,6 +6699,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "operation_wait_many",
         description = "Preferred after starting up to 8 independent operations (the per-instance active-operation limit): wait for all of them together with bounded parallel polling. Returns compact terminal artifacts in request order; timeout_seconds must be 1..=120"
     )]
     async fn proofstorm_operation_wait_many(
@@ -6632,7 +6755,10 @@ impl ProofstormMcp {
         }
     }
 
-    #[tool(description = "Request idempotent cancellation of an owned non-terminal action")]
+    #[tool(
+        name = "action_cancel",
+        description = "Request idempotent cancellation of an owned non-terminal action"
+    )]
     async fn proofstorm_action_cancel(
         &self,
         Parameters(request): Parameters<CancelOperationRequest>,
@@ -6674,6 +6800,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "action_list",
         description = "Read a bounded page of compact canonical action summaries. Use operation_status for one request or artifact body"
     )]
     fn proofstorm_action_list(
@@ -6732,6 +6859,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "artifact_export",
         description = "Export complete deterministic evidence after experiment_close. The journal always includes every action plus artifact descriptors; leave artifact_operation_ids empty unless up to 16 specific full bodies are needed. A smaller artifact_count does not mean incomplete evidence. Bulk content stays outside model context at resource_uri"
     )]
     fn proofstorm_artifact_export(
@@ -6748,6 +6876,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "evidence_section_read",
         description = "Read one bounded semantic section of a closed experiment's deterministic evidence bundle. Use JSON Pointer for large revision, lock, or artifact documents"
     )]
     fn proofstorm_evidence_section_read(
@@ -6844,6 +6973,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_quote_status",
         description = "Read the latest stored observation of an exact adapter-native wallet quote; this is historical data, not live wallet state"
     )]
     async fn proofstorm_wallet_quote_status(
@@ -6866,6 +6996,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "wallet_quote_list",
         description = "List the latest stored observation per adapter-native wallet quote in an experiment; results are historical, not live wallet state"
     )]
     fn proofstorm_wallet_quote_list(
@@ -6943,7 +7074,10 @@ impl ProofstormMcp {
         }
     }
 
-    #[tool(description = "Read an action and persist its bounded terminal artifact")]
+    #[tool(
+        name = "action_status",
+        description = "Read an action and persist its bounded terminal artifact"
+    )]
     async fn proofstorm_action_status(
         &self,
         Parameters(request): Parameters<OperationRequest>,
@@ -8274,7 +8408,7 @@ impl ServerHandler for ProofstormMcp {
         .with_instructions(if self.toolset == ProofstormToolset::Developer {
             "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named lab with lab_up, inspect runtime and cached activity with lab_inspect, and run native argv commands with lab_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use lab_sync to collect durable receipts; inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate lab is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with lab_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
         } else {
-            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the lab; deletion purges lab-owned activity. Read full evidence only through its manifest resource_uri; use proofstorm_evidence_section_read for bounded inspection."
+            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the lab; deletion purges lab-owned activity. Read full evidence only through its manifest resource_uri; use evidence_section_read for bounded inspection."
         }
         )
     }
@@ -8291,7 +8425,7 @@ impl ServerHandler for ProofstormMcp {
             )
             .with_title("Proofstorm evidence bundle")
             .with_description(
-                "Complete deterministic evidence bundle identified by a manifest returned from proofstorm_artifact_export",
+                "Complete deterministic evidence bundle identified by a manifest returned from artifact_export",
             )
             .with_mime_type("application/vnd.proofstorm.evidence.v1alpha1+json"),
             ResourceTemplate::new(
@@ -8362,37 +8496,31 @@ fn tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
 )]
 fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
-        ("proofstorm_workspace_read", &[Capability::LabRead]),
-        ("proofstorm_catalog_list", &[Capability::CatalogRead]),
-        ("proofstorm_catalog_entry_read", &[Capability::CatalogRead]),
+        ("workspace_read", &[Capability::LabRead]),
+        ("catalog_list", &[Capability::CatalogRead]),
+        ("catalog_entry_read", &[Capability::CatalogRead]),
+        ("catalog_config_schema_read", &[Capability::CatalogRead]),
+        ("network_capabilities", &[Capability::CatalogRead]),
         (
-            "proofstorm_catalog_config_schema_read",
-            &[Capability::CatalogRead],
-        ),
-        (
-            "proofstorm_network_capabilities",
-            &[Capability::CatalogRead],
-        ),
-        (
-            "proofstorm_candidate_build",
+            "candidate_build",
             &[
                 Capability::CandidateBuild,
                 Capability::CandidateRead,
                 Capability::CatalogRead,
             ],
         ),
-        ("proofstorm_candidate_wait", &[Capability::CandidateRead]),
-        ("proofstorm_candidate_list", &[Capability::CandidateRead]),
+        ("candidate_wait", &[Capability::CandidateRead]),
+        ("candidate_list", &[Capability::CandidateRead]),
         (
-            "proofstorm_candidate_cancel",
+            "candidate_cancel",
             &[Capability::CandidateCancel, Capability::CandidateRead],
         ),
         (
-            "proofstorm_lab_plan",
+            "lab_plan",
             &[Capability::CatalogRead, Capability::LabCreate],
         ),
         (
-            "proofstorm_lab_apply",
+            "lab_apply",
             &[
                 Capability::LabRead,
                 Capability::LabPublish,
@@ -8401,41 +8529,41 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_lab_create",
+            "lab_create",
             &[Capability::LabCreate, Capability::CatalogRead],
         ),
-        ("proofstorm_lab_recipe_create", &[Capability::LabCreate]),
-        ("proofstorm_lab_read", &[Capability::LabRead]),
-        ("proofstorm_lab_edit", &[Capability::LabEdit]),
+        ("lab_recipe_create", &[Capability::LabCreate]),
+        ("lab_read", &[Capability::LabRead]),
+        ("lab_edit", &[Capability::LabEdit]),
         (
-            "proofstorm_component_add",
+            "component_add",
             &[Capability::LabEdit, Capability::TopologyMutate],
         ),
         (
-            "proofstorm_component_update",
+            "component_update",
             &[Capability::LabEdit, Capability::TopologyMutate],
         ),
         (
-            "proofstorm_component_remove",
+            "component_remove",
             &[Capability::LabEdit, Capability::TopologyMutate],
         ),
         (
-            "proofstorm_link_add",
+            "link_add",
             &[Capability::LabEdit, Capability::TopologyMutate],
         ),
         (
-            "proofstorm_link_remove",
+            "link_remove",
             &[Capability::LabEdit, Capability::TopologyMutate],
         ),
-        ("proofstorm_lab_clone", &[Capability::LabClone]),
+        ("lab_clone", &[Capability::LabClone]),
         (
-            "proofstorm_lab_validate",
+            "lab_validate",
             &[Capability::LabValidate, Capability::CatalogRead],
         ),
-        ("proofstorm_lab_diff", &[Capability::LabRead]),
-        ("proofstorm_lab_publish", &[Capability::LabPublish]),
+        ("lab_diff", &[Capability::LabRead]),
+        ("lab_publish", &[Capability::LabPublish]),
         (
-            "proofstorm_lab_materialize",
+            "lab_materialize",
             &[
                 Capability::LabMaterialize,
                 Capability::LabRead,
@@ -8443,47 +8571,29 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
                 Capability::LabStatus,
             ],
         ),
-        ("proofstorm_lab_status", &[Capability::LabStatus]),
-        (
-            "proofstorm_lab_component_status_list",
-            &[Capability::LabStatus],
-        ),
-        ("proofstorm_lab_inventory_list", &[Capability::LabStatus]),
-        ("proofstorm_lab_wait", &[Capability::LabStatus]),
-        (
-            "proofstorm_lab_close",
-            &[Capability::LabClose, Capability::LabStatus],
-        ),
-        (
-            "proofstorm_experiment_create",
-            &[Capability::ExperimentCreate],
-        ),
-        ("proofstorm_experiment_read", &[Capability::ExperimentRead]),
-        (
-            "proofstorm_experiment_close",
-            &[Capability::ExperimentClose],
-        ),
+        ("lab_status", &[Capability::LabStatus]),
+        ("lab_component_status_list", &[Capability::LabStatus]),
+        ("lab_inventory_list", &[Capability::LabStatus]),
+        ("lab_wait", &[Capability::LabStatus]),
+        ("lab_close", &[Capability::LabClose, Capability::LabStatus]),
+        ("experiment_create", &[Capability::ExperimentCreate]),
+        ("experiment_read", &[Capability::ExperimentRead]),
+        ("experiment_close", &[Capability::ExperimentClose]),
     ]
 }
 
 fn activity_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
-        ("proofstorm_session_start", &[Capability::ExperimentRead]),
+        ("session_start", &[Capability::ExperimentRead]),
         (
-            "proofstorm_private_access_issue",
+            "private_access_issue",
             &[Capability::LabOperate, Capability::ComponentExecLive],
         ),
-        ("proofstorm_session_list", &[Capability::ExperimentRead]),
-        (
-            "proofstorm_private_access_read",
-            &[Capability::ExperimentRead],
-        ),
-        (
-            "proofstorm_private_access_revoke",
-            &[Capability::ExperimentRead],
-        ),
-        ("proofstorm_session_read", &[Capability::ExperimentRead]),
-        ("proofstorm_session_finish", &[Capability::ExperimentRead]),
+        ("session_list", &[Capability::ExperimentRead]),
+        ("private_access_read", &[Capability::ExperimentRead]),
+        ("private_access_revoke", &[Capability::ExperimentRead]),
+        ("session_read", &[Capability::ExperimentRead]),
+        ("session_finish", &[Capability::ExperimentRead]),
     ]
 }
 
@@ -8494,7 +8604,7 @@ fn activity_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
 fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
         (
-            "proofstorm_lab_up",
+            "lab_up",
             &[
                 Capability::LabCreate,
                 Capability::LabRead,
@@ -8507,7 +8617,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_environment_read",
+            "environment_read",
             &[
                 Capability::LabRead,
                 Capability::LabStatus,
@@ -8515,11 +8625,11 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_lab_inspect",
+            "lab_inspect",
             &[Capability::LabStatus, Capability::ExperimentRead],
         ),
         (
-            "proofstorm_lab_exec",
+            "lab_exec",
             &[
                 Capability::LabStatus,
                 Capability::ComponentExecLive,
@@ -8529,7 +8639,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_lab_sync",
+            "lab_sync",
             &[
                 Capability::LabStatus,
                 Capability::ArtifactRead,
@@ -8537,7 +8647,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_lab_finish",
+            "lab_finish",
             &[
                 Capability::LabStatus,
                 Capability::LabClose,
@@ -8548,27 +8658,15 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
                 Capability::ActionCancel,
             ],
         ),
-        ("proofstorm_node_start", &[Capability::NodeControl]),
-        ("proofstorm_node_stop", &[Capability::NodeControl]),
-        ("proofstorm_node_restart", &[Capability::NodeControl]),
+        ("node_start", &[Capability::NodeControl]),
+        ("node_stop", &[Capability::NodeControl]),
+        ("node_restart", &[Capability::NodeControl]),
+        ("component_restart", &[Capability::ComponentControl]),
+        ("private_transfer", &[Capability::ComponentExecLive]),
+        ("component_exec_live", &[Capability::ComponentExecLive]),
+        ("component_forensics", &[Capability::ComponentForensics]),
         (
-            "proofstorm_component_restart",
-            &[Capability::ComponentControl],
-        ),
-        (
-            "proofstorm_private_transfer",
-            &[Capability::ComponentExecLive],
-        ),
-        (
-            "proofstorm_component_exec_live",
-            &[Capability::ComponentExecLive],
-        ),
-        (
-            "proofstorm_component_forensics",
-            &[Capability::ComponentForensics],
-        ),
-        (
-            "proofstorm_lab_recipe_bootstrap",
+            "lab_recipe_bootstrap",
             &[
                 Capability::ChainMine,
                 Capability::WalletFund,
@@ -8577,7 +8675,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_lab_recipe_route_channel_open",
+            "lab_recipe_route_channel_open",
             &[
                 Capability::ChannelOpen,
                 Capability::ChainMine,
@@ -8585,7 +8683,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_lab_recipe_fee_matrix_run",
+            "lab_recipe_fee_matrix_run",
             &[
                 Capability::WalletCreate,
                 Capability::WalletFund,
@@ -8597,7 +8695,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_liquidity_bootstrap",
+            "liquidity_bootstrap",
             &[
                 Capability::ChainMine,
                 Capability::WalletFund,
@@ -8606,12 +8704,12 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_peer_connect",
+            "peer_connect",
             &[Capability::PeerConnect, Capability::ExperimentRead],
         ),
-        ("proofstorm_peer_disconnect", &[Capability::PeerDisconnect]),
+        ("peer_disconnect", &[Capability::PeerDisconnect]),
         (
-            "proofstorm_channel_open",
+            "channel_open",
             &[
                 Capability::ChannelOpen,
                 Capability::ChainMine,
@@ -8619,62 +8717,50 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_channel_policy_set",
+            "channel_policy_set",
             &[Capability::ChannelOpen, Capability::ExperimentRead],
         ),
         (
-            "proofstorm_channel_close",
+            "channel_close",
             &[Capability::ChannelClose, Capability::ChainMine],
         ),
         (
-            "proofstorm_channel_force_close",
+            "channel_force_close",
             &[Capability::ChannelForceClose, Capability::ChainMine],
         ),
+        ("channel_rebalance", &[Capability::ChannelRebalance]),
+        ("network_partition", &[Capability::NetworkPartition]),
+        ("network_delay", &[Capability::NetworkDelay]),
+        ("network_loss", &[Capability::NetworkDrop]),
+        ("network_heal", &[Capability::NetworkHeal]),
+        ("wallet_initialize", &[Capability::WalletCreate]),
+        ("wallet_balance", &[Capability::WalletControl]),
         (
-            "proofstorm_channel_rebalance",
-            &[Capability::ChannelRebalance],
-        ),
-        (
-            "proofstorm_network_partition",
-            &[Capability::NetworkPartition],
-        ),
-        ("proofstorm_network_delay", &[Capability::NetworkDelay]),
-        ("proofstorm_network_loss", &[Capability::NetworkDrop]),
-        ("proofstorm_network_heal", &[Capability::NetworkHeal]),
-        ("proofstorm_wallet_initialize", &[Capability::WalletCreate]),
-        ("proofstorm_wallet_balance", &[Capability::WalletControl]),
-        (
-            "proofstorm_wallet_fund",
+            "wallet_fund",
             &[Capability::WalletFund, Capability::CatalogRead],
         ),
-        ("proofstorm_wallet_invoice", &[Capability::WalletFund]),
-        ("proofstorm_component_logs", &[Capability::ComponentLogs]),
+        ("wallet_invoice", &[Capability::WalletFund]),
+        ("component_logs", &[Capability::ComponentLogs]),
         (
-            "proofstorm_authentication_conformance",
+            "authentication_conformance",
             &[Capability::AuthenticationTest],
         ),
         (
-            "proofstorm_authentication_protected_spend",
+            "authentication_protected_spend",
             &[Capability::AuthenticationTest],
         ),
         (
-            "proofstorm_authentication_replay",
+            "authentication_replay",
             &[Capability::AuthenticationTest, Capability::ArtifactRead],
         ),
         (
-            "proofstorm_wallet_pay",
+            "wallet_pay",
             &[Capability::WalletControl, Capability::ArtifactRead],
         ),
+        ("wallet_quote_claim", &[Capability::WalletControl]),
+        ("wallet_melt_quote_refresh", &[Capability::WalletControl]),
         (
-            "proofstorm_wallet_quote_claim",
-            &[Capability::WalletControl],
-        ),
-        (
-            "proofstorm_wallet_melt_quote_refresh",
-            &[Capability::WalletControl],
-        ),
-        (
-            "proofstorm_wallet_round_trip",
+            "wallet_round_trip",
             &[
                 Capability::WalletCreate,
                 Capability::WalletFund,
@@ -8682,35 +8768,26 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "proofstorm_conservation_oracle",
+            "conservation_oracle",
             &[Capability::OracleRun, Capability::ArtifactRead],
         ),
-        ("proofstorm_reachability_oracle", &[Capability::OracleRun]),
-        ("proofstorm_action_cancel", &[Capability::ActionCancel]),
-        ("proofstorm_operation_status", &[Capability::ArtifactRead]),
-        ("proofstorm_operation_wait", &[Capability::ArtifactRead]),
+        ("reachability_oracle", &[Capability::OracleRun]),
+        ("action_cancel", &[Capability::ActionCancel]),
+        ("operation_status", &[Capability::ArtifactRead]),
+        ("operation_wait", &[Capability::ArtifactRead]),
+        ("operation_wait_many", &[Capability::ArtifactRead]),
+        ("action_list", &[Capability::ExperimentRead]),
         (
-            "proofstorm_operation_wait_many",
-            &[Capability::ArtifactRead],
-        ),
-        ("proofstorm_action_list", &[Capability::ExperimentRead]),
-        (
-            "proofstorm_artifact_export",
+            "artifact_export",
             &[Capability::ExperimentRead, Capability::ArtifactRead],
         ),
         (
-            "proofstorm_evidence_section_read",
+            "evidence_section_read",
             &[Capability::ExperimentRead, Capability::ArtifactRead],
         ),
-        ("proofstorm_action_status", &[Capability::ArtifactRead]),
-        (
-            "proofstorm_wallet_quote_status",
-            &[Capability::ArtifactRead],
-        ),
-        (
-            "proofstorm_wallet_quote_list",
-            &[Capability::ExperimentRead],
-        ),
+        ("action_status", &[Capability::ArtifactRead]),
+        ("wallet_quote_status", &[Capability::ArtifactRead]),
+        ("wallet_quote_list", &[Capability::ExperimentRead]),
     ]
 }
 
@@ -8895,7 +8972,7 @@ impl ProofstormMcp {
                     Some(serde_json::json!({
                         "code": "runtime_initialization_in_progress",
                         "operation_id": operation_id,
-                        "next_tool": "proofstorm_operation_wait"
+                        "next_tool": "operation_wait"
                     })),
                 ))
             }
@@ -8908,23 +8985,23 @@ impl ProofstormMcp {
                     Some(serde_json::json!({
                         "code": "runtime_initialization_failed",
                         "operation_id": operation_id,
-                        "next_tool": "proofstorm_operation_status",
-                        "recovery_tool": "proofstorm_liquidity_bootstrap"
+                        "next_tool": "operation_status",
+                        "recovery_tool": "liquidity_bootstrap"
                     })),
                 ))
             }
             None => Err(ErrorData::invalid_request(
-                "regtest infrastructure is running but Lightning is not initialized; call proofstorm_liquidity_bootstrap with the Bitcoin component and two LND components, wait for it to succeed, then connect peers and open any additional LND/CLN channels",
+                "regtest infrastructure is running but Lightning is not initialized; call liquidity_bootstrap with the Bitcoin component and two LND components, wait for it to succeed, then connect peers and open any additional LND/CLN channels",
                 Some(serde_json::json!({
                     "code": "runtime_initialization_required",
-                    "next_tool": "proofstorm_liquidity_bootstrap",
+                    "next_tool": "liquidity_bootstrap",
                     "required_sequence": [
-                        "proofstorm_liquidity_bootstrap",
-                        "proofstorm_operation_wait",
-                        "proofstorm_peer_connect",
-                        "proofstorm_operation_wait",
-                        "proofstorm_channel_open",
-                        "proofstorm_operation_wait"
+                        "liquidity_bootstrap",
+                        "operation_wait",
+                        "peer_connect",
+                        "operation_wait",
+                        "channel_open",
+                        "operation_wait"
                     ],
                     "mixed_backend_hint": "bootstrap the LND-LND edge first; then open the LND-to-CLN edge from the funded LND node"
                 })),
@@ -9429,7 +9506,7 @@ fn validate_channel_funding_admission(
                 "requested_from": request.from_lightning,
                 "funded_components": [bootstrap.payer_lightning, bootstrap.mint_lightning],
                 "recommended_from": bootstrap.payer_lightning,
-                "next_tool": "proofstorm_channel_open",
+                "next_tool": "channel_open",
             })),
         ));
     };
@@ -9455,7 +9532,7 @@ fn validate_channel_funding_admission(
             "requested_channel_sat": request.channel_sat,
             "safe_max_channel_sat": safe_channel_sat,
             "recommended_channel_sat": safe_channel_sat,
-            "next_tool": "proofstorm_channel_open",
+            "next_tool": "channel_open",
         })),
     ))
 }
@@ -10297,12 +10374,12 @@ fn candidate_build_resource(
 
 fn compact_candidate_build(candidate: &CandidateBuild, timed_out: bool) -> CandidateBuildReceipt {
     let next_tool = match candidate.phase {
-        CandidateBuildPhase::Succeeded => "proofstorm_lab_plan",
+        CandidateBuildPhase::Succeeded => "lab_plan",
         CandidateBuildPhase::Failed | CandidateBuildPhase::Cancelled => "none",
         CandidateBuildPhase::Pending
         | CandidateBuildPhase::Resolving
         | CandidateBuildPhase::Building
-        | CandidateBuildPhase::Pushing => "proofstorm_candidate_wait",
+        | CandidateBuildPhase::Pushing => "candidate_wait",
     };
     let version = candidate.version.clone().unwrap_or_default();
     CandidateBuildReceipt {
@@ -12048,7 +12125,7 @@ mod tests {
         assert!(
             service
                 .tool_names()
-                .contains(&"proofstorm_environment_read".to_owned())
+                .contains(&"environment_read".to_owned())
         );
         let result = service
             .proofstorm_environment_read(Parameters(
@@ -12081,16 +12158,8 @@ mod tests {
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("designer session");
         let reader = ProofstormMcp::new(store, "alpha", "reader").expect("reader session");
         assert_eq!(designer.tool_names().len(), 20);
-        assert!(
-            !designer
-                .tool_names()
-                .contains(&"proofstorm_lab_edit".to_owned())
-        );
-        assert!(
-            designer
-                .tool_names()
-                .contains(&"proofstorm_lab_wait".to_owned())
-        );
+        assert!(!designer.tool_names().contains(&"lab_edit".to_owned()));
+        assert!(designer.tool_names().contains(&"lab_wait".to_owned()));
         let backend = designer
             .proofstorm_network_capabilities()
             .expect("network backend discovery")
@@ -12162,11 +12231,7 @@ mod tests {
         assert_nutshell_support(catalog);
         assert_eq!(
             reader.tool_names(),
-            vec![
-                "proofstorm_lab_diff",
-                "proofstorm_lab_read",
-                "proofstorm_workspace_read",
-            ]
+            vec!["lab_diff", "lab_read", "workspace_read",]
         );
     }
 
@@ -12537,17 +12602,17 @@ mod tests {
         assert!(
             !unauthorized
                 .tool_names()
-                .contains(&"proofstorm_authentication_conformance".to_owned())
+                .contains(&"authentication_conformance".to_owned())
         );
         assert!(
             !unauthorized
                 .tool_names()
-                .contains(&"proofstorm_authentication_protected_spend".to_owned())
+                .contains(&"authentication_protected_spend".to_owned())
         );
         assert!(
             !unauthorized
                 .tool_names()
-                .contains(&"proofstorm_authentication_replay".to_owned())
+                .contains(&"authentication_replay".to_owned())
         );
 
         store
@@ -12558,17 +12623,17 @@ mod tests {
         assert!(
             authorized
                 .tool_names()
-                .contains(&"proofstorm_authentication_conformance".to_owned())
+                .contains(&"authentication_conformance".to_owned())
         );
         assert!(
             authorized
                 .tool_names()
-                .contains(&"proofstorm_authentication_protected_spend".to_owned())
+                .contains(&"authentication_protected_spend".to_owned())
         );
         assert!(
             !authorized
                 .tool_names()
-                .contains(&"proofstorm_authentication_replay".to_owned())
+                .contains(&"authentication_replay".to_owned())
         );
         store
             .grant("alpha", "designer", Capability::ArtifactRead)
@@ -12578,7 +12643,7 @@ mod tests {
         assert!(
             replay_authorized
                 .tool_names()
-                .contains(&"proofstorm_authentication_replay".to_owned())
+                .contains(&"authentication_replay".to_owned())
         );
     }
 
@@ -12955,28 +13020,24 @@ mod tests {
         assert_optional_tracking(&service);
 
         assert!(
-            !service
-                .tool_names()
-                .contains(&"proofstorm_lab_edit".to_owned()),
+            !service.tool_names().contains(&"lab_edit".to_owned()),
             "whole-document replacement is not an agent tool"
         );
         assert!(
             service
                 .tool_names()
-                .contains(&"proofstorm_wallet_quote_claim".to_owned()),
+                .contains(&"wallet_quote_claim".to_owned()),
             "recipient quote claiming is a first-class recovery operation"
         );
         assert!(
-            service
-                .tool_names()
-                .contains(&"proofstorm_component_logs".to_owned()),
+            service.tool_names().contains(&"component_logs".to_owned()),
             "reading a component log is a first-class runtime observation"
         );
         for required in [
-            "proofstorm_component_restart",
-            "proofstorm_component_exec_live",
-            "proofstorm_component_forensics",
-            "proofstorm_wallet_melt_quote_refresh",
+            "component_restart",
+            "component_exec_live",
+            "component_forensics",
+            "wallet_melt_quote_refresh",
         ] {
             assert!(
                 service.tool_names().contains(&required.to_owned()),
@@ -12986,7 +13047,7 @@ mod tests {
         assert!(
             service
                 .tool_names()
-                .contains(&"proofstorm_channel_policy_set".to_owned()),
+                .contains(&"channel_policy_set".to_owned()),
             "routing policy is a first-class typed runtime operation"
         );
         assert!(
@@ -13020,7 +13081,7 @@ mod tests {
             if size >= maximum {
                 oversized.push(format!("{toolset:?}: {size} >= {maximum}"));
             }
-            assert!(tools.contains(&"proofstorm_catalog_list".to_owned()));
+            assert!(tools.contains(&"catalog_list".to_owned()));
         }
         assert!(
             oversized.is_empty(),
@@ -13031,45 +13092,33 @@ mod tests {
         assert!(
             !design
                 .tool_names()
-                .contains(&"proofstorm_component_exec_live".to_owned())
+                .contains(&"component_exec_live".to_owned())
         );
         let evidence = service.with_toolset(ProofstormToolset::Evidence);
-        assert!(
-            !evidence
-                .tool_names()
-                .contains(&"proofstorm_wallet_pay".to_owned())
-        );
+        assert!(!evidence.tool_names().contains(&"wallet_pay".to_owned()));
     }
 
     fn assert_native_toolset(service: &ProofstormMcp) {
         let native = service.clone().with_toolset(ProofstormToolset::Native);
         for required in [
-            "proofstorm_component_exec_live",
-            "proofstorm_component_forensics",
-            "proofstorm_wallet_balance",
-            "proofstorm_network_partition",
-            "proofstorm_network_capabilities",
-            "proofstorm_network_heal",
-            "proofstorm_artifact_export",
-            "proofstorm_lab_close",
+            "component_exec_live",
+            "component_forensics",
+            "wallet_balance",
+            "network_partition",
+            "network_capabilities",
+            "network_heal",
+            "artifact_export",
+            "lab_close",
         ] {
             assert!(native.tool_names().contains(&required.to_owned()));
         }
+        assert!(!native.tool_names().contains(&"wallet_pay".to_owned()));
         assert!(
             !native
                 .tool_names()
-                .contains(&"proofstorm_wallet_pay".to_owned())
+                .contains(&"channel_policy_set".to_owned())
         );
-        assert!(
-            !native
-                .tool_names()
-                .contains(&"proofstorm_channel_policy_set".to_owned())
-        );
-        for workflow_specific in [
-            "proofstorm_liquidity_bootstrap",
-            "proofstorm_peer_connect",
-            "proofstorm_channel_open",
-        ] {
+        for workflow_specific in ["liquidity_bootstrap", "peer_connect", "channel_open"] {
             assert!(!native.tool_names().contains(&workflow_specific.to_owned()));
         }
     }
@@ -13104,25 +13153,25 @@ mod tests {
     #[test]
     fn experiment_toolset_is_generic_and_one_session_capable() {
         for required in [
-            "proofstorm_catalog_list",
-            "proofstorm_candidate_build",
-            "proofstorm_candidate_wait",
-            "proofstorm_candidate_list",
-            "proofstorm_candidate_cancel",
-            "proofstorm_lab_plan",
-            "proofstorm_lab_apply",
-            "proofstorm_liquidity_bootstrap",
-            "proofstorm_channel_open",
-            "proofstorm_channel_policy_set",
-            "proofstorm_component_restart",
-            "proofstorm_component_exec_live",
-            "proofstorm_wallet_pay",
-            "proofstorm_wallet_melt_quote_refresh",
-            "proofstorm_network_partition",
-            "proofstorm_authentication_replay",
-            "proofstorm_operation_wait_many",
-            "proofstorm_artifact_export",
-            "proofstorm_lab_close",
+            "catalog_list",
+            "candidate_build",
+            "candidate_wait",
+            "candidate_list",
+            "candidate_cancel",
+            "lab_plan",
+            "lab_apply",
+            "liquidity_bootstrap",
+            "channel_open",
+            "channel_policy_set",
+            "component_restart",
+            "component_exec_live",
+            "wallet_pay",
+            "wallet_melt_quote_refresh",
+            "network_partition",
+            "authentication_replay",
+            "operation_wait_many",
+            "artifact_export",
+            "lab_close",
         ] {
             assert!(
                 experiment_tool(required),
@@ -13130,15 +13179,15 @@ mod tests {
             );
         }
         for recipe_specific_or_unbounded in [
-            "proofstorm_lab_create",
-            "proofstorm_lab_validate",
+            "lab_create",
+            "lab_validate",
             "proofstorm_component_exec",
-            "proofstorm_lab_recipe_create",
-            "proofstorm_lab_recipe_bootstrap",
-            "proofstorm_lab_recipe_route_channel_open",
-            "proofstorm_lab_recipe_fee_matrix_run",
-            "proofstorm_wallet_round_trip",
-            "proofstorm_lab_clone",
+            "lab_recipe_create",
+            "lab_recipe_bootstrap",
+            "lab_recipe_route_channel_open",
+            "lab_recipe_fee_matrix_run",
+            "wallet_round_trip",
+            "lab_clone",
         ] {
             assert!(
                 !experiment_tool(recipe_specific_or_unbounded),
@@ -13213,12 +13262,12 @@ mod tests {
         assert!(
             !restricted
                 .tool_names()
-                .contains(&"proofstorm_component_exec_live".to_owned())
+                .contains(&"component_exec_live".to_owned())
         );
         assert!(
             !restricted
                 .tool_names()
-                .contains(&"proofstorm_component_forensics".to_owned())
+                .contains(&"component_forensics".to_owned())
         );
 
         store
@@ -13227,12 +13276,12 @@ mod tests {
         let live = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("live session");
         assert!(
             live.tool_names()
-                .contains(&"proofstorm_component_exec_live".to_owned())
+                .contains(&"component_exec_live".to_owned())
         );
         assert!(
             !live
                 .tool_names()
-                .contains(&"proofstorm_component_forensics".to_owned())
+                .contains(&"component_forensics".to_owned())
         );
 
         store
@@ -13241,7 +13290,7 @@ mod tests {
         let both = ProofstormMcp::new(store, "alpha", "designer").expect("execution session");
         assert!(
             both.tool_names()
-                .contains(&"proofstorm_component_forensics".to_owned())
+                .contains(&"component_forensics".to_owned())
         );
     }
 
@@ -13312,12 +13361,12 @@ mod tests {
         assert!(
             !restricted
                 .tool_names()
-                .contains(&"proofstorm_operation_wait".to_owned())
+                .contains(&"operation_wait".to_owned())
         );
         assert!(
             !restricted
                 .tool_names()
-                .contains(&"proofstorm_operation_wait_many".to_owned())
+                .contains(&"operation_wait_many".to_owned())
         );
         store
             .grant("alpha", "designer", Capability::ArtifactRead)
@@ -13326,12 +13375,12 @@ mod tests {
         assert!(
             authorized
                 .tool_names()
-                .contains(&"proofstorm_operation_wait".to_owned())
+                .contains(&"operation_wait".to_owned())
         );
         assert!(
             authorized
                 .tool_names()
-                .contains(&"proofstorm_operation_wait_many".to_owned())
+                .contains(&"operation_wait_many".to_owned())
         );
     }
 
@@ -13532,11 +13581,7 @@ mod tests {
     fn handler_rechecks_authority_after_discovery() {
         let store = seeded_store();
         let session = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
-        assert!(
-            session
-                .tool_names()
-                .contains(&"proofstorm_lab_create".to_owned())
-        );
+        assert!(session.tool_names().contains(&"lab_create".to_owned()));
         store
             .revoke("alpha", "designer", Capability::LabCreate)
             .expect("revoke");
@@ -13571,18 +13616,10 @@ mod tests {
         assert!(
             !partial
                 .tool_names()
-                .contains(&"proofstorm_liquidity_bootstrap".to_owned())
+                .contains(&"liquidity_bootstrap".to_owned())
         );
-        assert!(
-            partial
-                .tool_names()
-                .contains(&"proofstorm_peer_connect".to_owned())
-        );
-        assert!(
-            !partial
-                .tool_names()
-                .contains(&"proofstorm_channel_open".to_owned())
-        );
+        assert!(partial.tool_names().contains(&"peer_connect".to_owned()));
+        assert!(!partial.tool_names().contains(&"channel_open".to_owned()));
         store
             .grant("alpha", "designer", Capability::ChannelOpen)
             .expect("complete operation grant");
@@ -13590,27 +13627,15 @@ mod tests {
         assert!(
             complete
                 .tool_names()
-                .contains(&"proofstorm_liquidity_bootstrap".to_owned())
+                .contains(&"liquidity_bootstrap".to_owned())
         );
-        assert!(
-            complete
-                .tool_names()
-                .contains(&"proofstorm_channel_open".to_owned())
-        );
-        assert!(
-            !complete
-                .tool_names()
-                .contains(&"proofstorm_node_restart".to_owned())
-        );
+        assert!(complete.tool_names().contains(&"channel_open".to_owned()));
+        assert!(!complete.tool_names().contains(&"node_restart".to_owned()));
         store
             .grant("alpha", "designer", Capability::NodeControl)
             .expect("node control grant");
         let node_control = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
-        for tool in [
-            "proofstorm_node_start",
-            "proofstorm_node_stop",
-            "proofstorm_node_restart",
-        ] {
+        for tool in ["node_start", "node_stop", "node_restart"] {
             assert!(node_control.tool_names().contains(&tool.to_owned()));
         }
         for capability in [
@@ -13629,14 +13654,14 @@ mod tests {
         }
         let teardown = ProofstormMcp::new(store, "alpha", "designer").expect("session");
         for tool in [
-            "proofstorm_peer_disconnect",
-            "proofstorm_channel_close",
-            "proofstorm_channel_force_close",
-            "proofstorm_channel_rebalance",
-            "proofstorm_network_delay",
-            "proofstorm_network_loss",
-            "proofstorm_network_partition",
-            "proofstorm_network_heal",
+            "peer_disconnect",
+            "channel_close",
+            "channel_force_close",
+            "channel_rebalance",
+            "network_delay",
+            "network_loss",
+            "network_partition",
+            "network_heal",
         ] {
             assert!(teardown.tool_names().contains(&tool.to_owned()));
         }
@@ -14118,21 +14143,17 @@ mod tests {
     fn composer_discovery_requires_edit_and_topology_authority() {
         let store = seeded_store();
         let partial = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
-        assert!(
-            !partial
-                .tool_names()
-                .contains(&"proofstorm_component_add".to_owned())
-        );
+        assert!(!partial.tool_names().contains(&"component_add".to_owned()));
         store
             .grant("alpha", "designer", Capability::TopologyMutate)
             .expect("topology grant");
         let complete = ProofstormMcp::new(store, "alpha", "designer").expect("session");
         for tool in [
-            "proofstorm_component_add",
-            "proofstorm_component_update",
-            "proofstorm_component_remove",
-            "proofstorm_link_add",
-            "proofstorm_link_remove",
+            "component_add",
+            "component_update",
+            "component_remove",
+            "link_add",
+            "link_remove",
         ] {
             assert!(complete.tool_names().contains(&tool.to_owned()));
         }
@@ -14146,7 +14167,7 @@ mod tests {
         assert!(
             !denied
                 .tool_names()
-                .contains(&"proofstorm_reachability_oracle".to_owned())
+                .contains(&"reachability_oracle".to_owned())
         );
         store
             .grant("alpha", "designer", Capability::OracleRun)
@@ -14155,7 +14176,7 @@ mod tests {
         assert!(
             allowed
                 .tool_names()
-                .contains(&"proofstorm_reachability_oracle".to_owned())
+                .contains(&"reachability_oracle".to_owned())
         );
         assert!(
             validate_reachability_oracle_bounds(&ReachabilityOracleRequest {
@@ -14440,18 +14461,10 @@ mod tests {
         assert!(
             create
                 .tool_names()
-                .contains(&"proofstorm_wallet_initialize".to_owned())
+                .contains(&"wallet_initialize".to_owned())
         );
-        assert!(
-            !create
-                .tool_names()
-                .contains(&"proofstorm_wallet_balance".to_owned())
-        );
-        assert!(
-            !create
-                .tool_names()
-                .contains(&"proofstorm_wallet_fund".to_owned())
-        );
+        assert!(!create.tool_names().contains(&"wallet_balance".to_owned()));
+        assert!(!create.tool_names().contains(&"wallet_fund".to_owned()));
 
         store
             .grant("alpha", "designer", Capability::WalletControl)
@@ -14460,31 +14473,15 @@ mod tests {
             .grant("alpha", "designer", Capability::WalletFund)
             .expect("fund grant");
         let complete = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
+        assert!(complete.tool_names().contains(&"wallet_balance".to_owned()));
+        assert!(complete.tool_names().contains(&"wallet_fund".to_owned()));
+        assert!(complete.tool_names().contains(&"wallet_invoice".to_owned()));
         assert!(
             complete
                 .tool_names()
-                .contains(&"proofstorm_wallet_balance".to_owned())
+                .contains(&"wallet_quote_claim".to_owned())
         );
-        assert!(
-            complete
-                .tool_names()
-                .contains(&"proofstorm_wallet_fund".to_owned())
-        );
-        assert!(
-            complete
-                .tool_names()
-                .contains(&"proofstorm_wallet_invoice".to_owned())
-        );
-        assert!(
-            complete
-                .tool_names()
-                .contains(&"proofstorm_wallet_quote_claim".to_owned())
-        );
-        assert!(
-            !complete
-                .tool_names()
-                .contains(&"proofstorm_wallet_pay".to_owned())
-        );
+        assert!(!complete.tool_names().contains(&"wallet_pay".to_owned()));
 
         store
             .grant("alpha", "designer", Capability::ArtifactRead)
@@ -14493,13 +14490,9 @@ mod tests {
         assert!(
             status
                 .tool_names()
-                .contains(&"proofstorm_wallet_quote_status".to_owned())
+                .contains(&"wallet_quote_status".to_owned())
         );
-        assert!(
-            status
-                .tool_names()
-                .contains(&"proofstorm_wallet_pay".to_owned())
-        );
+        assert!(status.tool_names().contains(&"wallet_pay".to_owned()));
         let Err(missing_quote) = status
             .proofstorm_wallet_quote_status(Parameters(WalletQuoteRequest {
                 instance_id: "missing-instance".into(),
@@ -14519,7 +14512,7 @@ mod tests {
         assert!(
             !status
                 .tool_names()
-                .contains(&"proofstorm_wallet_quote_list".to_owned())
+                .contains(&"wallet_quote_list".to_owned())
         );
         store
             .grant("alpha", "designer", Capability::ExperimentRead)
@@ -14528,7 +14521,7 @@ mod tests {
         assert!(
             readable
                 .tool_names()
-                .contains(&"proofstorm_wallet_quote_list".to_owned())
+                .contains(&"wallet_quote_list".to_owned())
         );
     }
 

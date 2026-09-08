@@ -63,13 +63,10 @@ pub fn run(context: &GateContext) -> Result<()> {
         EXPERIMENT_CAPABILITIES,
     )?;
 
-    let catalog = client.call(
-        "proofstorm_catalog_list",
-        json!({"implementations": ["nutshell"]}),
-    )?;
+    let catalog = client.call("catalog_list", json!({"implementations": ["nutshell"]}))?;
     let summary = &expect::array(&catalog, "/items")?[0];
     let nutshell = client.call(
-        "proofstorm_catalog_entry_read",
+        "catalog_entry_read",
         json!({
             "id": expect::string(summary, "/id")?,
             "version": expect::string(summary, "/version")?
@@ -100,11 +97,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-nutshell-cln"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-cln", "include_revision": true}),
     )?;
 
@@ -121,7 +118,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-cln"}),
     )?;
     let ready = lab::wait_phase(
@@ -201,16 +198,16 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-nutshell-cln-experiment"}),
     )?;
     client.call(
-        "proofstorm_session_start",
+        "session_start",
         json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-nutshell-cln-session"}),
     )?;
 
     client.call(
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         with(
             common("nutshell-cln-bootstrap"),
             json!({"chain": "chain", "mint_lightning": "seed-lnd", "payer_lightning": "payer-lnd", "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 1_000_000, "idempotency_key": "bootstrap-nutshell-cln"}),
@@ -222,7 +219,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_peer_connect",
+        "peer_connect",
         with(
             common("nutshell-cln-peer"),
             json!({"from_lightning": "payer-lnd", "to_lightning": "mint-cln", "idempotency_key": "peer-nutshell-cln"}),
@@ -234,7 +231,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_channel_open",
+        "channel_open",
         with(
             common("nutshell-cln-channel"),
             json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-cln", "channel_sat": 4_000_000, "push_sat": 1_000_000, "idempotency_key": "channel-nutshell-cln"}),
@@ -248,7 +245,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let wallet = json!({"wallet": "wallet", "mint": "mint"});
 
     client.call(
-        "proofstorm_wallet_initialize",
+        "wallet_initialize",
         with(
             with(common("nutshell-cln-initialize"), wallet.clone()),
             json!({"idempotency_key": "initialize-nutshell-cln"}),
@@ -260,7 +257,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         with(
             with(common("nutshell-cln-balance"), wallet.clone()),
             json!({"idempotency_key": "balance-nutshell-cln"}),
@@ -272,7 +269,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_fund",
+        "wallet_fund",
         with(
             with(common("nutshell-cln-fund"), wallet.clone()),
             json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": "fund-nutshell-cln"}),
@@ -287,7 +284,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         with(
             with(
                 common("nutshell-cln-balance-before-round-trip"),
@@ -302,7 +299,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_round_trip",
+        "wallet_round_trip",
         with(
             with(common("nutshell-cln-round-trip"), wallet.clone()),
             json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": "round-trip-nutshell-cln"}),
@@ -317,7 +314,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_conservation_oracle",
+        "conservation_oracle",
         with(
             with(common("nutshell-cln-conservation"), wallet),
             json!({
@@ -333,16 +330,16 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_session_finish",
+        "session_finish",
         json!({"session_id": LEASE, "idempotency_key": "release-nutshell-cln-session"}),
     )?;
     let closed_experiment = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id": EXPERIMENT, "idempotency_key": "close-nutshell-cln-experiment"}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     lab::wait_phase(
         &mut client,
         INSTANCE,

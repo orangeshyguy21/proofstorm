@@ -53,7 +53,7 @@ pub const fn outcome_title(phase: OperationPhase) -> &'static str {
 /// Display names for MCP discovery and interfaces that refer to exact tool IDs.
 #[must_use]
 pub fn tool_title(name: &str) -> Option<&'static str> {
-    Some(match name.strip_prefix("proofstorm_")? {
+    Some(match name {
         "lab_up" => "Start lab",
         "environment_read" => "View environment",
         "lab_inspect" => "Inspect lab",

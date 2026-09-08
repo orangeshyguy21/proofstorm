@@ -80,14 +80,14 @@ class Client:
         return result.get('structuredContent') or json.loads(result['content'][0]['text'])
 
     def wait(self, identity):
-        result = self.call('proofstorm_operation_wait_many',
+        result = self.call('operation_wait_many',
                            {'operation_ids': [identity], 'timeout_seconds': 60})
         operations = result.get('operations', [])
         if len(operations) != 1 or operations[0].get('operation_id') != identity:
             raise RuntimeError('setup batch wait identity mismatch')
         operation = operations[0]
         if result.get('artifact_bodies_omitted'):
-            return self.call('proofstorm_operation_status', {'operation_id': identity})
+            return self.call('operation_status', {'operation_id': identity})
         return operation
 
     def close(self):
@@ -106,7 +106,7 @@ def main():
     output = path.parent
     setup = output / 'setup'
     setup.mkdir()
-    config = json.loads(path.read_text())['mcp']['proofstorm']
+    config = json.loads(path.read_text())['mcp']['pst']
     workspace = config['environment']['PROOFSTORM_WORKSPACE']
     # Enables existing owned-workspace finalizer if preparation fails before the model manifest.
     (output / 'manifest.json').write_text(json.dumps({'workspace': workspace, 'run_id': run_id,
@@ -137,7 +137,7 @@ def main():
         return result.get('artifact', {}).get('content', {})
 
     def native(label, component, argv, mode=None):
-        receipt = operation('proofstorm_component_exec_live', label, {
+        receipt = operation('component_exec_live', label, {
             'component': component, 'argv': argv, 'timeout_seconds': 60,
             'output': mode or {'mode': 'private'}})
         expected = {'exit_code': 0, 'timed_out': False, 'cancelled': False,
@@ -149,27 +149,27 @@ def main():
 
     try:
         advertised = {tool['name'] for tool in client.rpc('tools/list', {})['tools']}
-        required = {'proofstorm_lab_apply', 'proofstorm_lab_wait', 'proofstorm_experiment_create',
-                    'proofstorm_session_start', 'proofstorm_component_exec_live',
-                    'proofstorm_operation_wait_many', 'proofstorm_operation_status',
-                    'proofstorm_component_restart', 'proofstorm_liquidity_bootstrap', 'proofstorm_wallet_balance'}
+        required = {'lab_apply', 'lab_wait', 'experiment_create',
+                    'session_start', 'component_exec_live',
+                    'operation_wait_many', 'operation_status',
+                    'component_restart', 'liquidity_bootstrap', 'wallet_balance'}
         if required - advertised:
             raise RuntimeError('setup tool profile missing: ' + ','.join(sorted(required - advertised)))
         seed = json.loads((output / 'seed-plan.json').read_text())
-        call('proofstorm_lab_apply', {'plan_id': seed['plan_id'], 'expected_plan_digest': seed['plan_digest'],
+        call('lab_apply', {'plan_id': seed['plan_id'], 'expected_plan_digest': seed['plan_digest'],
                                     'instance_id': scope['instance_id'], 'idempotency_key': 'setup-apply'}, 'applied')
-        ready = call('proofstorm_lab_wait', {'instance_id': scope['instance_id'], 'target_phase': 'ready',
+        ready = call('lab_wait', {'instance_id': scope['instance_id'], 'target_phase': 'ready',
                                            'timeout_seconds': 60}, 'ready')
         if ready.get('phase') != 'ready':
             raise RuntimeError('prefunding lab not ready')
-        call('proofstorm_experiment_create', {k: v for k, v in {**scope, 'idempotency_key': 'setup-experiment'}.items()
+        call('experiment_create', {k: v for k, v in {**scope, 'idempotency_key': 'setup-experiment'}.items()
                                              if k != 'session_id'}, 'experiment')
-        call('proofstorm_session_start', {'experiment_id': scope['experiment_id'], 'session_id': scope['session_id'],
+        call('session_start', {'experiment_id': scope['experiment_id'], 'session_id': scope['session_id'],
                                                 'idempotency_key': 'setup-session'}, 'session')
         native('initialize', 'wallet-a', ['python3', '-c', API + "p=Path('/wallet/session.passphrase'); p.write_text(secrets.token_urlsafe(32)); p.chmod(0o600)\nr=api('/v1/admin/wallet/initialize',{'passphrase':p.read_text()}); assert r['generatedMnemonic']\nconfig=root/'config.json'; settings=json.loads(config.read_text()); settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings)); config.chmod(0o600)"])
-        operation('proofstorm_component_restart', 'restart', {'component': 'wallet-a'})
+        operation('component_restart', 'restart', {'component': 'wallet-a'})
         native('unlock', 'wallet-a', ['python3', '-c', API + "api('/v1/admin/session/start',{'passphrase':Path('/wallet/session.passphrase').read_text()})\ndeadline=time.monotonic()+40\nwhile time.monotonic()<deadline:\n if api('/v1/status')['cocoSession']['state']=='running': break\n time.sleep(.25)\nelse: raise RuntimeError('session_not_running')"])
-        operation('proofstorm_liquidity_bootstrap', 'liquidity', {'chain': 'chain', 'mint_lightning': 'mint-lnd',
+        operation('liquidity_bootstrap', 'liquidity', {'chain': 'chain', 'mint_lightning': 'mint-lnd',
                   'payer_lightning': 'payer-lnd', 'funding_sat': 50000000, 'channel_sat': 10000000, 'push_sat': 5000000})
         invoice = native('invoice', 'wallet-a', ['cocod', 'receive', 'bolt11', '5000', '--mint-url', 'http://mint:3338'], {'mode': 'bolt11'})
         selected = invoice.get('selected_output', {})
@@ -185,8 +185,8 @@ def main():
         # CDK requires a native initialization before its fail-closed passive adapter can open state.
         native('cdk-initialize', 'wallet-b', ['cdk-cli', '--work-dir', '/wallet/cdk', '--unit', 'sat',
                                            '--non-interactive', 'balance'])
-        a = operation('proofstorm_wallet_balance', 'balance-a', {'wallet': 'wallet-a', 'mint': 'mint'})
-        b = operation('proofstorm_wallet_balance', 'balance-b', {'wallet': 'wallet-b', 'mint': 'mint'})
+        a = operation('wallet_balance', 'balance-a', {'wallet': 'wallet-a', 'mint': 'mint'})
+        b = operation('wallet_balance', 'balance-b', {'wallet': 'wallet-b', 'mint': 'mint'})
         if any(a.get(k) != v for k, v in {'balance_sat': 5000, 'total_ready_sat': 5000, 'reserved_sat': 0, 'inflight_sat': 0}.items()):
             raise RuntimeError('setup cocod balance not verified')
         if any(b.get(k) != 0 for k in ['balance_sat', 'reserved_sat', 'pending_sat', 'pending_spent_sat']):
