@@ -99,11 +99,11 @@
         "lab.materialize",
         "lab.status",
         "lab.close",
+        "lab.connect",
         "experiment.create",
         "experiment.read",
         "experiment.close",
-        "lease.acquire",
-        "lease.release",
+        "lab.operate",
         "action.cancel",
         "topology.inspect",
         "topology.mutate",
@@ -356,9 +356,6 @@
         "kind": {
           "$ref": "#/$defs/OperationKind"
         },
-        "lease_id": {
-          "type": "string"
-        },
         "phase": {
           "$ref": "#/$defs/OperationPhase"
         },
@@ -369,10 +366,17 @@
         "request_digest": {
           "type": "string"
         },
+        "revision_digest": {
+          "default": "",
+          "type": "string"
+        },
         "sequence": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "session_id": {
+          "type": "string"
         },
         "started_at_unix": {
           "format": "int64",
@@ -386,7 +390,7 @@
         "id",
         "instance_id",
         "experiment_id",
-        "lease_id",
+        "session_id",
         "principal_id",
         "sequence",
         "kind",
@@ -450,6 +454,14 @@
         },
         "revision": {
           "$ref": "#/$defs/PublishedRevision"
+        },
+        "revisions": {
+          "default": [],
+          "description": "Immutable configurations actually used by the journal, including earlier lab generations.",
+          "items": {
+            "$ref": "#/$defs/PublishedRevision"
+          },
+          "type": "array"
         },
         "workspace_id": {
           "type": "string"

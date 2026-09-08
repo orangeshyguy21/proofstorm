@@ -48,6 +48,8 @@ fn main() -> Result<()> {
     };
     let gate = arguments.gate.context("no gate given")?;
     match gate.as_str() {
+        "images" => proofstorm_acceptance::images::provision(),
+        "images-check" => proofstorm_acceptance::images::verify(&Kubectl::pinned(&root)),
         "doctor" => {
             let binary = arguments
                 .mcp_binary

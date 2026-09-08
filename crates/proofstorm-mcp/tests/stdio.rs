@@ -30,7 +30,7 @@ fn assert_resource_contract(client: &mut McpClient) {
 }
 
 #[test]
-fn stdio_server_advertises_exact_slice_one_tools() {
+fn stdio_default_developer_discovery_respects_unconfigured_authority() {
     let mut client = McpClient::spawn_bare(binary(), "proofstorm-test").expect("spawn");
 
     let initialized = client.initialize_result().clone();
@@ -51,18 +51,16 @@ fn stdio_server_advertises_exact_slice_one_tools() {
     assert_eq!(
         names,
         vec![
-            "proofstorm_catalog_config_schema_read",
-            "proofstorm_catalog_entry_read",
-            "proofstorm_catalog_list",
-            "proofstorm_lab_validate",
-            "proofstorm_network_capabilities",
+            "catalog_config_schema_read",
+            "catalog_entry_read",
+            "catalog_list",
         ]
     );
 
     assert_resource_contract(&mut client);
 
     let catalog = client
-        .call_response("proofstorm_catalog_list", json!({}))
+        .call_response("catalog_list", json!({}))
         .expect("list catalog");
     let structured = catalog
         .pointer("/result/structuredContent")
@@ -101,9 +99,11 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         binary(),
         "proofstorm-policy-test",
         &[
+            ("PROOFSTORM_MODE", "offline".as_ref()),
             ("PROOFSTORM_DB", database.as_os_str()),
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
+            ("PROOFSTORM_TOOLSET", "all".as_ref()),
             ("PROOFSTORM_CAPABILITIES", "lab.read".as_ref()),
         ],
     )
@@ -115,17 +115,10 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         .iter()
         .map(|tool| expect::string(tool, "/name").expect("tool name"))
         .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        vec![
-            "proofstorm_lab_diff",
-            "proofstorm_lab_read",
-            "proofstorm_workspace_read"
-        ]
-    );
+    assert_eq!(names, vec!["lab_diff", "lab_read", "workspace_read"]);
 
     let refused = client
-        .call_error("proofstorm_lab_create", json!({}))
+        .call_error("lab_create", json!({}))
         .expect("lab create must be refused");
     expect::equals(&refused, "/message", &Value::from("tool not found")).expect("refusal message");
 }
@@ -133,12 +126,14 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
 #[test]
 fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
     let directory = tempfile::tempdir().expect("tempdir");
+    let kubeconfig = disconnected_kubeconfig(directory.path());
     let database = directory.path().join("proofstorm.sqlite3");
     let mut client = McpClient::spawn(
         binary(),
         "private-transfer-contract",
         &[
             ("PROOFSTORM_DB", database.as_os_str()),
+            ("KUBECONFIG", kubeconfig.as_os_str()),
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "agent".as_ref()),
             (
@@ -154,16 +149,16 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "proofstorm_private_transfer")
+        .find(|tool| tool["name"] == "private_transfer")
         .unwrap();
     assert_private_transfer_schema(tool);
     let request = |transfer| {
         json!({"instance_id":"unmaterialized", "experiment_id":"test",
-        "lease_id":"test", "operation_id":"must-not-exist", "idempotency_key":"test", "transfer":transfer})
+        "session_id":"test", "operation_id":"must-not-exist", "idempotency_key":"test", "transfer":transfer})
     };
     for (transfer, field) in invalid_private_transfer_requests() {
         let response = client
-            .call_response("proofstorm_private_transfer", request(transfer))
+            .call_response("private_transfer", request(transfer))
             .unwrap();
         // rmcp returns parameter decoding failures as a textual tool error.
         assert_eq!(response["result"]["isError"], true, "{response}");
@@ -176,7 +171,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
         );
     }
     for size in [0, 1_048_577] {
-        let error = client.call_error("proofstorm_private_transfer", request(json!({
+        let error = client.call_error("private_transfer", request(json!({
             "transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":size
         }))).unwrap();
         assert!(
@@ -186,7 +181,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
     }
     // A complete synthetic request passes decoding and static validation, then
     // reaches the expected missing-instance boundary without a live cluster.
-    let error = client.call_error("proofstorm_private_transfer", request(json!({
+    let error = client.call_error("private_transfer", request(json!({
         "transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536
     }))).unwrap();
     assert_eq!(error["data"]["code"], "not_found", "{error}");
@@ -227,7 +222,7 @@ fn assert_private_transfer_schema(tool: &Value) {
                 "transferMethod",
                 "component",
                 "reference",
-                "recipientLeaseId",
+                "recipientGrantId",
             ]
         } else {
             vec!["transferMethod", "component", "reference"]
@@ -265,7 +260,7 @@ fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
         ),
         (
             json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque"}),
-            "recipientLeaseId",
+            "recipientGrantId",
         ),
         (
             json!({"transferMethod":"status","component":"wallet-a"}),
@@ -284,4 +279,115 @@ fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
             "maximumBytes",
         ),
     ]
+}
+
+#[test]
+fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
+    let directory = tempfile::tempdir().unwrap();
+    let kubeconfig = disconnected_kubeconfig(directory.path());
+    let database = directory.path().join("developer.sqlite3");
+    let mut client = McpClient::spawn(binary(), "developer-discovery", &[
+        ("PROOFSTORM_DB", database.as_os_str()),
+            ("KUBECONFIG", kubeconfig.as_os_str()),
+        ("PROOFSTORM_WORKSPACE", "local".as_ref()),
+        ("PROOFSTORM_PRINCIPAL", "developer".as_ref()),
+        ("PROOFSTORM_CAPABILITIES", "catalog.read,lab.create,lab.read,lab.publish,lab.materialize,lab.status,lab.close,experiment.read,experiment.close,lab.operate,component.exec_live,artifact.read,action.cancel".as_ref()),
+    ]).unwrap();
+    let listed = client.request("tools/list", json!({})).unwrap();
+    let names = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 15);
+    for name in [
+        "session_list",
+        "lab_up",
+        "lab_inspect",
+        "lab_read",
+        "environment_read",
+        "lab_exec",
+        "lab_sync",
+        "lab_finish",
+    ] {
+        assert!(names.contains(&name));
+    }
+    for name in [
+        "experiment_create",
+        "session_start",
+        "lab_recipe_bootstrap",
+        "wallet_pay",
+    ] {
+        assert!(!names.contains(&name));
+    }
+    assert!(serde_json::to_vec(&listed).unwrap().len() < 64 * 1024);
+    assert!(
+        client.initialize_result()["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("lab_up")
+    );
+}
+
+fn disconnected_kubeconfig(directory: &Path) -> std::path::PathBuf {
+    let path = directory.join("kubeconfig");
+    std::fs::write(&path, "apiVersion: v1\nkind: Config\ncurrent-context: other\ncontexts:\n- name: k3d-proofstorm\n  context: {cluster: test, user: test}\nclusters:\n- name: test\n  cluster: {server: 'http://127.0.0.1:1'}\nusers:\n- name: test\n  user: {}\n").unwrap();
+    path
+}
+
+#[test]
+fn offline_mode_uses_existing_grants_without_replacing_them() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("existing.db");
+    let store = proofstorm_store::Store::open(&database).unwrap();
+    store
+        .put_workspace(&proofstorm_store::Workspace {
+            id: "local-lab".into(),
+            name: "local-lab".into(),
+        })
+        .unwrap();
+    store.put_principal("reader").unwrap();
+    store
+        .grant("local-lab", "reader", proofstorm_core::Capability::LabRead)
+        .unwrap();
+    let mut client = McpClient::spawn(
+        binary(),
+        "existing-grants",
+        &[
+            ("PROOFSTORM_MODE", "offline".as_ref()),
+            ("PROOFSTORM_DB", database.as_os_str()),
+            ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
+            ("PROOFSTORM_TOOLSET", "all".as_ref()),
+        ],
+    )
+    .unwrap();
+    let listed = client.request("tools/list", json!({})).unwrap();
+    let names = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"lab_read"));
+    assert!(!names.contains(&"lab_apply"));
+    assert!(!names.contains(&"component_exec_live"));
+    assert_eq!(
+        store.capabilities("local-lab", "reader").unwrap(),
+        [proofstorm_core::Capability::LabRead].into()
+    );
+}
+
+#[test]
+fn missing_agent_identity_fails_instead_of_starting_an_ephemeral_service() {
+    let mut command = std::process::Command::new(binary());
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("PROOFSTORM_") {
+            command.env_remove(key);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("PROOFSTORM_PRINCIPAL"));
+    assert!(output.stdout.is_empty());
 }

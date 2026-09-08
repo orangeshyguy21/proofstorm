@@ -3,8 +3,12 @@
 *.log
 .DS_Store
 /dev/
+/output/
 /target/
 /.tools/
 /.proofstorm/
 __pycache__/
 *.pyc
+
+/crates/proofstorm-web/dist/
+/.codex

@@ -14,7 +14,9 @@ mod operation;
 mod publication;
 mod quote;
 mod schema;
+mod update;
 mod validation;
+pub use update::{LabChanges, LabUpdatePlan, LabUpdateTarget};
 
 pub use backend::{
     BackendContractRegistry, BitcoinCoreConfig, CdkMintConfig, ClnConfig, ComponentBackendContract,
@@ -49,8 +51,8 @@ pub use evidence::{
     EvidenceBundleContent, EvidenceInstance,
 };
 pub use experiment::{
-    Experiment, ExperimentLease, ExperimentPhase, LeasePhase, PrivateReceiveCommand,
-    PrivateTransferLeaseScope,
+    Experiment, ExperimentPhase, PrivateAccessGrant, PrivateReceiveCommand, PrivateTransferScope,
+    Session, SessionPhase,
 };
 pub use instance::{
     ComponentCondition, ComponentStatus, InstancePhase, InventoryEntry, LabInstance,

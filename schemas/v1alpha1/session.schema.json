@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "SessionPhase": {
+      "enum": [
+        "active",
+        "finished"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "experiment_id": {
+      "type": "string"
+    },
+    "finished_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "instance_id": {
+      "type": "string"
+    },
+    "last_activity_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "phase": {
+      "$ref": "#/$defs/SessionPhase"
+    },
+    "principal_id": {
+      "type": "string"
+    },
+    "started_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "workspace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "experiment_id",
+    "instance_id",
+    "principal_id",
+    "phase",
+    "started_at_unix",
+    "last_activity_at_unix"
+  ],
+  "title": "Session",
+  "type": "object"
+}

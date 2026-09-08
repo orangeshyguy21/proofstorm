@@ -20,7 +20,7 @@ pub(super) fn transfer(
     let artifact = operation(
         client,
         directory,
-        "proofstorm_private_transfer",
+        "private_transfer",
         id,
         json!({"transfer":parameters}),
     )?;
@@ -212,7 +212,7 @@ pub fn exercise(
     let replay = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "synthetic-replay-refused",
         json!({"component":"wallet-a","argv":["python3","-c","raise SystemExit(99)"],"timeout_seconds":10,"private_payload":{"kind":"consume","reference":synthetic,"input":{"kind":"stdin"}}}),
     );
@@ -254,14 +254,14 @@ pub fn exercise(
     operation(
         client,
         directory,
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         "bootstrap",
         json!({"chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd","funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000}),
     )?;
     let invoice = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "funding-invoice",
         json!({"component":"wallet-a","argv":["cocod","receive","bolt11","5000","--mint-url","http://mint:3338"],"timeout_seconds":60,"output":{"mode":"bolt11"}}),
     )?;
@@ -269,7 +269,7 @@ pub fn exercise(
     let paid = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "funding-payment",
         json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","payinvoice","--force","--json",request],"timeout_seconds":60,"output":{"mode":"json_fields","fields":["status","value_sat"]}}),
     )?;
@@ -398,7 +398,7 @@ fn cdk_balance(client: &mut McpClient, directory: &Path, id: &str, expected: u64
     let receipt = operation(
         client,
         directory,
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         id,
         json!({"wallet":"wallet-b","mint":"mint"}),
     )?;

@@ -74,7 +74,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("slice4-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({
             "draft_id": DRAFT,
             "lab": lab_document(),
@@ -83,7 +83,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({
             "draft_id": DRAFT,
             "expected_version": 1,
@@ -100,7 +100,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({
             "instance_id": INSTANCE,
             "revision_digest": expect::string(&published, "/digest")?,
@@ -111,7 +111,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let ready = lab::wait_ready(&mut client, INSTANCE)?;
 
     let components = client.call(
-        "proofstorm_lab_component_status_list",
+        "lab_component_status_list",
         json!({"instance_id": INSTANCE, "limit": 50}),
     )?;
     let mut ready_ids = Vec::new();
@@ -130,7 +130,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("sanitized status leaked a credential");
     }
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     let closed = lab::wait_closed(&mut client, INSTANCE)?;
 
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {

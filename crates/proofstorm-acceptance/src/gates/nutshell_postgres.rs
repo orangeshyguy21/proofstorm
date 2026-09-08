@@ -49,15 +49,15 @@ pub fn run(context: &GateContext) -> Result<()> {
         context.session("nutshell-postgres-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-nutshell-postgres"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-postgres"}),
     )?;
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-postgres"}),
     )?;
 
@@ -201,7 +201,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     lab::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     lab::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
 
     println!(

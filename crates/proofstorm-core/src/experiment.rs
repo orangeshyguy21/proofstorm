@@ -24,44 +24,53 @@ pub struct Experiment {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum LeasePhase {
+pub enum SessionPhase {
     #[default]
     Active,
-    Released,
-    Expired,
+    Finished,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ExperimentLease {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegation: Option<PrivateTransferLeaseScope>,
+pub struct Session {
     pub id: String,
     pub workspace_id: String,
     pub experiment_id: String,
     pub instance_id: String,
     pub principal_id: String,
-    pub phase: LeasePhase,
-    pub acquired_at_unix: i64,
-    pub expires_at_unix: i64,
-    pub max_actions: u32,
+    pub phase: SessionPhase,
+    pub started_at_unix: i64,
+    pub last_activity_at_unix: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub released_at_unix: Option<i64>,
+    pub finished_at_unix: Option<i64>,
 }
 
 /// A recipient may inspect and consume one private transfer in one wallet.
-/// The parent remains the exclusive lab lease; this scope grants no global capability.
+/// This scope grants no global capability and is independent of session lifetime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct PrivateTransferLeaseScope {
+pub struct PrivateTransferScope {
     pub receive_command_digest: String,
-    pub parent_lease_id: String,
+    pub issuer_principal_id: String,
     pub component: String,
     pub mint: String,
     pub reference: String,
 }
 
-impl PrivateTransferLeaseScope {
+/// Explicit permission for one private transfer. Sessions never confer or revoke access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateAccessGrant {
+    pub id: String,
+    pub workspace_id: String,
+    pub instance_id: String,
+    pub principal_id: String,
+    pub scope: PrivateTransferScope,
+    pub created_at_unix: i64,
+    pub revoked_at_unix: Option<i64>,
+}
+
+impl PrivateTransferScope {
     /// Evaluate the normalized public operation request before admission.
     pub fn permits(&self, kind: crate::OperationKind, request: &serde_json::Value) -> bool {
         use crate::OperationKind;
@@ -102,7 +111,7 @@ impl PrivateTransferLeaseScope {
     }
 }
 
-/// Exact native command approved by the source for this recipient lease.
+/// Exact native command approved by the source for this recipient session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateReceiveCommand {

@@ -75,7 +75,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("cdk-cln-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({
             "draft_id": DRAFT,
             "lab": lab_document(),
@@ -84,7 +84,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({
             "draft_id": DRAFT,
             "expected_version": 1,
@@ -98,7 +98,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     expect::equals(entry, "/image", &Value::from(IMAGE))?;
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({
             "instance_id": INSTANCE,
             "revision_digest": expect::string(&published, "/digest")?,
@@ -135,7 +135,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     lab::wait_closed(&mut client, INSTANCE)?;
 
     println!(

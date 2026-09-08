@@ -39,16 +39,18 @@ pub enum Capability {
     LabStatus,
     #[serde(rename = "lab.close")]
     LabClose,
+    // Open a local application connection; authenticated endpoints may reveal
+    // disposable lab credentials through a private configuration file.
+    #[serde(rename = "lab.connect")]
+    LabConnect,
     #[serde(rename = "experiment.create")]
     ExperimentCreate,
     #[serde(rename = "experiment.read")]
     ExperimentRead,
     #[serde(rename = "experiment.close")]
     ExperimentClose,
-    #[serde(rename = "lease.acquire")]
-    LeaseAcquire,
-    #[serde(rename = "lease.release")]
-    LeaseRelease,
+    #[serde(rename = "lab.operate")]
+    LabOperate,
     #[serde(rename = "action.cancel")]
     ActionCancel,
     #[serde(rename = "topology.inspect")]

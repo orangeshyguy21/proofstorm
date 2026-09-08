@@ -65,7 +65,7 @@ class PrefunderTests(unittest.TestCase):
             return {'operations': [{'operation_id': 'setup-initialize', 'phase': 'succeeded'}]}
         client.call = call
         self.assertEqual(client.wait('setup-initialize')['phase'], 'succeeded')
-        self.assertEqual(calls[0][0], 'proofstorm_operation_wait_many')
+        self.assertEqual(calls[0][0], 'operation_wait_many')
         with self.assertRaises(RuntimeError):
             client.wait('different-operation')
 

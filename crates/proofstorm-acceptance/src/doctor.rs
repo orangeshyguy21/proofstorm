@@ -17,57 +17,74 @@ use crate::{Kubectl, McpClient, gate::CONTROL_NAMESPACE, json as expect};
 
 /// Tools a fully granted principal must still see after capability filtering.
 const REQUIRED_TOOLS: &[&str] = &[
-    "proofstorm_artifact_export",
-    "proofstorm_catalog_entry_read",
-    "proofstorm_catalog_list",
-    "proofstorm_channel_open",
-    "proofstorm_component_exec_live",
-    "proofstorm_component_forensics",
-    "proofstorm_component_restart",
-    "proofstorm_conservation_oracle",
-    "proofstorm_evidence_section_read",
-    "proofstorm_lab_close",
-    "proofstorm_lab_component_status_list",
-    "proofstorm_network_heal",
-    "proofstorm_network_partition",
-    "proofstorm_node_restart",
-    "proofstorm_peer_connect",
-    "proofstorm_reachability_oracle",
-    "proofstorm_wallet_balance",
-    "proofstorm_wallet_fund",
-    "proofstorm_wallet_initialize",
-    "proofstorm_wallet_invoice",
-    "proofstorm_wallet_melt_quote_refresh",
-    "proofstorm_wallet_pay",
+    "artifact_export",
+    "catalog_entry_read",
+    "catalog_list",
+    "channel_open",
+    "component_exec_live",
+    "component_forensics",
+    "component_restart",
+    "conservation_oracle",
+    "evidence_section_read",
+    "lab_close",
+    "lab_component_status_list",
+    "network_heal",
+    "network_partition",
+    "node_restart",
+    "peer_connect",
+    "reachability_oracle",
+    "wallet_balance",
+    "wallet_fund",
+    "wallet_initialize",
+    "wallet_invoice",
+    "wallet_melt_quote_refresh",
+    "wallet_pay",
+];
+
+/// Ordinary lab workflow, without exposing manual run/session coordination.
+const REQUIRED_DEVELOPER_TOOLS: &[&str] = &[
+    "catalog_list",
+    "catalog_entry_read",
+    "catalog_config_schema_read",
+    "lab_up",
+    "lab_inspect",
+    "session_list",
+    "lab_exec",
+    "lab_sync",
+    "lab_finish",
+    "lab_component_status_list",
+    "operation_status",
+    "operation_wait_many",
+    "action_cancel",
 ];
 
 /// Native operation replaces the wallet and bootstrap-dependent mutations.
 const REQUIRED_NATIVE_TOOLS: &[&str] = &[
-    "proofstorm_catalog_list",
-    "proofstorm_catalog_entry_read",
-    "proofstorm_candidate_build",
-    "proofstorm_candidate_wait",
-    "proofstorm_network_capabilities",
-    "proofstorm_lab_plan",
-    "proofstorm_lab_apply",
-    "proofstorm_lab_wait",
-    "proofstorm_lab_close",
-    "proofstorm_experiment_create",
-    "proofstorm_experiment_close",
-    "proofstorm_lease_acquire",
-    "proofstorm_lease_release",
-    "proofstorm_component_exec_live",
-    "proofstorm_component_forensics",
-    "proofstorm_component_restart",
-    "proofstorm_component_logs",
-    "proofstorm_network_partition",
-    "proofstorm_network_heal",
-    "proofstorm_reachability_oracle",
-    "proofstorm_wallet_balance",
-    "proofstorm_operation_wait_many",
-    "proofstorm_action_cancel",
-    "proofstorm_artifact_export",
-    "proofstorm_evidence_section_read",
+    "catalog_list",
+    "catalog_entry_read",
+    "candidate_build",
+    "candidate_wait",
+    "network_capabilities",
+    "lab_plan",
+    "lab_apply",
+    "lab_wait",
+    "lab_close",
+    "experiment_create",
+    "experiment_close",
+    "session_start",
+    "session_finish",
+    "component_exec_live",
+    "component_forensics",
+    "component_restart",
+    "component_logs",
+    "network_partition",
+    "network_heal",
+    "reachability_oracle",
+    "wallet_balance",
+    "operation_wait_many",
+    "action_cancel",
+    "artifact_export",
+    "evidence_section_read",
 ];
 
 /// Spawn the configured server and assert it still advertises every required tool.
@@ -108,14 +125,13 @@ pub fn run(mcp_binary: &Path, config_path: &Path) -> Result<()> {
         .map(|tool| expect::string(tool, "/name"))
         .collect::<Result<_>>()?;
 
-    let required = if environment
+    let required = match environment
         .get("PROOFSTORM_TOOLSET")
         .and_then(Value::as_str)
-        == Some("native")
     {
-        REQUIRED_NATIVE_TOOLS
-    } else {
-        REQUIRED_TOOLS
+        None | Some("developer") => REQUIRED_DEVELOPER_TOOLS,
+        Some("native") => REQUIRED_NATIVE_TOOLS,
+        _ => REQUIRED_TOOLS,
     };
     let missing: Vec<&&str> = required
         .iter()

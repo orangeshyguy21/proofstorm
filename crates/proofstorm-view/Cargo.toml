@@ -1,0 +1,16 @@
+[package]
+name = "proofstorm-view"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+proofstorm-core = { path = "../proofstorm-core", default-features = false }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

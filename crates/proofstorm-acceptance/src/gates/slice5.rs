@@ -20,7 +20,7 @@ use crate::{GateContext, McpClient, gate::CONTROL_NAMESPACE, json as expect, lab
 
 const INSTANCE: &str = "slice5-instance";
 const EXPERIMENT: &str = "slice5-experiment";
-const LEASE: &str = "slice5-lease";
+const LEASE: &str = "slice5-session";
 const DRAFT: &str = "slice5";
 const WORKSPACE: &str = "slice5";
 const INVALID_ACTION: &str = "slice5-invalid-peer-action";
@@ -40,8 +40,7 @@ const CAPABILITIES: &[&str] = &[
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lease.acquire",
-    "lease.release",
+    "lab.operate",
     "action.cancel",
     "topology.mutate",
     "node.control",
@@ -95,12 +94,12 @@ fn empty_lab() -> Value {
     })
 }
 
-/// The instance, experiment and lease triple every runtime action carries.
+/// The instance, experiment and session triple every runtime action carries.
 fn scoped(operation: &str, extra: Value) -> Value {
     let mut base = json!({
         "instance_id": INSTANCE,
         "experiment_id": EXPERIMENT,
-        "lease_id": LEASE,
+        "session_id": LEASE,
         "operation_id": operation
     });
     if let (Some(target), Value::Object(source)) = (base.as_object_mut(), extra) {
@@ -200,7 +199,7 @@ fn observe_mint_reachability(
     observations: &mut Vec<String>,
 ) -> Result<()> {
     client.call(
-        "proofstorm_reachability_oracle",
+        "reachability_oracle",
         scoped(
             operation,
             json!({
@@ -258,7 +257,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let kubectl = &context.kubectl;
 
     // --- network backend discovery is explicit and bounded ------------------
-    let backend = client.call("proofstorm_network_capabilities", json!({}))?;
+    let backend = client.call("network_capabilities", json!({}))?;
     if expect::string(&backend, "/id")? != "kubernetes-network-policy"
         || expect::string(&backend, "/version")? != "networking.k8s.io/v1"
         || backend.get("features") != Some(&json!(["partition", "heal"]))
@@ -275,7 +274,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // --- compose the lab one mutation at a time ----------------------------
     let mut draft = client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": empty_lab(), "idempotency_key": "create-slice5"}),
     )?;
     for component in components() {
@@ -286,9 +285,9 @@ pub fn run(context: &GateContext) -> Result<()> {
             "component": component,
             "idempotency_key": format!("add-component-{id}")
         });
-        draft = client.call("proofstorm_component_add", mutation.clone())?;
+        draft = client.call("component_add", mutation.clone())?;
         if id == "chain" {
-            let replayed = client.call("proofstorm_component_add", mutation)?;
+            let replayed = client.call("component_add", mutation)?;
             if replayed != draft {
                 bail!("component mutation replay was not idempotent");
             }
@@ -302,7 +301,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             expect::string(&link, "/to")?
         );
         draft = client.call(
-            "proofstorm_link_add",
+            "link_add",
             json!({
                 "draft_id": DRAFT,
                 "expected_version": expect::integer(&draft, "/version")?,
@@ -312,7 +311,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?;
     }
 
-    let document = client.call("proofstorm_lab_read", json!({"draft_id": DRAFT}))?;
+    let document = client.call("lab_read", json!({"draft_id": DRAFT}))?;
     let composed: Vec<&str> = expect::array(&document, "/lab/components")?
         .iter()
         .map(|component| expect::string(component, "/id"))
@@ -326,7 +325,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("component composer did not produce canonical ordering: {composed:?}");
     }
     let validation = client.call(
-        "proofstorm_lab_validate",
+        "lab_validate",
         json!({"lab": document.get("lab").cloned().unwrap_or(Value::Null)}),
     )?;
     if !expect::boolean(&validation, "/valid")? {
@@ -334,7 +333,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({
             "draft_id": DRAFT,
             "expected_version": expect::integer(&draft, "/version")?,
@@ -349,7 +348,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-slice5"}),
     )?;
     let status = lab::wait_phase(&mut client, INSTANCE, "ready", 180, Duration::from_secs(3))?;
@@ -358,7 +357,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let lock_digest = expect::string(&status, "/lock_digest")?.to_string();
 
     let component_status = client.call(
-        "proofstorm_lab_component_status_list",
+        "lab_component_status_list",
         json!({"instance_id": INSTANCE, "limit": 50}),
     )?;
     let mut ready: Vec<&str> = expect::array(&component_status, "/components")?
@@ -383,20 +382,20 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // --- unsupported fault kinds are refused before any action -------------
     client.call_refused(
-        "proofstorm_network_delay",
+        "network_delay",
         json!({
             "instance_id": INSTANCE, "experiment_id": "unsupported-network-experiment",
-            "lease_id": "unsupported-network-lease", "operation_id": "unsupported-network-delay",
+            "session_id": "unsupported-network-session", "operation_id": "unsupported-network-delay",
             "from_component": "wallet", "to_component": "mint", "direction": "from_to",
             "delay_ms": 100, "jitter_ms": 10, "idempotency_key": "unsupported-network-delay-slice5"
         }),
         "network_fault_unsupported",
     )?;
     client.call_refused(
-        "proofstorm_network_loss",
+        "network_loss",
         json!({
             "instance_id": INSTANCE, "experiment_id": "unsupported-network-experiment",
-            "lease_id": "unsupported-network-lease", "operation_id": "unsupported-network-loss",
+            "session_id": "unsupported-network-session", "operation_id": "unsupported-network-loss",
             "from_component": "wallet", "to_component": "mint", "direction": "bidirectional",
             "loss_basis_points": 250, "idempotency_key": "unsupported-network-loss-slice5"
         }),
@@ -434,7 +433,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             "instanceId": INSTANCE,
             "instanceKey": instance_key,
             "experimentId": "controller-conformance",
-            "leaseId": "controller-conformance",
+            "sessionId": "controller-conformance",
             "principalId": "cluster-operator",
             "sequence": 1,
             "operationId": "invalid-peer-connect",
@@ -497,17 +496,17 @@ pub fn run(context: &GateContext) -> Result<()> {
         CONTROL_NAMESPACE,
     ])?;
 
-    // --- experiment and lease ----------------------------------------------
+    // --- experiment and session ----------------------------------------------
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-slice5-experiment"}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 900, "max_actions": 46, "idempotency_key": "acquire-slice5-lease"}),
+        "session_start",
+        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-slice5-session"}),
     )?;
     client.call_refused(
-        "proofstorm_lab_close",
+        "lab_close",
         json!({"instance_id": INSTANCE}),
         "instance_leased",
     )?;
@@ -521,8 +520,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "bootstrap-slice5"
         }),
     );
-    let accepted_bootstrap =
-        client.call("proofstorm_liquidity_bootstrap", bootstrap_request.clone())?;
+    let accepted_bootstrap = client.call("liquidity_bootstrap", bootstrap_request.clone())?;
     let mut items = Value::Null;
     let mut created = false;
     for _ in 0..30 {
@@ -542,7 +540,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     {
         bail!("unexpected typed runtime action: {items}");
     }
-    let retried_bootstrap = client.call("proofstorm_liquidity_bootstrap", bootstrap_request)?;
+    let retried_bootstrap = client.call("liquidity_bootstrap", bootstrap_request)?;
     if expect::string(&retried_bootstrap, "/resource_name")?
         != expect::string(&accepted_bootstrap, "/resource_name")?
         || expect::integer(&retried_bootstrap, "/sequence")?
@@ -572,7 +570,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // --- peer, channel, wallet ---------------------------------------------
     submit_idempotent(
         &mut client,
-        "proofstorm_peer_connect",
+        "peer_connect",
         scoped(
             "peer-connect",
             json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "idempotency_key": "peer-connect-slice5"}),
@@ -586,7 +584,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_channel_open",
+        "channel_open",
         scoped(
             "channel-open",
             json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_sat": 2_000_000, "push_sat": 0, "idempotency_key": "channel-open-slice5"}),
@@ -602,7 +600,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_wallet_initialize",
+        "wallet_initialize",
         scoped(
             "wallet-initialize",
             json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-initialize-slice5"}),
@@ -615,7 +613,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         scoped(
             "wallet-balance",
             json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-balance-slice5"}),
@@ -628,7 +626,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_wallet_fund",
+        "wallet_fund",
         scoped(
             "wallet-fund",
             json!({"wallet": "wallet", "mint": "mint", "payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": "wallet-fund-slice5"}),
@@ -644,7 +642,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         scoped(
             "wallet-balance-before-round-trip",
             json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-balance-before-round-trip-slice5"}),
@@ -657,7 +655,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let accepted_wallet = submit_idempotent(
         &mut client,
-        "proofstorm_wallet_round_trip",
+        "wallet_round_trip",
         scoped(
             "round-trip",
             json!({"wallet": "wallet", "mint": "mint", "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": "round-trip-slice5"}),
@@ -689,7 +687,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // --- a Job deleted across controller downtime must not replay ----------
     let accepted_lost = client.call(
-        "proofstorm_conservation_oracle",
+        "conservation_oracle",
         scoped(
             "lost-conservation",
             json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-round-trip", "treatment_operation_id": "round-trip", "idempotency_key": "lost-conservation-slice5"}),
@@ -749,7 +747,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // --- cancellation recorded while the controller is down ----------------
     kubectl.stop_controller()?;
     let accepted_cancelled = client.call(
-        "proofstorm_conservation_oracle",
+        "conservation_oracle",
         scoped(
             "cancelled-conservation",
             json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-round-trip", "treatment_operation_id": "round-trip", "idempotency_key": "cancelled-conservation-slice5"}),
@@ -757,8 +755,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     let cancelled_resource = expect::string(&accepted_cancelled, "/resource_name")?.to_string();
     let cancel_request = json!({"operation_id": "cancelled-conservation", "idempotency_key": "cancel-action-slice5"});
-    let first_cancel = client.call("proofstorm_action_cancel", cancel_request.clone())?;
-    let retried_cancel = client.call("proofstorm_action_cancel", cancel_request)?;
+    let first_cancel = client.call("action_cancel", cancel_request.clone())?;
+    let retried_cancel = client.call("action_cancel", cancel_request)?;
     if expect::string(&first_cancel, "/resource_name")? != cancelled_resource
         || expect::string(&retried_cancel, "/resource_name")? != cancelled_resource
         || expect::integer(&retried_cancel, "/sequence")?
@@ -791,7 +789,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // --- conservation oracle ------------------------------------------------
     let accepted_oracle = submit_idempotent(
         &mut client,
-        "proofstorm_conservation_oracle",
+        "conservation_oracle",
         scoped(
             "conservation",
             json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-round-trip", "treatment_operation_id": "round-trip", "idempotency_key": "conservation-slice5"}),
@@ -821,7 +819,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // --- private invoice and pay -------------------------------------------
     client.call(
-        "proofstorm_wallet_initialize",
+        "wallet_initialize",
         scoped(
             "receiver-initialize",
             json!({"wallet": "receiver-wallet", "mint": "mint", "idempotency_key": "receiver-initialize-slice5"}),
@@ -838,7 +836,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_wallet_invoice",
+        "wallet_invoice",
         scoped(
             "wallet-invoice",
             json!({"wallet": "receiver-wallet", "mint": "mint", "amount_sat": 100, "timeout_seconds": 300, "idempotency_key": "wallet-invoice-slice5"}),
@@ -856,7 +854,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("non-blocking wallet invoice artifact is invalid: {invoice}");
     }
     let quote = client.call(
-        "proofstorm_wallet_quote_status",
+        "wallet_quote_status",
         json!({"instance_id": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
     if expect::string(&quote, "/last_observation/state")? != "UNPAID"
@@ -867,7 +865,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_wallet_pay",
+        "wallet_pay",
         scoped(
             "wallet-pay",
             json!({"wallet": "wallet", "mint": "mint", "recipient_wallet": "receiver-wallet", "recipient_mint": "mint", "mint_quote_id": mint_quote_id, "idempotency_key": "wallet-pay-slice5"}),
@@ -885,14 +883,14 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("wallet pay artifact is invalid: {paid}");
     }
     let quote = client.call(
-        "proofstorm_wallet_quote_status",
+        "wallet_quote_status",
         json!({"instance_id": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
     if expect::string(&quote, "/last_observation/state")? != "ISSUED" {
         bail!("receive quote was not observed as issued: {quote}");
     }
     let quote_list = client.call(
-        "proofstorm_wallet_quote_list",
+        "wallet_quote_list",
         json!({"experiment_id": EXPERIMENT, "limit": 10}),
     )?;
     let listed = expect::array(&quote_list, "/last_observations")?;
@@ -930,7 +928,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_node_stop",
+        "node_stop",
         node_scoped("payer-stop", "payer-stop-slice5"),
         "node stop",
     )?;
@@ -944,9 +942,9 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
     let mut degraded_ok = false;
     for _ in 0..60 {
-        let stopped_lab = client.call("proofstorm_lab_status", json!({"instance_id": INSTANCE}))?;
+        let stopped_lab = client.call("lab_status", json!({"instance_id": INSTANCE}))?;
         let stopped_components = client.call(
-            "proofstorm_lab_component_status_list",
+            "lab_component_status_list",
             json!({"instance_id": INSTANCE, "limit": 50}),
         )?;
         let payer = expect::array(&stopped_components, "/components")?
@@ -965,7 +963,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_node_start",
+        "node_start",
         node_scoped("payer-start", "payer-start-slice5"),
     )?;
     let started = lab::wait_operation(&mut client, "payer-start", 120)?;
@@ -981,7 +979,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "jsonpath={.metadata.uid}",
     ])?;
     client.call(
-        "proofstorm_node_restart",
+        "node_restart",
         node_scoped("payer-restart", "payer-restart-slice5"),
     )?;
     let restarted = lab::wait_operation(&mut client, "payer-restart", 120)?;
@@ -1020,7 +1018,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_network_partition",
+        "network_partition",
         scoped(
             "wallet-mint-partition",
             json!({"from_component": "wallet", "to_component": "mint", "idempotency_key": "wallet-mint-partition-slice5"}),
@@ -1062,7 +1060,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     client.call(
-        "proofstorm_network_partition",
+        "network_partition",
         scoped(
             "receiver-wallet-mint-partition",
             json!({"from_component": "receiver-wallet", "to_component": "mint", "idempotency_key": "receiver-wallet-mint-partition-slice5"}),
@@ -1152,7 +1150,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     client.call(
-        "proofstorm_network_heal",
+        "network_heal",
         scoped(
             "wallet-mint-heal",
             json!({"partition_operation_id": "wallet-mint-partition", "idempotency_key": "wallet-mint-heal-slice5"}),
@@ -1192,7 +1190,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     client.call(
-        "proofstorm_network_heal",
+        "network_heal",
         scoped(
             "receiver-wallet-mint-heal",
             json!({"partition_operation_id": "receiver-wallet-mint-partition", "idempotency_key": "receiver-wallet-mint-heal-slice5"}),
@@ -1230,7 +1228,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // --- CLN interoperability and rebalance --------------------------------
     client.call(
-        "proofstorm_peer_connect",
+        "peer_connect",
         scoped(
             "cln-peer-connect",
             json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "idempotency_key": "cln-peer-connect-slice5"}),
@@ -1242,7 +1240,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_channel_open",
+        "channel_open",
         scoped(
             "cln-channel-open",
             json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 300_000, "idempotency_key": "cln-channel-open-slice5"}),
@@ -1252,7 +1250,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let cln_channel_id = assert_handle(lab::artifact_content(&cln_channel)?, "LND to CLN channel")?;
 
     client.call(
-        "proofstorm_peer_connect",
+        "peer_connect",
         scoped(
             "rebalance-bridge-peer-connect",
             json!({"from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "idempotency_key": "rebalance-bridge-peer-connect-slice5"}),
@@ -1264,7 +1262,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_channel_open",
+        "channel_open",
         scoped(
             "rebalance-bridge-channel-open",
             json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 0, "idempotency_key": "rebalance-bridge-channel-open-slice5"}),
@@ -1276,7 +1274,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_channel_rebalance",
+        "channel_rebalance",
         scoped(
             "channel-rebalance",
             json!({"lightning": "mint-lnd", "outgoing_channel_id": channel_id, "incoming_channel_id": cln_channel_id, "amount_sat": 100_000, "max_fee_sat": 100, "idempotency_key": "channel-rebalance-slice5"}),
@@ -1300,7 +1298,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // --- topology teardown --------------------------------------------------
     client.call(
-        "proofstorm_channel_close",
+        "channel_close",
         scoped(
             "rebalance-bridge-channel-close",
             json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "channel_id": bridge_channel_id, "idempotency_key": "rebalance-bridge-channel-close-slice5"}),
@@ -1313,7 +1311,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_channel_close",
+        "channel_close",
         scoped(
             "channel-close",
             json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_id": channel_id, "idempotency_key": "channel-close-slice5"}),
@@ -1332,7 +1330,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_channel_close",
+        "channel_close",
         scoped(
             "bootstrap-channel-close",
             json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-lnd", "channel_id": bootstrap_channel_id, "idempotency_key": "bootstrap-channel-close-slice5"}),
@@ -1347,7 +1345,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     submit_idempotent(
         &mut client,
-        "proofstorm_peer_disconnect",
+        "peer_disconnect",
         scoped(
             "peer-disconnect",
             json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "idempotency_key": "peer-disconnect-slice5"}),
@@ -1360,7 +1358,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_peer_connect",
+        "peer_connect",
         scoped(
             "peer-reconnect",
             json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "idempotency_key": "peer-reconnect-slice5"}),
@@ -1372,7 +1370,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_channel_open",
+        "channel_open",
         scoped(
             "force-channel-open",
             json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_sat": 1_000_000, "push_sat": 0, "idempotency_key": "force-channel-open-slice5"}),
@@ -1383,7 +1381,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         assert_handle(lab::artifact_content(&force_channel)?, "force-close target")?;
 
     client.call(
-        "proofstorm_channel_force_close",
+        "channel_force_close",
         scoped(
             "channel-force-close",
             json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_id": force_channel_id, "idempotency_key": "channel-force-close-slice5"}),
@@ -1401,7 +1399,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_channel_close",
+        "channel_close",
         scoped(
             "cln-channel-close",
             json!({"chain": "chain", "from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "channel_id": cln_channel_id, "idempotency_key": "cln-channel-close-slice5"}),
@@ -1419,7 +1417,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_peer_disconnect",
+        "peer_disconnect",
         scoped(
             "cln-peer-disconnect",
             json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "idempotency_key": "cln-peer-disconnect-slice5"}),
@@ -1431,7 +1429,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_peer_connect",
+        "peer_connect",
         scoped(
             "cln-peer-reconnect",
             json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "idempotency_key": "cln-peer-reconnect-slice5"}),
@@ -1443,7 +1441,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_channel_open",
+        "channel_open",
         scoped(
             "cln-force-channel-open",
             json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 300_000, "idempotency_key": "cln-force-channel-open-slice5"}),
@@ -1456,7 +1454,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     client.call(
-        "proofstorm_channel_force_close",
+        "channel_force_close",
         scoped(
             "cln-channel-force-close",
             json!({"chain": "chain", "from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "channel_id": cln_force_channel_id, "idempotency_key": "cln-channel-force-close-slice5"}),
@@ -1473,22 +1471,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("CLN force-close artifact is invalid: {cln_force_closed}");
     }
 
-    // --- the first request past the lease budget is refused ----------------
-    client.call_refused(
-        "proofstorm_wallet_balance",
-        scoped(
-            "over-budget",
-            json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "over-budget-slice5"}),
-        ),
-        "action_budget_exceeded",
-    )?;
-
     let runtime_items = action_kinds(context)?;
-    if expect::array(&runtime_items, "/items")?.iter().any(|item| {
-        item.pointer("/spec/operationId").and_then(Value::as_str) == Some("over-budget")
-    }) {
-        bail!("exhausted action budget created a runtime action");
-    }
     let kinds = kinds_by_operation(&runtime_items)?;
     let expect_kinds = |operations: &[&str], wanted: &[&str], label: &str| -> Result<()> {
         let actual: Vec<&str> = operations
@@ -1588,7 +1571,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // --- journal, evidence, verified close ---------------------------------
     let journal_page = client.call(
-        "proofstorm_action_list",
+        "action_list",
         json!({"experiment_id": EXPERIMENT, "after_sequence": 0, "limit": 100}),
     )?;
     let journal = expect::array(&journal_page, "/actions")?;
@@ -1613,17 +1596,17 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": LEASE, "idempotency_key": "release-slice5-lease"}),
+        "session_finish",
+        json!({"session_id": LEASE, "idempotency_key": "release-slice5-session"}),
     )?;
     let closed_experiment = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id": EXPERIMENT, "idempotency_key": "close-slice5-experiment"}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
     let evidence = client.call(
-        "proofstorm_artifact_export",
+        "artifact_export",
         json!({
             "experiment_id": EXPERIMENT,
             "include_oracle_artifacts": true,
@@ -1680,7 +1663,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
     }
 
-    client.call("proofstorm_lab_close", json!({"instance_id": INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
     let final_status =
         lab::wait_phase(&mut client, INSTANCE, "closed", 90, Duration::from_secs(3))?;
     if !expect::boolean(&final_status, "/teardown_receipt/verified_absent")? {

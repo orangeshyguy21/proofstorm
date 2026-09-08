@@ -12,17 +12,17 @@ import sys
 import threading
 import time
 
-CLEANUP_TOOLS = frozenset('''proofstorm_workspace_read
-proofstorm_lab_status proofstorm_lab_wait proofstorm_lab_close proofstorm_lab_close_wait
-proofstorm_lab_component_status_list proofstorm_lab_component_status_read
-proofstorm_lab_inventory_list proofstorm_operation_status proofstorm_operation_wait
-proofstorm_operation_wait_many proofstorm_action_list proofstorm_action_cancel
-proofstorm_artifact_read proofstorm_artifact_export proofstorm_artifact_list
-proofstorm_lease_release proofstorm_experiment_close proofstorm_experiment_read
-proofstorm_candidate_cancel proofstorm_candidate_read proofstorm_candidate_list
-proofstorm_candidate_wait'''.split())
-WAIT_TOOLS = frozenset('''proofstorm_lab_wait
-proofstorm_operation_wait proofstorm_operation_wait_many proofstorm_candidate_wait'''.split())
+CLEANUP_TOOLS = frozenset('''workspace_read
+lab_status lab_wait lab_close lab_close_wait
+lab_component_status_list lab_component_status_read
+lab_inventory_list operation_status operation_wait
+operation_wait_many action_list action_cancel
+artifact_read artifact_export artifact_list
+private_access_revoke private_access_read session_list session_finish experiment_close experiment_read
+candidate_cancel candidate_read candidate_list
+candidate_wait'''.split())
+WAIT_TOOLS = frozenset('''lab_wait
+operation_wait operation_wait_many candidate_wait'''.split())
 
 CDK_PREFIX = ('cdk-cli', '--work-dir', '/wallet/cdk', '--unit', 'sat', '--non-interactive')
 SAFE_PUBLIC_ARGV = frozenset([
@@ -38,7 +38,7 @@ SAFE_PUBLIC_ARGV = frozenset([
 
 def public_output_allowed(message):
     params = message.get('params', {})
-    if message.get('method') != 'tools/call' or not isinstance(params, dict) or params.get('name') != 'proofstorm_component_exec_live':
+    if message.get('method') != 'tools/call' or not isinstance(params, dict) or params.get('name') != 'component_exec_live':
         return True
     args = params.get('arguments', {})
     if not isinstance(args, dict) or not isinstance(args.get('output'), dict) or args['output'].get('mode') != 'public':
@@ -51,7 +51,7 @@ def public_output_allowed(message):
 def argument_snapshot(message, boundary):
     """Fixed custody metadata only; no native commands or arbitrary string values."""
     params = message.get('params', {})
-    if message.get('method') != 'tools/call' or not isinstance(params, dict) or params.get('name') != 'proofstorm_private_transfer':
+    if message.get('method') != 'tools/call' or not isinstance(params, dict) or params.get('name') != 'private_transfer':
         return None
     args = params.get('arguments', {})
     if not isinstance(args, dict):
@@ -150,7 +150,7 @@ class CleanupGate:
             return True
         # Custody retirement is cleanup. Keep authorization in MCP and admit
         # only these methods; delivery, handoff and reservation remain work.
-        if params.get('name') == 'proofstorm_private_transfer':
+        if params.get('name') == 'private_transfer':
             args = params.get('arguments')
             transfer = args.get('transfer') if isinstance(args, dict) else None
             return isinstance(transfer, dict) and transfer.get('transferMethod') in ('status', 'release')
@@ -168,7 +168,7 @@ class CleanupGate:
                 'hard_stop_at_unix': self.started_at + self.max_seconds,
                 'seconds_to_cleanup': max(0, round(self.started_at + self.seconds - now, 3)),
                 'seconds_to_hard_stop': max(0, round(self.started_at + self.max_seconds - now, 3)),
-                'instruction': ('Cancel owned operations, release lease, close experiment, export evidence, '
+                'instruction': ('Cancel owned operations, release session, close experiment, export evidence, '
                                 'close and verify lab absence, then report now.' if cleanup else
                                 'Finish experimental work before cleanup; reserve time for teardown and report.')}
         if self.stage_budget:
@@ -193,7 +193,7 @@ class CleanupGate:
         if type(requested) is not int or not 1 <= requested <= 120:
             return message
         budget = self.budget()
-        if (budget['phase'] == 'cleanup' and params['name'] == 'proofstorm_lab_wait'
+        if (budget['phase'] == 'cleanup' and params['name'] == 'lab_wait'
                 and arguments.get('target_phase') == 'closed'):
             # Ordinary deletion should not burn the remaining model steps in
             # short polls. Keep a reporting margin and the server's 1s minimum
@@ -330,7 +330,7 @@ def main():
             if not allowed:
                 if 'id' in message:
                     emit(json.dumps(gate.decorate({'jsonrpc': '2.0', 'id': message['id'], 'error': {
-                        'code': -32600, 'message': 'Cleanup phase: cancel or wait for owned operations, release the lease, close the experiment, export evidence, close the lab, then report. New experimental work is refused.',
+                        'code': -32600, 'message': 'Cleanup phase: cancel or wait for owned operations, release the session, close the experiment, export evidence, close the lab, then report. New experimental work is refused.',
                         'data': {'code': 'cleanup_phase_only'}}})) + '\n')
                 continue
             if message.get('method') == 'tools/call':

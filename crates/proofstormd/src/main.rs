@@ -1,3 +1,5 @@
+mod component_logs;
+mod lab_updates;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -14,7 +16,6 @@ use k8s_openapi::api::{
     },
     discovery::v1::EndpointSlice,
     networking::v1::NetworkPolicy,
-    rbac::v1::{Role, RoleBinding},
 };
 use kube::{
     Api, Client, ResourceExt,
@@ -42,7 +43,7 @@ use proofstorm_kube::{
     ProofstormLabAction, ProofstormLabActionStatus, ProofstormLabStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_component_network_policy,
-    render_lab, render_lab_action_cleanup_job, render_lab_action_job, render_security_spine,
+    render_lab, render_lab_action_cleanup_job, render_lab_action_job, render_lab_security_spine,
     schedule_protocol_probers,
 };
 use thiserror::Error;
@@ -92,6 +93,13 @@ enum Error {
     LiveExec(String),
 }
 
+fn pod_belongs_to_instance(pod: &Pod, key: &str) -> bool {
+    pod.labels()
+        .get(INSTANCE_LABEL)
+        .is_some_and(|value| value == key)
+        && pod.metadata.namespace.as_deref() == Some(instance_namespace(key).as_str())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::try_default().await?;
@@ -99,7 +107,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let actions = Api::<ProofstormLabAction>::all(client.clone());
     let candidate_builds = Api::<ProofstormCandidateBuild>::all(client.clone());
     let context = Arc::new(Context { client });
-    let lab_controller = Controller::new(labs, watcher::Config::default())
+    let lab_controller = Controller::new(labs, watcher::Config::default());
+    let lab_cache = lab_controller.store();
+    let lab_controller = lab_controller
+        // Pod readiness, restarts and probe changes should refresh stable labs promptly.
+        // Keep the slower periodic requeue as a fallback when the watch reconnects.
+        .watches(
+            Api::<Pod>::all(context.client.clone()),
+            watcher::Config::default().labels(INSTANCE_LABEL),
+            move |pod| {
+                lab_cache
+                    .state()
+                    .into_iter()
+                    .filter(|lab| pod_belongs_to_instance(&pod, &lab.spec.instance_key))
+                    .map(|lab| kube::runtime::reflector::ObjectRef::from_obj(lab.as_ref()))
+                    .collect::<Vec<_>>()
+            },
+        )
         .with_config(
             kube::runtime::controller::Config::default().concurrency(LAB_CONTROLLER_CONCURRENCY),
         )
@@ -429,6 +453,18 @@ async fn reconcile_action(
     }
     let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
     let lab = labs.get(&action.spec.lab_name).await?;
+    if action
+        .annotations()
+        .get("proofstorm.dev/action-revision")
+        .is_none_or(String::is_empty)
+        && lab
+            .annotations()
+            .get("proofstorm.dev/desired-generation")
+            .is_some_and(|g| g != "1")
+    {
+        return patch_invalid_action(&action, &context, "Operation does not identify its configuration revision. Reconnect the MCP server and submit a new operation.").await;
+    }
+    let lab = lab_updates::action_lab(&action, lab, &context).await?;
     // Existing native handles only reconcile owned work; changed readiness must
     // not discard a completed native receipt or turn collection into a new start.
     if matches!(action.spec.action, LabAction::ComponentExecLive(_))
@@ -448,8 +484,8 @@ async fn reconcile_action(
         return patch_action_failure(
             action.as_ref(),
             &context,
-            "recipient_lease_refused",
-            "recipient lease unavailable or action outside its scope; no new command started",
+            "private_access_refused",
+            "private access unavailable or action outside its scope; no new command started",
         )
         .await;
     }
@@ -643,7 +679,7 @@ async fn reconcile_action(
     Ok(Action::await_change())
 }
 
-/// Read one component's container log and journal it as the action artifact.
+/// Read a component's startup or application logs and journal their availability.
 ///
 /// Lab workloads hold no Kubernetes credentials by design, so no Job can read
 /// another Pod's log. The controller already holds that authority for native
@@ -685,14 +721,13 @@ async fn reconcile_component_logs(
             request.component, lab.spec.instance_key
         )))
         .await?;
-    // A rollout can leave more than one Pod; the newest is the live one.
-    let newest = matching.items.into_iter().max_by(|left, right| {
-        left.creation_timestamp()
-            .cmp(&right.creation_timestamp())
-            .then_with(|| left.name_any().cmp(&right.name_any()))
-    });
-    let artifact =
-        component_log_artifact(&pods, &request.component, request.tail_lines, newest).await?;
+    let artifact = component_logs::component_log_artifact(
+        &pods,
+        &request.component,
+        request.tail_lines,
+        matching.items,
+    )
+    .await?;
 
     let observed = now_unix();
     patch_action_status(
@@ -709,74 +744,6 @@ async fn reconcile_component_logs(
     )
     .await?;
     Ok(Action::await_change())
-}
-
-/// The journaled body of a component log read, including the pod state that
-/// explains an empty or short log.
-async fn component_log_artifact(
-    pods: &Api<Pod>,
-    component: &str,
-    tail_lines: u32,
-    pod: Option<Pod>,
-) -> Result<std::collections::BTreeMap<String, serde_json::Value>, kube::Error> {
-    const LOG_LIMIT_BYTES: i64 = 20 * 1024;
-
-    let Some(pod) = pod else {
-        return Ok(status_object(serde_json::json!({
-            "component": component,
-            "pod": serde_json::Value::Null,
-            "log": "",
-            "log_truncated": false,
-            "diagnostic": "no_pod",
-            "diagnostic_message":
-                "the component currently has no Pod, so it has no log to read",
-        })));
-    };
-    let pod_name = pod.name_any();
-    let status = pod.status.clone().unwrap_or_default();
-    let container_status = status
-        .container_statuses
-        .as_ref()
-        .and_then(|statuses| statuses.first());
-    let container = container_status
-        .map(|status| status.name.clone())
-        .or_else(|| {
-            pod.spec.as_ref().and_then(|spec| {
-                spec.containers
-                    .first()
-                    .map(|container| container.name.clone())
-            })
-        });
-    let log = match pods
-        .logs(
-            &pod_name,
-            &LogParams {
-                container: container.clone(),
-                tail_lines: Some(i64::from(tail_lines)),
-                limit_bytes: Some(LOG_LIMIT_BYTES),
-                ..LogParams::default()
-            },
-        )
-        .await
-    {
-        Ok(log) => log,
-        // A Pod that has not started its container yet has no readable log,
-        // which is an observation about the component, not a controller fault.
-        Err(kube::Error::Api(error)) if error.code == 400 || error.code == 404 => String::new(),
-        Err(error) => return Err(error),
-    };
-    let truncated = log.len() >= usize::try_from(LOG_LIMIT_BYTES).unwrap_or(usize::MAX);
-    Ok(status_object(serde_json::json!({
-        "component": component,
-        "pod": pod_name,
-        "container": container,
-        "pod_phase": status.phase,
-        "container_ready": container_status.map(|status| status.ready),
-        "restart_count": container_status.map(|status| status.restart_count),
-        "tail_lines": tail_lines,
-        "log": log,
-        "log_truncated": truncated,
-    })))
 }
 
 #[allow(
@@ -1701,7 +1668,22 @@ async fn reconcile(lab: Arc<ProofstormLab>, context: Arc<Context>) -> Result<Act
     let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &namespace);
     finalizer(&labs, FINALIZER, lab, |event| async {
         match event {
-            Event::Apply(lab) => apply(lab, &context).await,
+            Event::Apply(lab) => {
+                let result = apply(lab.clone(), &context).await;
+                if let Err(Error::Kube(kube::Error::Api(error))) = &result {
+                    if matches!(error.code, 400 | 403 | 422) {
+                        let mut status = lab.status.clone().unwrap_or_default();
+                        status.phase = LabPhase::Blocked;
+                        status.message = Some(format!(
+                            "Reconciliation blocked (Kubernetes {}): {}",
+                            error.code,
+                            error.message.chars().take(1024).collect::<String>()
+                        ));
+                        let _ = patch_status(&lab, &context, status).await;
+                    }
+                }
+                result
+            }
             Event::Cleanup(lab) => cleanup(lab, &context).await,
         }
     })
@@ -2252,7 +2234,34 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         &lab.spec.lab,
         &lab.spec.lock,
     )?;
-    let rendered = render_security_spine(&lab.spec.instance_key);
+    // Persist the intended inventory before the first component write. If the process
+    // stops halfway through, the next edit can still identify and prune partial additions.
+    let desired_generation = lab
+        .annotations()
+        .get("proofstorm.dev/desired-generation")
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(1);
+    let mut lab = lab.as_ref().clone();
+    if lab.status.as_ref().is_none_or(|s| {
+        s.observed_revision_digest != lab.spec.revision_digest
+            || s.observed_desired_generation != desired_generation
+    }) {
+        let mut status = lab.status.clone().unwrap_or_default();
+        for resource in workloads.inventory() {
+            if !status.inventory.contains(&resource) {
+                status.inventory.push(resource);
+            }
+        }
+        status.phase = LabPhase::Pending;
+        patch_status(&lab, context, status.clone()).await?;
+        lab.status = Some(status);
+    }
+    let lab = Arc::new(lab);
+    let rendered = render_lab_security_spine(
+        &lab.spec.instance_key,
+        lab.spec.lab.components.len(),
+        lab.status.as_ref().map_or(0, |s| s.retained_storage.len()),
+    );
     let client = context.client.clone();
     let namespace_name = instance_namespace(&lab.spec.instance_key);
     let patch = PatchParams::apply(FIELD_MANAGER).force();
@@ -2288,17 +2297,6 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             &Patch::Apply(&rendered.service_account),
         )
         .await?;
-    Api::<Role>::namespaced(client.clone(), &namespace_name)
-        .patch("proofstorm-workload", &patch, &Patch::Apply(&rendered.role))
-        .await?;
-    Api::<RoleBinding>::namespaced(client, &namespace_name)
-        .patch(
-            "proofstorm-workload",
-            &patch,
-            &Patch::Apply(&rendered.role_binding),
-        )
-        .await?;
-
     let client = context.client.clone();
     let secrets = Api::<Secret>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.secrets {
@@ -2404,8 +2402,13 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
                 .patch(name, &PatchParams::default(), &Patch::Merge(&desired))
                 .await?;
         } else {
+            clear_rolling_update_strategy(&deployments, resource).await?;
             deployments
-                .patch(name, &patch, &Patch::Apply(resource))
+                .patch(
+                    name,
+                    &patch,
+                    &Patch::Apply(deployment_apply_document(resource)),
+                )
                 .await?;
         }
     }
@@ -2440,17 +2443,36 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             .await?;
     apply_network_fault_policies(&lab, &network_actions.items, None, context).await?;
 
-    let inventory = workloads.inventory();
+    let (pruned, retained, retained_storage) = lab_updates::prune(&lab, context).await?;
+    let mut inventory = workloads.inventory();
+    inventory.extend(retained);
     let inventory_digest = proofstorm_core::digest_json(&inventory);
     let inventory_name = format!("proofstorm-inventory-{}", lab.spec.instance_key);
     let inventory_resource = serde_json::json!({
         "apiVersion": "v1", "kind": "ConfigMap",
         "metadata": {"name": inventory_name, "namespace": namespace_name,
             "labels": {"proofstorm.dev/instance": lab.spec.instance_key, "proofstorm.dev/inventory": "true"}},
-        "immutable": true,
         "data": {"inventory.json": serde_json::to_string(&inventory).expect("inventory serializes"),
             "inventoryDigest": inventory_digest}
     });
+    if let Some(old) = configs.get_opt(&inventory_name).await? {
+        if old.immutable == Some(true)
+            && old.labels().get("proofstorm.dev/instance") == Some(&lab.spec.instance_key)
+        {
+            configs
+                .delete(
+                    &inventory_name,
+                    &DeleteParams {
+                        preconditions: Some(kube::api::Preconditions {
+                            uid: old.metadata.uid.clone(),
+                            resource_version: old.metadata.resource_version.clone(),
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+    }
     configs
         .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
         .await?;
@@ -2490,14 +2512,39 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         &stopped_components,
         now_unix(),
     );
-    let ready = components
-        .iter()
-        .all(|component| component.ready || stopped_components.contains(&component.id));
+    let ready = pruned
+        && components
+            .iter()
+            .all(|component| component.ready || stopped_components.contains(&component.id));
+    let blocked = components.iter().any(|component| {
+        component.conditions.iter().any(|condition| {
+            condition.state == proofstorm_core::ComponentConditionState::False
+                && condition.reason.blocks_startup()
+        })
+    });
+    let message = (!ready).then(|| if blocked {
+        "component startup is blocked; inspect workload_ready conditions for error reasons and recovery steps".to_owned()
+    } else {
+        "waiting for protocol component readiness".to_owned()
+    });
 
     patch_status(
         lab.as_ref(),
         context,
         ProofstormLabStatus {
+            observed_desired_generation: lab
+                .annotations()
+                .get("proofstorm.dev/desired-generation")
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(1),
+            retained_storage,
+            last_converged_revision: if ready {
+                Some(lab.spec.revision_digest.clone())
+            } else {
+                lab.status
+                    .as_ref()
+                    .and_then(|s| s.last_converged_revision.clone())
+            },
             phase: if ready {
                 LabPhase::Ready
             } else {
@@ -2514,7 +2561,7 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             inventory,
             inventory_digest: Some(inventory_digest),
             teardown_receipt: None,
-            message: (!ready).then(|| "waiting for protocol component readiness".to_owned()),
+            message,
         },
     )
     .await?;
@@ -2523,6 +2570,64 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     } else {
         jittered_requeue(&lab.spec.instance_key, 3, 2)
     })
+}
+
+/// Apply cannot delete a defaulted field owned by another field manager. Clear
+/// the old strategy atomically before applying the complete desired workload.
+async fn clear_rolling_update_strategy(
+    deployments: &Api<Deployment>,
+    desired: &Deployment,
+) -> Result<(), Error> {
+    if desired
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.strategy.as_ref())
+        .and_then(|strategy| strategy.type_.as_deref())
+        != Some("Recreate")
+    {
+        return Ok(());
+    }
+    let name = desired.name_any();
+    let Some(existing) = deployments.get_opt(&name).await? else {
+        return Ok(());
+    };
+    if let Some(document) = recreate_strategy_transition(&existing) {
+        if existing.metadata.resource_version.is_none() {
+            return Err(Error::ControllerInvariant(
+                "Deployment lacks resourceVersion",
+            ));
+        }
+        deployments
+            .patch(&name, &PatchParams::default(), &Patch::Merge(document))
+            .await?;
+    }
+    Ok(())
+}
+
+fn recreate_strategy_transition(existing: &Deployment) -> Option<serde_json::Value> {
+    let strategy = existing
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.strategy.as_ref());
+    if strategy.is_some_and(|strategy| {
+        strategy.type_.as_deref() == Some("Recreate") && strategy.rolling_update.is_none()
+    }) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "metadata": {"resourceVersion": existing.metadata.resource_version},
+        "spec": {"strategy": {"type": "Recreate", "rollingUpdate": null}}
+    }))
+}
+
+/// Explicitly omit rolling-update defaults from the desired Recreate document.
+/// Existing defaults owned elsewhere are removed by the fenced merge above.
+fn deployment_apply_document(deployment: &Deployment) -> serde_json::Value {
+    let mut document = serde_json::json!(deployment);
+    if document["spec"]["strategy"]["type"].as_str() == Some("Recreate") {
+        document["spec"]["strategy"]["rollingUpdate"] = serde_json::Value::Null;
+    }
+    document
 }
 
 async fn preserve_lifecycle_state(
@@ -2637,6 +2742,13 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
         lab.as_ref(),
         context,
         ProofstormLabStatus {
+            observed_desired_generation: lab
+                .annotations()
+                .get("proofstorm.dev/desired-generation")
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(1),
+            last_converged_revision: None,
+            retained_storage: BTreeMap::new(),
             phase: LabPhase::Closing,
             instance_namespace: Some(instance_namespace.clone()),
             observed_generation: lab.metadata.generation,
@@ -3409,13 +3521,13 @@ mod tests {
         ProofstormLabAction::new(
             "op-auth-spend-resource",
             proofstorm_kube::ProofstormLabActionSpec {
-                lease_scope: None,
+                access_scope: None,
                 lab_name: "lab-auth".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
                 experiment_id: "experiment".into(),
-                lease_id: "lease".into(),
+                session_id: "session".into(),
                 principal_id: "principal".into(),
                 sequence: 1,
                 operation_id: "auth-spend".into(),
@@ -3430,6 +3542,61 @@ mod tests {
                 ),
             },
         )
+    }
+
+    #[test]
+    fn recreate_transition_uses_resource_version_and_merge_deletion() {
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "mint", "resourceVersion": "123"},
+            "spec": {"selector": {"matchLabels": {"app": "mint"}},
+                "template": {}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%"}}}
+        })).unwrap();
+        assert_eq!(
+            recreate_strategy_transition(&deployment),
+            Some(serde_json::json!({
+                "metadata": {"resourceVersion": "123"},
+                "spec": {"strategy": {"type": "Recreate", "rollingUpdate": null}}
+            }))
+        );
+        let mut recreated = deployment;
+        let strategy = recreated.spec.as_mut().unwrap().strategy.as_mut().unwrap();
+        strategy.type_ = Some("Recreate".into());
+        strategy.rolling_update = None;
+        assert!(recreate_strategy_transition(&recreated).is_none());
+    }
+
+    #[test]
+    fn recreate_apply_explicitly_removes_rolling_update_defaults() {
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "mint"},
+            "spec": {"selector": {"matchLabels": {"app": "mint"}},
+                "template": {}, "strategy": {"type": "Recreate"}}
+        }))
+        .unwrap();
+        let document = deployment_apply_document(&deployment);
+        assert_eq!(document["spec"]["strategy"]["type"], "Recreate");
+        assert!(
+            document["spec"]["strategy"]
+                .as_object()
+                .unwrap()
+                .contains_key("rollingUpdate")
+        );
+        assert!(document["spec"]["strategy"]["rollingUpdate"].is_null());
+        let mut rolling = deployment;
+        rolling
+            .spec
+            .as_mut()
+            .unwrap()
+            .strategy
+            .as_mut()
+            .unwrap()
+            .type_ = Some("RollingUpdate".into());
+        assert!(
+            !deployment_apply_document(&rolling)["spec"]["strategy"]
+                .as_object()
+                .unwrap()
+                .contains_key("rollingUpdate")
+        );
     }
 
     #[test]
@@ -3737,6 +3904,19 @@ mod tests {
     }
 
     #[test]
+    fn pod_watch_routes_only_the_matching_instance_namespace() {
+        let mut pod = Pod::default();
+        pod.metadata.labels = Some(BTreeMap::from([(INSTANCE_LABEL.into(), "demo".into())]));
+        pod.metadata.namespace = Some("proofstorm-demo".into());
+        assert!(pod_belongs_to_instance(&pod, "demo"));
+        assert!(!pod_belongs_to_instance(&pod, "other"));
+        pod.metadata.namespace = Some("unrelated".into());
+        assert!(!pod_belongs_to_instance(&pod, "demo"));
+        pod.metadata.labels = None;
+        assert!(!pod_belongs_to_instance(&pod, "demo"));
+    }
+
+    #[test]
     fn controller_policy_is_bounded_deterministic_and_desynchronized() {
         assert_eq!(LAB_CONTROLLER_CONCURRENCY, 8);
         assert_eq!(ACTION_CONTROLLER_CONCURRENCY, 16);
@@ -3824,6 +4004,9 @@ mod tests {
             })
             .collect();
         let status = ProofstormLabStatus {
+            observed_desired_generation: 1,
+            last_converged_revision: None,
+            retained_storage: BTreeMap::new(),
             phase: LabPhase::Pending,
             instance_namespace: Some("proofstorm-i0123456789012345678".into()),
             observed_generation: Some(1),
@@ -3928,13 +4111,13 @@ mod tests {
         let mut resource = ProofstormLabAction::new(
             &format!("action-{sequence}"),
             proofstorm_kube::ProofstormLabActionSpec {
-                lease_scope: None,
+                access_scope: None,
                 lab_name: "lab-1".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
                 experiment_id: "experiment".into(),
-                lease_id: "lease".into(),
+                session_id: "session".into(),
                 principal_id: "principal".into(),
                 sequence,
                 operation_id: operation_id.into(),

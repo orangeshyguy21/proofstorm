@@ -1,10 +1,172 @@
 # proofstorm
 
-Proofstorm is an MCP-native, Kubernetes-backed protocol laboratory for
-Bitcoin, Lightning, Cashu mints, wallets, adversarial clients, and network
-faults. Everything host-side is Rust, and `make` is the only entrypoint you
-need. The legacy Docker Compose harness is quarantined in
-[`docs/compose-harness.md`](docs/compose-harness.md).
+Proofstorm spins up Bitcoin, Lightning, and Cashu test labs so you can connect
+your app, test failures, and see what happened.
+
+The runtime uses Kubernetes. The developer CLI and MCP share the same Rust
+application layer. Start here; the advanced agent workflows remain below.
+
+## Developer quick start
+
+With Docker running and Rust installed:
+
+```bash
+make setup
+target/debug/proofstorm init
+target/debug/proofstorm up examples/developer-lab.json
+target/debug/proofstorm status demo
+```
+
+Setup restores required local catalog images from the Docker cache, and doctor
+verifies image pulls from the cluster nodes. Missing exact artifacts fail setup
+explicitly, with startup errors available through component status and logs.
+
+The example starts Bitcoin Core and a Cashu mint with an embedded BDK backend.
+It uses Bitcoin regtest and the mint's on-chain NUT-30 support. It does not
+create a Lightning channel or fund a wallet automatically.
+
+Run a native command, then connect your application in another terminal:
+
+```bash
+target/debug/proofstorm exec demo chain --public-output -- bitcoin-cli -regtest -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only getblockchaininfo
+target/debug/proofstorm connect demo mint http --config /tmp/proofstorm-mint.json
+```
+
+Keep `connect` running. Your application reads the generated JSON `url` and
+uses the mint's normal HTTP API, such as `GET /v1/info`. It needs no MCP or
+Kubernetes credentials. For authenticated Bitcoin RPC, use:
+
+```bash
+target/debug/proofstorm connect demo chain rpc --config /tmp/proofstorm-bitcoin.json
+```
+
+The new configuration file contains the URL and authentication fields, uses
+owner-only permissions, and is removed on normal disconnect. Existing files
+are never overwritten. A forced process kill can leave the file behind;
+remove it before reconnecting. Connection metadata printed to the terminal
+contains no credentials. Tunnels bind only to loopback, bypass lab network
+policies, and stop when their process stops or the lab closes. Existing TCP
+sessions can fail when a component restarts; new sessions resolve its new pod.
+Only mint HTTP and Bitcoin Core RPC are supported in this first increment.
+
+Inspect, collect receipts, and finish:
+
+```bash
+target/debug/proofstorm sync demo
+target/debug/proofstorm down demo
+```
+
+`status` is a pure observation of current infrastructure and cached activity;
+`sync` records completed runtime results. Use `sync demo --watch` for ongoing
+collection while that process runs. `result <request-id>` reads a retained
+operation while its lab exists; export evidence before teardown. `down` revokes managed actions, collects
+or cancels outstanding work, and waits for verified absence. Repeat it after
+a timeout to finish cleanup. External application requests use native
+protocols and are not individually journaled.
+
+Labs and their managed runs have **no expiry or action-count quota**. They stay
+available until explicitly closed. Individual commands still have
+timeouts, and temporary private payloads retain their storage cleanup policy.
+The CLI prints a request ID
+before submission; reuse `exec --request-id <id>` with the same command after
+an interrupted submission. Command output defaults to private; only use
+`--public-output` for output suitable for durable public artifacts.
+
+Sessions are created automatically for CLI/MCP clients. `status` includes session
+records and attributes activity to each actor. Clean disconnects finish tracking;
+a crash leaves an unfinished record with its last activity time. Finishing a
+session never cancels work or revokes access.
+
+State survives in `.proofstorm/proofstorm.sqlite3`. Cluster selection defaults
+to `k3d-proofstorm`; `--database`, `--workspace`, `--principal`, `--context`,
+and `--namespace` select another environment explicitly. `init` provisions
+CLI permissions (and is included in `make serve`). Calling `up` with changed
+configuration edits the live lab and preserves unchanged components. Closing
+the lab purges its local activity; reusing its name creates a fresh instance.
+`make down` deletes the entire local cluster, while `proofstorm down demo`
+closes just that lab.
+
+## Edit a running lab
+
+Change the configuration and run `proofstorm up` with the same name. Unchanged
+components keep their state; `--preview` shows additions, restarts, and removals.
+Removed data is retained until explicitly deleted. Agents use the existing MCP
+plan/apply flow with an instance target and expected generation.
+
+An accepted edit remains saved if the cluster cannot immediately reconcile it.
+The MCP apply receipt includes `reconciliation_error` and recovery instructions
+in that case. Wait for recovery or retry the same plan and idempotency key.
+
+CDK mint edits validate and apply the accepted configuration to the existing
+database. The old mint stops before its replacement starts; storage and mint
+identity are preserved. Readiness waits for the current rollout to finish.
+
+For startup failures, use `lab_component_status_list` and
+`component_logs`. Logs select a blocking initializer before the main
+container and include previous crash logs when available. Inspect `container_state`
+and `log_available`/`log_diagnostic`; empty logs do not establish health.
+`observed_pods` and `ready_pod_count` distinguish a failing replacement from an
+older pod that is still serving.
+
+## See the environment
+
+```bash
+# make build includes the Rust/Wasm website
+target/debug/proofstorm environment
+make serve
+# Open http://127.0.0.1:8787 to watch agents build labs
+# From another terminal:
+curl http://127.0.0.1:8787/v1/environment
+```
+
+The same read-only view is available through MCP `environment_read`.
+It includes topology, endpoint metadata, desired resources, session overlaps,
+and recorded activity across labs currently present in the cluster. Deleted labs
+disappear automatically. Each source reports its freshness;
+protocol traffic and external clients are explicitly unobserved. Results are
+paged, and reads never start commands or collect receipts. The web server uses
+SSE to keep the topology and activity current and runs a background receipt
+collector, including after an agent disconnects. The canvas shows live balances
+and the lab’s highest observed block height. Open System for measured CPU,
+memory and container state, expanded by lab and component. Appearance follows
+the system theme, with Dark and Light overrides. Use the same database and
+workspace as your agent. The checked-in
+[environment schema](schemas/v1alpha1/environment.schema.json) describes the
+response format.
+
+`make serve` builds the website and CLI, initializes the local developer
+permissions, then keeps the server running. No separate `init` is needed.
+Deleted labs are cleaned up automatically and their names become reusable. Export
+evidence before closing a lab.
+Running it again replaces this checkout's existing Proofstorm server, refreshing
+its cluster connection after a rebuild. Other applications using the port are
+left running and reported as a port conflict. Replacement uses `lsof` and `ps`.
+Use `make serve PORT=8788` to change the port. Global CLI options passed through
+`ARGS` apply to both initialization and serving. Each launch restores the
+selected identity's default developer permissions. A configured MCP server
+registers its own agent identity and grants at startup.
+
+## Environment selection
+
+CLI and MCP share database, workspace, context and namespace defaults. CLI flags
+override `PROOFSTORM_DB`, `PROOFSTORM_WORKSPACE`, `PROOFSTORM_CONTEXT` and
+`PROOFSTORM_CONTROL_NAMESPACE`. Both pin `k3d-proofstorm` unless overridden;
+changing your current kubeconfig context does not redirect Proofstorm. Relative
+DB paths resolve from the working directory; startup prints resolved configuration
+to stderr. Use the same working directory or an absolute DB path across clients.
+
+MCP requires `PROOFSTORM_PRINCIPAL` to identify the agent. An explicit operator
+`PROOFSTORM_CAPABILITIES` list provisions its grants; otherwise it uses existing
+grants. Missing configuration fails visibly. `PROOFSTORM_MODE=offline` explicitly
+selects durable authoring/cached reads, and `PROOFSTORM_MODE=memory` provides
+limited ephemeral discovery. Neither advertises runtime commands. The default is
+`connected`; failures never fall back to another cluster or temporary storage.
+
+Native commands, logs, restart, partition/heal, private transfer and reachability
+can omit `experiment_id` and `session_id`. Proofstorm records an actor-specific
+run and session automatically. Receipts contain their IDs for optional evidence
+grouping. Explicit experiments remain available; keep operation IDs and retry
+keys stable when resubmitting an interrupted request.
 
 ## Agent quick start
 
@@ -34,10 +196,10 @@ OpenCode installed, start a project session without changing personal config:
 OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 ```
 
-That profile denies every host tool so all control flows through Proofstorm.
-Two wider profiles, `research.json` and `contributor.json`, live alongside it;
-[`examples/opencode/README.md`](examples/opencode/README.md) explains when to
-use each.
+OpenCode merges this profile with your personal providers, models, and subagents.
+All three profiles enable task delegation and leave other host permissions to
+your settings and OpenCode defaults. `research.json` and `contributor.json` are
+equivalent launch options; see [`examples/opencode/README.md`](examples/opencode/README.md).
 
 Use the complete agent request in
 [`examples/opencode-conversation.md`](examples/opencode-conversation.md), then
@@ -48,7 +210,8 @@ make down
 ```
 
 The MCP configuration is operator-owned. Its principal and capability set are
-not agent inputs, and the agent never receives kubeconfig. A principal granted
+not agent inputs, and MCP does not return kubeconfig. Host file and shell access
+is governed separately by your OpenCode settings. A principal granted
 `component.exec_live` or `component.forensics` can inspect component-local
 credentials, so both capabilities must be treated as secret-bearing authority.
 Live execution additionally shares the running component's process, network,
@@ -75,19 +238,21 @@ Run a durable, capability-scoped local MCP session:
 PROOFSTORM_DB=.proofstorm/proofstorm.sqlite3 \
 PROOFSTORM_WORKSPACE=local-lab \
 PROOFSTORM_PRINCIPAL=designer \
+PROOFSTORM_TOOLSET=design \
 PROOFSTORM_CAPABILITIES=catalog.read,lab.read,lab.create,lab.edit,lab.clone,lab.validate,lab.publish \
 cargo run -p proofstorm-mcp
 ```
 
 The configured capability list replaces that principal's grants in the selected
 workspace. It is trusted operator configuration, never model-supplied input.
-Set `PROOFSTORM_TOOLSET=native` for a slim cross-phase experiment surface:
+Set `PROOFSTORM_TOOLSET=all` to retain the full compatibility surface.
+Set `PROOFSTORM_TOOLSET=native` for a cross-phase experiment surface:
 native CLIs handle wallet operations and routing policy, while Proofstorm keeps
 provisioning, coordination, lifecycle, faults, and observations such as wallet
 balance and reachability. The `experiment` profile retains typed contracts for
 regression testing and comparison. Set `PROOFSTORM_TOOLSET=design`, `runtime`, or
 `evidence` to expose only the
-agent-facing tools for that phase; the default is `all`. A toolset only removes
+agent-facing tools for that phase; the default is `developer` (named lab lifecycle, native commands, and bounded observation). A toolset only removes
 routes and is always intersected with the principal's durable capabilities, so
 it cannot grant authority. Focused toolsets reduce the MCP discovery schema
 loaded into an agent's context.
@@ -101,11 +266,11 @@ Proofstorm's MCP interface, never Kubernetes authority.
 Candidate builds are also agent-operated. Grant
 `candidate.build,candidate.read,candidate.cancel`, configure the Kubernetes
 runtime, and give the agent a public GitHub pull-request URL plus an installed
-implementation ID such as `nutshell`. `proofstorm_candidate_build` freezes the
+implementation ID such as `nutshell`. `candidate_build` freezes the
 PR head commit and creates a controller-owned BuildKit Job; the job continues
 if the MCP client disconnects. The agent can make repeated bounded
-`proofstorm_candidate_wait` calls (at most 120 seconds each), recover prior
-builds with `proofstorm_candidate_list`, and inspect bounded logs through the
+`candidate_wait` calls (at most 120 seconds each), recover prior
+builds with `candidate_list`, and inspect bounded logs through the
 receipt's resource URI. A successful build becomes a workspace-scoped,
 experimental exact catalog version, so the normal `catalog_list` → `lab_plan`
 → `lab_apply` workflow remains unchanged. Published locks retain the PR URL,
@@ -120,24 +285,24 @@ refuses unsupported configuration versions, and the resolved lock records both
 versions plus a digest of that component's configuration. This lets adapter
 configuration evolve without pretending it is the same thing as upgrading the
 underlying Bitcoin, Lightning, mint, wallet, or attacker service.
-`proofstorm_lab_publish` returns only revision and lock digests plus a component
+`lab_publish` returns only revision and lock digests plus a component
 count by default; `include_revision: true` explicitly embeds the complete lab
 and lock when a caller needs the bulk document.
 
-Catalog discovery is intentionally progressive. `proofstorm_catalog_list`
+Catalog discovery is intentionally progressive. `catalog_list`
 returns only compact exact-version identities and accepts implementation, kind,
 feature, lifecycle, release-channel, and dependency filters with a digest-bound
-cursor. After selecting a version, use `proofstorm_catalog_entry_read` for its
+cursor. After selecting a version, use `catalog_entry_read` for its
 immutable image, compatibility, support matrix, and features, then
-`proofstorm_catalog_config_schema_read` for the complete configuration JSON
+`catalog_config_schema_read` for the complete configuration JSON
 Schema or one RFC 6901 fragment. Broad list calls never embed configuration
 schemas.
 
-Runtime observation follows the same pattern. `proofstorm_lab_status` is a
+Runtime observation follows the same pattern. `lab_status` is a
 compact receipt containing phase, revision and lock digests, readiness and
 inventory counts, and an inventory digest; it does not embed topology or
-Kubernetes inventory arrays. Use `proofstorm_lab_component_status_list` for
-cursor-paged component conditions and `proofstorm_lab_inventory_list` for
+Kubernetes inventory arrays. Use `lab_component_status_list` for
+cursor-paged component conditions and `lab_inventory_list` for
 cursor-paged sanitized object inventory. Both pages are capped at 50 items and
 shrink to a 32 KiB agent-response budget.
 
@@ -167,7 +332,7 @@ verified close entirely through MCP.
 Slice 5 adds a pinned Nutshell wallet adapter and asynchronous, capability-
 scoped operation tools for liquidity bootstrap, wallet round trips,
 conservation checks, and operation status. Operation submission returns after a
-bounded Kubernetes Job is admitted; clients poll `proofstorm_operation_status`
+bounded Kubernetes Job is admitted; clients poll `operation_status`
 for a content-hashed JSON artifact. Jobs have fixed deadlines, no service-
 account token, no service-link environment injection, zero retries, a ten-
 minute TTL, and a 32 KiB persisted artifact ceiling. Run the live path with:
@@ -179,7 +344,7 @@ make down
 ```
 
 Proofstorm exposes two deliberately different native shell primitives.
-`proofstorm_component_exec_live` (`component.exec_live`) runs inside the
+`component_exec_live` (`component.exec_live`) runs inside the
 selected running container, so native CLIs see the component's real localhost,
 Unix sockets, files, credentials, user, and network identity. A static supervisor
 owns the command and its descendants, enforces its deadline inside the container,
@@ -188,18 +353,13 @@ waiting or cancellation; controller interruption does not replay the command.
 Use `argv` for direct invocation, or `script` for shell semantics. Output is private
 by default; opt into `public` for safe output or `json_fields` for selected typed
 receipt fields. Requests remain journaled, so never embed secrets in arguments.
-The [reliable native execution contract](docs/reliable-native-execution.md)
-describes receipts, uncertain outcomes and the next fuzzer checkpoint.
-`proofstorm_component_forensics` (`component.forensics`) instead creates a
+`component_forensics` (`component.forensics`) instead creates a
 short-lived pod from the locked image and data mounts. It is useful for offline
 source/database inspection, but explicitly does not promise live CLI or socket
 connectivity. Forensics retains its separate bounded-output contract. Native CLIs are the
 normal surface for operating deployed software; use typed actions where they
 provide coordination, lifecycle guarantees, or useful portable observations.
-The [native-first validation plan](docs/native-first-experiments.md) describes
-how execution choices and evidence are evaluated; the
-[recovery round](docs/recovery-round-2026-09-04.md) records live findings.
-`proofstorm_component_restart`
+`component_restart`
 (`component.control`) rolls any primary component workload, including mints and
 wallets, while preserving its persistent state.
 
@@ -220,11 +380,11 @@ The focused supervisor gate, `make e2e-reliable-exec`, additionally checks CDK a
 LND compatibility, private output, cancellation, deadlines and controller restart.
 It requires the locally provisioned CDK wallet image.
 
-Agents should use `proofstorm_lab_wait` after materialization or close and
-`proofstorm_operation_wait` after action submission. These calls perform
+Agents should use `lab_wait` after materialization or close and
+`operation_wait` after action submission. These calls perform
 server-side exponential backoff with a required 1–120 second bound.
-`proofstorm_lab_wait` returns only phase, readiness counts, message, and teardown
-receipt; `proofstorm_operation_wait` returns compact operation identity, phase,
+`lab_wait` returns only phase, readiness counts, message, and teardown
+receipt; `operation_wait` returns compact operation identity, phase,
 and the terminal artifact. This avoids repeated full topology and journal
 responses while preserving explicit timeouts and terminal evidence.
 
@@ -236,15 +396,15 @@ controllers before distributed labs are claimed as supported. A component
 controller is a deterministic, component-local capability gateway—not an AI
 agent.
 
-Slice 6 lifecycle work is complete. Experiments and exclusive leases are
-durable SQLite records with dedicated capabilities. Leases expire, carry a
-bounded action budget, and block conflicting leases, experiment close, and lab
-close. Slice 5 runtime operations now require a matching lease and are assigned
-an atomic experiment-wide sequence; `proofstorm_action_list` exposes bounded
+Activity is attributed to automatic, nonexclusive sessions in SQLite. Sessions
+record the actor, lab, start, last activity and finish. Multiple agents may work
+in the same lab; overlapping sessions never block actions or lab closure.
+`session_list` lists intervals and their temporal overlaps. Actions retain
+an atomic experiment-wide sequence; `action_list` exposes bounded
 pages of compact canonical summaries in an object envelope with an explicit
 next sequence cursor. Summaries contain request and artifact digests, but omit
 stored request bodies, runtime resource names, and artifact content; use
-`proofstorm_operation_status` for one exact operation.
+`operation_status` for one exact operation.
 
 Liquidity bootstrap, wallet round trip, and conservation oracle are
 controller-owned typed actions. MCP records and submits a
@@ -257,7 +417,7 @@ action records that execution began, a missing Job fails closed as
 effect may have completed before its receipt disappeared. The
 Slice 5 live test retries all three calls, restarts `proofstormd` while
 bootstrap is active, proves that exactly one Job ran for each accepted action,
-rejects malformed actions and exhausted lease budgets before Job creation,
+rejects malformed actions before Job creation,
 deletes a running action Job across controller downtime to prove the no-replay
 fence, and confirms that lab close removed the ephemeral action resources. MCP no
 longer renders runtime Jobs or reads pod termination state directly. An
@@ -273,7 +433,7 @@ catalog, enforce implementation kind, control class, service version,
 configuration-contract version, configuration fields, topology compatibility,
 and policy limits, then store components and links in canonical order. Mutation
 tools return compact version, count, validation, and changed-path receipts;
-`proofstorm_lab_read` is the explicit full-document read. Failed mutations are
+`lab_read` is the explicit full-document read. Failed mutations are
 transactional, and component removal refuses until its links are removed
 explicitly.
 
@@ -286,8 +446,8 @@ logical component identities and bounded amounts; proofstormd resolves the
 installed LND adapter, pinned images, credentials, and controller-owned Jobs.
 
 Logical Bitcoin and Lightning nodes can now be stopped, started, and restarted
-through `proofstorm_node_stop`, `proofstorm_node_start`, and
-`proofstorm_node_restart` under the `node.control` capability. These are direct,
+through `node_stop`, `node_start`, and
+`node_restart` under the `node.control` capability. These are direct,
 ordered controller reconciliations of the component StatefulSet rather than
 privileged Jobs: MCP receives no Kubernetes or node credentials. Desired state,
 action sequence, and restart identity are durable workload annotations preserved
@@ -302,8 +462,8 @@ lab readiness, started it back to one ready replica, and restarted it with a new
 Pod UID. The three sanitized lifecycle artifacts were canonical action
 sequences 15–17.
 
-Topology teardown is now available through `proofstorm_peer_disconnect`,
-`proofstorm_channel_close`, and `proofstorm_channel_force_close`. Channel-open
+Topology teardown is now available through `peer_disconnect`,
+`channel_close`, and `channel_force_close`. Channel-open
 artifacts return an opaque `ch-` handle derived inside the credential-bearing
 controller Job, so agents can select one of several channels between the same
 logical nodes without receiving an LND funding outpoint. Cooperative close
@@ -313,7 +473,7 @@ claiming funds are settled. Peer disconnect is issued and verified from both
 logical endpoints so the result is not defeated by the remote node immediately
 reconnecting.
 
-`proofstorm_channel_rebalance` completes the topology mutation surface for the
+`channel_rebalance` completes the topology mutation surface for the
 initial proof of concept. An agent selects one logical LND component, two opaque
 `ch-` handles, an amount, and a maximum fee. The controller resolves native
 channel IDs and peers inside a credential-bearing Job, creates and pays a
@@ -330,11 +490,10 @@ The live path forms a real three-node cycle and rebalances 100,000 sat through
 it, closes the temporary bridge, then cooperatively and forcibly closes the LND
 and mixed CLN/LND channels while exercising peer disconnect/reconnect. These
 actions remain canonically ordered alongside the network observations described
-below, and the first request beyond the lease budget is refused before any
-runtime action is created.
+below.
 
-Slice 8 begins with `proofstorm_network_partition` and
-`proofstorm_network_heal`. An agent partitions two logical components and later
+Slice 8 begins with `network_partition` and
+`network_heal`. An agent partitions two logical components and later
 heals that exact fault using its durable operation ID; it never receives
 Kubernetes or CNI credentials. Proofstormd applies the fault directly through
 component-scoped NetworkPolicies and reconstructs the active fault set from the
@@ -344,7 +503,7 @@ policy, keeping fault administration out of component containers.
 
 The live path proves normal TCP reachability from two persistent Nutshell
 wallets to their mint, then blocks both sockets through overlapping partitions.
-The `proofstorm_reachability_oracle` accepts only logical source and destination
+The `reachability_oracle` accepts only logical source and destination
 component IDs plus a destination-advertised service name. Proofstorm resolves
 the port from the immutable adapter contract and runs a bounded, digest-pinned
 probe under the source component's actual NetworkPolicy identity; the agent
@@ -359,27 +518,25 @@ remaining Lightning workflow completed, demonstrating fault composition,
 restart recovery, and selective healing rather than a blanket lab outage.
 
 Agents discover the installed fault implementation with
-`proofstorm_network_capabilities`. Its descriptor includes the backend ID and
+`network_capabilities`. Its descriptor includes the backend ID and
 version, supported features and directions, and numeric bounds. The current
 `kubernetes-network-policy` backend advertises only bidirectional partition and
 heal; it does not pretend to support traffic shaping. The typed
-`proofstorm_network_delay` contract accepts explicit `from_to` or
+`network_delay` contract accepts explicit `from_to` or
 `bidirectional` direction, 1–60,000 ms delay, and at most 10,000 ms jitter that
-cannot exceed the delay. `proofstorm_network_loss` accepts 1–10,000 basis points
+cannot exceed the delay. `network_loss` accepts 1–10,000 basis points
 of packet loss. With the current backend, both return
-`network_fault_unsupported` before operation admission, lease-budget
-consumption, or journal sequencing. The MCP surface now exposes 61 tools. The
+`network_fault_unsupported` before operation admission or journal sequencing. The MCP surface now exposes 61 tools. The
 live workflow records nine reachability observations spanning baseline,
 overlapping faults, controller reconstruction, and targeted heals, for a
-47-action canonical journal; the forty-eighth request is refused by the lease
-budget.
+47-action canonical journal.
 
-`proofstorm_artifact_export` turns a closed experiment into a deterministic,
+`artifact_export` turns a closed experiment into a deterministic,
 content-hashed evidence bundle without consulting Kubernetes. The default
 response is a compact manifest containing its identity, revision and lock
 digests, byte length, journal/artifact counts, and a stable `resource_uri`.
 Agents can read that URI through MCP `resources/read` when they deliberately
-need the complete bundle, or use `proofstorm_evidence_section_read` to inspect
+need the complete bundle, or use `evidence_section_read` to inspect
 a bounded revision/lock JSON Pointer, a paged journal, or one selected artifact.
 `include_content: true` remains an explicit compatibility opt-in for embedding
 the complete immutable lab revision and
@@ -388,10 +545,9 @@ artifact bodies by default, and up to 16 explicitly selected sanitized
 artifacts. The content is capped at 512 KiB and omits runtime resource names,
 instance keys, component credentials, private payment material, and unbounded
 logs. Export requires both `experiment.read` and `artifact.read`; it does not
-consume a lease action.
+submit a runtime action.
 
-The live k3d workflow exported the complete 47-action experiment after lease
-release and experiment close. The bundle contained the seven-component lab and
+The live k3d workflow exported the complete 47-action experiment after experiment close. The bundle contained the seven-component lab and
 resolved content lock, the ordered terminal journal, all twelve conservation
 and reachability artifacts, and the explicitly selected wallet-payment artifact.
 Acceptance verified the 512 KiB ceiling and scanned the result for runtime
@@ -536,15 +692,15 @@ requires identical initialize, zero-balance, 1,000 sat funding, self-pay round
 trip, and exact conservation-oracle behavior before verified teardown.
 
 The implementation-neutral wallet surface now includes
-`proofstorm_wallet_initialize`, `proofstorm_wallet_balance`, and
-`proofstorm_wallet_fund`. Nutshell balance reads copy the persistent wallet into a
+`wallet_initialize`, `wallet_balance`, and
+`wallet_fund`. Nutshell balance reads copy the persistent wallet into a
 disposable snapshot before invoking the locked adapter, while initialize and
 fund are bounded state-changing actions under separate capabilities. Those typed
 operations keep mnemonics, proof databases, mint quotes, Lightning invoices and
 adapter commands outside MCP responses.
 
 `cdk-cli-wallet` 0.18.0 adds a separate persistent native CLI wallet and a passive
-`proofstorm_wallet_balance` adapter. Use `--work-dir /wallet/cdk --unit sat
+`wallet_balance` adapter. Use `--work-dir /wallet/cdk --unit sat
 --non-interactive` on native commands. Native CDK commands, including `balance`,
 may run recovery; the typed observation instead reads SQLite in a read-only
 transaction. Its volume permits SQLite's WAL coordination files, but the reader
@@ -552,7 +708,7 @@ does not change wallet records or contact a mint. Typed wallet mutations and
 quote/oracle workflows remain unavailable for CDK and are refused before an
 operation is created. The initial local-registry image is Linux arm64; source,
 release-binary checksum, runtime image and recipe provenance are recorded in the
-catalog and resolved lock. See the [wallet expansion architecture](docs/wallet-expansion-architecture.md).
+catalog and resolved lock.
 In this CDK release, resume a paid mint quote with `mint <url> --quote-id <id>`;
 `mint-pending` checks pending proofs despite its quote-claiming help text.
 
@@ -564,8 +720,6 @@ verified teardown, retaining results under `dev/wallet-integration-runs/`.
 The `cdk-wallet-native-smoke` agent scenario is the subsequent usability gate;
 it is not run by the deterministic acceptance gate. The private ecash payload
 exchange remains a subsequent wallet-expansion phase.
-The [first fuzzer handoff](docs/cdk-wallet-fuzzer-handoff.md) records the tested
-scope, local image prerequisite, retained evidence and launch instructions.
 
 `cocod-wallet` is available as the exact experimental source build
 `0.0.17-dev.44e5101c`, with no default version. It runs the upstream foreground
@@ -577,14 +731,11 @@ the combined ready total. Typed wallet mutations remain unavailable.
 
 Run `make e2e-cocod-wallet` after provisioning its pinned local arm64 image.
 The deterministic checkpoint passed real funding, two payments, restart,
-two-wallet isolation, session lifecycle and verified teardown. See the
-[cocod fuzzer handoff](docs/cocod-wallet-fuzzer-handoff.md) for exact provenance,
-the protected native configuration workflow and evidence.
-Subsequent [agent execution hardening](docs/cocod-execution-hardening-2026-09-05.md)
-adds validated native lifecycle projections and more efficient teardown waits;
+two-wallet isolation, session lifecycle and verified teardown.
+Agent execution hardening adds validated native lifecycle projections and more efficient teardown waits;
 focused agent runs verified restart/unlock and 5,000-sat funding followed by a
 700-sat payment. Earlier benchmark failures remain recorded.
-[Structured invoice relay](docs/structured-invoice-relay.md) now validates native
+Structured invoice relay validates native
 cocod/LND invoice output and passed the deterministic money/restart gate. The
 focused agent relay target also held; its report accounting still failed review.
 Private ecash delivery remains the next build boundary.
@@ -593,21 +744,21 @@ Nutshell's wallet database is authoritative for receive and melt quote facts.
 Proofstorm stores immutable, attributed observations of those adapter records;
 it does not maintain a second quote phase machine. Receive and pay observations
 use their distinct adapter-native mint and melt quote IDs. The
-capability-filtered `proofstorm_wallet_quote_status` and
-`proofstorm_wallet_quote_list` tools explicitly return the latest stored
+capability-filtered `wallet_quote_status` and
+`wallet_quote_list` tools explicitly return the latest stored
 observation rather than live mint state. List pages use a digest-bound cursor.
 
-`proofstorm_wallet_invoice` returns after creating the receive quote, exposing
+`wallet_invoice` returns after creating the receive quote, exposing
 only its mint quote ID and sanitized `UNPAID` observation. Its BOLT11 request is
 captured in a mode-0600 pod-local temporary file and removed on exit.
-`proofstorm_wallet_pay` privately reads the exact recipient row, atomically
+`wallet_pay` privately reads the exact recipient row, atomically
 reserves that mint quote against duplicate payment operations, correlates the
 new payer melt row, and claims the recipient quote after a paid melt. A paid
-but unverified claim is never replayed; `proofstorm_wallet_quote_claim` is the
+but unverified claim is never replayed; `wallet_quote_claim` is the
 bounded, idempotent recovery path and also supports externally paid invoices.
 
 ## Legacy Compose harness
 
 The original Docker Compose wallet-population runner and the regtest
-adversarial harness moved to [`docs/compose-harness.md`](docs/compose-harness.md).
-Its targets run through `make compose-<target>`.
+adversarial harness use [Makefile.compose](Makefile.compose).
+Their targets run through `make compose-<target>`.

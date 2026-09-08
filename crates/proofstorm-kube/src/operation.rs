@@ -275,6 +275,8 @@ pub enum ActionRenderError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ActionAdmissionError {
+    #[error("lab is closing; new actions are not admitted")]
+    LabClosing,
     #[error("action identity is invalid: {0}")]
     Identity(&'static str),
     #[error("component plan is invalid: {0}")]
@@ -299,6 +301,7 @@ impl ActionAdmissionError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::LabClosing => "lab_closing",
             Self::Identity(_) => "action_identity_invalid",
             Self::InvalidPlan(_) => "action_plan_invalid",
             Self::MissingContract { .. } => "action_admission_contract_missing",
@@ -321,6 +324,7 @@ pub fn evaluate_action_admission(
     action: &ProofstormLabAction,
     lab: &ProofstormLab,
 ) -> Result<(), ActionAdmissionError> {
+    require_open_lab(lab)?;
     validate_action_identity(action, lab).map_err(|error| match error {
         ActionRenderError::Identity(field) => ActionAdmissionError::Identity(field),
         _ => ActionAdmissionError::InvalidPlan(error.to_string()),
@@ -340,10 +344,10 @@ pub fn evaluate_action_admission(
     let protocol_lease_current = lab
         .annotations()
         .get(crate::PROTOCOL_PROBER_LEASE_ANNOTATION)
-        .is_some_and(|lease| {
-            lease != "inactive"
+        .is_some_and(|session| {
+            session != "inactive"
                 && lab.status.as_ref().is_some_and(|status| {
-                    status.observed_protocol_probe_lease.as_ref() == Some(lease)
+                    status.observed_protocol_probe_lease.as_ref() == Some(session)
                 })
         });
 
@@ -379,6 +383,26 @@ pub fn evaluate_action_admission(
             ReadinessPrerequisite::TargetDescriptor,
             protocol_lease_current,
         )?;
+    }
+    Ok(())
+}
+
+/// Admit work on a live lab independently of aggregate component health.
+/// Operation-specific readiness is evaluated separately. Existing execution
+/// receipts may still be collected during teardown.
+///
+/// # Errors
+/// Returns `LabClosing` when deletion or cleanup has begun.
+pub fn require_open_lab(lab: &ProofstormLab) -> Result<(), ActionAdmissionError> {
+    if lab.metadata.deletion_timestamp.is_some()
+        || lab.status.as_ref().is_some_and(|status| {
+            matches!(
+                status.phase,
+                crate::LabPhase::Closing | crate::LabPhase::CleanupBlocked
+            )
+        })
+    {
+        return Err(ActionAdmissionError::LabClosing);
     }
     Ok(())
 }
@@ -3605,13 +3629,13 @@ mod tests {
         let action = ProofstormLabAction::new(
             "action-123",
             crate::ProofstormLabActionSpec {
-                lease_scope: None,
+                access_scope: None,
                 lab_name: "lab-resource".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
                 experiment_id: "experiment".into(),
-                lease_id: "lease".into(),
+                session_id: "session".into(),
                 principal_id: "principal".into(),
                 sequence: 1,
                 operation_id: "bootstrap".into(),
@@ -3721,6 +3745,26 @@ mod tests {
             .expect("condition");
         condition.state = state;
         condition.reason = reason;
+    }
+
+    #[test]
+    fn closing_labs_refuse_new_work_even_when_components_are_ready() {
+        let (mut lab, action) = typed_bootstrap();
+        ready_admission_status(&mut lab);
+        for phase in [crate::LabPhase::Closing, crate::LabPhase::CleanupBlocked] {
+            lab.status.as_mut().expect("status").phase = phase;
+            assert_eq!(
+                evaluate_action_admission(&action, &lab),
+                Err(ActionAdmissionError::LabClosing)
+            );
+        }
+        lab.status.as_mut().expect("status").phase = crate::LabPhase::Ready;
+        lab.metadata.deletion_timestamp =
+            Some(serde_json::from_value(json!("2026-09-06T00:00:00Z")).expect("timestamp"));
+        assert_eq!(
+            evaluate_action_admission(&action, &lab),
+            Err(ActionAdmissionError::LabClosing)
+        );
     }
 
     #[test]

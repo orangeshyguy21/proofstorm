@@ -1,0 +1,44 @@
+{
+  "api_version": "proofstorm/v1alpha1",
+  "name": "demo",
+  "components": [
+    {
+      "id": "chain",
+      "kind": "bitcoin",
+      "implementation": "bitcoin-core",
+      "version": "30.0",
+      "config_version": "bitcoin-core/30/v1",
+      "control": "laboratory",
+      "config": {}
+    },
+    {
+      "id": "mint",
+      "kind": "mint",
+      "implementation": "cdk-bdk",
+      "version": "0.18.0",
+      "config_version": "cdk-mintd-bdk/0.18/v1",
+      "control": "target",
+      "config": {}
+    }
+  ],
+  "links": [
+    {
+      "id": "mint-chain",
+      "kind": "chain_backend",
+      "from": "mint",
+      "to": "chain",
+      "binding": {
+        "type": "chain",
+        "network": "regtest"
+      }
+    }
+  ],
+  "policy": {
+    "allow": [],
+    "limits": {
+      "max_components": 64,
+      "max_links": 256,
+      "max_config_bytes": 65536
+    }
+  }
+}

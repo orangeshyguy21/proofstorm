@@ -35,40 +35,65 @@ async fn main() -> anyhow::Result<()> {
 
 async fn configured_service() -> anyhow::Result<ProofstormMcp> {
     let toolset = std::env::var("PROOFSTORM_TOOLSET")
-        .unwrap_or_else(|_| "all".into())
+        .unwrap_or_else(|_| "developer".into())
         .parse::<ProofstormToolset>()
         .map_err(anyhow::Error::msg)?;
-    let Ok(database_path) = std::env::var("PROOFSTORM_DB") else {
-        return Ok(ProofstormMcp::default().with_toolset(toolset));
-    };
-    let workspace = std::env::var("PROOFSTORM_WORKSPACE")
-        .context("PROOFSTORM_WORKSPACE is required with PROOFSTORM_DB")?;
-    let principal = std::env::var("PROOFSTORM_PRINCIPAL")
-        .context("PROOFSTORM_PRINCIPAL is required with PROOFSTORM_DB")?;
-    let encoded_capabilities = std::env::var("PROOFSTORM_CAPABILITIES")
-        .context("PROOFSTORM_CAPABILITIES is required with PROOFSTORM_DB")?;
-    let capabilities = encoded_capabilities
-        .split(',')
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            serde_json::from_value::<Capability>(serde_json::Value::String(value.to_owned()))
-                .with_context(|| format!("invalid Proofstorm capability {value:?}"))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-
-    let store = Store::open(database_path)?;
-    store.put_workspace(&Workspace {
-        id: workspace.clone(),
-        name: workspace.clone(),
-    })?;
-    store.put_principal(&principal)?;
-    store.replace_grants(&workspace, &principal, capabilities)?;
-    let service = ProofstormMcp::new(store, workspace, principal)?.with_toolset(toolset);
-    let Ok(control_namespace) = std::env::var("PROOFSTORM_CONTROL_NAMESPACE") else {
-        return Ok(service);
-    };
-    let client = kube::Client::try_default()
-        .await
-        .context("connect to Kubernetes for Proofstorm materialization")?;
-    Ok(service.with_kubernetes(client, control_namespace))
+    let environment = proofstorm_app::config::Environment::resolve(
+        |key| std::env::var(key).ok(),
+        &std::env::current_dir()?,
+    )?;
+    environment.report();
+    if environment.mode == proofstorm_app::config::Mode::Memory {
+        let store = Store::memory()?;
+        store.put_workspace(&Workspace {
+            id: environment.workspace.clone(),
+            name: environment.workspace.clone(),
+        })?;
+        store.put_principal(&environment.principal)?;
+        store.replace_grants(
+            &environment.workspace,
+            &environment.principal,
+            [Capability::CatalogRead, Capability::LabValidate],
+        )?;
+        return Ok(
+            ProofstormMcp::new(store, &environment.workspace, &environment.principal)?
+                .with_toolset(toolset)
+                .offline(),
+        );
+    }
+    if let Some(parent) = environment.database.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let store = Store::open(&environment.database)?;
+    let workspace = environment.workspace.clone();
+    let principal = environment.principal.clone();
+    if let Ok(encoded) = std::env::var("PROOFSTORM_CAPABILITIES") {
+        let capabilities = encoded
+            .split(',')
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                serde_json::from_value::<Capability>(serde_json::Value::String(value.to_owned()))
+                    .with_context(|| format!("invalid Proofstorm capability {value:?}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        store.put_workspace(&Workspace {
+            id: workspace.clone(),
+            name: workspace.clone(),
+        })?;
+        store.put_principal(&principal)?;
+        store.replace_grants(&workspace, &principal, capabilities)?;
+    } else if store.capabilities(&workspace, &principal)?.is_empty() {
+        anyhow::bail!(
+            "identity {principal:?} has no configured grants in {workspace:?}; supply operator-owned PROOFSTORM_CAPABILITIES or configure this identity with proofstorm init --principal {principal}"
+        );
+    }
+    let service = ProofstormMcp::new(store.clone(), workspace.clone(), principal.clone())?
+        .with_toolset(toolset);
+    if environment.mode == proofstorm_app::config::Mode::Offline {
+        return Ok(service.offline());
+    }
+    let runtime = environment.runtime().await?;
+    let _recovery =
+        proofstorm_app::updates::start_recovery(runtime.clone(), store, workspace, principal);
+    Ok(service.with_runtime(runtime))
 }

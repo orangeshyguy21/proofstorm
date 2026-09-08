@@ -4,10 +4,8 @@ use super::{
     ProofstormLabActionStatus, ResourceExt, instance_namespace, now_unix, patch_action_failure,
     patch_action_status, status_object,
 };
-use proofstorm_core::private_io::{
-    PRIVATE_DELEGATIONS_ANNOTATION, PRIVATE_LEASE_ANNOTATION, PayloadBinding, PrivateIo,
-};
-use proofstorm_core::{Capability, ComponentKind, ExperimentLease, LeasePhase, OperationKind};
+use proofstorm_core::private_io::{PRIVATE_ACCESS_ANNOTATION, PayloadBinding, PrivateIo};
+use proofstorm_core::{Capability, ComponentKind, OperationKind, PrivateAccessGrant};
 use proofstorm_transfer::{
     Grant, Limits, NativeReceipt, PayloadManifest, ProducedPayload, Transfer, Vault,
 };
@@ -75,83 +73,22 @@ async fn live_lab(action: &ProofstormLabAction, context: &Context) -> Result<Pro
     }
     Ok(lab)
 }
-fn root_lease(lab: &ProofstormLab) -> Result<ExperimentLease, Error> {
-    let root: ExperimentLease = serde_json::from_str(
+fn recipient_access(lab: &ProofstormLab, id: &str) -> Result<PrivateAccessGrant, Error> {
+    let grants: std::collections::BTreeMap<String, PrivateAccessGrant> = serde_json::from_str(
         lab.annotations()
-            .get(PRIVATE_LEASE_ANNOTATION)
+            .get(PRIVATE_ACCESS_ANNOTATION)
             .ok_or_else(failure)?,
     )
     .map_err(|_| failure())?;
-    if root.phase != LeasePhase::Active
-        || root.delegation.is_some()
-        || root.workspace_id != lab.spec.workspace_id
-        || root.instance_id != lab.spec.instance_id
-        || root.expires_at_unix <= now_unix()
+    let grant = grants.get(id).ok_or_else(failure)?;
+    if grant.id != id
+        || grant.workspace_id != lab.spec.workspace_id
+        || grant.instance_id != lab.spec.instance_id
+        || grant.revoked_at_unix.is_some()
     {
         return Err(failure());
     }
-    Ok(root)
-}
-
-fn recipient_lease(lab: &ProofstormLab, id: &str) -> Result<ExperimentLease, Error> {
-    let root = root_lease(lab)?;
-    let children: std::collections::BTreeMap<String, ExperimentLease> = serde_json::from_str(
-        lab.annotations()
-            .get(PRIVATE_DELEGATIONS_ANNOTATION)
-            .ok_or_else(failure)?,
-    )
-    .map_err(|_| failure())?;
-    if children.len() > 32 {
-        return Err(failure());
-    }
-    let child = children.get(id).ok_or_else(failure)?;
-    let scope = child.delegation.as_ref().ok_or_else(failure)?;
-    if child.id != id
-        || child.principal_id == root.principal_id
-        || child.workspace_id != root.workspace_id
-        || child.instance_id != root.instance_id
-        || child.experiment_id != root.experiment_id
-        || scope.parent_lease_id != root.id
-        || child.phase != LeasePhase::Active
-        || child.expires_at_unix <= now_unix()
-        || child.expires_at_unix > root.expires_at_unix
-        || !lab
-            .spec
-            .lab
-            .components
-            .iter()
-            .any(|c| c.id == scope.component && c.kind == ComponentKind::Wallet)
-        || !lab
-            .spec
-            .lab
-            .components
-            .iter()
-            .any(|c| c.id == scope.mint && c.kind == ComponentKind::Mint)
-    {
-        return Err(failure());
-    }
-    Ok(child.clone())
-}
-
-fn action_lease(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
-) -> Result<ExperimentLease, Error> {
-    let lease = if action.spec.lease_scope.is_some() {
-        recipient_lease(lab, &action.spec.lease_id)?
-    } else {
-        root_lease(lab)?
-    };
-    if lease.instance_id != action.spec.instance_id
-        || lease.id != action.spec.lease_id
-        || lease.experiment_id != action.spec.experiment_id
-        || lease.principal_id != action.spec.principal_id
-        || lease.workspace_id != action.spec.workspace_id
-        || lease.delegation != action.spec.lease_scope
-    {
-        return Err(failure());
-    }
-    Ok(lease)
+    Ok(grant.clone())
 }
 
 /// Validate every new delegated action, including typed observations, before dispatch.
@@ -159,10 +96,18 @@ pub fn validate_delegated_action(
     action: &ProofstormLabAction,
     lab: &ProofstormLab,
 ) -> Result<(), Error> {
-    action_lease(action, lab)?;
-    let Some(scope) = &action.spec.lease_scope else {
+    let Some(snapshot) = &action.spec.access_scope else {
         return Ok(());
     };
+    let current = recipient_access(lab, &snapshot.id)?;
+    if &current != snapshot
+        || current.principal_id != action.spec.principal_id
+        || current.instance_id != action.spec.instance_id
+        || current.workspace_id != action.spec.workspace_id
+    {
+        return Err(failure());
+    }
+    let scope = &current.scope;
     let (kind, request) = match &action.spec.action {
         LabAction::WalletBalance(r) if action.spec.capability == Capability::WalletControl => (
             OperationKind::WalletBalance,
@@ -192,15 +137,14 @@ pub fn validate_delegated_action(
     Ok(())
 }
 
-fn lease_grant(lease: &ExperimentLease, lab: &ProofstormLab, wallet: &str) -> Result<Grant, Error> {
-    Ok(Grant {
-        workspace: lease.workspace_id.clone(),
+fn recipient_grant(access: &PrivateAccessGrant, lab: &ProofstormLab, wallet: &str) -> Grant {
+    Grant {
+        workspace: access.workspace_id.clone(),
         lab: lab.spec.instance_key.clone(),
-        principal: lease.principal_id.clone(),
+        principal: access.principal_id.clone(),
         wallet: wallet.into(),
-        lease: lease.id.clone(),
-        expires_at_unix: u64::try_from(lease.expires_at_unix).map_err(|_| failure())?,
-    })
+        authority: access.id.clone(),
+    }
 }
 
 fn grant(action: &ProofstormLabAction, lab: &ProofstormLab, wallet: &str) -> Result<Grant, Error> {
@@ -215,8 +159,16 @@ fn grant(action: &ProofstormLabAction, lab: &ProofstormLab, wallet: &str) -> Res
         return Err(failure());
     }
     validate_delegated_action(action, lab)?;
-    let lease = action_lease(action, lab)?;
-    lease_grant(&lease, lab, wallet)
+    if let Some(access) = &action.spec.access_scope {
+        return Ok(recipient_grant(access, lab, wallet));
+    }
+    Ok(Grant {
+        workspace: action.spec.workspace_id.clone(),
+        lab: lab.spec.instance_key.clone(),
+        principal: action.spec.principal_id.clone(),
+        wallet: wallet.into(),
+        authority: "owner".into(),
+    })
 }
 
 pub async fn reconcile(action: &ProofstormLabAction, context: &Context) -> Result<Action, Error> {
@@ -260,23 +212,23 @@ async fn metadata(action: &ProofstormLabAction, context: &Context) -> Result<Tra
     if request.transfer_method == TransferMethod::Handoff {
         if request.destination_component.is_some()
             || request.maximum_bytes.is_some()
-            || action.spec.lease_scope.is_some()
+            || action.spec.access_scope.is_some()
         {
             return Err(failure());
         }
         let id = request.reference.as_deref().ok_or_else(failure)?;
-        let recipient = recipient_lease(
+        let recipient = recipient_access(
             &lab,
-            request.recipient_lease_id.as_deref().ok_or_else(failure)?,
+            request.recipient_grant_id.as_deref().ok_or_else(failure)?,
         )?;
-        let scope = recipient.delegation.as_ref().ok_or_else(failure)?;
-        if scope.reference != id || scope.parent_lease_id != source.lease {
+        let scope = &recipient.scope;
+        if scope.reference != id || scope.issuer_principal_id != source.principal {
             return Err(failure());
         }
-        let destination = lease_grant(&recipient, &lab, &scope.component)?;
+        let destination = recipient_grant(&recipient, &lab, &scope.component);
         return private(vault.handoff(&source, &destination, id));
     }
-    if request.recipient_lease_id.is_some() {
+    if request.recipient_grant_id.is_some() {
         return Err(failure());
     }
     if request.transfer_method == TransferMethod::Prepare {
@@ -401,7 +353,7 @@ pub async fn complete(
     let Some(binding) = &request.private_payload else {
         return Ok(None);
     };
-    // Completion may attach to an accepted operation after the lease expired.
+    // Completion may attach to an accepted operation after the session was released.
     let labs = Api::<ProofstormLab>::namespaced(
         context.client.clone(),
         &action.namespace().ok_or_else(failure)?,
@@ -487,8 +439,8 @@ mod tests {
     use proofstorm_kube::{
         PrivateTransferAction, ProofstormLabActionSpec, ProofstormLabSpec, TransferMethod,
     };
-    fn root_fixture() -> (ProofstormLab, ProofstormLabAction, ExperimentLease) {
-        let mut lab=ProofstormLab::new("lab",ProofstormLabSpec {
+    fn fixture() -> (ProofstormLab, ProofstormLabAction) {
+        let lab=ProofstormLab::new("lab",ProofstormLabSpec {
             workspace_id:"workspace".into(),instance_id:"instance".into(),instance_key:"instance-key".into(),revision_digest:"revision".into(),
             lock:proofstorm_core::ResolvedLock {api_version:"proofstorm/v1alpha1".into(),digest:"lock".into(),entries:vec![]},
             lab:serde_json::from_value(serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"lab","components":[{"id":"wallet","kind":"wallet","implementation":"cocod-wallet","config_version":"test","control":"laboratory","config":{}}],"links":[]})).unwrap(),
@@ -496,13 +448,13 @@ mod tests {
         let action = ProofstormLabAction::new(
             "action",
             ProofstormLabActionSpec {
-                lease_scope: None,
+                access_scope: None,
                 lab_name: "lab".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "instance-key".into(),
                 experiment_id: "experiment".into(),
-                lease_id: "lease".into(),
+                session_id: "session".into(),
                 principal_id: "owner".into(),
                 sequence: 1,
                 operation_id: "operation".into(),
@@ -510,7 +462,7 @@ mod tests {
                 capability: Capability::ComponentExecLive,
                 accepted_at_unix: now_unix(),
                 action: LabAction::PrivateTransfer(PrivateTransferAction {
-                    recipient_lease_id: None,
+                    recipient_grant_id: None,
                     transfer_method: TransferMethod::Status,
                     component: "wallet".into(),
                     destination_component: None,
@@ -519,176 +471,50 @@ mod tests {
                 }),
             },
         );
-        let original = ExperimentLease {
-            delegation: None,
-            id: "lease".into(),
+        (lab, action)
+    }
+    #[test]
+    fn ordinary_private_work_has_no_session_state_or_single_owner_annotation() {
+        let (lab, mut action) = fixture();
+        let first = grant(&action, &lab, "wallet").unwrap();
+        action.spec.session_id = "another-session".into();
+        let later = grant(&action, &lab, "wallet").unwrap();
+        assert_eq!(first.authority, later.authority);
+        assert!(grant(&action, &lab, "unknown-wallet").is_err());
+    }
+    #[test]
+    fn private_access_is_bound_and_revocable_independently_of_sessions() {
+        let (mut lab, mut action) = fixture();
+        let access = PrivateAccessGrant {
+            id: "receive-one".into(),
             workspace_id: "workspace".into(),
-            experiment_id: "experiment".into(),
             instance_id: "instance".into(),
-            principal_id: "owner".into(),
-            phase: LeasePhase::Active,
-            acquired_at_unix: now_unix(),
-            expires_at_unix: now_unix() + 600,
-            max_actions: 10,
-            released_at_unix: None,
-        };
-        lab.metadata.annotations = Some(std::collections::BTreeMap::from([(
-            PRIVATE_LEASE_ANNOTATION.into(),
-            serde_json::to_string(&original).unwrap(),
-        )]));
-        (lab, action, original)
-    }
-    #[test]
-    fn runtime_grants_require_the_current_exact_active_lease_and_wallet() {
-        let (mut lab, mut action, original) = root_fixture();
-        assert!(grant(&action, &lab, "wallet").is_ok());
-        assert!(grant(&action, &lab, "other-wallet").is_err());
-        for field in [
-            "id",
-            "workspace_id",
-            "instance_id",
-            "experiment_id",
-            "principal_id",
-            "phase",
-            "expires_at_unix",
-        ] {
-            let mut value = serde_json::to_value(&original).unwrap();
-            value[field] = match field {
-                "phase" => serde_json::json!("released"),
-                "expires_at_unix" => serde_json::json!(0),
-                _ => serde_json::json!("other"),
-            };
-            lab.metadata
-                .annotations
-                .as_mut()
-                .unwrap()
-                .insert(PRIVATE_LEASE_ANNOTATION.into(), value.to_string());
-            assert!(
-                grant(&action, &lab, "wallet").is_err(),
-                "accepted stale/mismatched {field}"
-            );
-        }
-        lab.metadata.annotations = None;
-        assert!(grant(&action, &lab, "wallet").is_err());
-        lab.metadata.annotations = Some(std::collections::BTreeMap::from([(
-            PRIVATE_LEASE_ANNOTATION.into(),
-            serde_json::to_string(&original).unwrap(),
-        )]));
-        action.spec.capability = Capability::LabRead;
-        assert!(grant(&action, &lab, "wallet").is_err());
-    }
-    #[test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one fixture proves admission, scope substitution, and fresh revocation boundaries"
-    )]
-    fn delegated_runtime_checks_fresh_identity_scope_and_parent_revocation() {
-        use proofstorm_core::PrivateTransferLeaseScope;
-        let (mut lab, mut action, root) = root_fixture();
-        let mut mint = lab.spec.lab.components[0].clone();
-        mint.id = "mint".into();
-        mint.kind = ComponentKind::Mint;
-        lab.spec.lab.components.push(mint);
-        let scope = PrivateTransferLeaseScope {
-            receive_command_digest: proofstorm_core::PrivateReceiveCommand {
-                script: String::new(),
-                argv: vec!["receive".into()],
-                timeout_seconds: 30,
-                input: proofstorm_core::private_io::InputBinding::Stdin,
-            }
-            .digest(),
-            parent_lease_id: root.id.clone(),
-            component: "wallet".into(),
-            mint: "mint".into(),
-            reference: "opaque".into(),
-        };
-        let child = ExperimentLease {
-            delegation: Some(scope.clone()),
-            id: "child".into(),
-            principal_id: "recipient".into(),
-            ..root.clone()
-        };
-        action.spec.lease_scope = Some(scope);
-        action.spec.lease_id = child.id.clone();
-        action.spec.principal_id = child.principal_id.clone();
-        let annotate = |lab: &mut ProofstormLab, value: serde_json::Value| {
-            lab.metadata.annotations.as_mut().unwrap().insert(
-                PRIVATE_DELEGATIONS_ANNOTATION.into(),
-                serde_json::json!({"child":value}).to_string(),
-            );
-        };
-        annotate(&mut lab, serde_json::to_value(&child).unwrap());
-        assert!(validate_delegated_action(&action, &lab).is_ok());
-        assert!(grant(&action, &lab, "wallet").is_ok());
-        let mut omitted = action.clone();
-        omitted.spec.lease_scope = None;
-        assert!(validate_delegated_action(&omitted, &lab).is_err());
-        for field in [
-            "id",
-            "principal_id",
-            "instance_id",
-            "workspace_id",
-            "experiment_id",
-            "phase",
-            "expires_at_unix",
-        ] {
-            let mut value = serde_json::to_value(&child).unwrap();
-            value[field] = match field {
-                "phase" => serde_json::json!("released"),
-                "expires_at_unix" => serde_json::json!(0),
-                _ => serde_json::json!("wrong"),
-            };
-            annotate(&mut lab, value);
-            assert!(validate_delegated_action(&action, &lab).is_err(), "{field}");
-        }
-        annotate(&mut lab, serde_json::to_value(&child).unwrap());
-        action.spec.action = LabAction::WalletBalance(proofstorm_kube::WalletBalanceAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-        });
-        action.spec.capability = Capability::WalletControl;
-        assert!(validate_delegated_action(&action, &lab).is_ok());
-        for (wallet, mint) in [("other", "mint"), ("wallet", "other")] {
-            let mut wrong = action.clone();
-            wrong.spec.action = LabAction::WalletBalance(proofstorm_kube::WalletBalanceAction {
-                wallet: wallet.into(),
-                mint: mint.into(),
-            });
-            assert!(validate_delegated_action(&wrong, &lab).is_err());
-        }
-        action.spec.capability = Capability::ComponentExecLive;
-        action.spec.action =
-            LabAction::ComponentExecLive(proofstorm_kube::ComponentExecLiveAction {
+            principal_id: "receiver".into(),
+            scope: proofstorm_core::PrivateTransferScope {
+                issuer_principal_id: "owner".into(),
+                receive_command_digest: format!("sha256:{}", "a".repeat(64)),
                 component: "wallet".into(),
-                script: String::new(),
-                argv: vec!["receive".into()],
-                timeout_seconds: 30,
-                output: proofstorm_core::native::NativeOutput::default(),
-                private_payload: Some(PayloadBinding::Consume {
-                    reference: "opaque".into(),
-                    input: proofstorm_core::private_io::InputBinding::Stdin,
-                }),
-            });
+                mint: "mint".into(),
+                reference: "opaque".into(),
+            },
+            created_at_unix: 0,
+            revoked_at_unix: None,
+        };
+        lab.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            PRIVATE_ACCESS_ANNOTATION.into(),
+            serde_json::json!({access.id.clone():access}).to_string(),
+        )]));
+        action.spec.principal_id = "receiver".into();
+        action.spec.access_scope = Some(access.clone());
         assert!(validate_delegated_action(&action, &lab).is_ok());
-        let mut substituted = action.clone();
-        if let LabAction::ComponentExecLive(r) = &mut substituted.spec.action {
-            r.argv = vec!["wallet-spend".into()];
-        }
-        assert!(validate_delegated_action(&substituted, &lab).is_err());
-        let mut other = action.clone();
-        if let LabAction::ComponentExecLive(r) = &mut other.spec.action {
-            r.private_payload = None;
-        }
-        assert!(validate_delegated_action(&other, &lab).is_err());
-        let annotations = lab.metadata.annotations.as_mut().unwrap();
-        annotations.remove(PRIVATE_DELEGATIONS_ANNOTATION);
-        assert!(validate_delegated_action(&action, &lab).is_err());
-        annotate(&mut lab, serde_json::to_value(&child).unwrap());
-        lab.metadata
-            .annotations
-            .as_mut()
-            .unwrap()
-            .remove(PRIVATE_LEASE_ANNOTATION);
+        action.spec.session_id = "new-session".into();
+        assert!(validate_delegated_action(&action, &lab).is_ok());
+        let mut revoked = access.clone();
+        revoked.revoked_at_unix = Some(1);
+        lab.metadata.annotations.as_mut().unwrap().insert(
+            PRIVATE_ACCESS_ANNOTATION.into(),
+            serde_json::json!({access.id:revoked}).to_string(),
+        );
         assert!(validate_delegated_action(&action, &lab).is_err());
     }
 }

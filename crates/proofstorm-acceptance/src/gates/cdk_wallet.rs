@@ -12,7 +12,7 @@ use crate::{GateContext, McpClient, json as expect, lab};
 
 const INSTANCE: &str = "cdk-wallet-instance";
 const EXPERIMENT: &str = "cdk-wallet-experiment";
-const LEASE: &str = "cdk-wallet-lease";
+const LEASE: &str = "cdk-wallet-session";
 const CLI: &str = "timeout -k 2 45 cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive";
 const LN: &str = "lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=127.0.0.1:10009";
 
@@ -41,7 +41,7 @@ fn scoped(operation: &str, parameters: Value) -> Value {
         panic!("parameters must be an object")
     };
     request.extend(
-        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"lease_id":LEASE,
+        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":LEASE,
         "operation_id":operation,"idempotency_key":operation})
         .as_object()
         .expect("scope")
@@ -69,9 +69,7 @@ fn operation(
     let result = match lab::wait_operation(client, id, 60) {
         Ok(result) => result,
         Err(error) => {
-            if let Ok(failed) =
-                client.call("proofstorm_operation_status", json!({"operation_id": id}))
-            {
+            if let Ok(failed) = client.call("operation_status", json!({"operation_id": id})) {
                 save(directory, id, &failed)?;
             }
             return Err(error);
@@ -91,7 +89,7 @@ fn native(
     let result = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         id,
         json!({"component":wallet,"script":format!("umask 077; {script}"),"timeout_seconds":60,"output":{"mode":"public"}}),
     )?;
@@ -116,7 +114,7 @@ fn balance(
     let observed = operation(
         client,
         directory,
-        "proofstorm_wallet_balance",
+        "wallet_balance",
         id,
         json!({"wallet":wallet,"mint":"mint"}),
     )?;
@@ -159,21 +157,21 @@ fn exercise(
         bail!("wallets share seed identity");
     }
     client.call_refused(
-        "proofstorm_wallet_initialize",
+        "wallet_initialize",
         scoped(
             "unsupported-initialize",
             json!({"wallet":"wallet-a","mint":"mint"}),
         ),
         "runtime_control_unsupported",
     )?;
-    client.call_refused("proofstorm_wallet_fund",
+    client.call_refused("wallet_fund",
         scoped("unsupported-fund",json!({"wallet":"wallet-a","mint":"mint","payer_lightning":"payer-lnd","amount_sat":1000})),
         "runtime_control_unsupported")?;
 
     operation(
         client,
         directory,
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         "bootstrap",
         json!({
             "chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd",
@@ -183,7 +181,7 @@ fn exercise(
 
     // Interrupt a genuinely started CLI while its real quote is unpaid. Passive
     // observation must work during the command; resumption uses that exact quote.
-    client.call("proofstorm_component_exec_live", scoped("interrupted-funding", json!({
+    client.call("component_exec_live", scoped("interrupted-funding", json!({
         "component":"wallet-a", "argv":["cdk-cli","--work-dir","/wallet/cdk","--unit","sat","--non-interactive","mint","http://mint:3338","5000","--wait-duration","240"],
         "timeout_seconds":300
     })))?;
@@ -196,7 +194,7 @@ fn exercise(
     )?;
     balance(client, directory, "passive-during-funding", "wallet-a", 0)?;
     let active = client.call(
-        "proofstorm_operation_status",
+        "operation_status",
         json!({"operation_id":"interrupted-funding"}),
     )?;
     save(directory, "funding-before-cancel", &active)?;
@@ -204,11 +202,11 @@ fn exercise(
         bail!("funding CLI was not live at interruption");
     }
     client.call(
-        "proofstorm_action_cancel",
+        "action_cancel",
         json!({"operation_id":"interrupted-funding","idempotency_key":"cancel-interrupted-funding"}),
     )?;
     let cancelled = client.call(
-        "proofstorm_operation_wait",
+        "operation_wait",
         json!({"operation_id":"interrupted-funding","timeout_seconds":30}),
     )?;
     save(directory, "funding-cancelled", &cancelled)?;
@@ -229,7 +227,7 @@ fn exercise(
     let payment = operation(
         client,
         directory,
-        "proofstorm_component_exec_live",
+        "component_exec_live",
         "funding-payment",
         json!({
             "component":"payer-lnd", "script":format!("exec {LN} sendpayment --force --json --timeout=30s --pay_req=\"$(cat /tmp/funding.invoice)\""),
@@ -288,7 +286,7 @@ fn exercise(
             operation(
                 client,
                 directory,
-                "proofstorm_component_restart",
+                "component_restart",
                 "restart-wallet-a",
                 json!({"component":"wallet-a"}),
             )?;
@@ -324,7 +322,7 @@ fn exercise(
             let receipt = operation(
                 client,
                 directory,
-                "proofstorm_component_exec_live",
+                "component_exec_live",
                 id,
                 json!({"component":"wallet-a",
                     "argv":["cdk-cli","--work-dir","/wallet/cdk","--unit","sat","--non-interactive",
@@ -482,13 +480,7 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
         "component":"wallet-a", "script":format!("cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive melt --mint-url http://mint:3338 --invoice \"$(cat /wallet/rejected.invoice)\" > /wallet/{id}.log 2>&1"),
         "timeout_seconds":45
     });
-    let receipt = operation(
-        client,
-        directory,
-        "proofstorm_component_exec_live",
-        id,
-        args.clone(),
-    )?;
+    let receipt = operation(client, directory, "component_exec_live", id, args.clone())?;
     if receipt
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -500,7 +492,7 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
     }
     // Idempotent transport replay must preserve the original receipt, not
     // perform another potentially fee-bearing native attempt.
-    client.call("proofstorm_component_exec_live", scoped(id, args))?;
+    client.call("component_exec_live", scoped(id, args))?;
     let replay = lab::wait_operation(client, id, 60)?;
     save(directory, &format!("{id}-idempotent-replay"), &replay)?;
     if lab::artifact_content(&replay)? != &receipt {
@@ -541,10 +533,10 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &capabilities,
     )?;
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id":"cdk-wallet","lab":document(input_fee_ppk),"idempotency_key":"create"}),
     )?;
-    let published = client.call("proofstorm_lab_publish",json!({"draft_id":"cdk-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published = client.call("lab_publish",json!({"draft_id":"cdk-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
     save(&directory, "published", &published)?;
     let locked = lab::lock_entry(&published, "cdk-cli-wallet")?;
     if locked.pointer("/build_provenance/commit_sha")
@@ -552,13 +544,16 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     {
         bail!("wallet lock omitted source provenance");
     }
-    client.call("proofstorm_lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
     // Always attempt normal cleanup after materialization, including failed gates.
     let result = (|| -> Result<()> {
         let ready = lab::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
-        client.call("proofstorm_experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
-        client.call("proofstorm_lease_acquire",json!({"experiment_id":EXPERIMENT,"lease_id":LEASE,"duration_seconds":1200,"max_actions":64,"idempotency_key":"lease"}))?;
+        client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
+        client.call(
+            "session_start",
+            json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
+        )?;
         exercise(
             context,
             &mut client,
@@ -568,15 +563,15 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         )
     })();
     let _ = client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id":LEASE,"idempotency_key":"release"}),
+        "session_finish",
+        json!({"session_id":LEASE,"idempotency_key":"release"}),
     );
     let _ = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
     );
     let evidence = client.call(
-        "proofstorm_artifact_export",
+        "artifact_export",
         json!({"experiment_id":EXPERIMENT,"include_content":true}),
     );
     if let Ok(export) = &evidence {
@@ -588,7 +583,7 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &json!({"passed": result.is_ok(),
         "error": result.as_ref().err().map(|error| format!("{error:#}"))}),
     )?;
-    client.call("proofstorm_lab_close", json!({"instance_id":INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
     let closed = lab::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {

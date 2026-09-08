@@ -59,4 +59,42 @@ validate_config \
   "${ROOT_DIR}/docker/mint/mintd.regtest.toml" \
   -e 'CDK_MINTD_MNEMONIC=abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
+# Exercise the exact rendered initializer against the pinned CDK database,
+# including accepted edits, restart retries, and failure without data loss.
+jq -er '.resources.deployments[0].spec.template.spec.initContainers[]
+  | select(.name == "initialize-config") | .command[2]' \
+  "${ROOT_DIR}/crates/proofstorm-kube/tests/golden/cdk.json" > "${TMP_DIR}/initialize.sh"
+docker run --rm -i \
+  --entrypoint sh \
+  --tmpfs /config:rw,mode=1777 \
+  --tmpfs /app/data:rw,mode=1777 \
+  -v "${ROOT_DIR}/docker/mint/mintd.toml:/fixture.toml:ro" \
+  -v "${TMP_DIR}/initialize.sh:/initialize.sh:ro" \
+  -e CDK_MINTD_WORK_DIR=/app/data \
+  -e 'CDK_MINTD_MNEMONIC=abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
+  "${STANDARD_IMAGE}" -es <<'SH'
+cp /fixture.toml /config/config.toml
+sh -e /initialize.sh
+printf 'persistent-state\n' > /app/data/sentinel
+sed 's/name = "proofstorm"/name = "edited mint"/' /fixture.toml > /config/config.toml
+sh -e /initialize.sh
+cdk-mintd config show > /tmp/accepted.toml
+grep -q 'name = "edited mint"' /tmp/accepted.toml
+sh -e /initialize.sh
+cdk-mintd config show > /tmp/retried.toml
+cmp /tmp/accepted.toml /tmp/retried.toml
+printf 'not valid TOML = [\n' > /config/config.toml
+if sh -e /initialize.sh; then
+    echo 'invalid configuration was accepted' >&2
+    exit 1
+fi
+cdk-mintd config show > /tmp/after-failure.toml
+cmp /tmp/accepted.toml /tmp/after-failure.toml
+cp /fixture.toml /config/config.toml
+sh -e /initialize.sh
+cdk-mintd config show | grep -q 'name = "proofstorm"'
+grep -q '^persistent-state$' /app/data/sentinel
+echo 'CDK initialization, edit, retry, invalid edit and recovery passed'
+SH
+
 echo "All generated and Compose CDK 0.18 configurations satisfy the pinned upstream binaries"

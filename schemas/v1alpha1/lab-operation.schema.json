@@ -15,11 +15,11 @@
         "lab.materialize",
         "lab.status",
         "lab.close",
+        "lab.connect",
         "experiment.create",
         "experiment.read",
         "experiment.close",
-        "lease.acquire",
-        "lease.release",
+        "lab.operate",
         "action.cancel",
         "topology.inspect",
         "topology.mutate",
@@ -170,9 +170,6 @@
     "kind": {
       "$ref": "#/$defs/OperationKind"
     },
-    "lease_id": {
-      "type": "string"
-    },
     "phase": {
       "$ref": "#/$defs/OperationPhase"
     },
@@ -186,10 +183,18 @@
     "resource_name": {
       "type": "string"
     },
+    "revision_digest": {
+      "default": "",
+      "description": "Immutable configuration captured atomically at admission.",
+      "type": "string"
+    },
     "sequence": {
       "format": "uint64",
       "minimum": 0,
       "type": "integer"
+    },
+    "session_id": {
+      "type": "string"
     },
     "started_at_unix": {
       "format": "int64",
@@ -207,7 +212,7 @@
     "workspace_id",
     "instance_id",
     "experiment_id",
-    "lease_id",
+    "session_id",
     "principal_id",
     "sequence",
     "kind",

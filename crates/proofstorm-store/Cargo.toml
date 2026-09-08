@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+proofstorm-view = { path = "../proofstorm-view" }
 proofstorm-core = { path = "../proofstorm-core" }
 rusqlite.workspace = true
 schemars.workspace = true

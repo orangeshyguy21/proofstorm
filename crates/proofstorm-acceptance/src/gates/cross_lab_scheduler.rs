@@ -149,11 +149,11 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let draft = format!("cross-lab-{run_id}");
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": draft, "lab": lab_document(), "idempotency_key": format!("create-{run_id}")}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": draft, "expected_version": 1, "idempotency_key": format!("publish-{run_id}")}),
     )?;
     let digest = expect::string(&published, "/digest")?.to_string();
@@ -163,7 +163,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         .collect();
     for (index, instance) in instances.iter().enumerate() {
         client.call(
-            "proofstorm_lab_materialize",
+            "lab_materialize",
             json!({
                 "instance_id": instance,
                 "revision_digest": digest,
@@ -244,12 +244,12 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     for instance in &instances {
-        client.call("proofstorm_lab_close", json!({"instance_id": instance}))?;
+        client.call("lab_close", json!({"instance_id": instance}))?;
     }
     for instance in &instances {
         let mut closed = false;
         for _ in 0..60 {
-            let status = client.call("proofstorm_lab_status", json!({"instance_id": instance}))?;
+            let status = client.call("lab_status", json!({"instance_id": instance}))?;
             if expect::string(&status, "/phase")? == "closed" {
                 if !expect::boolean(&status, "/teardown_receipt/verified_absent")? {
                     bail!("lab {instance} closed without verified teardown: {status}");

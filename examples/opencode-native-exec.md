@@ -1,6 +1,6 @@
 # OpenCode native-protocol acceptance conversation
 
-Run `tools/proofstorm-cluster setup`, then start OpenCode from this repository:
+Run `make setup`, then start OpenCode from this repository:
 
 ```bash
 OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
@@ -10,14 +10,14 @@ Give the agent this request:
 
 > Use Proofstorm MCP only; do not invoke host Docker, Kubernetes, Helm, or local
 > component CLIs. Generate one unique run suffix and use it consistently in
-> every draft, instance, experiment, lease, operation, and idempotency ID.
+> every plan, instance, operation, and idempotency ID.
 > Discover compact catalog identities, read only the exact selected entries and
 > configuration schemas, then create and materialize a minimal lab
 > with two Bitcoin Core nodes, one LND node linked to the first Bitcoin node, a
 > CDK mint linked to LND, and a Nutshell wallet. Include `component.exec_live` in the
-> lab policy. Create an
-> experiment and acquire an exclusive lease. Use
-> `proofstorm_component_exec_live` to run `bitcoin-cli --help`, then use the native
+> lab policy. Omit experiment_id and session_id for ordinary native commands;
+> Proofstorm supplies attribution automatically. Use
+> `pst_component_exec_live` to run `bitcoin-cli --help`, then use the native
 > Bitcoin CLI with the lab-provided RPC environment to call
 > `getblockchaininfo` on each Bitcoin node. Prove explicit multi-node selection
 > by executing a command in each selected live Bitcoin component. Run
@@ -26,15 +26,17 @@ Give the agent this request:
 > artifact and report its exit code and a concise output summary. Also prove
 > the exec workload has no Kubernetes service-account token at
 > `/var/run/secrets/kubernetes.io/serviceaccount/token`; treat the expected
-> missing file as experiment data. Use `proofstorm_lab_wait` for readiness and
+> missing file as experiment data. Use `pst_lab_wait` for readiness and
 > teardown, and use the paged component-status tool only when exact component
-> conditions are needed. Use `proofstorm_operation_wait` for every submitted
+> conditions are needed. Use `pst_operation_wait` for every submitted
 > command; do not tightly poll status tools. Do not print mnemonics, macaroons, proofs, or
-> private keys. Release the lease, close the experiment, export evidence, close
-> the lab, and report the evidence digest and verified teardown receipt. Read
-> the canonical journal through `proofstorm_action_list` and confirm its
+> private keys. Export evidence before closing
+> the lab, since verified deletion purges its local history. Read
+> the canonical journal through `pst_action_list` and confirm its
 > object-wrapped `actions` page. Reuse an idempotency key only for an identical
-> retry.
+> retry. Get expected_instance_key from pst_lab_status, then pass it to pst_lab_close
+> and pst_lab_wait with target_phase=closed. Report the exported evidence digest
+> and verified teardown receipt.
 
 Passing evidence:
 

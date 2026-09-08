@@ -41,6 +41,14 @@ pub enum ComponentConditionReason {
     StaleRevision,
     WorkloadAvailable,
     WorkloadUnavailable,
+    ImagePullFailed,
+    ImagePullBackoff,
+    InvalidImageName,
+    ContainerConfigError,
+    ContainerCrashLoop,
+    ContainerStartError,
+    ContainerExited,
+    PodUnschedulable,
     StorageBound,
     StoragePending,
     CredentialsProjected,
@@ -57,6 +65,24 @@ pub enum ComponentConditionReason {
     IntentionallyStopped,
     ControlAvailable,
     ControlUnavailable,
+}
+
+impl ComponentConditionReason {
+    /// Startup is failing; repeated waiting alone is not a recovery strategy.
+    #[must_use]
+    pub const fn blocks_startup(self) -> bool {
+        matches!(
+            self,
+            Self::ImagePullFailed
+                | Self::ImagePullBackoff
+                | Self::InvalidImageName
+                | Self::ContainerConfigError
+                | Self::ContainerCrashLoop
+                | Self::ContainerStartError
+                | Self::ContainerExited
+                | Self::PodUnschedulable
+        )
+    }
 }
 
 #[derive(
@@ -3134,6 +3160,14 @@ fn default_condition_reasons(
             BTreeSet::from([
                 Reason::WorkloadAvailable,
                 Reason::WorkloadUnavailable,
+                Reason::ImagePullFailed,
+                Reason::ImagePullBackoff,
+                Reason::InvalidImageName,
+                Reason::ContainerConfigError,
+                Reason::ContainerCrashLoop,
+                Reason::ContainerStartError,
+                Reason::ContainerExited,
+                Reason::PodUnschedulable,
                 Reason::NotObserved,
                 Reason::StaleRevision,
                 Reason::IntentionallyStopped,

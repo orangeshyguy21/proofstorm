@@ -24,6 +24,55 @@ spec:
               acceptedAtUnix:
                 format: int64
                 type: integer
+              accessScope:
+                description: Explicit permission for one private transfer. Sessions never confer or revoke access.
+                nullable: true
+                properties:
+                  created_at_unix:
+                    format: int64
+                    type: integer
+                  id:
+                    type: string
+                  instance_id:
+                    type: string
+                  principal_id:
+                    type: string
+                  revoked_at_unix:
+                    format: int64
+                    nullable: true
+                    type: integer
+                  scope:
+                    description: |-
+                      A recipient may inspect and consume one private transfer in one wallet.
+                      This scope grants no global capability and is independent of session lifetime.
+                    properties:
+                      component:
+                        type: string
+                      issuer_principal_id:
+                        type: string
+                      mint:
+                        type: string
+                      receive_command_digest:
+                        type: string
+                      reference:
+                        type: string
+                    required:
+                    - component
+                    - issuer_principal_id
+                    - mint
+                    - receive_command_digest
+                    - reference
+                    type: object
+                  workspace_id:
+                    type: string
+                required:
+                - created_at_unix
+                - id
+                - instance_id
+                - principal_id
+                - scope
+                - workspace_id
+                type: object
               action:
                 properties:
                   kind:
@@ -227,7 +276,7 @@ spec:
                       quoteId:
                         nullable: true
                         type: string
-                      recipientLeaseId:
+                      recipientGrantId:
                         nullable: true
                         type: string
                       recipientMint:
@@ -311,11 +360,11 @@ spec:
                 - lab.materialize
                 - lab.status
                 - lab.close
+                - lab.connect
                 - experiment.create
                 - experiment.read
                 - experiment.close
-                - lease.acquire
-                - lease.release
+                - lab.operate
                 - action.cancel
                 - topology.inspect
                 - topology.mutate
@@ -360,31 +409,6 @@ spec:
                 type: string
               labName:
                 type: string
-              leaseId:
-                type: string
-              leaseScope:
-                description: |-
-                  A recipient may inspect and consume one private transfer in one wallet.
-                  The parent remains the exclusive lab lease; this scope grants no global capability.
-                nullable: true
-                properties:
-                  component:
-                    type: string
-                  mint:
-                    type: string
-                  parent_lease_id:
-                    type: string
-                  receive_command_digest:
-                    type: string
-                  reference:
-                    type: string
-                required:
-                - component
-                - mint
-                - parent_lease_id
-                - receive_command_digest
-                - reference
-                type: object
               operationId:
                 type: string
               principalId:
@@ -395,6 +419,8 @@ spec:
                 format: uint64
                 minimum: 0.0
                 type: integer
+              sessionId:
+                type: string
               workspaceId:
                 type: string
             required:
@@ -405,11 +431,11 @@ spec:
             - instanceId
             - instanceKey
             - labName
-            - leaseId
             - operationId
             - principalId
             - requestDigest
             - sequence
+            - sessionId
             - workspaceId
             type: object
           status:

@@ -352,6 +352,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -502,6 +510,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -678,6 +694,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -861,6 +885,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -1065,6 +1097,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -1276,6 +1316,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -1506,6 +1554,14 @@
           "stale_revision",
           "workload_available",
           "workload_unavailable",
+          "image_pull_failed",
+          "image_pull_backoff",
+          "invalid_image_name",
+          "container_config_error",
+          "container_crash_loop",
+          "container_start_error",
+          "container_exited",
+          "pod_unschedulable",
           "intentionally_stopped"
         ]
       },
@@ -1757,6 +1813,9 @@
               "proofstorm.dev/network-identity": "mint"
             }
           },
+          "strategy": {
+            "type": "Recreate"
+          },
           "template": {
             "metadata": {
               "annotations": {
@@ -1854,7 +1913,7 @@
                   "command": [
                     "sh",
                     "-ec",
-                    "if stored_config=$(cdk-mintd config show 2>/dev/null); then desired_config=$(cat /config/config.toml); if test \"$stored_config\" != \"$desired_config\"; then echo 'stored CDK configuration differs from the immutable Proofstorm lock; refusing implicit config apply' >&2; exit 1; fi; cdk-mintd config apply --file /config/config.toml --validate-only; else cdk-mintd config validate --file /config/config.toml && cdk-mintd config init --new-mint --file /config/config.toml; fi"
+                    "cdk-mintd config validate --file /config/config.toml; if cdk-mintd config show >/dev/null; then exec cdk-mintd config apply --file /config/config.toml; else exec cdk-mintd config init --new-mint --file /config/config.toml; fi"
                   ],
                   "env": [
                     {
@@ -3870,43 +3929,6 @@
           "requests.memory": "4Gi"
         }
       }
-    },
-    "role": {
-      "apiVersion": "rbac.authorization.k8s.io/v1",
-      "kind": "Role",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-workload",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "rules": []
-    },
-    "roleBinding": {
-      "apiVersion": "rbac.authorization.k8s.io/v1",
-      "kind": "RoleBinding",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-workload",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "roleRef": {
-        "apiGroup": "rbac.authorization.k8s.io",
-        "kind": "Role",
-        "name": "proofstorm-workload"
-      },
-      "subjects": [
-        {
-          "kind": "ServiceAccount",
-          "name": "proofstorm-workload",
-          "namespace": "proofstorm-i-golden-b2"
-        }
-      ]
     },
     "serviceAccount": {
       "apiVersion": "v1",

@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::{
     CandidateBuild, Capability, CatalogResponse, ComponentBackendContract, ComponentPlanContract,
-    ConfigurationCoverageManifest, EvidenceBundle, Experiment, ExperimentLease, LabOperation,
-    LabSpec, NetworkFaultBackend, OperationArtifact, PublishedRevision, ResolvedLock,
+    ConfigurationCoverageManifest, EvidenceBundle, Experiment, LabOperation, LabSpec,
+    NetworkFaultBackend, OperationArtifact, PublishedRevision, ResolvedLock, Session,
     ValidationReport, WalletQuoteObservation,
 };
 
@@ -89,9 +89,9 @@ pub fn schema_documents() -> Vec<(&'static str, Value)> {
             serde_json::to_value(schema_for!(Experiment)).expect("experiment schema serializes"),
         ),
         (
-            "experiment-lease.schema.json",
-            serde_json::to_value(schema_for!(ExperimentLease))
-                .expect("experiment lease schema serializes"),
+            "session.schema.json",
+            serde_json::to_value(schema_for!(Session))
+                .expect("experiment session schema serializes"),
         ),
         (
             "evidence-bundle.schema.json",

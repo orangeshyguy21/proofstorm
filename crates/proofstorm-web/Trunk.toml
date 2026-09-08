@@ -1,0 +1,12 @@
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/"
+filehash = true
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8080
+
+[[proxy]]
+backend = "http://127.0.0.1:8787/v1/"

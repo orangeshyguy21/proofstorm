@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_PRIVATE_BYTES: u32 = 1024 * 1024;
 pub const MAX_PRIVATE_ARG_BYTES: u32 = 64 * 1024;
 pub const PRIVATE_ARG: &str = "@proofstorm-private-input";
-pub const PRIVATE_DELEGATIONS_ANNOTATION: &str = "proofstorm.dev/private-recipient-leases";
-pub const PRIVATE_LEASE_ANNOTATION: &str = "proofstorm.dev/private-lease";
+pub const PRIVATE_ACCESS_ANNOTATION: &str = "proofstorm.dev/private-access-grants";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -43,7 +42,7 @@ impl PayloadBinding {
     }
 }
 
-/// Internal runner request, constructed after runtime custody/lease admission.
+/// Internal runner request, constructed after runtime custody/session admission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PrivateIo {

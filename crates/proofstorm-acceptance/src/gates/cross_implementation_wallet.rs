@@ -16,7 +16,7 @@ const CACHE_DRIVER: &str = include_str!("../../drivers/nutshell_redis_settings.p
 
 const INSTANCE: &str = "cross-mint-wallet-instance";
 const EXPERIMENT: &str = "cross-mint-experiment";
-const LEASE: &str = "cross-mint-lease";
+const LEASE: &str = "cross-mint-session";
 const DRAFT: &str = "cross-mint-wallet";
 
 fn lab_document() -> Value {
@@ -66,15 +66,15 @@ pub fn run(context: &GateContext) -> Result<()> {
         EXPERIMENT_CAPABILITIES,
     )?;
     let _ = client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id":LEASE,"idempotency_key":"release-cross-mint-lease"}),
+        "session_finish",
+        json!({"session_id":LEASE,"idempotency_key":"release-cross-mint-session"}),
     );
     let _ = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-cross-mint-experiment"}),
     );
     if let Ok(export) = client.call(
-        "proofstorm_artifact_export",
+        "artifact_export",
         json!({"experiment_id":EXPERIMENT,"include_content":true}),
     ) {
         fs::write(
@@ -89,7 +89,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?,
     )?;
     // A failed assertion must still retire the disposable lab through its finalizer.
-    client.call("proofstorm_lab_close", json!({"instance_id":INSTANCE}))?;
+    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
     let closed = lab::wait_closed(&mut client, INSTANCE)?;
     fs::write(
         directory.join("closed.json"),
@@ -109,11 +109,11 @@ fn exercise(context: &GateContext) -> Result<()> {
     )?;
 
     client.call(
-        "proofstorm_lab_create",
+        "lab_create",
         json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-cross-mint-wallet"}),
     )?;
     let published = client.call(
-        "proofstorm_lab_publish",
+        "lab_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cross-mint-wallet", "include_revision": true}),
     )?;
 
@@ -141,14 +141,14 @@ fn exercise(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_lab_materialize",
+        "lab_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cross-mint-wallet"}),
     )?;
     let ready = lab::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let components = client.call(
-        "proofstorm_lab_component_status_list",
+        "lab_component_status_list",
         json!({"instance_id": INSTANCE, "limit": 50}),
     )?;
     let mut actual: Vec<&str> = expect::array(&components, "/components")?
@@ -234,18 +234,18 @@ fn exercise(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "proofstorm_experiment_create",
+        "experiment_create",
         json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-cross-mint-experiment"}),
     )?;
     client.call(
-        "proofstorm_lease_acquire",
-        json!({"experiment_id": EXPERIMENT, "lease_id": LEASE, "duration_seconds": 1200, "max_actions": 24, "idempotency_key": "acquire-cross-mint-lease"}),
+        "session_start",
+        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-cross-mint-session"}),
     )?;
 
     client.call(
-        "proofstorm_liquidity_bootstrap",
+        "liquidity_bootstrap",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "operation_id": "cross-mint-bootstrap", "chain": "chain",
             "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
             "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000,
@@ -263,7 +263,7 @@ fn exercise(context: &GateContext) -> Result<()> {
     ] {
         let prefix = format!("{implementation}-wallet");
         let common = json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "lease_id": LEASE,
+            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
             "wallet": wallet, "mint": mint
         });
         let merge = |extra: Value| -> Value {
@@ -277,7 +277,7 @@ fn exercise(context: &GateContext) -> Result<()> {
         };
 
         client.call(
-            "proofstorm_wallet_initialize",
+            "wallet_initialize",
             merge(json!({"operation_id": format!("{prefix}-initialize"), "idempotency_key": format!("{prefix}-initialize")})),
         )?;
         let initialized = lab::wait_operation(&mut client, &format!("{prefix}-initialize"), 160)?;
@@ -286,7 +286,7 @@ fn exercise(context: &GateContext) -> Result<()> {
         }
 
         client.call(
-            "proofstorm_wallet_balance",
+            "wallet_balance",
             merge(json!({"operation_id": format!("{prefix}-balance"), "idempotency_key": format!("{prefix}-balance")})),
         )?;
         let balance = lab::wait_operation(&mut client, &format!("{prefix}-balance"), 160)?;
@@ -295,7 +295,7 @@ fn exercise(context: &GateContext) -> Result<()> {
         }
 
         client.call(
-            "proofstorm_wallet_fund",
+            "wallet_fund",
             merge(json!({"operation_id": format!("{prefix}-fund"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": format!("{prefix}-fund")})),
         )?;
         let funded = lab::wait_operation(&mut client, &format!("{prefix}-fund"), 160)?;
@@ -308,7 +308,7 @@ fn exercise(context: &GateContext) -> Result<()> {
 
         let baseline_id = format!("{prefix}-balance-before-round-trip");
         client.call(
-            "proofstorm_wallet_balance",
+            "wallet_balance",
             merge(json!({"operation_id": baseline_id, "idempotency_key": format!("{prefix}-balance-before-round-trip")})),
         )?;
         let baseline = lab::wait_operation(
@@ -321,7 +321,7 @@ fn exercise(context: &GateContext) -> Result<()> {
         }
 
         client.call(
-            "proofstorm_wallet_round_trip",
+            "wallet_round_trip",
             merge(json!({"operation_id": format!("{prefix}-round-trip"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": format!("{prefix}-round-trip")})),
         )?;
         let round_trip = lab::wait_operation(&mut client, &format!("{prefix}-round-trip"), 160)?;
@@ -336,18 +336,18 @@ fn exercise(context: &GateContext) -> Result<()> {
         // that funds and spends in one action. Keep the round-trip assertion and
         // give conservation its own immediately preceding baseline/payment.
         let recipient = format!("{implementation}-recipient");
-        client.call("proofstorm_wallet_initialize", merge(json!({"wallet":recipient,
+        client.call("wallet_initialize", merge(json!({"wallet":recipient,
             "operation_id":format!("{prefix}-recipient-initialize"),"idempotency_key":format!("{prefix}-recipient-initialize")})))?;
         lab::wait_operation(&mut client, &format!("{prefix}-recipient-initialize"), 160)?;
-        client.call("proofstorm_wallet_invoice",merge(json!({"wallet":recipient,"amount_sat":100,"timeout_seconds":30,
+        client.call("wallet_invoice",merge(json!({"wallet":recipient,"amount_sat":100,"timeout_seconds":30,
             "operation_id":format!("{prefix}-recipient-invoice"),"idempotency_key":format!("{prefix}-recipient-invoice")})))?;
         let invoice =
             lab::wait_operation(&mut client, &format!("{prefix}-recipient-invoice"), 160)?;
         let quote = expect::string(lab::artifact_content(&invoice)?, "/mint_quote_id")?;
-        client.call("proofstorm_wallet_balance",merge(json!({"operation_id":format!("{prefix}-balance-before-pay"),"idempotency_key":format!("{prefix}-balance-before-pay")})))?;
+        client.call("wallet_balance",merge(json!({"operation_id":format!("{prefix}-balance-before-pay"),"idempotency_key":format!("{prefix}-balance-before-pay")})))?;
         lab::wait_operation(&mut client, &format!("{prefix}-balance-before-pay"), 160)?;
         client.call(
-            "proofstorm_wallet_pay",
+            "wallet_pay",
             merge(
                 json!({"recipient_wallet":recipient,"recipient_mint":mint,"mint_quote_id":quote,
             "operation_id":format!("{prefix}-pay"),"idempotency_key":format!("{prefix}-pay")}),
@@ -381,14 +381,14 @@ fn exercise(context: &GateContext) -> Result<()> {
                 bail!("CDK authoritative fee support changed; review this boundary fixture");
             }
             client.call_refused(
-                "proofstorm_conservation_oracle",
+                "conservation_oracle",
                 oracle_request,
                 "conservation_treatment_artifact_invalid",
             )?;
             json!({"refused":true,"code":"conservation_treatment_artifact_invalid",
                 "reason":"authoritative_mint_fee_unavailable","conservation_claimed":false})
         } else {
-            client.call("proofstorm_conservation_oracle", oracle_request)?;
+            client.call("conservation_oracle", oracle_request)?;
             let oracle = lab::wait_operation(&mut client, &format!("{prefix}-conservation"), 160)?;
             if !expect::boolean(lab::artifact_content(&oracle)?, "/conserved")? {
                 bail!("{implementation} conservation check failed: {oracle}");
@@ -437,11 +437,11 @@ fn exercise(context: &GateContext) -> Result<()> {
     lab::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
 
     client.call(
-        "proofstorm_lease_release",
-        json!({"lease_id": LEASE, "idempotency_key": "release-cross-mint-lease"}),
+        "session_finish",
+        json!({"session_id": LEASE, "idempotency_key": "release-cross-mint-session"}),
     )?;
     let closed_experiment = client.call(
-        "proofstorm_experiment_close",
+        "experiment_close",
         json!({"experiment_id": EXPERIMENT, "idempotency_key": "close-cross-mint-experiment"}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
