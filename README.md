@@ -86,6 +86,14 @@ the lab purges its local activity; reusing its name creates a fresh instance.
 `make down` deletes the entire local cluster, while `proofstorm down demo`
 closes just that lab.
 
+CLI and MCP lifecycle commands resolve the same lab by name or instance ID.
+An agent-created lab can be inspected, edited, connected to, and closed from the
+CLI using its instance ID. Access follows workspace permissions in both interfaces.
+Closing verifies the specific lab incarnation before removing its records.
+For MCP `lab_finish` and `lab_close`, copy `expected_instance_key` from inspection
+or status. `lab_inspect` exposes `instance_key` even if startup has not reached
+the cluster; reusing a name produces a different key.
+
 ## Edit a running lab
 
 Change the configuration and run `proofstorm up` with the same name. Unchanged
@@ -359,9 +367,16 @@ source/database inspection, but explicitly does not promise live CLI or socket
 connectivity. Forensics retains its separate bounded-output contract. Native CLIs are the
 normal surface for operating deployed software; use typed actions where they
 provide coordination, lifecycle guarantees, or useful portable observations.
-`component_restart`
-(`component.control`) rolls any primary component workload, including mints and
-wallets, while preserving its persistent state.
+`component_start`, `component_stop`, and `component_restart` (`component.control`)
+control any primary component workload, including mints and wallets, while
+preserving persistent storage. A deliberate stop survives controller restarts and
+compatible lab edits; use start to resume it. Restarting a deliberately stopped
+component returns `component_not_running`. Poll `operation_status` or
+`operation_wait`: acceptance is not completion. Stops wait for pods to disappear;
+starts and restarts wait for the accepted rollout to become ready. Conflicting
+controls are ordered across the whole lab; an older operation reports
+`lifecycle_action_superseded` if a newer control overtakes it. Native node controls
+use the same application and controller path.
 
 Mint management uses these same native exec paths. CDK, CDK-LDK, CDK-BDK, and
 Nutshell start management RPC on `127.0.0.1:8086` with mandatory mutual TLS.

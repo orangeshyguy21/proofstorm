@@ -27,6 +27,64 @@ fn read(
 }
 
 impl Store {
+    /// Resolve a display name or canonical instance ID without creating bookkeeping.
+    /// An unnamed instance has no recorded name owner; the empty owner is informational.
+    /// Authority always comes from workspace capabilities, not this display projection.
+    pub fn resolve_lab(
+        &self,
+        workspace: &str,
+        principal: &str,
+        reference: &str,
+    ) -> Result<LabHandle, StoreError> {
+        self.authorize(workspace, principal, Capability::LabStatus)?;
+        let named = read(&*self.lock()?, workspace, reference)?;
+        let exact = match self.instance_unchecked(workspace, reference) {
+            Ok(instance) => Some(instance),
+            Err(StoreError::NotFound { .. }) => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(handle) = named {
+            if exact.as_ref().is_some_and(|i| i.id != handle.instance_id) {
+                return Err(StoreError::LabUpdate {
+                    code: "lab_reference_ambiguous",
+                    message: "This name also identifies another instance; use the intended canonical instance ID".into(),
+                });
+            }
+            return self.lab_handle(workspace, principal, &handle.name);
+        }
+        let instance = exact.ok_or_else(|| StoreError::NotFound {
+            resource: "lab",
+            id: reference.into(),
+        })?;
+        let alias: Option<String> = self
+            .lock()?
+            .query_row(
+                "SELECT name FROM lab_handles WHERE workspace_id=?1 AND instance_id=?2",
+                params![workspace, instance.id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(alias) = alias {
+            return self.lab_handle(workspace, principal, &alias);
+        }
+        let revision = self.revision_unchecked(workspace, &instance.revision_digest)?;
+        let closing = self
+            .update_state(workspace, principal, &instance.id)?
+            .closing;
+        Ok(LabHandle {
+            name: instance.id.clone(),
+            instance_id: instance.id,
+            generation: 1,
+            owner: String::new(),
+            config_digest: proofstorm_core::digest_json(&revision.lab),
+            phase: if closing {
+                LabHandlePhase::Closing
+            } else {
+                LabHandlePhase::Open
+            },
+        })
+    }
+
     /// Reserve a name before provisioning. Retry resumes the same instance;
     /// a verified closed generation can be replaced without reusing execution identities.
     pub fn reserve_lab(
@@ -81,10 +139,19 @@ impl Store {
         name: &str,
     ) -> Result<LabHandle, StoreError> {
         self.authorize(workspace, principal, Capability::LabStatus)?;
-        read(&*self.lock()?, workspace, name)?.ok_or_else(|| StoreError::NotFound {
-            resource: "lab",
-            id: name.into(),
-        })
+        let mut handle =
+            read(&*self.lock()?, workspace, name)?.ok_or_else(|| StoreError::NotFound {
+                resource: "lab",
+                id: name.into(),
+            })?;
+        if handle.phase != LabHandlePhase::Closed
+            && self
+                .update_state(workspace, principal, &handle.instance_id)?
+                .closing
+        {
+            handle.phase = LabHandlePhase::Closing;
+        }
+        Ok(handle)
     }
 
     /// A monotonic shutdown latch. It never reopens authority.

@@ -34,11 +34,11 @@ use proofstorm_kube::{
     AuthenticationReplayAction, BootstrapLiquidityAction, CANDIDATE_BUILD_LABEL,
     CANDIDATE_CANCEL_ANNOTATION, ChannelCloseAction, ChannelOpenAction, ChannelPolicySetAction,
     ChannelRebalanceAction, ComponentExecLiveAction, ComponentForensicsAction, ComponentLogsAction,
-    LabAction, NetworkHealAction, NetworkPartitionAction, NodeControlAction, PeerConnectAction,
-    PeerDisconnectAction, ProofstormCandidateBuild, ProofstormCandidateBuildSpec,
-    ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
-    WalletInitializeAction, WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction,
-    WalletQuoteClaimAction, WalletRoundTripAction, component_ports,
+    LabAction, NetworkHealAction, NetworkPartitionAction, PeerConnectAction, PeerDisconnectAction,
+    ProofstormCandidateBuild, ProofstormCandidateBuildSpec, ProofstormLabAction,
+    ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
+    WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction, WalletQuoteClaimAction,
+    WalletRoundTripAction, component_ports,
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
@@ -87,8 +87,8 @@ pub struct DeveloperExecRequest {
 #[serde(deny_unknown_fields)]
 pub struct DeveloperFinishRequest {
     pub name: String,
-    /// Copy `lab.instance_id` from `lab_inspect`.
-    pub expected_instance_id: String,
+    /// Copy `instance_key` from `lab_inspect`.
+    pub expected_instance_key: String,
     #[serde(default = "default_wait_timeout_seconds")]
     pub timeout_seconds: u32,
 }
@@ -289,6 +289,7 @@ pub struct LabApplyRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LabApplyReceipt {
+    pub instance_key: String,
     pub current_generation: u64,
     pub superseded: bool,
     pub generation: u64,
@@ -305,12 +306,26 @@ pub struct LabApplyReceipt {
     pub reconciliation_error: Option<LabReconciliationError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct LabReconciliationError {
-    pub code: String,
-    pub message: String,
-    pub recovery: String,
+pub use proofstorm_app::lab::ReconciliationError as LabReconciliationError;
+
+impl From<proofstorm_app::lab::AppliedLab> for LabApplyReceipt {
+    fn from(applied: proofstorm_app::lab::AppliedLab) -> Self {
+        Self {
+            instance_key: applied.instance.instance_key,
+            current_generation: applied.instance.generation,
+            superseded: applied.instance.generation != applied.generation,
+            generation: applied.generation,
+            plan_id: applied.plan_id,
+            plan_digest: applied.plan_digest,
+            revision_digest: applied.revision_digest,
+            lock_digest: applied.lock_digest,
+            instance_id: applied.instance.id,
+            phase: applied.phase,
+            component_count: applied.component_count,
+            next_tool: "lab_wait".into(),
+            reconciliation_error: applied.reconciliation_error,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1114,19 +1129,7 @@ pub struct OperationWaitManyResult {
     pub artifact_bodies_omitted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct NodeControlRequest {
-    pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
-    #[serde(default)]
-    pub experiment_id: String,
-    #[serde(default)]
-    pub session_id: String,
-    pub operation_id: String,
-    pub component: String,
-    pub idempotency_key: String,
-}
+pub use proofstorm_app::lab::ComponentControlRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -2419,6 +2422,8 @@ fn experiment_tool(tool: &str) -> bool {
             | "session_read"
             | "session_finish"
             | "node_restart"
+            | "component_start"
+            | "component_stop"
             | "component_restart"
             | "component_exec_live"
             | "private_transfer"
@@ -2631,12 +2636,7 @@ impl ProofstormMcp {
     }
 
     async fn full_lab_status(&self, instance_id: &str) -> Result<LabInstanceStatus, ErrorData> {
-        self.authorize(Capability::LabStatus)?;
-        let instance = self
-            .store
-            .instance(&self.workspace, &self.principal, instance_id)
-            .map_err(store_error)?;
-        self.runtime()?.status(instance).await
+        self.labs()?.status(instance_id).await.map_err(app_error)
     }
 
     #[allow(
@@ -2819,7 +2819,7 @@ struct KubernetesRuntime {
 
 #[tool_router(router = tool_router)]
 impl ProofstormMcp {
-    fn developer_labs(&self) -> Result<proofstorm_app::lab::Labs, ErrorData> {
+    fn labs(&self) -> Result<proofstorm_app::lab::Labs, ErrorData> {
         let runtime = self.runtime()?;
         Ok(proofstorm_app::lab::Labs::new(
             self.store.clone(),
@@ -2837,7 +2837,7 @@ impl ProofstormMcp {
         &self,
         Parameters(request): Parameters<DeveloperUpRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.developer_labs()?
+        self.labs()?
             .up(&request.name, &request.lab)
             .await
             .map_err(app_error)
@@ -2852,7 +2852,7 @@ impl ProofstormMcp {
         &self,
         Parameters(request): Parameters<proofstorm_app::environment::EnvironmentQuery>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.developer_labs()?
+        self.labs()?
             .environment(&request)
             .await
             .map_err(app_error)
@@ -2872,7 +2872,7 @@ impl ProofstormMcp {
         &self,
         Parameters(request): Parameters<DeveloperInspectRequest>,
     ) -> Result<Json<DeveloperLabView>, ErrorData> {
-        self.developer_labs()?
+        self.labs()?
             .inspect(&request.name, request.after_sequence)
             .await
             .map(|view| Json(compact_developer_view(view)))
@@ -2894,7 +2894,7 @@ impl ProofstormMcp {
             timeout_seconds: request.timeout_seconds,
             output: request.output,
         };
-        self.developer_labs()?
+        self.labs()?
             .exec(
                 &request.name,
                 &request.component,
@@ -2914,7 +2914,7 @@ impl ProofstormMcp {
         &self,
         Parameters(request): Parameters<DeveloperInspectRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let labs = self.developer_labs()?;
+        let labs = self.labs()?;
         labs.sync(&request.name).await.map_err(app_error)?;
         labs.inspect(&request.name, request.after_sequence)
             .await
@@ -2933,11 +2933,11 @@ impl ProofstormMcp {
         if !(1..=120).contains(&request.timeout_seconds) {
             return Err(invalid_operation("timeout_seconds must be in 1..=120"));
         }
-        self.developer_labs()?
+        self.labs()?
             .down_checked(
                 &request.name,
                 request.timeout_seconds,
-                Some(&request.expected_instance_id),
+                Some(&request.expected_instance_key),
             )
             .await
             .map_err(app_error)
@@ -3235,7 +3235,7 @@ impl ProofstormMcp {
     )]
     fn proofstorm_lab_plan(
         &self,
-        Parameters(request): Parameters<LabPlanRequest>,
+        Parameters(mut request): Parameters<LabPlanRequest>,
     ) -> Result<Json<LabPlanReceipt>, ErrorData> {
         self.authorize(Capability::LabCreate)?;
         self.authorize(Capability::CatalogRead)?;
@@ -3244,7 +3244,12 @@ impl ProofstormMcp {
             .effective_catalog(&self.workspace, &self.principal)
             .map_err(store_error)?;
         let mut lab = compile_lab_plan_with_catalog(&request, &catalog)?;
-        if let Some(target) = &request.update {
+        if let Some(target) = &mut request.update {
+            target.instance_id = self
+                .store
+                .resolve_lab(&self.workspace, &self.principal, &target.instance_id)
+                .map_err(store_error)?
+                .instance_id;
             let instance = self
                 .store
                 .instance(&self.workspace, &self.principal, &target.instance_id)
@@ -3328,159 +3333,20 @@ impl ProofstormMcp {
         &self,
         Parameters(request): Parameters<LabApplyRequest>,
     ) -> Result<Json<LabApplyReceipt>, ErrorData> {
-        if let Some(plan) = self
-            .store
-            .update_plan(&self.workspace, &self.principal, &request.plan_id)
-            .map_err(store_error)?
-        {
-            if plan.digest != request.expected_plan_digest
-                || plan.target.instance_id != request.instance_id
-            {
-                return Err(coded_invalid_request(
-                    "lab_plan_digest_mismatch",
-                    "Update target or digest differs from the reviewed plan; nothing applied",
-                ));
-            }
-            let runtime = self.runtime()?;
-            let accepted = self
-                .store
-                .accept_update(
-                    &self.workspace,
-                    &self.principal,
-                    &plan,
-                    &request.idempotency_key,
-                )
-                .map_err(store_error)?;
-            let reconciled = proofstorm_app::updates::reconcile(
-                &runtime.shared(),
-                &self.store,
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-            )
-            .await;
-            let (instance, phase, reconciliation_error) = match reconciled {
-                Ok(status) => (status.instance, status.phase, None),
-                Err(error) => {
-                    // Admission is already committed. A transport failure must not imply
-                    // rollback or make an agent submit the same edit under a new key.
-                    let current = self
-                        .store
-                        .instance(&self.workspace, &self.principal, &request.instance_id)
-                        .unwrap_or(accepted);
-                    let closing = self
-                        .store
-                        .update_state(&self.workspace, &self.principal, &request.instance_id)
-                        .is_ok_and(|state| state.closing);
-                    let detail = LabReconciliationError {
-                        code: error.details.as_ref().and_then(|details| details["code"].as_str()).unwrap_or("lab_update_runtime").into(),
-                        message: error.message,
-                        recovery: "The edit was accepted. Retry this exact lab_apply request with the same plan_id and idempotency_key, or use lab_wait to observe recovery. Do not create another edit to retry it.".into(),
-                    };
-                    (
-                        current,
-                        if closing {
-                            InstancePhase::Closing
-                        } else {
-                            InstancePhase::Pending
-                        },
-                        Some(detail),
-                    )
-                }
-            };
-            return Ok(Json(LabApplyReceipt {
-                generation: plan.target.expected_generation + u64::from(!plan.is_noop()),
-                current_generation: instance.generation,
-                superseded: instance.generation
-                    != plan.target.expected_generation + u64::from(!plan.is_noop()),
-                plan_id: request.plan_id,
-                plan_digest: plan.digest,
-                revision_digest: plan.target_revision,
-                lock_digest: plan.target_lock,
-                instance_id: instance.id,
-                phase,
-                component_count: u32::try_from(
-                    plan.changes.added.len()
-                        + plan.changes.unchanged.len()
-                        + plan.changes.restarted.len(),
-                )
-                .unwrap_or(u32::MAX),
-                next_tool: "lab_wait".into(),
-                reconciliation_error,
-            }));
-        }
-        let draft = self
-            .store
-            .read_draft(&self.workspace, &self.principal, &request.plan_id)
-            .map_err(store_error)?;
-        let plan_digest = digest_json(&draft.lab);
-        if plan_digest != request.expected_plan_digest {
-            return Err(ErrorData::invalid_request(
-                "stored lab plan does not match expected_plan_digest; nothing was applied",
-                Some(serde_json::json!({
-                    "code": "lab_plan_digest_mismatch",
-                    "plan_id": request.plan_id,
-                    "expected_plan_digest": request.expected_plan_digest,
-                    "actual_plan_digest": plan_digest,
-                    "recovery": "read or recreate the plan and apply the returned digest",
-                })),
-            ));
-        }
-        {
-            let runtime = self.runtime()?;
-            let _guard = proofstorm_app::lifecycle::guard(&self.store)
-                .await
-                .map_err(app_error)?;
-            proofstorm_app::lifecycle::reconcile_name(
-                &runtime.shared(),
-                &self.store,
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-            )
-            .await
-            .map_err(app_error)?;
-        }
-        let revision = self
-            .store
-            .publish(
-                &self.workspace,
-                &self.principal,
-                &request.plan_id,
-                draft.version,
-                &format!("{}:publish", request.idempotency_key),
-            )
-            .map_err(store_error)?;
-        let component_count = u32::try_from(revision.lab.components.len()).unwrap_or(u32::MAX);
-        let revision_digest = revision.digest.clone();
-        let lock_digest = revision.lock.digest.clone();
-        let runtime = self.runtime()?;
-        let status = proofstorm_app::lifecycle::materialize(
-            &runtime.shared(),
+        let reviewed = proofstorm_app::lab::review_apply(
             &self.store,
             &self.workspace,
             &self.principal,
             &request.instance_id,
-            &revision.digest,
-            &format!("{}:materialize", request.idempotency_key),
-            Some(&request.plan_id),
+            &request.plan_id,
+            &request.expected_plan_digest,
         )
-        .await
         .map_err(app_error)?;
-        Ok(Json(LabApplyReceipt {
-            current_generation: status.instance.generation,
-            superseded: false,
-            generation: status.instance.generation,
-            plan_id: request.plan_id,
-            plan_digest,
-            revision_digest,
-            lock_digest,
-            instance_id: status.instance.id,
-            phase: status.phase,
-            component_count,
-            next_tool: "lab_wait".into(),
-            reconciliation_error: None,
-        }))
+        self.labs()?
+            .apply_reviewed(reviewed, &request.idempotency_key)
+            .await
+            .map(|result| Json(result.into()))
+            .map_err(app_error)
     }
 
     #[tool(
@@ -3570,6 +3436,11 @@ impl ProofstormMcp {
                     "Specify instance_id or draft_id, not both",
                 ));
             }
+            let instance_id = self
+                .store
+                .resolve_lab(&self.workspace, &self.principal, &instance_id)
+                .map_err(store_error)?
+                .instance_id;
             let instance = self
                 .store
                 .instance(&self.workspace, &self.principal, &instance_id)
@@ -3859,20 +3730,16 @@ impl ProofstormMcp {
                 "The requested revision does not belong to this plan",
             ));
         }
-        let runtime = self.runtime()?;
-        proofstorm_app::lifecycle::materialize(
-            &runtime.shared(),
-            &self.store,
-            &self.workspace,
-            &self.principal,
-            &request.instance_id,
-            &request.revision_digest,
-            &request.idempotency_key,
-            Some(&request.plan_id),
-        )
-        .await
-        .map(Json)
-        .map_err(app_error)
+        self.labs()?
+            .materialize_revision(
+                &request.instance_id,
+                &request.revision_digest,
+                &request.idempotency_key,
+                Some(&request.plan_id),
+            )
+            .await
+            .map(Json)
+            .map_err(app_error)
     }
 
     #[tool(
@@ -3998,179 +3865,28 @@ impl ProofstormMcp {
         Parameters(request): Parameters<LabWaitRequest>,
     ) -> Result<Json<LabWaitResult>, ErrorData> {
         validate_wait_timeout(request.timeout_seconds)?;
-        let tracked =
-            match self
-                .store
-                .instance(&self.workspace, &self.principal, &request.instance_id)
-            {
-                Ok(instance) => {
-                    if request
-                        .expected_instance_key
-                        .as_ref()
-                        .is_some_and(|key| key != &instance.instance_key)
-                    {
-                        return Err(coded_invalid_request(
-                            "stale_incarnation",
-                            "The lab was replaced; read its current status",
-                        ));
-                    }
-                    instance
-                }
-                Err(StoreError::NotFound { .. })
-                    if request.target_phase == InstancePhase::Closed
-                        && request.expected_instance_key.is_some() =>
-                {
-                    let key = request.expected_instance_key.clone().unwrap();
-                    if !(key.starts_with('i')
-                        && key.len() == 20
-                        && key[1..].bytes().all(|b| b.is_ascii_hexdigit()))
-                    {
-                        return Err(invalid_operation("invalid expected_instance_key"));
-                    }
-                    LabInstance {
-                        id: request.instance_id.clone(),
-                        workspace_id: self.workspace.clone(),
-                        resource_name: format!("lab-{key}"),
-                        instance_key: key,
-                        revision_digest: String::new(),
-                        lock_digest: String::new(),
-                        generation: 0,
-                    }
-                }
-                Err(e) => return Err(store_error(e)),
-            };
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
-        let mut backoff = std::time::Duration::from_millis(250);
-        let mut last_status = None;
-        let mut expected_generation = request.expected_generation;
-        loop {
-            let status = match tokio::time::timeout_at(deadline, async {
-                let runtime = self.runtime()?;
-                let shared = runtime.shared();
-                let current = match self.store.instance(
-                    &self.workspace,
-                    &self.principal,
-                    &request.instance_id,
-                ) {
-                    Ok(current) if current.instance_key == tracked.instance_key => current,
-                    Ok(_) if request.target_phase != InstancePhase::Closed => {
-                        return Err(coded_invalid_request(
-                            "stale_incarnation",
-                            "The lab was replaced; read its current status",
-                        ));
-                    }
-                    Ok(_) | Err(StoreError::NotFound { .. })
-                        if request.target_phase == InstancePhase::Closed =>
-                    {
-                        return shared
-                            .verify_absent(tracked.clone())
-                            .await
-                            .map_err(app_error);
-                    }
-                    Err(e) => return Err(store_error(e)),
-                    Ok(_) => unreachable!(),
-                };
-                match shared.status(current).await {
-                    Err(e)
-                        if e.kind == proofstorm_app::ErrorKind::Missing
-                            && request.target_phase == InstancePhase::Closed =>
-                    {
-                        shared
-                            .verify_absent(tracked.clone())
-                            .await
-                            .map_err(app_error)
-                    }
-                    result => result.map_err(app_error),
-                }
+        let waited = self
+            .labs()?
+            .wait(proofstorm_app::lab::WaitRequest {
+                reference: &request.instance_id,
+                expected_instance_key: request.expected_instance_key.as_deref(),
+                expected_generation: request.expected_generation,
+                target_phase: request.target_phase,
+                timeout_seconds: request.timeout_seconds,
             })
             .await
-            {
-                Ok(result) => result?,
-                Err(_) => {
-                    return last_status.map_or_else(
-                        || {
-                            Err(coded_invalid_request(
-                                "lab_wait_deadline_exceeded",
-                                "the runtime status backend did not answer before the requested lab wait deadline",
-                            ))
-                        },
-                        |status| {
-                            Ok(Json(compact_lab_wait(
-                                status,
-                                request.target_phase,
-                                false,
-                                true,
-                            )))
-                        },
-                    );
-                }
-            };
-            if status.phase == InstancePhase::Closed
-                && self
-                    .store
-                    .instance(&self.workspace, &self.principal, &request.instance_id)
-                    .is_ok_and(|i| i.instance_key == tracked.instance_key)
-            {
-                let runtime = self.runtime()?;
-                let _guard = proofstorm_app::lifecycle::guard(&self.store)
-                    .await
-                    .map_err(app_error)?;
-                proofstorm_app::lifecycle::reconcile_name(
-                    &runtime.shared(),
-                    &self.store,
-                    &self.workspace,
-                    &self.principal,
-                    &request.instance_id,
-                )
-                .await
-                .map_err(app_error)?;
-            }
-            let expected = *expected_generation.get_or_insert(status.instance.generation);
-            if request.target_phase == InstancePhase::Ready
-                && expected != status.instance.generation
-            {
-                let mut result = compact_lab_wait(status, request.target_phase, false, false);
-                result.superseded = true;
-                result.message = Some("The requested generation was superseded; inspect the current lab before waiting again.".into());
-                return Ok(Json(result));
-            }
-            let reached = status.phase == request.target_phase;
-            if reached && status.phase == InstancePhase::Ready {
-                self.store
-                    .mark_update_applied(
-                        &self.workspace,
-                        &request.instance_id,
-                        status.instance.generation,
-                        Some(&status.instance.revision_digest),
-                    )
-                    .map_err(store_error)?;
-            }
-            if reached
-                || lab_wait_terminal(status.phase)
-                || (request.target_phase == InstancePhase::Ready
-                    && !startup_blockers(&status).is_empty())
-            {
-                return Ok(Json(compact_lab_wait(
-                    status,
-                    request.target_phase,
-                    reached,
-                    false,
-                )));
-            }
-            last_status = Some(status.clone());
-            let now = tokio::time::Instant::now();
-            if now >= deadline {
-                return Ok(Json(compact_lab_wait(
-                    status,
-                    request.target_phase,
-                    false,
-                    true,
-                )));
-            }
-            tokio::time::sleep(backoff.min(deadline - now)).await;
-            backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+            .map_err(app_error)?;
+        let mut result = compact_lab_wait(
+            waited.status,
+            request.target_phase,
+            waited.reached,
+            waited.timed_out,
+        );
+        result.superseded = waited.superseded;
+        if waited.superseded {
+            result.message = Some("The requested generation was superseded; inspect the current lab before waiting again.".into());
         }
+        Ok(Json(result))
     }
 
     #[tool(
@@ -4181,79 +3897,18 @@ impl ProofstormMcp {
         &self,
         Parameters(request): Parameters<CloseLabRequest>,
     ) -> Result<Json<LabWaitResult>, ErrorData> {
-        self.authorize(Capability::LabClose)?;
-        let _guard = proofstorm_app::lifecycle::guard(&self.store)
+        let status = self
+            .labs()?
+            .close(&request.instance_id, &request.expected_instance_key)
             .await
             .map_err(app_error)?;
-        let instance = self
-            .store
-            .instance_for_close(&self.workspace, &self.principal, &request.instance_id)
-            .map_err(store_error)?;
-        if instance.instance_key != request.expected_instance_key {
-            return Err(coded_invalid_request(
-                "stale_incarnation",
-                "The lab was replaced; read its status before closing",
-            ));
-        }
-        self.store
-            .begin_instance_close(&self.workspace, &self.principal, &request.instance_id)
-            .map_err(store_error)?;
-        self.finalize_active_operations(&instance.id).await?;
-        let status = self.runtime()?.close(instance).await?;
         let reached = status.phase == InstancePhase::Closed;
-        if reached {
-            let runtime = self.runtime()?;
-            proofstorm_app::lifecycle::reconcile_name(
-                &runtime.shared(),
-                &self.store,
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-            )
-            .await
-            .map_err(app_error)?;
-        }
         Ok(Json(compact_lab_wait(
             status,
             InstancePhase::Closed,
             reached,
             false,
         )))
-    }
-
-    /// Closing a lab deletes every runtime action resource, so the journal
-    /// must reach a terminal phase for each non-terminal operation first.
-    /// Cancellation is requested best-effort; the ledger outcome is recorded
-    /// regardless, because the lab will not produce one afterwards.
-    async fn finalize_active_operations(&self, instance_id: &str) -> Result<(), ErrorData> {
-        let active = self
-            .store
-            .active_operations(&self.workspace, instance_id)
-            .map_err(store_error)?;
-        for operation in active {
-            let token = proofstorm_core::digest_json(&(
-                &self.workspace,
-                &self.principal,
-                &operation.id,
-                "lab_close",
-            ));
-            let _ = self
-                .runtime()?
-                .request_action_cancellation(&operation, &token)
-                .await;
-            self.store
-                .record_operation_result(
-                    &self.workspace,
-                    &operation.id,
-                    OperationPhase::Cancelled,
-                    serde_json::json!({
-                        "code": "lab_closed",
-                        "message": "the lab instance was closed before the operation reached a terminal phase",
-                    }),
-                )
-                .map_err(store_error)?;
-        }
-        Ok(())
     }
 
     #[tool(
@@ -4518,9 +4173,9 @@ impl ProofstormMcp {
     )]
     async fn proofstorm_node_start(
         &self,
-        Parameters(request): Parameters<NodeControlRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.submit_node_control(request, OperationKind::NodeStart)
+        Parameters(request): Parameters<ComponentControlRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.submit_component_control(request, OperationKind::NodeStart)
             .await
     }
 
@@ -4530,9 +4185,9 @@ impl ProofstormMcp {
     )]
     async fn proofstorm_node_stop(
         &self,
-        Parameters(request): Parameters<NodeControlRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.submit_node_control(request, OperationKind::NodeStop)
+        Parameters(request): Parameters<ComponentControlRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.submit_component_control(request, OperationKind::NodeStop)
             .await
     }
 
@@ -4542,9 +4197,9 @@ impl ProofstormMcp {
     )]
     async fn proofstorm_node_restart(
         &self,
-        Parameters(request): Parameters<NodeControlRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.submit_node_control(request, OperationKind::NodeRestart)
+        Parameters(request): Parameters<ComponentControlRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.submit_component_control(request, OperationKind::NodeRestart)
             .await
     }
 
@@ -4554,56 +4209,34 @@ impl ProofstormMcp {
     )]
     async fn proofstorm_component_restart(
         &self,
-        Parameters(request): Parameters<NodeControlRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::ComponentControl)?;
-        let (instance, revision) = self
-            .store
-            .operation_context_for(
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-                &request.operation_id,
-                Capability::ComponentControl,
-            )
-            .map_err(store_error)?;
-        let component = revision
-            .lab
-            .components
-            .iter()
-            .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
-        component_image_any(&revision, &request.component, component.kind)?;
-        let operation = self.create_operation(
-            &instance.revision_digest,
-            &request.instance_id,
-            &request.experiment_id,
-            &request.session_id,
-            &request.operation_id,
-            OperationKind::ComponentRestart,
-            &request,
-            &request.idempotency_key,
-            Capability::ComponentControl,
-        )?;
-        if operation.phase != OperationPhase::Pending {
-            return Ok(Json(operation));
-        }
-        let action = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            LabAction::ComponentRestart(NodeControlAction {
-                component: request.component,
-            }),
-        );
-        if let Some(grant) = &action.spec.access_scope {
-            self.runtime()?.private_access(grant).await?;
-        }
-        self.runtime()?.apply_action(&instance, &action).await?;
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
+        Parameters(request): Parameters<ComponentControlRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.submit_component_control(request, OperationKind::ComponentRestart)
+            .await
+    }
+
+    #[tool(
+        name = "component_start",
+        description = "Start any stopped lab component. Preserves its storage; poll operation_status for readiness."
+    )]
+    async fn proofstorm_component_start(
+        &self,
+        Parameters(request): Parameters<ComponentControlRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.submit_component_control(request, OperationKind::ComponentStart)
+            .await
+    }
+
+    #[tool(
+        name = "component_stop",
+        description = "Stop any lab component without deleting its storage. The stop persists across lab edits and controller restarts; poll operation_status for completion."
+    )]
+    async fn proofstorm_component_stop(
+        &self,
+        Parameters(request): Parameters<ComponentControlRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.submit_component_control(request, OperationKind::ComponentStop)
+            .await
     }
 
     #[tool(
@@ -8672,6 +8305,8 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("node_start", &[Capability::NodeControl]),
         ("node_stop", &[Capability::NodeControl]),
         ("node_restart", &[Capability::NodeControl]),
+        ("component_start", &[Capability::ComponentControl]),
+        ("component_stop", &[Capability::ComponentControl]),
         ("component_restart", &[Capability::ComponentControl]),
         ("private_transfer", &[Capability::ComponentExecLive]),
         ("component_exec_live", &[Capability::ComponentExecLive]),
@@ -8879,76 +8514,16 @@ impl ProofstormMcp {
             .map_err(store_error)
     }
 
-    async fn submit_node_control(
+    async fn submit_component_control(
         &self,
-        request: NodeControlRequest,
+        request: ComponentControlRequest,
         kind: OperationKind,
-    ) -> Result<Json<LabOperation>, ErrorData> {
-        self.authorize(Capability::NodeControl)?;
-        let (instance, revision) = self
-            .store
-            .operation_context_for(
-                &self.workspace,
-                &self.principal,
-                &request.instance_id,
-                &request.operation_id,
-                Capability::NodeControl,
-            )
-            .map_err(store_error)?;
-        let component = revision
-            .lab
-            .components
-            .iter()
-            .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("node component is not part of this lab revision"))?;
-        if !matches!(
-            component.kind,
-            ComponentKind::Bitcoin | ComponentKind::Lightning
-        ) {
-            return Err(invalid_operation(
-                "node lifecycle currently supports Bitcoin and Lightning components",
-            ));
-        }
-        component_image_any(&revision, &request.component, component.kind)?;
-        let operation = self.create_operation(
-            &instance.revision_digest,
-            &request.instance_id,
-            &request.experiment_id,
-            &request.session_id,
-            &request.operation_id,
-            kind,
-            &request,
-            &request.idempotency_key,
-            Capability::NodeControl,
-        )?;
-        if operation.phase != OperationPhase::Pending {
-            return Ok(Json(operation));
-        }
-        let parameters = NodeControlAction {
-            component: request.component,
-        };
-        let action = match kind {
-            OperationKind::NodeStart => LabAction::NodeStart(parameters),
-            OperationKind::NodeStop => LabAction::NodeStop(parameters),
-            OperationKind::NodeRestart => LabAction::NodeRestart(parameters),
-            _ => {
-                return Err(ErrorData::internal_error(
-                    "invalid node lifecycle operation kind",
-                    Some(serde_json::json!({"code": "controller_invariant"})),
-                ));
-            }
-        };
-        let resource = runtime_action_resource(
-            &self.runtime()?.control_namespace,
-            &instance,
-            &operation,
-            action,
-        );
-        self.runtime()?.apply_action(&instance, &resource).await?;
-        self.store
-            .update_operation_phase(&self.workspace, &operation.id, OperationPhase::Running)
-            .map(Json)
-            .map_err(store_error)
+    ) -> Result<CallToolResult, ErrorData> {
+        self.labs()?
+            .control_component(request, kind)
+            .await
+            .map_err(app_error)
+            .and_then(developer_result)
     }
 
     /// Refuse peer/channel actions until the experiment's chain and initial
@@ -9915,13 +9490,6 @@ fn validate_operation_wait_many_request(
     Ok(())
 }
 
-const fn lab_wait_terminal(phase: InstancePhase) -> bool {
-    matches!(
-        phase,
-        InstancePhase::Closed | InstancePhase::CleanupBlocked | InstancePhase::Blocked
-    )
-}
-
 const fn operation_terminal(phase: OperationPhase) -> bool {
     matches!(
         phase,
@@ -9978,6 +9546,9 @@ fn inventory_key(entry: &InventoryEntry) -> String {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DeveloperLabView {
+    pub instance_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconciliation_error: Option<LabReconciliationError>,
     pub lab: proofstorm_store::LabHandle,
     pub runtime: Option<LabStatusSummary>,
     pub run: Option<Experiment>,
@@ -9997,6 +9568,8 @@ fn developer_result(value: impl Serialize) -> Result<CallToolResult, ErrorData> 
 
 fn compact_developer_view(view: proofstorm_app::lab::LabView) -> DeveloperLabView {
     DeveloperLabView {
+        instance_key: view.instance_key,
+        reconciliation_error: view.reconciliation_error,
         lab: view.lab,
         runtime: view.runtime.map(|status| {
             let mut summary = compact_lab_status(status);
@@ -10739,14 +10312,6 @@ impl KubernetesRuntime {
             .request_action_cancellation(operation, token)
             .await
             .map_err(app_error)
-    }
-
-    async fn status(&self, instance: LabInstance) -> Result<LabInstanceStatus, ErrorData> {
-        self.shared().status(instance).await.map_err(app_error)
-    }
-
-    async fn close(&self, instance: LabInstance) -> Result<LabInstanceStatus, ErrorData> {
-        self.shared().close(instance).await.map_err(app_error)
     }
 }
 
@@ -11922,7 +11487,7 @@ mod tests {
         ));
     }
 
-    fn seeded_store() -> Store {
+    pub(super) fn seeded_store() -> Store {
         let store = Store::memory().expect("store");
         store
             .put_workspace(&Workspace {
@@ -12426,7 +11991,7 @@ mod tests {
             schemars::schema_for!(ComponentLogsRequest),
             schemars::schema_for!(ComponentExecLiveRequest),
             schemars::schema_for!(ComponentExecRequest),
-            schemars::schema_for!(NodeControlRequest),
+            schemars::schema_for!(ComponentControlRequest),
             schemars::schema_for!(PrivateTransferRequest),
             schemars::schema_for!(NetworkPartitionRequest),
             schemars::schema_for!(NetworkHealRequest),
@@ -13027,7 +12592,7 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 91);
+        assert_eq!(service.tool_names().len(), 93);
         assert_optional_tracking(&service);
 
         assert!(
@@ -13045,6 +12610,8 @@ mod tests {
             "reading a component log is a first-class runtime observation"
         );
         for required in [
+            "component_start",
+            "component_stop",
             "component_restart",
             "component_exec_live",
             "component_forensics",
@@ -13358,9 +12925,11 @@ mod tests {
             .expect("batch wait schema");
         assert!(schema.contains("\"minItems\":1"));
         assert!(schema.contains("\"maxItems\":8"));
-        assert!(!lab_wait_terminal(InstancePhase::Ready));
-        assert!(lab_wait_terminal(InstancePhase::Closed));
-        assert!(lab_wait_terminal(InstancePhase::CleanupBlocked));
+        assert!(!proofstorm_app::lab::wait_terminal(InstancePhase::Ready));
+        assert!(proofstorm_app::lab::wait_terminal(InstancePhase::Closed));
+        assert!(proofstorm_app::lab::wait_terminal(
+            InstancePhase::CleanupBlocked
+        ));
         assert!(!operation_terminal(OperationPhase::Running));
         assert!(operation_terminal(OperationPhase::Succeeded));
         assert!(operation_terminal(OperationPhase::Failed));
@@ -14551,3 +14120,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;

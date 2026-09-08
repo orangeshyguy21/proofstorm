@@ -1187,6 +1187,8 @@ fn runtime_endpoint(
             [
                 "component_exec_live",
                 "component_forensics",
+                "component_start",
+                "component_stop",
                 "component_restart",
             ]
             .into_iter()

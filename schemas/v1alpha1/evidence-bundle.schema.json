@@ -806,6 +806,8 @@
         "node_start",
         "node_stop",
         "node_restart",
+        "component_start",
+        "component_stop",
         "component_restart",
         "bootstrap_liquidity",
         "peer_connect",

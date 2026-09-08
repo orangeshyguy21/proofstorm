@@ -87,6 +87,8 @@
         "node_start",
         "node_stop",
         "node_restart",
+        "component_start",
+        "component_stop",
         "component_restart",
         "bootstrap_liquidity",
         "peer_connect",
@@ -189,6 +191,7 @@
       "type": "string"
     },
     "sequence": {
+      "description": "Monotonic across this lab, including operations from other actors and runs.",
       "format": "uint64",
       "minimum": 0,
       "type": "integer"

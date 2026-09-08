@@ -555,8 +555,12 @@ fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
 fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
     use OperationClass as Operation;
     match action {
-        LabAction::NodeStart(request) => vec![(&request.component, Operation::Start)],
-        LabAction::NodeStop(request) => vec![(&request.component, Operation::Stop)],
+        LabAction::NodeStart(request) | LabAction::ComponentStart(request) => {
+            vec![(&request.component, Operation::Start)]
+        }
+        LabAction::NodeStop(request) | LabAction::ComponentStop(request) => {
+            vec![(&request.component, Operation::Stop)]
+        }
         LabAction::NodeRestart(request) | LabAction::ComponentRestart(request) => {
             vec![(&request.component, Operation::Restart)]
         }
@@ -669,6 +673,8 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentStart(_)
+        | LabAction::ComponentStop(_)
         | LabAction::ComponentRestart(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_)
@@ -715,6 +721,8 @@ pub fn render_lab_action_job(
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentStart(_)
+        | LabAction::ComponentStop(_)
         | LabAction::ComponentRestart(_)
         | LabAction::ComponentExecLive(_)
         | LabAction::PrivateTransfer(_)
@@ -3791,7 +3799,7 @@ mod tests {
             ComponentConditionState::False,
             ComponentConditionReason::ProtocolProbeFailed,
         );
-        action.spec.action = LabAction::NodeStart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeStart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(
@@ -3834,7 +3842,7 @@ mod tests {
             ComponentConditionReason::IntentionallyStopped,
         );
 
-        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
             component: "mint-lnd".into(),
         });
         assert!(evaluate_action_admission(&action, &lab).is_ok());
@@ -3869,7 +3877,7 @@ mod tests {
             .expect("chain")
             .observed_rollout_digest = "sha256:stale".into();
 
-        action.spec.action = LabAction::NodeStop(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeStop(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(matches!(
@@ -3933,7 +3941,7 @@ mod tests {
             .expect("status")
             .observed_revision_digest = "sha256:previous-revision".into();
 
-        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(matches!(
@@ -3985,7 +3993,7 @@ mod tests {
             })
         ));
 
-        action.spec.action = LabAction::NodeStart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeStart(crate::ComponentControlAction {
             component: "mint-lnd".into(),
         });
         assert!(evaluate_action_admission(&action, &lab).is_ok());
@@ -5178,7 +5186,7 @@ mod tests {
     fn node_lifecycle_is_typed_and_never_renders_a_privileged_job() {
         let (lab, mut action) = typed_bootstrap();
         action.spec.capability = Capability::NodeControl;
-        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         let serialized = serde_json::to_value(&action.spec.action).expect("serialize action");

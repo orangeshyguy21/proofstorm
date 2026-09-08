@@ -1,3 +1,6 @@
+mod component_lifecycle;
+#[cfg(test)]
+use component_lifecycle::same_lifecycle_identity;
 mod component_logs;
 mod lab_updates;
 use std::{
@@ -506,12 +509,14 @@ async fn reconcile_action(
     }
     if matches!(
         action.spec.action,
-        LabAction::NodeStart(_) | LabAction::NodeStop(_) | LabAction::NodeRestart(_)
+        LabAction::NodeStart(_)
+            | LabAction::NodeStop(_)
+            | LabAction::NodeRestart(_)
+            | LabAction::ComponentStart(_)
+            | LabAction::ComponentStop(_)
+            | LabAction::ComponentRestart(_)
     ) {
-        return reconcile_node_lifecycle(action.as_ref(), &lab, &context).await;
-    }
-    if matches!(action.spec.action, LabAction::ComponentRestart(_)) {
-        return reconcile_component_restart(action.as_ref(), &lab, &context).await;
+        return component_lifecycle::reconcile(action.as_ref(), &lab, &context).await;
     }
     if matches!(
         action.spec.action,
@@ -739,378 +744,6 @@ async fn reconcile_component_logs(
             started_at_unix: Some(observed),
             completed_at_unix: Some(observed),
             artifact: Some(artifact),
-            ..ProofstormLabActionStatus::default()
-        },
-    )
-    .await?;
-    Ok(Action::await_change())
-}
-
-#[allow(
-    clippy::too_many_lines,
-    reason = "node lifecycle reconciliation keeps sequence fencing, mutation, and readiness proof contiguous"
-)]
-async fn reconcile_node_lifecycle(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
-    context: &Context,
-) -> Result<Action, Error> {
-    if action.spec.capability != proofstorm_core::Capability::NodeControl {
-        return patch_invalid_action(action, context, "node lifecycle requires node.control").await;
-    }
-    let (LabAction::NodeStart(request)
-    | LabAction::NodeStop(request)
-    | LabAction::NodeRestart(request)) = &action.spec.action
-    else {
-        return Err(Error::ControllerInvariant("expected node lifecycle action"));
-    };
-    let plans = compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
-    )?;
-    let component = plans
-        .iter()
-        .find(|plan| plan.component_id == request.component);
-    let Some(component) = component else {
-        return patch_invalid_action(
-            action,
-            context,
-            "node component is not in the immutable lab",
-        )
-        .await;
-    };
-    if !matches!(
-        component.kind,
-        proofstorm_core::ComponentKind::Bitcoin | proofstorm_core::ComponentKind::Lightning
-    ) {
-        return patch_invalid_action(
-            action,
-            context,
-            "node lifecycle supports only Bitcoin and Lightning components",
-        )
-        .await;
-    }
-    if action.status.is_none() {
-        patch_action_status(
-            action,
-            context,
-            ProofstormLabActionStatus {
-                phase: ActionPhase::Running,
-                observed_generation: action.metadata.generation,
-                started_at_unix: Some(now_unix()),
-                ..ProofstormLabActionStatus::default()
-            },
-        )
-        .await?;
-        return Ok(Action::requeue(Duration::from_secs(1)));
-    }
-
-    let namespace = instance_namespace(&action.spec.instance_key);
-    let workloads = Api::<StatefulSet>::namespaced(context.client.clone(), &namespace);
-    let Some(workload) = workloads.get_opt(&request.component).await? else {
-        return Ok(Action::requeue(Duration::from_secs(1)));
-    };
-    if !stateful_set_matches_plan(&workload, component) {
-        return patch_action_failure(
-            action,
-            context,
-            "stale_component_plan",
-            "node workload does not match the accepted component plan",
-        )
-        .await;
-    }
-    let annotations = workload.metadata.annotations.as_ref();
-    let observed_sequence = annotations
-        .and_then(|values| values.get(LIFECYCLE_SEQUENCE_ANNOTATION))
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or_default();
-    if observed_sequence > action.spec.sequence {
-        return patch_action_failure(
-            action,
-            context,
-            "lifecycle_action_superseded",
-            "a newer lifecycle action already controls this component",
-        )
-        .await;
-    }
-    let desired_state = match action.spec.action {
-        LabAction::NodeStop(_) => "stopped",
-        LabAction::NodeStart(_) | LabAction::NodeRestart(_) => "running",
-        _ => unreachable!(),
-    };
-    let restart_token = format!("{}-{}", action.spec.sequence, action.spec.operation_id);
-    let current_state = annotations
-        .and_then(|values| values.get(LIFECYCLE_STATE_ANNOTATION))
-        .map_or("running", String::as_str);
-    let current_restart = workload
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.template.metadata.as_ref())
-        .and_then(|metadata| metadata.annotations.as_ref())
-        .and_then(|values| values.get(LIFECYCLE_RESTART_ANNOTATION));
-    if matches!(action.spec.action, LabAction::NodeRestart(_))
-        && workload.spec.as_ref().and_then(|spec| spec.replicas) == Some(0)
-    {
-        return patch_action_failure(
-            action,
-            context,
-            "node_not_running",
-            "a stopped node must be started before it can be restarted",
-        )
-        .await;
-    }
-    let mutation_needed = observed_sequence < action.spec.sequence
-        || current_state != desired_state
-        || (matches!(action.spec.action, LabAction::NodeRestart(_))
-            && current_restart != Some(&restart_token));
-    if mutation_needed {
-        let mut patch = serde_json::json!({
-            "metadata": {"annotations": {
-                LIFECYCLE_STATE_ANNOTATION: desired_state,
-                LIFECYCLE_SEQUENCE_ANNOTATION: action.spec.sequence.to_string(),
-            }},
-            "spec": {"replicas": i32::from(desired_state != "stopped")}
-        });
-        if matches!(action.spec.action, LabAction::NodeRestart(_)) {
-            patch["spec"]["template"]["metadata"]["annotations"] =
-                serde_json::json!({LIFECYCLE_RESTART_ANNOTATION: restart_token});
-        }
-        workloads
-            .patch(
-                &request.component,
-                &PatchParams::default(),
-                &Patch::Merge(patch),
-            )
-            .await?;
-        return Ok(Action::requeue(Duration::from_secs(1)));
-    }
-
-    let status = workload.status.as_ref();
-    let complete = match action.spec.action {
-        LabAction::NodeStop(_) => status.map(|status| status.replicas).unwrap_or_default() == 0,
-        LabAction::NodeStart(_) => {
-            status
-                .and_then(|status| status.ready_replicas)
-                .unwrap_or_default()
-                >= 1
-        }
-        LabAction::NodeRestart(_) => {
-            let generation_observed = status
-                .and_then(|status| status.observed_generation)
-                .zip(workload.metadata.generation)
-                .is_some_and(|(observed, desired)| observed >= desired);
-            generation_observed
-                && status
-                    .and_then(|status| status.ready_replicas)
-                    .unwrap_or_default()
-                    >= 1
-                && status.and_then(|status| status.current_revision.as_ref())
-                    == status.and_then(|status| status.update_revision.as_ref())
-        }
-        _ => false,
-    };
-    if !complete {
-        return Ok(Action::requeue(Duration::from_secs(1)));
-    }
-    patch_action_status(
-        action,
-        context,
-        ProofstormLabActionStatus {
-            phase: ActionPhase::Succeeded,
-            observed_generation: action.metadata.generation,
-            started_at_unix: action
-                .status
-                .as_ref()
-                .and_then(|status| status.started_at_unix),
-            completed_at_unix: Some(now_unix()),
-            artifact: Some(status_object(serde_json::json!({
-                "component": request.component,
-                "kind": component.kind,
-                "state": desired_state,
-                "restarted": matches!(action.spec.action, LabAction::NodeRestart(_)),
-                "sequence": action.spec.sequence,
-            }))),
-            ..ProofstormLabActionStatus::default()
-        },
-    )
-    .await?;
-    Ok(Action::await_change())
-}
-
-/// Restart any component workload without assuming that it is a logical node
-/// or that its controller is a `StatefulSet`.
-#[allow(
-    clippy::too_many_lines,
-    reason = "the deployment and stateful rollout fences remain explicit and locally auditable"
-)]
-async fn reconcile_component_restart(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
-    context: &Context,
-) -> Result<Action, Error> {
-    if action.spec.capability != proofstorm_core::Capability::ComponentControl {
-        return patch_invalid_action(
-            action,
-            context,
-            "component restart requires component.control",
-        )
-        .await;
-    }
-    let LabAction::ComponentRestart(request) = &action.spec.action else {
-        return Err(Error::ControllerInvariant(
-            "expected component restart action",
-        ));
-    };
-    let plans = compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
-    )?;
-    let Some(component) = plans
-        .iter()
-        .find(|plan| plan.component_id == request.component)
-    else {
-        return patch_invalid_action(action, context, "component is not in the immutable lab")
-            .await;
-    };
-    if action.status.is_none() {
-        patch_action_status(
-            action,
-            context,
-            ProofstormLabActionStatus {
-                phase: ActionPhase::Running,
-                observed_generation: action.metadata.generation,
-                started_at_unix: Some(now_unix()),
-                ..ProofstormLabActionStatus::default()
-            },
-        )
-        .await?;
-        return Ok(Action::requeue(Duration::from_secs(1)));
-    }
-
-    let namespace = instance_namespace(&action.spec.instance_key);
-    let restart_token = format!("{}-{}", action.spec.sequence, action.spec.operation_id);
-    let patch = serde_json::json!({
-        "spec": {"template": {"metadata": {"annotations": {
-            LIFECYCLE_RESTART_ANNOTATION: restart_token,
-        }}}}
-    });
-    let complete = match component.workload.kind {
-        WorkloadControllerKind::StatefulSet => {
-            let workloads = Api::<StatefulSet>::namespaced(context.client.clone(), &namespace);
-            let Some(workload) = workloads.get_opt(&component.workload.name).await? else {
-                return Ok(Action::requeue(Duration::from_secs(1)));
-            };
-            if !stateful_set_matches_plan(&workload, component) {
-                return patch_action_failure(
-                    action,
-                    context,
-                    "stale_component_plan",
-                    "component workload does not match the accepted plan",
-                )
-                .await;
-            }
-            let current_restart = workload
-                .spec
-                .as_ref()
-                .and_then(|spec| spec.template.metadata.as_ref())
-                .and_then(|metadata| metadata.annotations.as_ref())
-                .and_then(|annotations| annotations.get(LIFECYCLE_RESTART_ANNOTATION));
-            if current_restart != Some(&restart_token) {
-                workloads
-                    .patch(
-                        &component.workload.name,
-                        &PatchParams::default(),
-                        &Patch::Merge(&patch),
-                    )
-                    .await?;
-                return Ok(Action::requeue(Duration::from_secs(1)));
-            }
-            let status = workload.status.as_ref();
-            status
-                .and_then(|status| status.observed_generation)
-                .zip(workload.metadata.generation)
-                .is_some_and(|(observed, desired)| observed >= desired)
-                && status
-                    .and_then(|status| status.ready_replicas)
-                    .unwrap_or_default()
-                    >= i32::from(component.workload.desired_replicas)
-                && status.and_then(|status| status.current_revision.as_ref())
-                    == status.and_then(|status| status.update_revision.as_ref())
-        }
-        WorkloadControllerKind::Deployment => {
-            let workloads = Api::<Deployment>::namespaced(context.client.clone(), &namespace);
-            let Some(workload) = workloads.get_opt(&component.workload.name).await? else {
-                return Ok(Action::requeue(Duration::from_secs(1)));
-            };
-            if !deployment_matches_plan(&workload, component) {
-                return patch_action_failure(
-                    action,
-                    context,
-                    "stale_component_plan",
-                    "component workload does not match the accepted plan",
-                )
-                .await;
-            }
-            let current_restart = workload
-                .spec
-                .as_ref()
-                .and_then(|spec| spec.template.metadata.as_ref())
-                .and_then(|metadata| metadata.annotations.as_ref())
-                .and_then(|annotations| annotations.get(LIFECYCLE_RESTART_ANNOTATION));
-            if current_restart != Some(&restart_token) {
-                workloads
-                    .patch(
-                        &component.workload.name,
-                        &PatchParams::default(),
-                        &Patch::Merge(&patch),
-                    )
-                    .await?;
-                return Ok(Action::requeue(Duration::from_secs(1)));
-            }
-            let status = workload.status.as_ref();
-            status
-                .and_then(|status| status.observed_generation)
-                .zip(workload.metadata.generation)
-                .is_some_and(|(observed, desired)| observed >= desired)
-                && status
-                    .and_then(|status| status.ready_replicas)
-                    .unwrap_or_default()
-                    >= i32::from(component.workload.desired_replicas)
-                && status
-                    .and_then(|status| status.updated_replicas)
-                    .unwrap_or_default()
-                    >= i32::from(component.workload.desired_replicas)
-                && status
-                    .and_then(|status| status.unavailable_replicas)
-                    .unwrap_or_default()
-                    == 0
-        }
-    };
-    if !complete {
-        return Ok(Action::requeue(Duration::from_secs(1)));
-    }
-    patch_action_status(
-        action,
-        context,
-        ProofstormLabActionStatus {
-            phase: ActionPhase::Succeeded,
-            observed_generation: action.metadata.generation,
-            started_at_unix: action
-                .status
-                .as_ref()
-                .and_then(|status| status.started_at_unix),
-            completed_at_unix: Some(now_unix()),
-            artifact: Some(status_object(serde_json::json!({
-                "component": request.component,
-                "kind": component.kind,
-                "workload_kind": component.workload.kind,
-                "restarted": true,
-                "sequence": action.spec.sequence,
-            }))),
             ..ProofstormLabActionStatus::default()
         },
     )
@@ -1477,6 +1110,8 @@ async fn reconcile_action_cancellation(
         LabAction::NodeStart(_)
             | LabAction::NodeStop(_)
             | LabAction::NodeRestart(_)
+            | LabAction::ComponentStart(_)
+            | LabAction::ComponentStop(_)
             | LabAction::ComponentRestart(_)
             | LabAction::ComponentExecLive(_)
             | LabAction::NetworkPartition(_)
@@ -2362,19 +1997,8 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             .await?;
     }
     let stateful_sets = Api::<StatefulSet>::namespaced(client.clone(), &namespace_name);
-    let mut stopped_components = BTreeSet::new();
     for resource in &workloads.stateful_sets {
-        let resource = preserve_lifecycle_state(&stateful_sets, resource).await?;
-        if resource
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|annotations| annotations.get(LIFECYCLE_STATE_ANNOTATION))
-            .is_some_and(|state| state == "stopped")
-            && let Some(name) = resource.metadata.name.as_ref()
-        {
-            stopped_components.insert(name.clone());
-        }
+        let resource = component_lifecycle::preserve(&stateful_sets, resource).await?;
         stateful_sets
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
@@ -2407,11 +2031,12 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
                 .await?;
         } else {
             clear_rolling_update_strategy(&deployments, resource).await?;
+            let resource = component_lifecycle::preserve(&deployments, resource).await?;
             deployments
                 .patch(
                     name,
                     &patch,
-                    &Patch::Apply(deployment_apply_document(resource)),
+                    &Patch::Apply(deployment_apply_document(&resource)),
                 )
                 .await?;
         }
@@ -2508,6 +2133,8 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         .as_ref()
         .filter(|status| status.observed_revision_digest == lab.spec.revision_digest)
         .map_or(&[][..], |status| status.components.as_slice());
+    let stopped_components =
+        component_lifecycle::observed_stops(&workloads.plans, &observed_resources);
     let components = observe_component_statuses(
         &namespace_name,
         &workloads.plans,
@@ -2632,111 +2259,6 @@ fn deployment_apply_document(deployment: &Deployment) -> serde_json::Value {
         document["spec"]["strategy"]["rollingUpdate"] = serde_json::Value::Null;
     }
     document
-}
-
-async fn preserve_lifecycle_state(
-    workloads: &Api<StatefulSet>,
-    desired: &StatefulSet,
-) -> Result<StatefulSet, Error> {
-    let mut desired = desired.clone();
-    let Some(name) = desired.metadata.name.as_deref() else {
-        return Ok(desired);
-    };
-    let Some(existing) = workloads.get_opt(name).await? else {
-        return Ok(desired);
-    };
-    if !same_lifecycle_identity(&existing, &desired) {
-        return Ok(desired);
-    }
-    for key in [LIFECYCLE_STATE_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION] {
-        if let Some(value) = existing
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|annotations| annotations.get(key))
-        {
-            desired
-                .metadata
-                .annotations
-                .get_or_insert_default()
-                .insert(key.to_owned(), value.clone());
-        }
-    }
-    if existing
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.get(LIFECYCLE_STATE_ANNOTATION))
-        .is_some()
-        && let (Some(existing_spec), Some(desired_spec)) =
-            (existing.spec.as_ref(), desired.spec.as_mut())
-    {
-        desired_spec.replicas = existing_spec.replicas;
-        if let Some(restart) = existing_spec
-            .template
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.annotations.as_ref())
-            .and_then(|annotations| annotations.get(LIFECYCLE_RESTART_ANNOTATION))
-        {
-            desired_spec
-                .template
-                .metadata
-                .get_or_insert_default()
-                .annotations
-                .get_or_insert_default()
-                .insert(LIFECYCLE_RESTART_ANNOTATION.to_owned(), restart.clone());
-        }
-    }
-    Ok(desired)
-}
-
-fn same_lifecycle_identity(existing: &StatefulSet, desired: &StatefulSet) -> bool {
-    let existing = existing.metadata.annotations.as_ref();
-    let desired = desired.metadata.annotations.as_ref();
-    [BACKEND_ID_ANNOTATION, EXECUTION_STATE_CONTRACT_ANNOTATION]
-        .into_iter()
-        .all(|key| {
-            existing.and_then(|annotations| annotations.get(key))
-                == desired.and_then(|annotations| annotations.get(key))
-                && desired
-                    .and_then(|annotations| annotations.get(key))
-                    .is_some()
-        })
-}
-
-fn stateful_set_matches_plan(
-    workload: &StatefulSet,
-    plan: &proofstorm_core::ComponentPlanContract,
-) -> bool {
-    let annotations = workload.metadata.annotations.as_ref();
-    annotations.and_then(|values| values.get(BACKEND_ID_ANNOTATION)) == Some(&plan.backend_id)
-        && annotations.and_then(|values| values.get(EXECUTION_STATE_CONTRACT_ANNOTATION))
-            == Some(&plan.execution_context.state_contract)
-        && workload
-            .spec
-            .as_ref()
-            .and_then(|spec| spec.template.metadata.as_ref())
-            .and_then(|metadata| metadata.annotations.as_ref())
-            .and_then(|values| values.get(proofstorm_kube::ROLLOUT_DIGEST_ANNOTATION))
-            == Some(&plan.rollout_digest)
-}
-
-fn deployment_matches_plan(
-    workload: &Deployment,
-    plan: &proofstorm_core::ComponentPlanContract,
-) -> bool {
-    let annotations = workload.metadata.annotations.as_ref();
-    annotations.and_then(|values| values.get(BACKEND_ID_ANNOTATION)) == Some(&plan.backend_id)
-        && annotations.and_then(|values| values.get(EXECUTION_STATE_CONTRACT_ANNOTATION))
-            == Some(&plan.execution_context.state_contract)
-        && workload
-            .spec
-            .as_ref()
-            .and_then(|spec| spec.template.metadata.as_ref())
-            .and_then(|metadata| metadata.annotations.as_ref())
-            .and_then(|values| values.get(proofstorm_kube::ROLLOUT_DIGEST_ANNOTATION))
-            == Some(&plan.rollout_digest)
 }
 
 async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {

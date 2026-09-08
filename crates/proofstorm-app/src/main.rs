@@ -75,7 +75,7 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         name: Option<String>,
-        #[arg(long, default_value_t = 120)]
+        #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u32).range(0..=120))]
         wait: u32,
     },
     /// Read the environment and cached activity without starting jobs or recording results.
@@ -241,28 +241,23 @@ async fn main() -> Result<()> {
                 labs.workspace.clone(),
                 labs.principal.clone(),
             );
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(wait));
-            while !view
-                .runtime
-                .as_ref()
-                .is_some_and(|r| r.phase == InstancePhase::Ready)
-                && tokio::time::Instant::now() < deadline
-            {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                view = labs.inspect(name, 0).await?;
-            }
+            let waited = if wait == 0 {
+                Ok(None)
+            } else {
+                let instance = view.runtime.as_ref().map(|status| &status.instance);
+                labs.wait(proofstorm_app::lab::WaitRequest {
+                    reference: &view.lab.instance_id,
+                    expected_instance_key: instance.map(|instance| instance.instance_key.as_str()),
+                    expected_generation: instance.map(|instance| instance.generation),
+                    target_phase: InstancePhase::Ready,
+                    timeout_seconds: wait,
+                })
+                .await
+                .map(Some)
+            };
             recovery.abort();
-            if let Some(status) = view
-                .runtime
-                .as_ref()
-                .filter(|s| s.phase == InstancePhase::Ready)
-            {
-                labs.store.mark_update_applied(
-                    &labs.workspace,
-                    &status.instance.id,
-                    status.instance.generation,
-                    Some(&status.instance.revision_digest),
-                )?;
+            if let Some(waited) = waited? {
+                view.runtime = Some(waited.status);
             }
             print(&view)?;
             if !view
@@ -271,7 +266,7 @@ async fn main() -> Result<()> {
                 .is_some_and(|r| r.phase == InstancePhase::Ready)
             {
                 bail!(
-                    "lab is still starting; status and recovery exec remain available; no second lab was created"
+                    "lab has not reached Ready; inspect the reported phase and blockers before retrying"
                 );
             }
         }

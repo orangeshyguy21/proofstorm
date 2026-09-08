@@ -378,6 +378,14 @@ async fn partial_startup_can_be_inspected_and_closed_without_reprovisioning() {
             .runtime
             .is_none()
     );
+    assert!(
+        labs.inspect("interrupted", 0)
+            .await
+            .unwrap()
+            .instance_key
+            .is_some(),
+        "the close fence remains available even before a runtime resource exists"
+    );
     let closed = labs.down("interrupted", 2).await.unwrap();
     assert_eq!(closed.lab.phase, LabHandlePhase::Closed);
     assert!(
@@ -949,3 +957,6 @@ async fn inspecting_unmaterialized_intent_does_not_require_or_create_a_run() {
     assert!(view.activity.is_empty());
     assert!(labs.sync("reserved").await.unwrap().is_empty());
 }
+
+#[path = "shared_lifecycle/mod.rs"]
+mod shared_lifecycle;
