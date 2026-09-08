@@ -10,6 +10,9 @@ use proofstorm_view::{EnvironmentLab, EnvironmentView, ObserverStatus};
 use std::{cell::Cell, rc::Rc};
 use wasm_bindgen::{JsCast, closure::Closure};
 
+const LOGO_SVG: &str = include_str!("../assets/proofstorm-logo.svg");
+const WORDMARK_SVG: &str = include_str!("../assets/proofstorm-word-mark.svg");
+
 #[component]
 #[allow(
     clippy::too_many_lines,
@@ -205,7 +208,7 @@ pub fn App() -> impl IntoView {
     view! {
         <header class="app-header">
             <button class="icon-button" aria-label="Toggle lab navigation" aria-expanded=move || navigation.get() on:click=move |_| navigation.update(|open| *open = !*open)>"☰"</button>
-            <a class="brand" href="/" aria-label="Proofstorm home"><span class="brand-mark">"✳"</span>"proofstorm"</a>
+            <a class="brand" href="/" aria-label="Proofstorm home"><span class="brand-mark" aria-hidden="true" inner_html=LOGO_SVG></span><span class="brand-wordmark" aria-hidden="true" inner_html=WORDMARK_SVG></span></a>
             <span class="header-context">{move || environment.get().map(|v| v.workspace_id)}</span>
             <div class="header-right"><span class=move || if connected.get() && error.get().is_none() { "live-state" } else { "live-state offline" }><i></i>{move || if error.get().is_some() { "Update failed" } else if connected.get() { "Live" } else { "Reconnecting" }}</span><ThemePicker /></div>
         </header>
@@ -236,7 +239,7 @@ pub fn App() -> impl IntoView {
                 <Show when=move || system_open.get()><SystemPanel telemetry selected_lab=selected selected_component=component open=system_open /></Show>
                 <Show when=move || !system_open.get()>
                     <LabPanel lab=detail selected_component=component history_pages zoom pan telemetry drawer />
-                    <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark">"✳"</span><h1>{move || if loaded.get() && selected.get().is_empty() { "No labs" } else { "Loading lab…" }}</h1><Show when=move || loaded.get() && selected.get().is_empty()><code>"proofstorm up examples/developer-lab.json --name demo"</code></Show></div></Show>
+                    <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark" aria-hidden="true" inner_html=LOGO_SVG></span><h1>{move || if loaded.get() && selected.get().is_empty() { "No labs" } else { "Loading lab…" }}</h1><Show when=move || loaded.get() && selected.get().is_empty()><code>"proofstorm up examples/developer-lab.json --name demo"</code></Show></div></Show>
                 </Show>
             </main>
         </div>
