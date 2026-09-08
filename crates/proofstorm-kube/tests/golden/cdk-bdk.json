@@ -289,6 +289,9 @@
               "proofstorm.dev/network-identity": "mint"
             }
           },
+          "strategy": {
+            "type": "Recreate"
+          },
           "template": {
             "metadata": {
               "annotations": {
@@ -406,7 +409,7 @@
                   "command": [
                     "sh",
                     "-ec",
-                    "if stored_config=$(cdk-mintd config show 2>/dev/null); then desired_config=$(cat /config/config.toml); if test \"$stored_config\" != \"$desired_config\"; then echo 'stored CDK configuration differs from the immutable Proofstorm lock; refusing implicit config apply' >&2; exit 1; fi; cdk-mintd config apply --file /config/config.toml --validate-only; else cdk-mintd config validate --file /config/config.toml && cdk-mintd config init --new-mint --file /config/config.toml; fi"
+                    "cdk-mintd config validate --file /config/config.toml; if cdk-mintd config show >/dev/null; then exec cdk-mintd config apply --file /config/config.toml; else exec cdk-mintd config init --new-mint --file /config/config.toml; fi"
                   ],
                   "env": [
                     {

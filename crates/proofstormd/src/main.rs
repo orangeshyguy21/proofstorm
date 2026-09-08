@@ -1,3 +1,4 @@
+mod component_logs;
 mod lab_updates;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -678,7 +679,7 @@ async fn reconcile_action(
     Ok(Action::await_change())
 }
 
-/// Read one component's container log and journal it as the action artifact.
+/// Read a component's startup or application logs and journal their availability.
 ///
 /// Lab workloads hold no Kubernetes credentials by design, so no Job can read
 /// another Pod's log. The controller already holds that authority for native
@@ -720,14 +721,13 @@ async fn reconcile_component_logs(
             request.component, lab.spec.instance_key
         )))
         .await?;
-    // A rollout can leave more than one Pod; the newest is the live one.
-    let newest = matching.items.into_iter().max_by(|left, right| {
-        left.creation_timestamp()
-            .cmp(&right.creation_timestamp())
-            .then_with(|| left.name_any().cmp(&right.name_any()))
-    });
-    let artifact =
-        component_log_artifact(&pods, &request.component, request.tail_lines, newest).await?;
+    let artifact = component_logs::component_log_artifact(
+        &pods,
+        &request.component,
+        request.tail_lines,
+        matching.items,
+    )
+    .await?;
 
     let observed = now_unix();
     patch_action_status(
@@ -744,74 +744,6 @@ async fn reconcile_component_logs(
     )
     .await?;
     Ok(Action::await_change())
-}
-
-/// The journaled body of a component log read, including the pod state that
-/// explains an empty or short log.
-async fn component_log_artifact(
-    pods: &Api<Pod>,
-    component: &str,
-    tail_lines: u32,
-    pod: Option<Pod>,
-) -> Result<std::collections::BTreeMap<String, serde_json::Value>, kube::Error> {
-    const LOG_LIMIT_BYTES: i64 = 20 * 1024;
-
-    let Some(pod) = pod else {
-        return Ok(status_object(serde_json::json!({
-            "component": component,
-            "pod": serde_json::Value::Null,
-            "log": "",
-            "log_truncated": false,
-            "diagnostic": "no_pod",
-            "diagnostic_message":
-                "the component currently has no Pod, so it has no log to read",
-        })));
-    };
-    let pod_name = pod.name_any();
-    let status = pod.status.clone().unwrap_or_default();
-    let container_status = status
-        .container_statuses
-        .as_ref()
-        .and_then(|statuses| statuses.first());
-    let container = container_status
-        .map(|status| status.name.clone())
-        .or_else(|| {
-            pod.spec.as_ref().and_then(|spec| {
-                spec.containers
-                    .first()
-                    .map(|container| container.name.clone())
-            })
-        });
-    let log = match pods
-        .logs(
-            &pod_name,
-            &LogParams {
-                container: container.clone(),
-                tail_lines: Some(i64::from(tail_lines)),
-                limit_bytes: Some(LOG_LIMIT_BYTES),
-                ..LogParams::default()
-            },
-        )
-        .await
-    {
-        Ok(log) => log,
-        // A Pod that has not started its container yet has no readable log,
-        // which is an observation about the component, not a controller fault.
-        Err(kube::Error::Api(error)) if error.code == 400 || error.code == 404 => String::new(),
-        Err(error) => return Err(error),
-    };
-    let truncated = log.len() >= usize::try_from(LOG_LIMIT_BYTES).unwrap_or(usize::MAX);
-    Ok(status_object(serde_json::json!({
-        "component": component,
-        "pod": pod_name,
-        "container": container,
-        "pod_phase": status.phase,
-        "container_ready": container_status.map(|status| status.ready),
-        "restart_count": container_status.map(|status| status.restart_count),
-        "tail_lines": tail_lines,
-        "log": log,
-        "log_truncated": truncated,
-    })))
 }
 
 #[allow(
@@ -2470,8 +2402,13 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
                 .patch(name, &PatchParams::default(), &Patch::Merge(&desired))
                 .await?;
         } else {
+            clear_rolling_update_strategy(&deployments, resource).await?;
             deployments
-                .patch(name, &patch, &Patch::Apply(resource))
+                .patch(
+                    name,
+                    &patch,
+                    &Patch::Apply(deployment_apply_document(resource)),
+                )
                 .await?;
         }
     }
@@ -2633,6 +2570,64 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     } else {
         jittered_requeue(&lab.spec.instance_key, 3, 2)
     })
+}
+
+/// Apply cannot delete a defaulted field owned by another field manager. Clear
+/// the old strategy atomically before applying the complete desired workload.
+async fn clear_rolling_update_strategy(
+    deployments: &Api<Deployment>,
+    desired: &Deployment,
+) -> Result<(), Error> {
+    if desired
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.strategy.as_ref())
+        .and_then(|strategy| strategy.type_.as_deref())
+        != Some("Recreate")
+    {
+        return Ok(());
+    }
+    let name = desired.name_any();
+    let Some(existing) = deployments.get_opt(&name).await? else {
+        return Ok(());
+    };
+    if let Some(document) = recreate_strategy_transition(&existing) {
+        if existing.metadata.resource_version.is_none() {
+            return Err(Error::ControllerInvariant(
+                "Deployment lacks resourceVersion",
+            ));
+        }
+        deployments
+            .patch(&name, &PatchParams::default(), &Patch::Merge(document))
+            .await?;
+    }
+    Ok(())
+}
+
+fn recreate_strategy_transition(existing: &Deployment) -> Option<serde_json::Value> {
+    let strategy = existing
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.strategy.as_ref());
+    if strategy.is_some_and(|strategy| {
+        strategy.type_.as_deref() == Some("Recreate") && strategy.rolling_update.is_none()
+    }) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "metadata": {"resourceVersion": existing.metadata.resource_version},
+        "spec": {"strategy": {"type": "Recreate", "rollingUpdate": null}}
+    }))
+}
+
+/// Explicitly omit rolling-update defaults from the desired Recreate document.
+/// Existing defaults owned elsewhere are removed by the fenced merge above.
+fn deployment_apply_document(deployment: &Deployment) -> serde_json::Value {
+    let mut document = serde_json::json!(deployment);
+    if document["spec"]["strategy"]["type"].as_str() == Some("Recreate") {
+        document["spec"]["strategy"]["rollingUpdate"] = serde_json::Value::Null;
+    }
+    document
 }
 
 async fn preserve_lifecycle_state(
@@ -3547,6 +3542,61 @@ mod tests {
                 ),
             },
         )
+    }
+
+    #[test]
+    fn recreate_transition_uses_resource_version_and_merge_deletion() {
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "mint", "resourceVersion": "123"},
+            "spec": {"selector": {"matchLabels": {"app": "mint"}},
+                "template": {}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%"}}}
+        })).unwrap();
+        assert_eq!(
+            recreate_strategy_transition(&deployment),
+            Some(serde_json::json!({
+                "metadata": {"resourceVersion": "123"},
+                "spec": {"strategy": {"type": "Recreate", "rollingUpdate": null}}
+            }))
+        );
+        let mut recreated = deployment;
+        let strategy = recreated.spec.as_mut().unwrap().strategy.as_mut().unwrap();
+        strategy.type_ = Some("Recreate".into());
+        strategy.rolling_update = None;
+        assert!(recreate_strategy_transition(&recreated).is_none());
+    }
+
+    #[test]
+    fn recreate_apply_explicitly_removes_rolling_update_defaults() {
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "mint"},
+            "spec": {"selector": {"matchLabels": {"app": "mint"}},
+                "template": {}, "strategy": {"type": "Recreate"}}
+        }))
+        .unwrap();
+        let document = deployment_apply_document(&deployment);
+        assert_eq!(document["spec"]["strategy"]["type"], "Recreate");
+        assert!(
+            document["spec"]["strategy"]
+                .as_object()
+                .unwrap()
+                .contains_key("rollingUpdate")
+        );
+        assert!(document["spec"]["strategy"]["rollingUpdate"].is_null());
+        let mut rolling = deployment;
+        rolling
+            .spec
+            .as_mut()
+            .unwrap()
+            .strategy
+            .as_mut()
+            .unwrap()
+            .type_ = Some("RollingUpdate".into());
+        assert!(
+            !deployment_apply_document(&rolling)["spec"]["strategy"]
+                .as_object()
+                .unwrap()
+                .contains_key("rollingUpdate")
+        );
     }
 
     #[test]

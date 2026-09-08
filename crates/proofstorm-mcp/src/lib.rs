@@ -300,6 +300,17 @@ pub struct LabApplyReceipt {
     pub phase: InstancePhase,
     pub component_count: u32,
     pub next_tool: String,
+    /// Saved edit; reconciliation failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_error: Option<LabReconciliationError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabReconciliationError {
+    pub code: String,
+    pub message: String,
+    pub recovery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3294,7 +3305,9 @@ impl ProofstormMcp {
                     "Update target or digest differs from the reviewed plan; nothing applied",
                 ));
             }
-            self.store
+            let runtime = self.runtime()?;
+            let accepted = self
+                .store
                 .accept_update(
                     &self.workspace,
                     &self.principal,
@@ -3302,27 +3315,54 @@ impl ProofstormMcp {
                     &request.idempotency_key,
                 )
                 .map_err(store_error)?;
-            let runtime = self.runtime()?;
-            let status = proofstorm_app::updates::reconcile(
+            let reconciled = proofstorm_app::updates::reconcile(
                 &runtime.shared(),
                 &self.store,
                 &self.workspace,
                 &self.principal,
                 &request.instance_id,
             )
-            .await
-            .map_err(app_error)?;
+            .await;
+            let (instance, phase, reconciliation_error) = match reconciled {
+                Ok(status) => (status.instance, status.phase, None),
+                Err(error) => {
+                    // Admission is already committed. A transport failure must not imply
+                    // rollback or make an agent submit the same edit under a new key.
+                    let current = self
+                        .store
+                        .instance(&self.workspace, &self.principal, &request.instance_id)
+                        .unwrap_or(accepted);
+                    let closing = self
+                        .store
+                        .update_state(&self.workspace, &self.principal, &request.instance_id)
+                        .is_ok_and(|state| state.closing);
+                    let detail = LabReconciliationError {
+                        code: error.details.as_ref().and_then(|details| details["code"].as_str()).unwrap_or("lab_update_runtime").into(),
+                        message: error.message,
+                        recovery: "The edit was accepted. Retry this exact lab_apply request with the same plan_id and idempotency_key, or use lab_wait to observe recovery. Do not create another edit to retry it.".into(),
+                    };
+                    (
+                        current,
+                        if closing {
+                            InstancePhase::Closing
+                        } else {
+                            InstancePhase::Pending
+                        },
+                        Some(detail),
+                    )
+                }
+            };
             return Ok(Json(LabApplyReceipt {
                 generation: plan.target.expected_generation + u64::from(!plan.is_noop()),
-                current_generation: status.instance.generation,
-                superseded: status.instance.generation
+                current_generation: instance.generation,
+                superseded: instance.generation
                     != plan.target.expected_generation + u64::from(!plan.is_noop()),
                 plan_id: request.plan_id,
                 plan_digest: plan.digest,
                 revision_digest: plan.target_revision,
                 lock_digest: plan.target_lock,
-                instance_id: status.instance.id,
-                phase: status.phase,
+                instance_id: instance.id,
+                phase,
                 component_count: u32::try_from(
                     plan.changes.added.len()
                         + plan.changes.unchanged.len()
@@ -3330,6 +3370,7 @@ impl ProofstormMcp {
                 )
                 .unwrap_or(u32::MAX),
                 next_tool: "proofstorm_lab_wait".into(),
+                reconciliation_error,
             }));
         }
         let draft = self
@@ -3402,6 +3443,7 @@ impl ProofstormMcp {
             phase: status.phase,
             component_count,
             next_tool: "proofstorm_lab_wait".into(),
+            reconciliation_error: None,
         }))
     }
 
@@ -4480,7 +4522,7 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        description = "Read a bounded tail of one lab component's own container log, journaled with automatic run and session attribution. This reads the selected running or failed component pod and keeps working while the component is unready, crash-looping, or stopped. The artifact also reports pod phase, container readiness, and restart count"
+        description = "Read current/previous logs, selecting a blocking initializer first. Reports log availability and serving pods. Works while unready; run/session attribution is automatic"
     )]
     async fn proofstorm_component_logs(
         &self,
@@ -9985,7 +10027,7 @@ fn compact_lab_wait(
 const fn runtime_guidance(phase: InstancePhase) -> Option<&'static str> {
     match phase {
         InstancePhase::Ready => Some(
-            "Ready means infrastructure/protocol availability, not mature regtest blocks or Lightning liquidity. For recipe labs, create an experiment and session, then run and await lab_recipe_bootstrap and lab_recipe_route_channel_open. For custom labs, use liquidity_bootstrap then channel_open. Use native CLIs for software behavior and typed actions for provisioning, faults, and coordinated flows.",
+            "Ready means infrastructure/protocol availability, not mature regtest blocks, Lightning liquidity, or payment settlement. Use catalog guidance and available native commands to provision and verify component state. Native commands and logs supply run/session attribution automatically; experiment_id and session_id can be omitted. Wait for operation results and independently verify effects.",
         ),
         _ => None,
     }
@@ -11826,6 +11868,163 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exercise admission, failure, replay, supersession and closing through the MCP route"
+    )]
+    async fn accepted_lab_apply_reports_pending_reconciliation_and_preserves_replay() {
+        let store = seeded_store();
+        let mut spec: LabSpec = serde_json::from_value(serde_json::json!({
+            "api_version":"proofstorm/v1alpha1", "name":"edit-recovery", "links":[],
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"30.0","config_version":"bitcoin-core/30/v1","control":"laboratory","config":{}}]
+        })).unwrap();
+        store
+            .create_draft("alpha", "designer", "initial", &spec, "initial-draft")
+            .unwrap();
+        let initial = store
+            .publish("alpha", "designer", "initial", 1, "initial-publication")
+            .unwrap();
+        store
+            .materialize(
+                "alpha",
+                "designer",
+                "edit-recovery",
+                &initial.digest,
+                "initial-apply",
+            )
+            .unwrap();
+        spec.components[0]
+            .config
+            .insert("txindex".into(), serde_json::json!(false));
+        store
+            .create_draft("alpha", "designer", "changed", &spec, "changed-draft")
+            .unwrap();
+        let changed = store
+            .publish("alpha", "designer", "changed", 1, "changed-publication")
+            .unwrap();
+        let plan = store
+            .plan_update(
+                "alpha",
+                "designer",
+                proofstorm_core::LabUpdateTarget {
+                    instance_id: "edit-recovery".into(),
+                    expected_generation: 1,
+                    delete_data: false,
+                    delete_retained: vec![],
+                },
+                &changed,
+            )
+            .unwrap();
+        store
+            .save_update_plan("alpha", "designer", "changed", &plan)
+            .unwrap();
+        let client = kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| {
+                std::future::ready(Ok::<_, std::io::Error>(http::Response::builder().status(503).body(kube::client::Body::from(
+                r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Unavailable","message":"injected cluster outage","code":503}"#.as_bytes().to_vec()
+            )).unwrap()))
+            }),
+            "system",
+        );
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client, "system");
+        let request = || LabApplyRequest {
+            instance_id: "edit-recovery".into(),
+            plan_id: "changed".into(),
+            expected_plan_digest: plan.digest.clone(),
+            idempotency_key: "accepted-edit".into(),
+        };
+        let mut mismatch = request();
+        mismatch.expected_plan_digest = "wrong".into();
+        assert!(
+            service
+                .proofstorm_lab_apply(Parameters(mismatch))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .instance("alpha", "designer", "edit-recovery")
+                .unwrap()
+                .generation,
+            1
+        );
+        let receipt = service
+            .proofstorm_lab_apply(Parameters(request()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!((receipt.generation, receipt.current_generation), (2, 2));
+        assert_eq!(receipt.phase, InstancePhase::Pending);
+        assert!(!receipt.superseded);
+        let detail = receipt.reconciliation_error.as_ref().unwrap();
+        assert_eq!(detail.code, "lab_update_runtime");
+        assert!(detail.recovery.contains("edit was accepted"));
+        assert!(detail.recovery.contains("same plan_id and idempotency_key"));
+        assert_eq!(
+            store
+                .instance("alpha", "designer", "edit-recovery")
+                .unwrap()
+                .generation,
+            2
+        );
+        let replay = service
+            .proofstorm_lab_apply(Parameters(request()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(replay, receipt);
+        spec.components[0]
+            .config
+            .insert("fallback_fee".into(), serde_json::json!(0.001));
+        store
+            .create_draft("alpha", "designer", "newer", &spec, "newer-draft")
+            .unwrap();
+        let newer = store
+            .publish("alpha", "designer", "newer", 1, "newer-publication")
+            .unwrap();
+        let newer_plan = store
+            .plan_update(
+                "alpha",
+                "designer",
+                proofstorm_core::LabUpdateTarget {
+                    instance_id: "edit-recovery".into(),
+                    expected_generation: 2,
+                    delete_data: false,
+                    delete_retained: vec![],
+                },
+                &newer,
+            )
+            .unwrap();
+        store
+            .accept_update("alpha", "designer", &newer_plan, "newer-accept")
+            .unwrap();
+        let superseded = service
+            .proofstorm_lab_apply(Parameters(request()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            (superseded.generation, superseded.current_generation),
+            (2, 3)
+        );
+        assert!(superseded.superseded);
+        assert_eq!(superseded.phase, InstancePhase::Pending);
+        store
+            .begin_instance_close("alpha", "designer", "edit-recovery")
+            .unwrap();
+        let closing = service
+            .proofstorm_lab_apply(Parameters(request()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(closing.phase, InstancePhase::Closing);
+        assert_eq!(closing.current_generation, 3);
+        assert!(closing.reconciliation_error.is_some());
+    }
+
+    #[tokio::test]
     async fn environment_tool_uses_shared_read_model_and_rechecks_permissions() {
         let store = seeded_store();
         store
@@ -13168,12 +13367,9 @@ mod tests {
         assert_eq!(receipt.total_components, 0);
         assert_eq!(receipt.inventory_count, 1);
         assert!(receipt.inventory_digest.starts_with("sha256:"));
-        assert!(
-            receipt
-                .runtime_guidance
-                .as_deref()
-                .is_some_and(|guidance| guidance.contains("liquidity_bootstrap"))
-        );
+        assert!(receipt.runtime_guidance.as_deref().is_some_and(|guidance| {
+            guidance.contains("experiment_id and session_id can be omitted")
+        }));
         let encoded = serde_json::to_string(&receipt).expect("status receipt");
         assert!(!encoded.contains("\"components\":["));
         assert!(!encoded.contains("inventory\":"));

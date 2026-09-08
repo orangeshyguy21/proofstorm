@@ -752,6 +752,11 @@ fn workload_observation(
                 status.and_then(|status| status.observed_generation),
                 status.and_then(|status| status.available_replicas),
                 plan.workload.desired_replicas,
+                status.is_some_and(|status| {
+                    status.updated_replicas.unwrap_or_default()
+                        >= i32::from(plan.workload.desired_replicas)
+                        && status.replicas == status.updated_replicas
+                }),
             )
         }
         WorkloadControllerKind::StatefulSet => {
@@ -784,6 +789,12 @@ fn workload_observation(
                 status.and_then(|status| status.observed_generation),
                 status.and_then(|status| status.ready_replicas),
                 plan.workload.desired_replicas,
+                status.is_some_and(|status| {
+                    status.updated_replicas.unwrap_or_default()
+                        >= i32::from(plan.workload.desired_replicas)
+                        && status.current_revision.is_some()
+                        && status.current_revision == status.update_revision
+                }),
             )
         }
     }
@@ -909,6 +920,7 @@ fn workload_replica_observation(
     observed_generation: Option<i64>,
     ready_replicas: Option<i32>,
     desired_replicas: u16,
+    rollout_complete: bool,
 ) -> (
     ComponentConditionState,
     ComponentConditionReason,
@@ -916,6 +928,10 @@ fn workload_replica_observation(
 ) {
     if generation.is_none() || observed_generation != generation {
         return workload_unavailable("owning workload has not observed its current generation");
+    }
+    // Available replicas can belong to the previous template during a rollout.
+    if !rollout_complete {
+        return workload_unavailable("owning workload has not completed its current rollout");
     }
     if ready_replicas.unwrap_or_default() >= i32::from(desired_replicas) {
         (
@@ -1853,10 +1869,12 @@ pub fn render_cdk_component(
     if !runtime.init_containers.is_empty() {
         pod_spec["initContainers"] = Value::Array(runtime.init_containers);
     }
+    // Configuration is persisted by the initializer. Stop the previous mint
+    // before applying the accepted document or opening the same wallet database.
     rendered.deployments.push(resource(json!({
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": plan_workload_metadata(plan),
-        "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
+        "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": pod_spec
         }}
     }))?);
@@ -1871,6 +1889,12 @@ struct CdkRuntimeResources {
     ports: Vec<Value>,
     init_containers: Vec<Value>,
 }
+
+// Both first startup and accepted edits use CDK's own configuration validation,
+// including its persisted mint constraints. A failed read must never authorize
+// overwriting an existing mint: --new-mint refuses an already initialized DB.
+// Keep stderr from every step so storage and configuration errors reach logs.
+const CDK_INITIALIZE_CONFIG: &str = "cdk-mintd config validate --file /config/config.toml; if cdk-mintd config show >/dev/null; then exec cdk-mintd config apply --file /config/config.toml; else exec cdk-mintd config init --new-mint --file /config/config.toml; fi";
 
 #[allow(
     clippy::too_many_lines,
@@ -2008,7 +2032,7 @@ fn cdk_runtime_resources(
         "name": "initialize-config",
         "image": plan.execution_context.image,
         "imagePullPolicy": "IfNotPresent",
-        "command": ["sh", "-ec", "if stored_config=$(cdk-mintd config show 2>/dev/null); then desired_config=$(cat /config/config.toml); if test \"$stored_config\" != \"$desired_config\"; then echo 'stored CDK configuration differs from the immutable Proofstorm lock; refusing implicit config apply' >&2; exit 1; fi; cdk-mintd config apply --file /config/config.toml --validate-only; else cdk-mintd config validate --file /config/config.toml && cdk-mintd config init --new-mint --file /config/config.toml; fi"],
+        "command": ["sh", "-ec", CDK_INITIALIZE_CONFIG],
         "env": env,
         "securityContext": container_security(),
         "volumeMounts": volume_mounts
@@ -3568,6 +3592,8 @@ mod tests {
         workload.status = Some(k8s_openapi::api::apps::v1::DeploymentStatus {
             observed_generation: Some(1),
             available_replicas: Some(1),
+            replicas: Some(1),
+            updated_replicas: Some(1),
             ..Default::default()
         });
         workload
@@ -3633,6 +3659,9 @@ mod tests {
             observed_generation: Some(1),
             ready_replicas: Some(1),
             replicas: 1,
+            updated_replicas: Some(1),
+            current_revision: Some("revision-1".into()),
+            update_revision: Some("revision-1".into()),
             ..Default::default()
         });
         let mut claim = PersistentVolumeClaim::default();
@@ -4233,12 +4262,11 @@ mod tests {
             deployment["spec"]["template"]["spec"]["initContainers"][0]["name"],
             "initialize-config"
         );
-        assert!(
-            deployment["spec"]["template"]["spec"]["initContainers"][0]["command"][2]
-                .as_str()
-                .expect("configuration initializer")
-                .contains("refusing implicit config apply")
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["initContainers"][0]["command"][2],
+            CDK_INITIALIZE_CONFIG
         );
+        assert_eq!(deployment["spec"]["strategy"]["type"], "Recreate");
         assert_cdk_018_config_contract(config);
 
         let revised_plans = compile_component_plans(
@@ -4756,6 +4784,116 @@ mod tests {
                 entry.name == plan.component_id || entry.name.starts_with(&plan.component_id)
             })
         }));
+    }
+
+    #[test]
+    fn deployment_readiness_waits_for_current_rollout_and_preserves_startup_errors() {
+        let lab = workspace_lab();
+        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
+        let plans = compile_component_plans("i0123456789012345678", "sha256:new", &lab, &lock)
+            .expect("plans");
+        let plan = plans
+            .iter()
+            .find(|plan| plan.component_id == "wallet-a")
+            .expect("wallet plan");
+        let mut workload = available_deployment(
+            render_wallet_component(plan)
+                .expect("render")
+                .deployments
+                .remove(0),
+        );
+        workload.metadata.generation = Some(2);
+        let status = workload.status.as_mut().expect("status");
+        status.observed_generation = Some(2);
+        status.replicas = Some(2);
+        // The original pod still serves traffic; the new pod has not started.
+        for (waiting, expected) in [
+            (
+                "ContainerCreating",
+                ComponentConditionReason::WorkloadUnavailable,
+            ),
+            (
+                "PodInitializing",
+                ComponentConditionReason::WorkloadUnavailable,
+            ),
+            (
+                "CrashLoopBackOff",
+                ComponentConditionReason::ContainerCrashLoop,
+            ),
+            (
+                "ImagePullBackOff",
+                ComponentConditionReason::ImagePullBackoff,
+            ),
+        ] {
+            let pod: Pod = resource(json!({
+                "metadata": {"labels": labels(&plan.instance_key, Some(&plan.component_id)), "annotations": rollout_annotations(plan)},
+                "status": {"containerStatuses": [{"name":"wallet", "image":"fixture", "imageID":"", "ready":false, "restartCount":0, "state":{"waiting":{"reason":waiting}}}]}
+            })).expect("pod");
+            let resources = ComponentObservationResources {
+                deployments: std::slice::from_ref(&workload),
+                stateful_sets: &[],
+                persistent_volume_claims: &[],
+                services: &[],
+                endpoint_slices: &[],
+                pods: std::slice::from_ref(&pod),
+            };
+            let (state, reason, _) = workload_observation(plan, &resources);
+            assert_eq!(state, ComponentConditionState::False, "{waiting}");
+            assert_eq!(reason, expected, "{waiting}");
+        }
+        for (replicas, updated, available, expected) in [
+            (1, 0, 1, false), // Only the original pod remains.
+            (2, 1, 2, false), // New ready pod exists, but rollout still retires the old pod.
+            (1, 1, 0, false), // New pod exists but is not available.
+            (1, 1, 1, true),
+        ] {
+            let status = workload.status.as_mut().expect("status");
+            status.replicas = Some(replicas);
+            status.updated_replicas = Some(updated);
+            status.available_replicas = Some(available);
+            let resources = ComponentObservationResources {
+                deployments: std::slice::from_ref(&workload),
+                stateful_sets: &[],
+                persistent_volume_claims: &[],
+                services: &[],
+                endpoint_slices: &[],
+                pods: &[],
+            };
+            assert_eq!(
+                workload_observation(plan, &resources).0 == ComponentConditionState::True,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn stateful_readiness_requires_updated_replicas_and_matching_controller_revisions() {
+        let mut fixture = chain_observation_fixture();
+        make_chain_fixture_ready(&mut fixture);
+        for (updated, current, next, expected) in [
+            (0, Some("old"), Some("new"), false),
+            (1, Some("old"), Some("new"), false),
+            (1, None, None, false),
+            (1, Some("new"), Some("new"), true),
+        ] {
+            let status = fixture.workload.status.as_mut().expect("status");
+            status.updated_replicas = Some(updated);
+            status.current_revision = current.map(str::to_owned);
+            status.update_revision = next.map(str::to_owned);
+            let resources = ComponentObservationResources {
+                deployments: &[],
+                stateful_sets: std::slice::from_ref(&fixture.workload),
+                persistent_volume_claims: &[],
+                services: &[],
+                endpoint_slices: &[],
+                pods: &[],
+            };
+            assert_eq!(
+                workload_observation(&fixture.plans[0], &resources).0
+                    == ComponentConditionState::True,
+                expected
+            );
+        }
     }
 
     #[test]

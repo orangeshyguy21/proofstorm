@@ -20,6 +20,8 @@ struct Cluster {
     fail_materialize: bool,
     fail_reads: bool,
     conflict_lease: bool,
+    update_conflicts: usize,
+    after_update_conflict: Option<Box<dyn FnOnce() + Send>>,
 }
 
 fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
@@ -37,7 +39,13 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                     let mut path=path.clone();
                     let mut value:Value=serde_json::from_slice(&bytes).unwrap();
                     if method == "POST" {path=format!("{}/{}",path,value["metadata"]["name"].as_str().unwrap());}
-                    if value.get("spec").is_none() && value.get("data").is_none() && cluster.conflict_lease {
+                    if method == "PUT" && path.contains("/proofstormlabs/") && cluster.update_conflicts > 0 {
+                        cluster.update_conflicts -= 1;
+                        let revision = cluster.update_conflicts + 2;
+                        cluster.objects.get_mut(&path).unwrap()["metadata"]["resourceVersion"] = json!(revision.to_string());
+                        if let Some(hook) = cluster.after_update_conflict.take() { hook(); }
+                        (409,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"controller status changed resourceVersion","code":409}))
+                    } else if value.get("spec").is_none() && value.get("data").is_none() && cluster.conflict_lease {
                         cluster.conflict_lease = false;
                         (409, json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"controller updated metadata","code":409}))
                     } else if value.get("spec").is_some() && path.contains("/proofstormlabs/") && cluster.fail_materialize {
@@ -49,7 +57,11 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                             for (key,v) in value["metadata"]["annotations"].as_object().unwrap() {if v.is_null() {object["metadata"]["annotations"].as_object_mut().unwrap().remove(key);} else {object["metadata"]["annotations"][key]=v.clone();}}
                             value=object.clone();
                         } else if path.contains("/proofstormlabs/") {
+                            if method == "PUT" {
+                                assert_eq!(value["metadata"]["resourceVersion"], cluster.objects[&path]["metadata"]["resourceVersion"], "retry must reread resourceVersion");
+                            }
                             if value["metadata"].get("annotations").is_none() {value["metadata"]["annotations"]=json!({});}
+                            if value["metadata"].get("resourceVersion").is_none() {value["metadata"]["resourceVersion"]=json!("1");}
                             value["metadata"]["uid"]=json!(format!("uid-{}",value["metadata"]["name"].as_str().unwrap()));
                             value["status"]=json!({"phase":"Pending","observedRevisionDigest":value["spec"]["revisionDigest"],"instanceNamespace":format!("proofstorm-{}",value["spec"]["instanceKey"].as_str().unwrap()),"components":[],"inventory":[]});
                         }
@@ -530,6 +542,165 @@ async fn retained_data_edits_cannot_converge_using_the_previous_configuration_st
     assert_eq!(
         proofstorm_app::runtime::status_from_resource(instance, &resource).phase,
         proofstorm_core::InstancePhase::Ready
+    );
+}
+
+#[tokio::test]
+async fn edit_conflict_retry_rereads_the_latest_durable_generation() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    labs.up("retry-edit", &spec()).await.unwrap();
+    let mut expanded = spec();
+    let mut second = expanded.components[0].clone();
+    second.id = "second".into();
+    expanded.components.push(second);
+    let first_plan = labs.plan_edit("retry-edit", &expanded, false, &[]).unwrap();
+    store
+        .accept_update("local", "developer", &first_plan, "first-edit")
+        .unwrap();
+    let mut third = expanded.components[0].clone();
+    third.id = "third".into();
+    expanded.components.push(third);
+    let next_plan = labs.plan_edit("retry-edit", &expanded, false, &[]).unwrap();
+    let next_revision = next_plan.target_revision.clone();
+    let newer_store = store.clone();
+    {
+        let mut cluster = cluster.lock().unwrap();
+        cluster.update_conflicts = 1;
+        cluster.after_update_conflict = Some(Box::new(move || {
+            newer_store
+                .accept_update("local", "developer", &next_plan, "newer-edit")
+                .unwrap();
+        }));
+    }
+    let status = proofstorm_app::updates::reconcile(
+        &labs.runtime,
+        &store,
+        "local",
+        "developer",
+        &first_plan.target.instance_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(status.instance.generation, 3);
+    let cluster = cluster.lock().unwrap();
+    let lab = cluster
+        .objects
+        .values()
+        .find(|value| value["kind"] == "ProofstormLab")
+        .unwrap();
+    assert_eq!(lab["spec"]["revisionDigest"], next_revision);
+    assert_eq!(
+        lab["spec"]["lab"]["components"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(
+        cluster
+            .requests
+            .iter()
+            .filter(|(method, path)| method == "PUT" && path.contains("/proofstormlabs/"))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn edit_conflict_retry_respects_a_durable_close() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    labs.up("retry-close", &spec()).await.unwrap();
+    let mut changed = spec();
+    changed.components[0]
+        .config
+        .insert("txindex".into(), json!(false));
+    let plan = labs.plan_edit("retry-close", &changed, false, &[]).unwrap();
+    store
+        .accept_update("local", "developer", &plan, "edit-before-close")
+        .unwrap();
+    let closing_store = store.clone();
+    let closing_instance = plan.target.instance_id.clone();
+    {
+        let mut cluster = cluster.lock().unwrap();
+        cluster.update_conflicts = 1;
+        cluster.after_update_conflict = Some(Box::new(move || {
+            closing_store
+                .begin_instance_close("local", "developer", &closing_instance)
+                .unwrap();
+        }));
+    }
+    proofstorm_app::updates::reconcile(
+        &labs.runtime,
+        &store,
+        "local",
+        "developer",
+        &plan.target.instance_id,
+    )
+    .await
+    .unwrap();
+    let cluster = cluster.lock().unwrap();
+    assert_eq!(
+        cluster
+            .requests
+            .iter()
+            .filter(|(method, path)| method == "PUT" && path.contains("/proofstormlabs/"))
+            .count(),
+        1
+    );
+    assert!(
+        cluster
+            .objects
+            .values()
+            .filter(|value| value["kind"] == "ProofstormLab")
+            .all(|value| value["spec"]["revisionDigest"] != plan.target_revision)
+    );
+}
+
+#[tokio::test]
+async fn edit_conflict_retry_is_bounded_and_keeps_the_accepted_update() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let labs = service(store.clone(), cluster.clone());
+    labs.up("retry-bound", &spec()).await.unwrap();
+    let mut changed = spec();
+    changed.components[0]
+        .config
+        .insert("txindex".into(), json!(false));
+    let plan = labs.plan_edit("retry-bound", &changed, false, &[]).unwrap();
+    store
+        .accept_update("local", "developer", &plan, "accepted-edit")
+        .unwrap();
+    cluster.lock().unwrap().update_conflicts = 10;
+    let error = proofstorm_app::updates::reconcile(
+        &labs.runtime,
+        &store,
+        "local",
+        "developer",
+        &plan.target.instance_id,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.details.unwrap()["http_status"], 409);
+    assert_eq!(
+        store
+            .instance("local", "developer", &plan.target.instance_id)
+            .unwrap()
+            .generation,
+        2
+    );
+    assert_eq!(
+        cluster
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|(method, path)| method == "PUT" && path.contains("/proofstormlabs/"))
+            .count(),
+        4
     );
 }
 

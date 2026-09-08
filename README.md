@@ -93,6 +93,21 @@ components keep their state; `--preview` shows additions, restarts, and removals
 Removed data is retained until explicitly deleted. Agents use the existing MCP
 plan/apply flow with an instance target and expected generation.
 
+An accepted edit remains saved if the cluster cannot immediately reconcile it.
+The MCP apply receipt includes `reconciliation_error` and recovery instructions
+in that case. Wait for recovery or retry the same plan and idempotency key.
+
+CDK mint edits validate and apply the accepted configuration to the existing
+database. The old mint stops before its replacement starts; storage and mint
+identity are preserved. Readiness waits for the current rollout to finish.
+
+For startup failures, use `proofstorm_lab_component_status_list` and
+`proofstorm_component_logs`. Logs select a blocking initializer before the main
+container and include previous crash logs when available. Inspect `container_state`
+and `log_available`/`log_diagnostic`; empty logs do not establish health.
+`observed_pods` and `ready_pod_count` distinguish a failing replacement from an
+older pod that is still serving.
+
 ## See the environment
 
 ```bash

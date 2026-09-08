@@ -42,10 +42,43 @@ pub async fn snapshot(runtime: &Runtime, lab: &ProofstormLab) -> Result<(), Erro
     reason = "map_err consumes the runtime error"
 )]
 fn runtime_error(e: kube::Error) -> Error {
-    Error::problem("lab_update_runtime", e.to_string())
+    let status = match &e {
+        kube::Error::Api(response) => Some(response.code),
+        _ => None,
+    };
+    Error::failure(
+        e.to_string(),
+        Some(serde_json::json!({"code":"lab_update_runtime", "http_status":status})),
+    )
 }
 
 pub async fn reconcile(
+    runtime: &Runtime,
+    store: &Store,
+    workspace: &str,
+    principal: &str,
+    id: &str,
+) -> Result<LabInstanceStatus, Error> {
+    for attempt in 0..4 {
+        let result = reconcile_once(runtime, store, workspace, principal, id).await;
+        if result.as_ref().is_err_and(|error| {
+            error
+                .details
+                .as_ref()
+                .is_some_and(|details| details["http_status"] == 409)
+        }) && attempt < 3
+        {
+            // Controller status writes also change resourceVersion. Reread both the
+            // journal and the resource; never retry a stale replacement body.
+            tokio::time::sleep(std::time::Duration::from_millis(10 << attempt)).await;
+            continue;
+        }
+        return result;
+    }
+    unreachable!("the final reconciliation attempt always returns")
+}
+
+async fn reconcile_once(
     runtime: &Runtime,
     store: &Store,
     workspace: &str,
