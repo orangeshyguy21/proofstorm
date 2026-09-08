@@ -42,7 +42,7 @@ pub const PROTOCOL_PROBER_LABEL: &str = "proofstorm.dev/prober";
 pub const PROTOCOL_PROBER_DIGEST_ANNOTATION: &str = "proofstorm.dev/prober-digest";
 pub const PROTOCOL_PROBER_LEASE_ANNOTATION: &str = "proofstorm.dev/prober-lease";
 const INACTIVE_PROBER_LEASE: &str = "inactive";
-const PROBER_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+const PROBER_IMAGE: &str = "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
 
 type ComponentRenderer = fn(&ComponentPlanContract) -> Result<RenderedComponent, AdapterError>;
 
@@ -3444,7 +3444,7 @@ mod tests {
             implementation: implementation.into(),
             version: None,
             config_version: match implementation {
-                "bitcoin-core" => "bitcoin-core/30/v1",
+                "bitcoin-core" => "bitcoin-core/31/v1",
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",

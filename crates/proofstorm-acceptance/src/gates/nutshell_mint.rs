@@ -24,8 +24,8 @@ fn lab_document() -> Value {
                 "id": "chain",
                 "kind": "bitcoin",
                 "implementation": "bitcoin-core",
-                "version": "30.0",
-                "config_version": "bitcoin-core/30/v1",
+                "version": "31.1",
+                "config_version": "bitcoin-core/31/v1",
                 "control": "laboratory",
                 "config": {}
             },
@@ -33,7 +33,7 @@ fn lab_document() -> Value {
                 "id": "lightning",
                 "kind": "lightning",
                 "implementation": "lnd",
-                "version": "0.20.0-beta",
+                "version": "0.21.3-beta",
                 "config_version": "lnd/0.20/v1",
                 "control": "laboratory",
                 "config": {"alias": "proofstorm-nutshell-lnd"}

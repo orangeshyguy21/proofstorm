@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:7972882e0b76ba178133a495b1b047b41bed9861bac9bf5fc98c0eaaef96928a",
+  "catalog_digest": "sha256:d779e833119af3b3823691d17350a1bb65fa6d82601c6b6dfc70a81122ddbad5",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -10,7 +10,7 @@
       "support_lifecycle": "preferred",
       "config_version": "attacker-workspace/0.1/v1",
       "config_schema_digest": "sha256:1bdbb8299f99be6f022604fc2cc62f6e464a1b50c185401880a760525b69c930",
-      "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
       "fields": {
         "idle_process": {
           "classification": "runtime_policy",
@@ -41,12 +41,12 @@
     {
       "implementation": "bitcoin-core",
       "kind": "bitcoin",
-      "upstream_version": "30.0",
+      "upstream_version": "31.1",
       "release_channel": "stable",
       "support_lifecycle": "preferred",
-      "config_version": "bitcoin-core/30/v1",
-      "config_schema_digest": "sha256:040a057bc8fdb2012fa9adb81bcee940e9156e98930ef46d82948cc004873cfc",
-      "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+      "config_version": "bitcoin-core/31/v1",
+      "config_schema_digest": "sha256:e92d4055cc8f70b0f1ad1ebc3229a58ed367a745a9994b8cd6db8d0408868666",
+      "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",
@@ -297,8 +297,8 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
-                "0.20.0-beta",
-                "0.21.0-beta"
+                "0.20.4-beta",
+                "0.21.3-beta"
               ]
             }
           }
@@ -320,8 +320,8 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
-            "0.20.0-beta",
-            "0.21.0-beta"
+            "0.20.4-beta",
+            "0.21.3-beta"
           ]
         },
         {
@@ -534,7 +534,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "30.0"
+            "31.1"
           ]
         },
         {
@@ -805,7 +805,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "30.0"
+            "31.1"
           ]
         },
         {
@@ -825,7 +825,7 @@
       "support_lifecycle": "preferred",
       "config_version": "cln/26.06/v1",
       "config_schema_digest": "sha256:1af8bae18445cca3dd6d67f9469145d70447781ea8d6ad369b33fb96f7ae0eee",
-      "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
       "fields": {
         "alias": {
           "classification": "agent_authorable",
@@ -896,7 +896,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "30.0"
+            "31.1"
           ]
         }
       ]
@@ -968,7 +968,7 @@
       "support_lifecycle": "preferred",
       "config_version": "keycloak/25/v1",
       "config_schema_digest": "sha256:c97d8e8af9c1a96ada4a3592af33d6ad08923284db346a44166d1963dc7e3f60",
-      "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+      "image": "proofstorm-registry.localhost:5000/upstream/quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
       "fields": {
         "access_token_lifespan_seconds": {
           "classification": "agent_authorable",
@@ -1025,12 +1025,12 @@
     {
       "implementation": "lnd",
       "kind": "lightning",
-      "upstream_version": "0.20.0-beta",
+      "upstream_version": "0.20.4-beta",
       "release_channel": "prerelease",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "supported",
       "config_version": "lnd/0.20/v1",
       "config_schema_digest": "sha256:65dff70176da398204126577f4d5892b2c5de8b47804f79d3891a0ed636d14d5",
-      "image": "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09",
       "fields": {
         "accept_keysend": {
           "classification": "runtime_policy",
@@ -1105,7 +1105,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "30.0"
+            "31.1"
           ]
         }
       ]
@@ -1113,12 +1113,12 @@
     {
       "implementation": "lnd",
       "kind": "lightning",
-      "upstream_version": "0.21.0-beta",
+      "upstream_version": "0.21.3-beta",
       "release_channel": "prerelease",
-      "support_lifecycle": "supported",
+      "support_lifecycle": "preferred",
       "config_version": "lnd/0.20/v1",
       "config_schema_digest": "sha256:65dff70176da398204126577f4d5892b2c5de8b47804f79d3891a0ed636d14d5",
-      "image": "docker.io/lightninglabs/lnd@sha256:60fca3f409cf3d500db1d15c9965678a4b5a60758ff30863d52b02529c18be8b",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
       "fields": {
         "accept_keysend": {
           "classification": "runtime_policy",
@@ -1193,7 +1193,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "30.0"
+            "31.1"
           ]
         }
       ]
@@ -1465,8 +1465,8 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
-                "0.20.0-beta",
-                "0.21.0-beta"
+                "0.20.4-beta",
+                "0.21.3-beta"
               ]
             }
           }
@@ -1490,8 +1490,8 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
-            "0.20.0-beta",
-            "0.21.0-beta"
+            "0.20.4-beta",
+            "0.21.3-beta"
           ]
         },
         {
@@ -1532,7 +1532,7 @@
       "support_lifecycle": "preferred",
       "config_version": "nutshell-wallet/0.20/v1",
       "config_schema_digest": "sha256:c3c3c1cfd04bf63de992267beabe8d2b1927575da11d8508bbe865957115281f",
-      "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",
@@ -1582,7 +1582,7 @@
       "support_lifecycle": "preferred",
       "config_version": "postgresql/17/v1",
       "config_schema_digest": "sha256:188caa752faa82af523c5ffc15bb48dd248305c73ec100865a5b5d54ba29fe93",
-      "image": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
       "fields": {
         "credentials": {
           "classification": "generated_instance_secret",
@@ -1630,7 +1630,7 @@
       "support_lifecycle": "preferred",
       "config_version": "redis/8.10/v1",
       "config_schema_digest": "sha256:338876fa399504a6168471adad43dc480f9b240dfd733ac1a36868c7b8f20250",
-      "image": "docker.io/library/redis@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
       "fields": {
         "credentials": {
           "classification": "generated_instance_secret",

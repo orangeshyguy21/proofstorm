@@ -17,9 +17,15 @@ target/debug/proofstorm up examples/developer-lab.json
 target/debug/proofstorm status demo
 ```
 
-Setup restores required local catalog images from the Docker cache, and doctor
-verifies image pulls from the cluster nodes. Missing exact artifacts fail setup
+Setup mirrors publisher images by exact digest into the local registry and
+restores Proofstorm-packaged catalog images from the Docker cache. Doctor
+verifies image pulls from every cluster node. Missing exact artifacts fail setup
 explicitly, with startup errors available through component status and logs.
+
+The default chain is Bitcoin Core 31.1. Lightning uses Lightning Labs LND
+0.21.3-beta; 0.20.4-beta is also available explicitly. Polar images are no longer
+part of the catalog or Compose stack. See [component image sourcing](docker/README.md)
+for release verification, mirroring, and the Bitcoin packaging recipe.
 
 The example starts Bitcoin Core and a Cashu mint with an embedded BDK backend.
 It uses Bitcoin regtest and the mint's on-chain NUT-30 support. It does not

@@ -305,7 +305,7 @@ mod tests {
         let mut candidate = succeeded_candidate();
         candidate.id = "lnd-pr-999".into();
         candidate.implementation = "lnd".into();
-        candidate.base_version = "0.21.0-beta".into();
+        candidate.base_version = "0.21.3-beta".into();
         candidate.version = Some("candidate-pr999-aabbccdd".into());
         candidate.pull_request_url = "https://github.com/lightningnetwork/lnd/pull/999".into();
         candidate.repository = Some("https://github.com/lightningnetwork/lnd.git".into());

@@ -133,7 +133,7 @@ mod tests {
             implementation: implementation.into(),
             version: None,
             config_version: match implementation {
-                "bitcoin-core" => "bitcoin-core/30/v1",
+                "bitcoin-core" => "bitcoin-core/31/v1",
                 "lnd" => "lnd/0.20/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),

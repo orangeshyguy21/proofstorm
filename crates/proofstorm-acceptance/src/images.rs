@@ -58,7 +58,14 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Restore local-only images from exact cached digests; never substitute a rebuilt image.
+fn upstream_reference(repository: &str, digest: &str) -> Option<String> {
+    let source = repository.strip_prefix("upstream/")?;
+    (source.starts_with("docker.io/") || source.starts_with("quay.io/"))
+        .then(|| format!("{source}@{digest}"))
+}
+
+/// Mirror publisher images by digest and restore local builds from exact cached
+/// digests. A rebuild is never silently substituted for a reviewed artifact.
 pub fn provision() -> Result<()> {
     let cache = Command::new("docker")
         .args(["image", "ls", "--digests", "--format", "{{json .}}"])
@@ -76,18 +83,34 @@ pub fn provision() -> Result<()> {
             println!("Catalog image available: {image}");
             continue;
         }
-        let cached = cached_reference(&rows, digest)?.with_context(|| format!(
-            "required catalog image is missing from both the local registry and Docker cache: {image}\nRestore the exact pinned image with docker load/pull, then run make images. A source rebuild may produce a different digest and must be reviewed as a catalog update; setup cannot silently substitute it."
-        ))?;
         let tag = format!(
             "localhost:5111/{repository}:catalog-{}",
             digest
                 .strip_prefix("sha256:")
                 .context("catalog image must use a sha256 digest")?
         );
-        println!("Restoring catalog image: {image}");
-        run("docker", &["tag", &cached, &tag])?;
-        run("docker", &["push", &tag])?;
+        if let Some(source) = upstream_reference(repository, digest) {
+            println!("Mirroring publisher image: {source}");
+            run(
+                "docker",
+                &[
+                    "buildx",
+                    "imagetools",
+                    "create",
+                    "--prefer-index=false",
+                    "--tag",
+                    &tag,
+                    &source,
+                ],
+            )?;
+        } else {
+            let cached = cached_reference(&rows, digest)?.with_context(|| format!(
+                "required catalog image is missing from both the local registry and Docker cache: {image}\nRestore the exact pinned image with docker load/pull, then run make images. A source rebuild may produce a different digest and must be reviewed as a catalog update; setup cannot silently substitute it."
+            ))?;
+            println!("Restoring catalog image: {image}");
+            run("docker", &["tag", &cached, &tag])?;
+            run("docker", &["push", &tag])?;
+        }
         if !registry_has(repository, digest)? {
             bail!("registry did not retain the exact catalog digest for {image}");
         }
@@ -163,6 +186,25 @@ mod tests {
             images
                 .iter()
                 .any(|image| image.starts_with(&format!("{LOCAL_REGISTRY}cocod-wallet@")))
+        );
+    }
+
+    #[test]
+    fn publisher_mirrors_retain_the_registry_repository_and_digest() {
+        assert_eq!(
+            upstream_reference("upstream/docker.io/lightninglabs/lnd", "sha256:exact"),
+            Some("docker.io/lightninglabs/lnd@sha256:exact".into())
+        );
+        assert_eq!(
+            upstream_reference("upstream/quay.io/keycloak/keycloak", "sha256:exact"),
+            Some("quay.io/keycloak/keycloak@sha256:exact".into())
+        );
+        assert!(upstream_reference("bitcoin-core", "sha256:exact").is_none());
+        assert!(upstream_reference("upstream/unreviewed.example/image", "sha256:exact").is_none());
+        assert!(
+            catalog_images()
+                .iter()
+                .all(|image| local_reference(image).is_some())
         );
     }
 }

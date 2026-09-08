@@ -23,7 +23,7 @@ fn lab_document(postgres_enabled: bool) -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-ldk-live-lab",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {"id": "peer", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "laboratory", "config": {"alias": "proofstorm-ldk-introduction-peer"}},
             {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.0", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 lab"}}
         ],

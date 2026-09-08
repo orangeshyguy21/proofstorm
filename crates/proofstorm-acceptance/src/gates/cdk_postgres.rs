@@ -20,8 +20,8 @@ fn lab_document() -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-postgres-live-lab",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-postgres-lnd"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-postgres-lnd"}},
             {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "laboratory", "config": {"database_name": "proofstorm_mint", "storage_size": "2Gi"}},
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK PostgreSQL", "description": "Secret-backed PostgreSQL persistence acceptance", "mint_quote_ttl_seconds": 601, "melt_quote_ttl_seconds": 121}}
         ],

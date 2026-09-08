@@ -121,7 +121,7 @@
                   "value": "proofstorm-regtest-only"
                 }
               ],
-              "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+              "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
               "imagePullPolicy": "IfNotPresent",
               "name": "exec",
               "securityContext": {
@@ -378,7 +378,7 @@
         "environment": {
           "HOME": "/tmp"
         },
-        "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
         "mounts": [],
         "state_contract": "proofstorm/attacker-workspace-state/v1"
       },
@@ -447,7 +447,7 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3",
+      "rollout_digest": "sha256:d3d09eea9e2987cbc21e946e328f19f3fd3953457734bfacdd7687af90247c50",
       "storage": [],
       "target_descriptor": {
         "backend_id": "attacker-workspace",
@@ -540,7 +540,7 @@
         "environment": {
           "HOME": "/home/bitcoin"
         },
-        "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
         "mounts": [
           {
             "mount_path": "/home/bitcoin/.bitcoin",
@@ -622,7 +622,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
+      "rollout_digest": "sha256:bc2476c689c7ec11a786c393ac5f5cc556e142841f17f676f11a73f4cb3bd755",
       "storage": [
         {
           "claim_name": "data-chain-a-0"
@@ -638,7 +638,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "30.0"
+        "version": "31.1"
       },
       "workload": {
         "desired_replicas": 1,
@@ -724,7 +724,7 @@
         "environment": {
           "HOME": "/home/bitcoin"
         },
-        "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
         "mounts": [
           {
             "mount_path": "/home/bitcoin/.bitcoin",
@@ -806,7 +806,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e",
+      "rollout_digest": "sha256:bc2476c689c7ec11a786c393ac5f5cc556e142841f17f676f11a73f4cb3bd755",
       "storage": [
         {
           "claim_name": "data-chain-b-0"
@@ -822,7 +822,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "30.0"
+        "version": "31.1"
       },
       "workload": {
         "desired_replicas": 1,
@@ -914,7 +914,7 @@
         "environment": {
           "HOME": "/home/cln"
         },
-        "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
         "mounts": [
           {
             "mount_path": "/home/cln/.lightning",
@@ -940,7 +940,7 @@
             "zmq_block": 28334,
             "zmq_tx": 28335
           },
-          "version": "30.0"
+          "version": "31.1"
         }
       },
       "operation_admission": [
@@ -1020,7 +1020,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:bc08b8a0ec74b362ee8ddf3f7003b3d9763f57d488fcb890f45f4c0bdd883c1b",
+      "rollout_digest": "sha256:8de01ad5e89a44b52e943939401c8fe2f203e310614ff61f39ac3aeb61555312",
       "storage": [
         {
           "claim_name": "data-cln-0"
@@ -1126,7 +1126,7 @@
         "environment": {
           "HOME": "/home/lnd"
         },
-        "image": "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
         "mounts": [
           {
             "mount_path": "/home/lnd/.lnd",
@@ -1152,7 +1152,7 @@
             "zmq_block": 28334,
             "zmq_tx": 28335
           },
-          "version": "30.0"
+          "version": "31.1"
         }
       },
       "operation_admission": [
@@ -1232,7 +1232,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:c70d6a9694097b28f41d45225936bf29d8ef2025682e10899d42a4bc872081a4",
+      "rollout_digest": "sha256:1041cc85ede9c4968926324e39ee3272251b077f78a843aa33480c1d88d484d7",
       "storage": [
         {
           "claim_name": "data-lnd-0"
@@ -1247,7 +1247,7 @@
           "rest": 8080,
           "rpc": 10009
         },
-        "version": "0.20.0-beta"
+        "version": "0.21.3-beta"
       },
       "workload": {
         "desired_replicas": 1,
@@ -1418,7 +1418,7 @@
             "rest": 8080,
             "rpc": 10009
           },
-          "version": "0.20.0-beta"
+          "version": "0.21.3-beta"
         }
       },
       "operation_admission": [
@@ -1581,7 +1581,7 @@
           "HOME": "/wallet",
           "PROOFSTORM_WALLET": "{component_id}"
         },
-        "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
         "mounts": [
           {
             "mount_path": "/wallet",
@@ -1659,7 +1659,7 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:ffebbe477adf9efd071bd0e9dec32f5c9ce366be0fd23608caef6a6d5f2afcf5",
+      "rollout_digest": "sha256:04473faa6aafd649143e28371924db8459d6d5c045051f882337d5b6536d131d",
       "storage": [
         {
           "claim_name": "wallet-data"
@@ -1731,7 +1731,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:b5276761c7351933f9e8f96dd29d2c8431238d48e54312ef04a868af8f28d3f3"
+                "proofstorm.dev/rollout-digest": "sha256:d3d09eea9e2987cbc21e946e328f19f3fd3953457734bfacdd7687af90247c50"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1763,7 +1763,7 @@
                     "-c",
                     "trap : TERM INT; sleep infinity & wait"
                   ],
-                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "securityContext": {
@@ -2066,7 +2066,7 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:420deadeca217db4d6d7b51c3dc7206c8cd3a30d3702881dbe831d58c1c76658",
+            "proofstorm.dev/prober-digest": "sha256:e99067c3bbfc4e346335c1a32509322f19caa871ebc9d4579387ba5c0bc94ac7",
             "proofstorm.dev/prober-lease": "inactive"
           },
           "labels": {
@@ -2093,7 +2093,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:420deadeca217db4d6d7b51c3dc7206c8cd3a30d3702881dbe831d58c1c76658",
+                "proofstorm.dev/prober-digest": "sha256:e99067c3bbfc4e346335c1a32509322f19caa871ebc9d4579387ba5c0bc94ac7",
                 "proofstorm.dev/prober-lease": "inactive"
               },
               "labels": {
@@ -2127,7 +2127,7 @@
                     "-c",
                     "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
                   ],
-                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "probe-chain-a-3964513b",
                   "readinessProbe": {
@@ -2172,7 +2172,7 @@
                     "-c",
                     "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
                   ],
-                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "probe-chain-b-3cc91cdf",
                   "readinessProbe": {
@@ -2217,7 +2217,7 @@
                     "-c",
                     "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
                   ],
-                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "probe-cln-a20575fb",
                   "readinessProbe": {
@@ -2262,7 +2262,7 @@
                     "-c",
                     "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
                   ],
-                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "probe-lnd-783f1672",
                   "readinessProbe": {
@@ -2307,7 +2307,7 @@
                     "-c",
                     "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
                   ],
-                  "image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "probe-mint-2913daf3",
                   "readinessProbe": {
@@ -2395,7 +2395,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:ffebbe477adf9efd071bd0e9dec32f5c9ce366be0fd23608caef6a6d5f2afcf5"
+                "proofstorm.dev/rollout-digest": "sha256:04473faa6aafd649143e28371924db8459d6d5c045051f882337d5b6536d131d"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2437,7 +2437,7 @@
                       "value": "wallet"
                     }
                   ],
-                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "securityContext": {
@@ -3334,7 +3334,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e"
+                "proofstorm.dev/rollout-digest": "sha256:bc2476c689c7ec11a786c393ac5f5cc556e142841f17f676f11a73f4cb3bd755"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3379,7 +3379,7 @@
                   "command": [
                     "bitcoind"
                   ],
-                  "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
@@ -3483,7 +3483,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:a92209dbe87d127d269888c2dae43c1dd17c7e60d6d813674cdbaa36c1599f7e"
+                "proofstorm.dev/rollout-digest": "sha256:bc2476c689c7ec11a786c393ac5f5cc556e142841f17f676f11a73f4cb3bd755"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3528,7 +3528,7 @@
                   "command": [
                     "bitcoind"
                   ],
-                  "image": "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
@@ -3632,7 +3632,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:bc08b8a0ec74b362ee8ddf3f7003b3d9763f57d488fcb890f45f4c0bdd883c1b"
+                "proofstorm.dev/rollout-digest": "sha256:8de01ad5e89a44b52e943939401c8fe2f203e310614ff61f39ac3aeb61555312"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3681,7 +3681,7 @@
                   "command": [
                     "lightningd"
                   ],
-                  "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
@@ -3784,7 +3784,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:c70d6a9694097b28f41d45225936bf29d8ef2025682e10899d42a4bc872081a4"
+                "proofstorm.dev/rollout-digest": "sha256:1041cc85ede9c4968926324e39ee3272251b077f78a843aa33480c1d88d484d7"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -3834,7 +3834,7 @@
                   "command": [
                     "lnd"
                   ],
-                  "image": "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

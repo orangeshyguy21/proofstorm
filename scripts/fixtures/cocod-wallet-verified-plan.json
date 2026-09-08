@@ -3,17 +3,17 @@
     {
       "id": "btc",
       "implementation": "bitcoin-core",
-      "version": "30.0"
+      "version": "31.1"
     },
     {
       "id": "lnd-a",
       "implementation": "lnd",
-      "version": "0.20.0-beta"
+      "version": "0.21.3-beta"
     },
     {
       "id": "lnd-b",
       "implementation": "lnd",
-      "version": "0.20.0-beta"
+      "version": "0.21.3-beta"
     },
     {
       "id": "mint",

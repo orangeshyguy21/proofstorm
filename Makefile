@@ -11,7 +11,7 @@ BIN_DIR := $(TOOLS_DIR)/bin
 DOWNLOAD_DIR := $(TOOLS_DIR)/downloads
 ACCEPTANCE := $(ROOT)target/debug/proofstorm-acceptance
 
-# The one source of pinned versions.
+# Pinned host tools and Proofstorm release version; component images live in the catalog.
 include $(ROOT)tools/versions.env
 
 CONTEXT := k3d-proofstorm
@@ -188,6 +188,15 @@ deploy: install cluster-schema
 
 images-build:
 	cargo build --locked -p proofstorm-acceptance
+
+# Explicit packaging step: review the resulting digest before changing the catalog.
+# make images restores exact artifacts; it never rebuilds a reviewed image silently.
+.PHONY: bitcoin-image-build
+bitcoin-image-build: cluster-up
+	@mkdir -p $(DOWNLOAD_DIR)
+	docker buildx build --platform linux/amd64,linux/arm64 --provenance=false \
+		--file $(ROOT)docker/bitcoin/Dockerfile --tag $(REGISTRY)/bitcoin-core:31.1 \
+		--metadata-file $(DOWNLOAD_DIR)/bitcoin-31.1-build.json --push $(ROOT)docker/bitcoin
 
 images: cluster-up images-build
 	$(ACCEPTANCE) images

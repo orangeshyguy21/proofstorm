@@ -30,7 +30,7 @@ fn component(
         implementation: implementation.into(),
         version: (implementation == "cocod-wallet").then(|| "0.0.17-dev.44e5101c".into()),
         config_version: match implementation {
-            "bitcoin-core" => "bitcoin-core/30/v1",
+            "bitcoin-core" => "bitcoin-core/31/v1",
             "lnd" => "lnd/0.20/v1",
             "cln" => "cln/26.06/v1",
             "cdk" => "cdk-mintd/0.18/v1",

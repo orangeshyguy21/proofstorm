@@ -31,7 +31,7 @@ fn seed(store: &Store) {
     }
 }
 fn lab(ids: &[&str]) -> LabSpec {
-    serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"edit-test","components":ids.iter().map(|id|json!({"id":id,"kind":"bitcoin","implementation":"bitcoin-core","version":"30.0","config_version":"bitcoin-core/30/v1","control":"laboratory","config":{}})).collect::<Vec<_>>(),"links":[]})).unwrap()
+    serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"edit-test","components":ids.iter().map(|id|json!({"id":id,"kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}})).collect::<Vec<_>>(),"links":[]})).unwrap()
 }
 fn publish(store: &Store, id: &str, spec: &LabSpec) -> PublishedRevision {
     store

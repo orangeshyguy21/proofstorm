@@ -1551,7 +1551,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "bitcoin-core",
             ComponentKind::Bitcoin,
-            "bitcoin-core/30/v1",
+            "bitcoin-core/31/v1",
             BTreeMap::from([
                 (
                     "fallback_fee".into(),
@@ -3345,7 +3345,7 @@ mod tests {
             implementation: implementation.into(),
             version: None,
             config_version: match implementation {
-                "bitcoin-core" => "bitcoin-core/30/v1",
+                "bitcoin-core" => "bitcoin-core/31/v1",
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",
@@ -3902,8 +3902,8 @@ mod tests {
                 ports: BTreeMap::new(),
             };
         let mut targets = BTreeMap::from([
-            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.0-beta")),
-            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.0-beta")),
+            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.4-beta")),
+            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.4-beta")),
         ]);
         let mounts = resolve_execution_mounts(&backend, "mint", &links, &targets)
             .expect("unselected methods and implementations do not collide");
@@ -3929,7 +3929,7 @@ mod tests {
         links.push(payment("bolt11-secondary", crate::PaymentMethod::Bolt11));
         targets.insert(
             "bolt11-secondary".into(),
-            target("bolt11-secondary-node", "lnd", "0.20.0-beta"),
+            target("bolt11-secondary-node", "lnd", "0.20.4-beta"),
         );
         let error = resolve_execution_mounts(&backend, "mint", &links, &targets)
             .expect_err("duplicate exact selectors must refuse");
@@ -3978,7 +3978,7 @@ mod tests {
                         component_id: "lightning".into(),
                         kind: ComponentKind::Lightning,
                         backend_id: "lnd".into(),
-                        version: "0.20.0-beta".into(),
+                        version: "0.20.4-beta".into(),
                         ports: BTreeMap::from([("rpc".into(), 10_009)]),
                     },
                 )]),

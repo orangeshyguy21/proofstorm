@@ -16,7 +16,7 @@ log() { printf '[block-miner] %s\n' "$*"; }
 bcli() {
     bitcoin-cli -regtest \
         -rpcconnect=bitcoind -rpcport=18443 \
-        -rpcuser="${BTC_RPC_USER:-polar}" -rpcpassword="${BTC_RPC_PASS:-polar}" \
+        -rpcuser="${BTC_RPC_USER:-proofstorm}" -rpcpassword="${BTC_RPC_PASS:-proofstorm-regtest-only}" \
         -rpcwallet=default \
         "$@"
 }

@@ -258,9 +258,9 @@ fn build_default_catalog() -> CatalogResponse {
             ComponentKind::Bitcoin,
             "Bitcoin Core regtest node",
             adapter_version,
-            "30.0",
+            "31.1",
             ReleaseChannel::Stable,
-            "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+            "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -278,15 +278,16 @@ fn build_default_catalog() -> CatalogResponse {
             ),
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
-        catalog_entry(
+        catalog_entry_with_lifecycle(
             "lnd",
             backends,
             ComponentKind::Lightning,
             "LND regtest Lightning node",
             adapter_version,
-            "0.20.0-beta",
+            "0.20.4-beta",
             ReleaseChannel::Prerelease,
-            "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+            SupportLifecycle::Supported,
+            "docker.io/lightninglabs/lnd@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -296,7 +297,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &["30.0"],
+                &["31.1"],
             )],
             support_matrix(
                 &[StorageBackend::PersistentVolume],
@@ -315,10 +316,10 @@ fn build_default_catalog() -> CatalogResponse {
             ComponentKind::Lightning,
             "LND regtest Lightning node",
             adapter_version,
-            "0.21.0-beta",
+            "0.21.3-beta",
             ReleaseChannel::Prerelease,
-            SupportLifecycle::Supported,
-            "docker.io/lightninglabs/lnd@sha256:60fca3f409cf3d500db1d15c9965678a4b5a60758ff30863d52b02529c18be8b",
+            SupportLifecycle::Preferred,
+            "docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -328,7 +329,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &["30.0"],
+                &["31.1"],
             )],
             support_matrix(
                 &[StorageBackend::PersistentVolume],
@@ -359,7 +360,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &["30.0"],
+                &["31.1"],
             )],
             support_matrix(
                 &[StorageBackend::PersistentVolume],
@@ -392,7 +393,7 @@ fn build_default_catalog() -> CatalogResponse {
                 dependency(
                     LinkKind::PaymentBackend,
                     "lnd",
-                    &["0.20.0-beta", "0.21.0-beta"],
+                    &["0.20.4-beta", "0.21.3-beta"],
                 ),
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
@@ -407,7 +408,7 @@ fn build_default_catalog() -> CatalogResponse {
                         PaymentMethod::Bolt11,
                         "sat",
                         "lnd",
-                        &["0.20.0-beta", "0.21.0-beta"],
+                        &["0.20.4-beta", "0.21.3-beta"],
                     ),
                     payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
                 ],
@@ -435,7 +436,7 @@ fn build_default_catalog() -> CatalogResponse {
                 CatalogFeature::Postgres,
             ]),
             vec![
-                dependency(LinkKind::ChainBackend, "bitcoin-core", &["30.0"]),
+                dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
             ],
             with_embedded_payment_bindings(
@@ -473,7 +474,7 @@ fn build_default_catalog() -> CatalogResponse {
                 CatalogFeature::Postgres,
             ]),
             vec![
-                dependency(LinkKind::ChainBackend, "bitcoin-core", &["30.0"]),
+                dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
             ],
             with_embedded_payment_bindings(
@@ -518,7 +519,7 @@ fn build_default_catalog() -> CatalogResponse {
                 dependency(
                     LinkKind::PaymentBackend,
                     "lnd",
-                    &["0.20.0-beta", "0.21.0-beta"],
+                    &["0.20.4-beta", "0.21.3-beta"],
                 ),
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
@@ -536,7 +537,7 @@ fn build_default_catalog() -> CatalogResponse {
                         PaymentMethod::Bolt11,
                         "sat",
                         "lnd",
-                        &["0.20.0-beta", "0.21.0-beta"],
+                        &["0.20.4-beta", "0.21.3-beta"],
                     ),
                 ],
                 &[
@@ -674,6 +675,7 @@ fn build_default_catalog() -> CatalogResponse {
             entry.features.insert(CatalogFeature::MintManagementRpc);
         }
         let encoded = match entry.id.as_str() {
+            "bitcoin-core" => include_str!("../../../docker/bitcoin/bitcoin-31.1-provenance.json"),
             "cdk" | "cdk-bdk" => {
                 include_str!("../../../docker/mint/cdk-management-provenance.json")
             }
@@ -1078,7 +1080,7 @@ fn catalog_entry_with_lifecycle(
         compatible_dependencies,
         support_matrix,
         runtime_endpoints: runtime_endpoints.clone(),
-        image: image.into(),
+        image: mirror_image(image),
         source_digest: crate::digest_json(&(
             id,
             version,
@@ -1089,6 +1091,16 @@ fn catalog_entry_with_lifecycle(
         source: None,
         build_provenance: None,
         allowed_control,
+    }
+}
+
+/// Preserve the upstream repository and digest while serving published images
+/// from the local registry. Locally packaged images already name that registry.
+fn mirror_image(image: &str) -> String {
+    if image.starts_with("docker.io/") || image.starts_with("quay.io/") {
+        format!("proofstorm-registry.localhost:5000/upstream/{image}")
+    } else {
+        image.into()
     }
 }
 
@@ -1546,6 +1558,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bitcoin_release_provenance_and_publisher_mirrors_are_pinned() {
+        use sha2::{Digest, Sha256};
+        let catalog = default_catalog();
+        let bitcoin = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "bitcoin-core")
+            .unwrap();
+        let provenance = bitcoin
+            .build_provenance
+            .as_ref()
+            .expect("Bitcoin release provenance");
+        assert_eq!(bitcoin.version, "31.1");
+        assert_eq!(bitcoin.config_version, "bitcoin-core/31/v1");
+        assert_eq!(provenance.platform, "linux/amd64,linux/arm64");
+        assert_eq!(
+            provenance.recipe_digest,
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(include_bytes!("../../../docker/bitcoin/Dockerfile"))
+            )
+        );
+        for entry in &catalog.entries {
+            assert!(
+                entry
+                    .image
+                    .starts_with("proofstorm-registry.localhost:5000/")
+            );
+            assert!(is_sha256_image(&entry.image));
+        }
+        assert_eq!(
+            mirror_image("docker.io/project/image@sha256:exact"),
+            "proofstorm-registry.localhost:5000/upstream/docker.io/project/image@sha256:exact"
+        );
+        assert_eq!(mirror_image(&bitcoin.image), bitcoin.image);
+    }
+
+    #[test]
     fn management_clients_have_matching_build_provenance() {
         use sha2::{Digest, Sha256};
         let recipe = include_bytes!("../../../docker/mint/Dockerfile.kube-cdk");
@@ -1649,11 +1699,11 @@ mod tests {
             .iter()
             .find(|support| support.implementation == "lnd")
             .expect("LND support summary");
-        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.0-beta"));
-        assert_eq!(lnd.preferred_version.as_deref(), Some("0.20.0-beta"));
+        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.4-beta"));
+        assert_eq!(lnd.preferred_version.as_deref(), Some("0.21.3-beta"));
         assert_eq!(
             lnd.supported_versions,
-            BTreeSet::from(["0.20.0-beta".into(), "0.21.0-beta".into()])
+            BTreeSet::from(["0.20.4-beta".into(), "0.21.3-beta".into()])
         );
         assert!(catalog.implementations.iter().all(|support| {
             support.implementation == "cocod-wallet"

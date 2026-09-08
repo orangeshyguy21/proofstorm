@@ -10767,8 +10767,8 @@ mod tests {
                     "id": "chain",
                     "kind": "bitcoin",
                     "implementation": "bitcoin-core",
-                    "version": "30.0",
-                    "config_version": "bitcoin-core/30/v1",
+                    "version": "31.1",
+                    "config_version": "bitcoin-core/31/v1",
                     "control": "laboratory",
                     "config": {}
                 },
@@ -10776,7 +10776,7 @@ mod tests {
                     "id": "node",
                     "kind": "lightning",
                     "implementation": "lnd",
-                    "version": "0.20.0-beta",
+                    "version": "0.20.4-beta",
                     "config_version": "lnd/0.20/v1",
                     "control": "laboratory",
                     "config": {"alias": "this-alias-is-deliberately-far-too-long-for-lnd"}
@@ -11529,7 +11529,7 @@ mod tests {
         let store = seeded_store();
         let mut spec: LabSpec = serde_json::from_value(serde_json::json!({
             "api_version":"proofstorm/v1alpha1", "name":"edit-recovery", "links":[],
-            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"30.0","config_version":"bitcoin-core/30/v1","control":"laboratory","config":{}}]
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}}]
         })).unwrap();
         store
             .create_draft("alpha", "designer", "initial", &spec, "initial-draft")
@@ -11865,7 +11865,7 @@ mod tests {
                     || entry.id == "cocod-wallet"
                         && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
-                        && entry.version == "0.21.0-beta"
+                        && entry.version == "0.20.4-beta"
                         && entry.support_lifecycle == SupportLifecycle::Supported)
         }));
         let summary = page
@@ -11906,14 +11906,14 @@ mod tests {
     #[test]
     fn missing_catalog_version_reports_exact_installed_alternatives() {
         let catalog = default_catalog();
-        let error = exact_catalog_entry(&catalog.entries, "lnd", "0.21.0-beta4")
+        let error = exact_catalog_entry(&catalog.entries, "lnd", "0.21.3-beta4")
             .expect_err("near-match must not silently select another version");
         let message = error.message.to_string();
         assert!(message.contains("[catalog_entry_not_found]"));
         assert!(message.contains("no changes were made"));
         assert!(message.contains("Recovery:"));
-        assert!(message.contains("0.20.0-beta"));
-        assert!(message.contains("0.21.0-beta"));
+        assert!(message.contains("0.20.4-beta"));
+        assert!(message.contains("0.21.3-beta"));
     }
 
     #[test]
@@ -12023,7 +12023,7 @@ mod tests {
         let store = seeded_store();
         let spec = serde_json::from_value(serde_json::json!({
             "api_version":"proofstorm/v1alpha1", "name":"automatic", "links":[],
-            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"30.0","config_version":"bitcoin-core/30/v1","control":"laboratory","config":{}}]
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}}]
         })).unwrap();
         store
             .create_draft("alpha", "designer", "automatic", &spec, "draft")
@@ -12295,8 +12295,8 @@ mod tests {
                     "id": "chain",
                     "kind": "bitcoin",
                     "implementation": "bitcoin-core",
-                    "version": "30.0",
-                    "config_version": "bitcoin-core/30/v1",
+                    "version": "31.1",
+                    "config_version": "bitcoin-core/31/v1",
                     "control": "laboratory",
                     "config": {}
                 }

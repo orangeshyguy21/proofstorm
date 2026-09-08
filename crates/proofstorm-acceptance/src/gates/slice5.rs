@@ -64,9 +64,9 @@ const CAPABILITIES: &[&str] = &[
 
 fn components() -> Vec<Value> {
     vec![
-        json!({"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}}),
-        json!({"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-mint"}}),
-        json!({"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-payer"}}),
+        json!({"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}}),
+        json!({"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-mint"}}),
+        json!({"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-payer"}}),
         json!({"id": "attacker-cln", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "attacker", "config": {"alias": "proofstorm-attacker"}}),
         json!({"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm Slice 5", "description": "Agent-created Cashu lab"}}),
         json!({"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}),
@@ -76,10 +76,10 @@ fn components() -> Vec<Value> {
 
 fn links() -> Vec<Value> {
     vec![
-        json!({"id": "mint-lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}}),
-        json!({"id": "payer-lnd-chain", "kind": "chain_backend", "from": "payer-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}}),
-        json!({"id": "attacker-cln-chain", "kind": "chain_backend", "from": "attacker-cln", "to": "chain", "binding": {"type": "chain", "network": "regtest"}}),
-        json!({"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "mint-lnd", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}}),
+        json!({"id": "mint-lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "network": "regtest"}),
+        json!({"id": "payer-lnd-chain", "kind": "chain_backend", "from": "payer-lnd", "to": "chain", "network": "regtest"}),
+        json!({"id": "attacker-cln-chain", "kind": "chain_backend", "from": "attacker-cln", "to": "chain", "network": "regtest"}),
+        json!({"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "mint-lnd", "method": "bolt11", "unit": "sat"}),
     ]
 }
 

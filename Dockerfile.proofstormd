@@ -5,6 +5,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY docker/wallet/*-provenance.json ./docker/wallet/
 COPY docker/mint/*-provenance.json ./docker/mint/
+COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
 RUN cargo build --locked --release -p proofstorm-exec
 
 FROM rust:1.88.0-bookworm AS build
@@ -13,6 +14,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY docker/wallet/*-provenance.json ./docker/wallet/
 COPY docker/mint/*-provenance.json ./docker/mint/
+COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
 RUN cargo build --locked --release -p proofstormd
 
 FROM gcr.io/distroless/cc-debian12:nonroot
