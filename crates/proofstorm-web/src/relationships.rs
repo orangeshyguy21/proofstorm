@@ -140,9 +140,13 @@ pub fn edges(lab: &EnvironmentLab, usage: Option<&LabUsage>, now: i64) -> Vec<Ed
                         remote,
                         active: channel.active,
                     },
-                    stale: observation.error.is_some()
-                        || usage.error.is_some()
-                        || now.saturating_sub(observation.observed_at_unix) > 20,
+                    stale: crate::model::observation_freshness(
+                        observation.observed_at_unix,
+                        now,
+                        observation.error.is_some() || usage.error.is_some(),
+                        true,
+                        crate::model::OBSERVATION_MAX_AGE,
+                    ) != crate::model::Freshness::Live,
                     lane: 0,
                 };
                 // Prefer a successful, newer endpoint observation; ties keep deterministic order.
@@ -183,9 +187,13 @@ pub fn edges(lab: &EnvironmentLab, usage: Option<&LabUsage>, now: i64) -> Vec<Ed
                             from: balance.component.clone(),
                             to: mint,
                             kind: EdgeKind::Holding { sat },
-                            stale: observation.error.is_some()
-                                || usage.error.is_some()
-                                || now.saturating_sub(observation.observed_at_unix) > 20,
+                            stale: crate::model::observation_freshness(
+                                observation.observed_at_unix,
+                                now,
+                                observation.error.is_some() || usage.error.is_some(),
+                                true,
+                                crate::model::OBSERVATION_MAX_AGE,
+                            ) != crate::model::Freshness::Live,
                             lane: 0,
                         }),
                 );

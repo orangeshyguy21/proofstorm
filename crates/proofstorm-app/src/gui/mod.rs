@@ -46,7 +46,7 @@ pub async fn open(
     no_open: bool,
 ) -> Result<Value> {
     let installation = Installation::load(home)?;
-    crate::installer::verify(bundle, allow_development, true)?;
+    let allow_development = crate::artifacts::verify(home, bundle, allow_development)?;
     let project = project
         .canonicalize()
         .context("GUI project directory must exist")?;
@@ -57,7 +57,12 @@ pub async fn open(
     let (record, reused) = if let Some(record) = previous.as_ref().filter(|r| r.port != 0) {
         if health(record).await.unwrap_or(false) {
             ensure!(
-                record.executable == executable,
+                record.executable == executable
+                    && record
+                        .build_sha256
+                        .as_ref()
+                        .is_none_or(|sha| crate::artifacts::hash(&executable)
+                            .is_ok_and(|current| &current == sha)),
                 "GUI uses an older bundle; run proofstorm stop, then proofstorm gui"
             );
             (record.clone(), true)
@@ -116,6 +121,7 @@ async fn start(
         instance: state::random::<16>()?,
         token: state::random::<32>()?,
         executable: executable.to_path_buf(),
+        build_sha256: Some(crate::artifacts::hash(executable)?),
         pid: 0,
         port: 0,
     };

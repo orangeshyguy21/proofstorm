@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 
 
-def run(prefix, env, work):
+def run(prefix, env, work, *, executable=None, installation_home=None, allow_development=True):
     root = work / "agent attachment tests"
     root.mkdir(mode=0o700)
     user = root / "private user"
@@ -28,11 +28,14 @@ def run(prefix, env, work):
                     XDG_STATE_HOME=str(user / ".local/state"), CLAUDE_CONFIG_DIR=str(user / ".claude"),
                     DOCKER_CONFIG=env.get("DOCKER_CONFIG", str(Path(env["HOME"]) / ".docker")),
                     OPENCODE_DISABLE_AUTOUPDATE="true", OPENCODE_DISABLE_MODELS_FETCH="true")
-    executable = prefix / "bin/proofstorm"
-    record_path = prefix / "lib/proofstorm/state/gui-process.json"
+    executable = executable or prefix / "bin/proofstorm"
+    installation_home = installation_home or prefix / "lib/proofstorm/state"
+    record_path = installation_home / "gui-process.json"
 
     def cli(*args, expected=0, cwd=project):
-        result = subprocess.run([executable, *args], env=isolated, cwd=cwd,
+        if not allow_development:
+            args = tuple(arg for arg in args if arg != "--allow-development")
+        result = subprocess.run([executable, "--home", installation_home, *args], env=isolated, cwd=cwd,
                                 capture_output=True, text=True, timeout=240)
         assert result.returncode == expected, result.stderr[-3000:]
         return json.loads(result.stdout) if expected == 0 else result

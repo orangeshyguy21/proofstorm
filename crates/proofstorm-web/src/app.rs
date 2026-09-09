@@ -39,6 +39,7 @@ pub fn App() -> impl IntoView {
     let component = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let connected = RwSignal::new(false);
+    crate::freshness::provide_connection(connected, telemetry_error);
     let loaded = RwSignal::new(false);
     let observer = RwSignal::new(None::<ObserverStatus>);
     let history_pages = RwSignal::new(1_usize);
@@ -210,7 +211,7 @@ pub fn App() -> impl IntoView {
             <button class="icon-button" aria-label="Toggle lab navigation" aria-expanded=move || navigation.get() on:click=move |_| navigation.update(|open| *open = !*open)>"☰"</button>
             <a class="brand" href="/" aria-label="Proofstorm home"><span class="brand-mark" aria-hidden="true" inner_html=LOGO_SVG></span><span class="brand-wordmark" aria-hidden="true" inner_html=WORDMARK_SVG></span></a>
             <span class="header-context">{move || environment.get().map(|v| v.workspace_id)}</span>
-            <div class="header-right"><crate::gui::GuiControls /><span class=move || if connected.get() && error.get().is_none() { "live-state" } else { "live-state offline" }><i></i>{move || if error.get().is_some() { "Update failed" } else if connected.get() { "Live" } else { "Reconnecting" }}</span><ThemePicker /></div>
+            <div class="header-right"><crate::gui::GuiControls /><crate::freshness::FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||error.get().is_some()||telemetry.get().is_some_and(|s|s.error.is_some()||s.labs.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /><ThemePicker /></div>
         </header>
         <div class=move || if navigation.get() { "workspace-shell" } else { "workspace-shell nav-collapsed" }>
             <aside class="sidebar" aria-label="Workspace navigation">

@@ -21,6 +21,7 @@ pub(super) struct Activation {
 }
 
 pub(crate) struct Session {
+    pub(crate) web_dist: Option<PathBuf>,
     pub(super) record: Record,
     pub(super) home: PathBuf,
     pub(super) bundle: PathBuf,
@@ -39,6 +40,7 @@ impl Session {
         allow_development: bool,
     ) -> Self {
         Self {
+            web_dist: None,
             record,
             home,
             bundle,
@@ -110,6 +112,14 @@ impl Session {
         project: PathBuf,
         preview: bool,
     ) -> Result<Value> {
+        ensure!(
+            self.record
+                .build_sha256
+                .as_ref()
+                .is_none_or(|sha| crate::artifacts::hash(&self.record.executable)
+                    .is_ok_and(|current| &current == sha)),
+            "GUI build changed; run proofstorm stop, then proofstorm gui"
+        );
         ensure!(
             project.is_absolute() && !project.as_os_str().is_empty(),
             "choose an absolute project folder"
@@ -201,7 +211,15 @@ pub(super) async fn serve(
             && record.executable == std::env::current_exe()?.canonicalize()?,
         "GUI launch reservation differs; refusing adoption"
     );
-    crate::installer::verify(bundle, allow_development, true)?;
+    ensure!(
+        record
+            .build_sha256
+            .as_ref()
+            .is_none_or(|sha| crate::artifacts::hash(&record.executable)
+                .is_ok_and(|current| &current == sha)),
+        "GUI executable changed during launch; stop and reopen the GUI"
+    );
+    let allow_development = crate::artifacts::verify(home, bundle, allow_development)?;
     crate::bootstrap::check_installed_runtime(&installation)?;
     let environment = environment(&installation)?;
     ensure!(
@@ -221,12 +239,14 @@ pub(super) async fn serve(
     record.port = listener.local_addr()?.port();
     record.pid = std::process::id();
     state::save(&installation.home.join(RECORD), &record)?;
-    let session = Arc::new(Session::new(
+    let mut session = Session::new(
         record.clone(),
         installation.home.clone(),
         bundle.to_path_buf(),
         allow_development,
-    ));
+    );
+    session.web_dist = crate::artifacts::web_dist(home)?;
+    let session = Arc::new(session);
     let result = crate::http::serve_managed(labs, listener, session).await;
     state::remove_owned(&installation.home, &record)?;
     result.map_err(Into::into)

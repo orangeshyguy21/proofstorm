@@ -3,6 +3,7 @@
     reason = "application operations return the shared Error contract for authorization, validation, storage, and runtime failures"
 )]
 //! Shared application behavior for developer and MCP clients.
+pub mod artifacts;
 pub mod bootstrap;
 pub mod config;
 pub mod connections;

@@ -22,6 +22,7 @@ fn private_records_and_lifetime_leases_refuse_foreign_state() {
         instance: "a".repeat(32),
         token: "b".repeat(64),
         executable: "/fixture/bin/proofstorm".into(),
+        build_sha256: None,
         pid: 1,
         port: 12345,
     };
@@ -64,6 +65,7 @@ async fn stop_confirms_owned_exit_when_the_last_http_response_is_lost() {
         instance: "a".repeat(32),
         token: "b".repeat(64),
         executable: "/fixture/bin/proofstorm".into(),
+        build_sha256: None,
         pid: std::process::id(),
         port: listener.local_addr().unwrap().port(),
     };
@@ -142,6 +144,7 @@ async fn transport_fixture() -> (
         instance: "a".repeat(32),
         token: "b".repeat(64),
         executable: "/fixture/bin/proofstorm".into(),
+        build_sha256: None,
         pid: std::process::id(),
         port: listener.local_addr().unwrap().port(),
     };

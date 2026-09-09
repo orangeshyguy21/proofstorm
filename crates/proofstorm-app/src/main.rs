@@ -56,6 +56,17 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Register checkout-built CLI/MCP and resources with a development installation.
+    CheckoutRegister {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        resources: PathBuf,
+        #[arg(long)]
+        web_dist: PathBuf,
+        #[arg(long)]
+        mcp: PathBuf,
+    },
     /// Open this installation's GUI in the default browser. Does not attach tools.
     Gui {
         /// Prefill this project folder; defaults to the caller's current directory.
@@ -238,6 +249,36 @@ use proofstorm_app::harness::Harness;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    // Metadata and registration must work before a coherent checkout is selected.
+    if matches!(args.command, Command::ReleaseInfo) {
+        return print(&proofstorm_app::release::describe());
+    }
+    if let Command::CheckoutRegister {
+        source,
+        resources,
+        mcp,
+        web_dist,
+    } = &args.command
+    {
+        let home = args
+            .home
+            .as_ref()
+            .context("checkout registration requires --home")?;
+        return print(&proofstorm_app::artifacts::register(
+            home, source, resources, mcp, web_dist,
+        )?);
+    }
+    // Stopping an owned GUI remains possible even after a checkout was rebuilt.
+    if matches!(args.command, Command::Stop) {
+        return print(
+            &proofstorm_app::gui::stop(args.home.as_ref().context("stop requires --home")?).await?,
+        );
+    }
+    if !matches!(args.command, Command::InstallBundle { .. }) {
+        if let Some(home) = &args.home {
+            proofstorm_app::artifacts::check_checkout(home)?;
+        }
+    }
     if matches!(
         args.command,
         Command::Gui { .. } | Command::GuiServe { .. } | Command::Stop
@@ -255,25 +296,21 @@ async fn main() -> Result<()> {
                 && args.namespace == DEFAULT_NAMESPACE,
             "the managed GUI uses only the installation's private runtime; remove overrides"
         );
-        let executable = std::env::current_exe()?.canonicalize()?;
-        let bundle = executable
-            .parent()
-            .and_then(std::path::Path::parent)
-            .context("installed bundle not found")?;
+        let bundle = proofstorm_app::artifacts::root(home)?;
         return match &args.command {
             Command::Gui {
                 project,
                 allow_development,
                 no_open,
             } => print(
-                &proofstorm_app::gui::open(home, project, bundle, *allow_development, *no_open)
+                &proofstorm_app::gui::open(home, project, &bundle, *allow_development, *no_open)
                     .await?,
             ),
             Command::Stop => print(&proofstorm_app::gui::stop(home).await?),
             Command::GuiServe {
                 instance,
                 allow_development,
-            } => proofstorm_app::gui::serve(home, bundle, instance, *allow_development).await,
+            } => proofstorm_app::gui::serve(home, &bundle, instance, *allow_development).await,
             _ => unreachable!(),
         };
     }
@@ -305,14 +342,17 @@ async fn main() -> Result<()> {
                 && args.namespace == DEFAULT_NAMESPACE,
             "attachment uses only this installation's private runtime and default workspace; remove overrides"
         );
-        let executable = std::env::current_exe()?.canonicalize()?;
-        let bundle = executable
-            .parent()
-            .and_then(std::path::Path::parent)
-            .context("installed bundle not found")?;
-        let plan = proofstorm_app::harness::plan_for(*harness, home, project, bundle, *allow_development)?;
+        let bundle = proofstorm_app::artifacts::root(home)?;
+        let plan = proofstorm_app::harness::plan_for(
+            *harness,
+            home,
+            project,
+            &bundle,
+            *allow_development,
+        )?;
         let launch = if let Command::Open { cli, .. } = &args.command {
-            let launch = proofstorm_app::harness::launch::detect_for(*harness, &plan.project, *cli)?;
+            let launch =
+                proofstorm_app::harness::launch::detect_for(*harness, &plan.project, *cli)?;
             if launch.interface == "cli" && !dry_run {
                 proofstorm_app::harness::launch::require_terminal()?;
             }
@@ -383,14 +423,10 @@ async fn main() -> Result<()> {
             prefetch_all,
         } = args.command
         {
-            let executable = std::env::current_exe()?.canonicalize()?;
-            let bundle = executable
-                .parent()
-                .and_then(std::path::Path::parent)
-                .context("cannot locate installed bundle")?;
+            let bundle = proofstorm_app::artifacts::root(home)?;
             return print(&proofstorm_app::bootstrap::setup(
                 home,
-                bundle,
+                &bundle,
                 allow_development,
                 prepare_only,
                 prefetch_all,
@@ -471,6 +507,7 @@ async fn main() -> Result<()> {
         .with_installation(environment.installation.clone());
     match args.command {
         Command::ReleaseInfo
+        | Command::CheckoutRegister { .. }
         | Command::Gui { .. }
         | Command::GuiServe { .. }
         | Command::Stop

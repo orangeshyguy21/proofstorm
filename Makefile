@@ -1,8 +1,8 @@
 # Proofstorm — the single entrypoint for build, test, cluster, and gates.
 #
-# Everything here is sequencing and paths. Anything needing a conditional or a
-# parser lives in Rust, so this file stays readable and cannot drift from the
-# real types. The legacy Docker Compose harness lives in Makefile.compose and
+# Product operations live in the Rust CLI; the development helper only builds
+# and registers checkout artifacts. Remaining legacy targets are marked below.
+# The legacy Docker Compose harness lives in Makefile.compose and
 # is reachable as `make compose-<target>`.
 
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -10,9 +10,10 @@ TOOLS_DIR := $(ROOT).tools
 BIN_DIR := $(TOOLS_DIR)/bin
 DOWNLOAD_DIR := $(TOOLS_DIR)/downloads
 ACCEPTANCE := $(ROOT)target/debug/proofstorm-acceptance
+DEV_CLI := $(ROOT).proofstorm-dev/bin/proofstorm
 
-# This Makefile owns the legacy contributor cluster, not an alpha installation.
-# Do not let installation selection inherited from a shell redirect its clients.
+# Normal commands explicitly select this checkout through DEV_CLI. Remaining
+# low-level legacy gate targets must not inherit another installation selection.
 unexport PROOFSTORM_HOME PROOFSTORM_KUBECONFIG
 
 # Pinned host tools and Proofstorm release version; component images live in the catalog.
@@ -44,25 +45,28 @@ EXPECTED_FAIL_GATES := nutshell-oidc
 # Development checkpoints needing an image provisioned in the local registry.
 LOCAL_IMAGE_GATES := private-handoff private-transfer cdk-wallet cdk-wallet-fees reliable-exec cocod-wallet cocod-projection
 
-.PHONY: help build serve web web-tools web-dev test lint tools images images-build cluster-up docker-build docker-push install \
+.PHONY: help dev dev-build build legacy-gate-build serve gui stop web web-tools web-dev test lint tools images images-build cluster-up docker-build docker-push install \
 	deploy setup doctor cluster-schema e2e build-installer down clean-tools \
 	$(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES) $(LOCAL_IMAGE_GATES))
 
 help:
 	@echo "Proofstorm targets:"
-	@echo "  make setup            tools, cluster, catalog images, CRDs, controller, binaries, doctor"
-	@echo "  make doctor           verify tools, cluster, controller, MCP discovery, and catalog image pulls"
-	@echo "  make images           restore exact catalog images into the local registry"
-	@echo "  make down             delete the local cluster and its registry"
+	@echo "  make dev              build and enter a shell selecting the checkout installation"
+	@echo "  make dev-build        rebuild/register checkout artifacts; preserve labs and permissions"
+	@echo "  make setup            build, then run the product CLI setup for this checkout"
+	@echo "  make doctor           run the product CLI doctor for this checkout"
 	@echo ""
-	@echo "  make build            build the web app, developer CLI, MCP server, and gate runner"
-	@echo "  make serve            build, initialize, and start the website (PORT=8787; ARGS for global CLI options)"
-	@echo "  make web              compile the Rust/Wasm web app"
-	@echo "  make web-dev          hot-reload UI (run proofstorm serve separately)"
+	@echo "  make build            alias for make dev-build"
+	@echo "  make gui / serve      open the checkout's managed GUI (run make setup first)"
+	@echo "  make stop             stop that GUI, leaving labs running"
+	@echo "  make web              rebuild managed GUI assets; refresh its browser tab"
+	@echo "  make web-dev          watch UI assets; refresh the managed GUI after each build"
 	@echo "  make test             hermetic workspace tests; needs no cluster"
 	@echo "  make lint             formatting, strict Clippy, and Helm lint"
 	@echo ""
-	@echo "  make e2e              every live gate in order (needs an idle cluster)"
+	@echo "  Remaining legacy targets (NOT the checkout installation; consolidation pending):"
+	@echo "  make images / down    legacy registry restore / legacy runtime teardown"
+	@echo "  make e2e              every legacy live gate in order (needs an idle legacy cluster)"
 	@echo "  make e2e-<gate>       one live gate; gates are:"
 	@echo "                        $(GATES)"
 	@echo "                        $(EXPECTED_FAIL_GATES) (expected to fail, upstream defect)"
@@ -77,13 +81,25 @@ help:
 
 # ---- build and check -------------------------------------------------------
 
-build: web
-	cargo build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance
-	cargo build --locked --release -p proofstorm-app -p proofstorm-mcp
+dev: web-tools
+	python3 $(ROOT)scripts/develop.py --shell $(DEV_ARGS)
 
-serve: web
-	cargo run --locked -p proofstorm-app -- init $(ARGS)
-	cargo run --locked -p proofstorm-app -- serve --replace --port $(PORT) $(ARGS)
+dev-build: web-tools
+	python3 $(ROOT)scripts/develop.py $(DEV_ARGS)
+
+build: dev-build
+
+# Acceptance's remaining legacy runtime assumptions are not part of make dev.
+legacy-gate-build: web
+	PROOFSTORM_WEB_DIST="$(ROOT).proofstorm-dev/web" cargo build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance
+
+serve: gui
+
+gui:
+	"$(DEV_CLI)" gui $(ARGS)
+
+stop:
+	"$(DEV_CLI)" stop
 
 test:
 	cargo test --workspace --all-targets
@@ -99,11 +115,11 @@ web-tools:
 	rustup target add wasm32-unknown-unknown
 
 web: web-tools
-	NO_COLOR=true $(BIN_DIR)/trunk build --release --locked --config $(ROOT)crates/proofstorm-web/Trunk.toml
+	python3 $(ROOT)scripts/develop.py --web-only $(DEV_ARGS)
 
-# Run `proofstorm serve` on port 8787 first; Trunk proxies its API and event stream.
+# Watched assets are served by the same managed/authenticated backend as releases.
 web-dev: web-tools
-	NO_COLOR=true $(BIN_DIR)/trunk serve --config $(ROOT)crates/proofstorm-web/Trunk.toml
+	python3 $(ROOT)scripts/develop.py --watch-web $(DEV_ARGS)
 
 # ---- pinned tools ----------------------------------------------------------
 
@@ -178,7 +194,7 @@ install: tools
 	$(KUBECTL) apply --server-side --force-conflicts \
 		--field-manager=proofstorm-make -f $(CHART)/crds
 
-cluster-schema: build
+cluster-schema: legacy-gate-build
 	$(ACCEPTANCE) cluster-schema
 
 deploy: install cluster-schema
@@ -205,19 +221,11 @@ bitcoin-image-build: cluster-up
 images: cluster-up images-build
 	$(ACCEPTANCE) images
 
-setup: cluster-up images docker-push deploy build doctor
+setup: dev-build
+	"$(DEV_CLI)" setup $(ARGS)
 
-doctor: tools build
-	@docker info >/dev/null
-	@$(K3D) version | grep -F "$(patsubst v%,%,$(K3D_VERSION))" >/dev/null
-	@$(BIN_DIR)/kubectl version --client | grep -F "$(patsubst v%,%,$(KUBECTL_VERSION))" >/dev/null
-	@$(HELM) version --short | grep -F "$(HELM_VERSION)" >/dev/null
-	@$(KUBECTL) get namespace $(CONTROL_NAMESPACE) >/dev/null
-	@$(KUBECTL) wait --for=condition=Available deployment/proofstormd \
-		-n $(CONTROL_NAMESPACE) --timeout=90s
-	@$(ACCEPTANCE) doctor
-	@$(ACCEPTANCE) images-check
-	@echo "proofstorm doctor passed: tools, cluster, controller, MCP discovery, and catalog image pulls are healthy"
+doctor:
+	"$(DEV_CLI)" doctor $(ARGS)
 
 down: tools
 	@$(K3D) cluster get proofstorm >/dev/null 2>&1 && $(K3D) cluster delete proofstorm || true
@@ -231,10 +239,10 @@ down: tools
 # Check before running the other gates:
 #   kubectl --context k3d-proofstorm get ns -l proofstorm.dev/instance
 
-$(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES) $(LOCAL_IMAGE_GATES)): e2e-%: build
+$(addprefix e2e-,$(sort $(GATES) $(EXPECTED_FAIL_GATES) $(LOCAL_IMAGE_GATES))): e2e-%: legacy-gate-build
 	$(ACCEPTANCE) $*
 
-e2e: build
+e2e: legacy-gate-build
 	@for gate in $(GATES); do \
 		echo "[proofstorm] gate $$gate"; \
 		$(ACCEPTANCE) $$gate || exit 1; \

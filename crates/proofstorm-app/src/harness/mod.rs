@@ -109,7 +109,7 @@ pub fn plan_for(
 ) -> Result<AttachmentPlan> {
     let installation = Installation::load(home)?;
     let bundle = bundle.canonicalize()?;
-    crate::installer::verify(&bundle, allow_development, true)?;
+    crate::artifacts::verify(home, &bundle, allow_development)?;
     let project = project
         .canonicalize()
         .context("project directory must already exist")?;
@@ -152,7 +152,9 @@ pub fn plan_for(
         Vec::new()
     };
     // Installed launchers follow atomic bundle upgrades. Unpacked bundles stay pinned.
-    let command = if bundle
+    let command = if let Some(mcp) = crate::artifacts::checkout_mcp(home)? {
+        mcp
+    } else if bundle
         .parent()
         .is_some_and(|parent| parent.file_name().is_some_and(|name| name == "versions"))
     {

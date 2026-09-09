@@ -18,7 +18,7 @@ pub struct LaunchPlan {
     pub desktop: Option<PathBuf>,
 }
 
-pub(super) fn capture(executable: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn capture(executable: &Path, args: &[&str]) -> Result<String> {
     let mut output = tempfile::tempfile()?;
     let mut child = Command::new(executable)
         .args(args)

@@ -20,6 +20,8 @@ pub(super) struct Record {
     pub instance: String,
     pub token: String,
     pub executable: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_sha256: Option<String>,
     pub pid: u32,
     pub port: u16,
 }

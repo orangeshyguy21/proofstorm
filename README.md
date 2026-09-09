@@ -53,8 +53,10 @@ an error; it never falls back to the development cluster. Explicit database,
 context, and kubeconfig overrides still take precedence. Do not copy an
 installation home to clone its runtime; initialize a new home instead.
 
-The contributor Makefile retains its existing development cluster and ignores
-`PROOFSTORM_HOME` and `PROOFSTORM_KUBECONFIG`. It is not an isolated setup path.
+The normal contributor setup now uses a registered checkout installation (see
+below). Low-level controller/image targets and older acceptance gates still use
+the legacy cluster while that remaining consolidation is in progress; do not
+use those targets to manage the checkout installation.
 To build and run the opt-in two-cluster isolation test without replacing
 checkout binaries:
 
@@ -77,19 +79,30 @@ The test is not a full installed-product or candidate-build acceptance gate.
 
 ## Developer quick start
 
-With Docker running and Rust installed:
+With Docker running, Rust, and Python 3.9+ installed, enter the checkout development shell:
 
 ```bash
-make setup
-target/debug/proofstorm init
-target/debug/proofstorm up examples/developer-lab.json
-target/debug/proofstorm status demo
+make dev
+proofstorm setup
+proofstorm up examples/developer-lab.json
+proofstorm status demo
+proofstorm gui
 ```
 
-Setup mirrors publisher images by exact digest into the local registry and
-restores Proofstorm-packaged catalog images from the Docker cache. Doctor
-verifies image pulls from every cluster node. Missing exact artifacts fail setup
-explicitly, with startup errors available through component status and logs.
+This builds directly from source—no release archive or installer—and selects
+`.proofstorm-dev/state` for CLI, GUI, MCP, and attached coding agents. The normal
+product commands own setup, image downloads, labs, permissions, and attachment.
+The controller currently comes from the same pinned prebuilt image as releases;
+local controller rebuild/deploy is the next consolidation step.
+
+`make dev-build` rebuilds and registers artifacts without entering a shell or
+starting Docker resources. Rebuilds preserve installation identity, labs, and
+grants. `make web-dev` watches UI assets; refresh the managed GUI after a build.
+After rebuilding host binaries, run `proofstorm stop` then `proofstorm gui`, and
+reconnect existing agent sessions. Exit the development shell to restore your
+normal command selection; no shell profiles or global agent settings are edited.
+Outside that shell, use `.proofstorm-dev/bin/proofstorm`, or `make setup`,
+`make doctor`, and `make gui`. See [checkout workflow](scripts/DEVELOPMENT.md).
 
 The default chain is Bitcoin Core 31.1. Lightning uses Lightning Labs LND
 0.21.3-beta; 0.20.4-beta is also available explicitly. Polar images are no longer
@@ -103,8 +116,8 @@ create a Lightning channel or fund a wallet automatically.
 Run a native command, then connect your application in another terminal:
 
 ```bash
-target/debug/proofstorm exec demo chain --public-output -- bitcoin-cli -regtest -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only getblockchaininfo
-target/debug/proofstorm connect demo mint http --config /tmp/proofstorm-mint.json
+proofstorm exec demo chain --public-output -- bitcoin-cli -regtest -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only getblockchaininfo
+proofstorm connect demo mint http --config /tmp/proofstorm-mint.json
 ```
 
 Keep `connect` running. Your application reads the generated JSON `url` and
@@ -112,7 +125,7 @@ uses the mint's normal HTTP API, such as `GET /v1/info`. It needs no MCP or
 Kubernetes credentials. For authenticated Bitcoin RPC, use:
 
 ```bash
-target/debug/proofstorm connect demo chain rpc --config /tmp/proofstorm-bitcoin.json
+proofstorm connect demo chain rpc --config /tmp/proofstorm-bitcoin.json
 ```
 
 The new configuration file contains the URL and authentication fields, uses
@@ -127,8 +140,8 @@ Only mint HTTP and Bitcoin Core RPC are supported in this first increment.
 Inspect, collect receipts, and finish:
 
 ```bash
-target/debug/proofstorm sync demo
-target/debug/proofstorm down demo
+proofstorm sync demo
+proofstorm down demo
 ```
 
 `status` is a pure observation of current infrastructure and cached activity;
@@ -152,14 +165,13 @@ records and attributes activity to each actor. Clean disconnects finish tracking
 a crash leaves an unfinished record with its last activity time. Finishing a
 session never cancels work or revokes access.
 
-State survives in `.proofstorm/proofstorm.sqlite3`. Cluster selection defaults
-to `k3d-proofstorm`; `--database`, `--workspace`, `--principal`, `--context`,
-and `--namespace` select another environment explicitly. `init` provisions
-CLI permissions (and is included in `make serve`). Calling `up` with changed
+Checkout state survives in `.proofstorm-dev/state/proofstorm.sqlite3`. Its
+installation selects a privately owned cluster and kubeconfig; setup initializes
+CLI permissions once, and opening the GUI does not regrant them. Calling `up` with changed
 configuration edits the live lab and preserves unchanged components. Closing
 the lab purges its local activity; reusing its name creates a fresh instance.
-`make down` deletes the entire local cluster, while `proofstorm down demo`
-closes just that lab.
+`proofstorm down demo` closes just that lab. The remaining legacy `make down`
+does not manage the checkout installation; owned runtime teardown is pending.
 
 CLI and MCP lifecycle commands resolve the same lab by name or instance ID.
 An agent-created lab can be inspected, edited, connected to, and closed from the
@@ -194,12 +206,9 @@ older pod that is still serving.
 ## See the environment
 
 ```bash
-# make build includes the Rust/Wasm website
-target/debug/proofstorm environment
-make serve
-# Open http://127.0.0.1:8787 to watch agents build labs
-# From another terminal:
-curl http://127.0.0.1:8787/v1/environment
+# In the development shell (make dev):
+proofstorm environment
+proofstorm gui
 ```
 
 The same read-only view is available through MCP `environment_read`.
@@ -217,19 +226,19 @@ workspace as your agent. The checked-in
 [environment schema](schemas/v1alpha1/environment.schema.json) describes the
 response format.
 
-`make serve` builds the website and CLI, initializes the local developer
-permissions, then keeps the server running. No separate `init` is needed.
-Deleted labs are cleaned up automatically and their names become reusable. Export
-evidence before closing a lab.
-Running it again replaces this checkout's existing Proofstorm server, refreshing
-its cluster connection after a rebuild. Other applications using the port are
-left running and reported as a port conflict. Replacement uses `lsof` and `ps`.
-Use `make serve PORT=8788` to change the port. Global CLI options passed through
-`ARGS` apply to both initialization and serving. Each launch restores the
-selected identity's default developer permissions. A configured MCP server
-registers its own agent identity and grants at startup.
+`make serve` is an alias for `make gui`: both open the selected checkout's managed
+GUI in your default browser. Setup must have completed first. Repeated launches
+reuse its owned server; opening the GUI does not restore grants or attach agents.
+Use **Connect coding agent…** to intentionally attach a project. The backend
+chooses its own loopback port and authenticates API requests. `proofstorm stop`
+stops the GUI only. Export evidence before closing a lab.
 
 ## Environment selection
+
+For the normal workflow, `PROOFSTORM_HOME` selects an owned installation and its
+private database, kubeconfig, and runtime. `make dev` selects this checkout's
+installation. The overrides below describe advanced, unmanaged use, not the
+contributor quick start.
 
 CLI and MCP share database, workspace, context and namespace defaults. CLI flags
 override `PROOFSTORM_DB`, `PROOFSTORM_WORKSPACE`, `PROOFSTORM_CONTEXT` and
@@ -253,44 +262,30 @@ keys stable when resubmitting an interrupted request.
 
 ## Agent quick start
 
-Prerequisites are Docker, Rust 1.88, `make`, `curl`, and `tar`. Nothing else:
-there is no Python or shell script to install. The setup target
-downloads checksum-verified pinned k3d, Helm, and kubectl binaries into the
-gitignored `.tools/` directory, creates the local cluster, installs the Helm
-chart, builds the release MCP binary, and runs the doctor:
+Use the same development shell and product commands. The source build needs
+Rust, Python 3.9+, and the pinned web builder; release users download prebuilt
+binaries and do not need these build tools. With Docker running:
 
 ```bash
-make setup
+make dev
+proofstorm setup
+proofstorm doctor
 ```
 
-Run the doctor again at any time to verify pinned tool versions, Docker and
-cluster access, controller availability, and a real capability-filtered MCP
-stdio handshake:
+Then change to the directory whose agent should receive Proofstorm tools:
 
 ```bash
-make doctor
+cd /absolute/path/to/your/app
+proofstorm open opencode
+# Alternatives: proofstorm open codex, or proofstorm open claude
 ```
 
-The checked-in configuration follows the current stable
-[OpenCode local MCP format](https://opencode.ai/docs/mcp-servers/). With
-OpenCode installed, start a project session without changing personal config:
-
-```bash
-OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
-```
-
-OpenCode merges this profile with your personal providers, models, and subagents.
-All three profiles enable task delegation and leave other host permissions to
-your settings and OpenCode defaults. `research.json` and `contributor.json` are
-equivalent launch options; see [`examples/opencode/README.md`](examples/opencode/README.md).
-
-Use the complete agent request in
-[`examples/opencode-conversation.md`](examples/opencode-conversation.md), then
-remove the local cluster when finished:
-
-```bash
-make down
-```
+Attachment preserves other project configuration, checks the MCP server, and
+pins the checkout installation in the agent's project-specific entry. The GUI's
+**Connect coding agent…** uses the same operation. Review project trust prompts
+in your chosen agent. Doctor checks runtime health; attachment performs the MCP
+handshake. Neither proves a model has invoked a tool. Personal providers,
+models, permissions, and global agent configuration are not changed.
 
 The MCP configuration is operator-owned. Its principal and capability set are
 not agent inputs, and MCP does not return kubeconfig. Host file and shell access

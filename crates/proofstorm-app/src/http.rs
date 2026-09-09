@@ -82,6 +82,13 @@ async fn serve_inner(
                                     crate::gui::transport::secure(&mut response);
                                     return Ok::<_,Infallible>(response);
                                 }
+                                if request.method() == hyper::Method::GET && !request.uri().path().starts_with("/v1/") {
+                                    if let Some(root) = &session.web_dist {
+                                        let mut response = checkout_asset(root, request.uri().path()).await;
+                                        crate::gui::transport::secure(&mut response);
+                                        return Ok(response);
+                                    }
+                                }
                             }
                             let mut response=handle(labs,status,events,telemetry,streams,request).await?;
                             if managed.is_some() { crate::gui::transport::secure(&mut response); }
@@ -223,6 +230,64 @@ pub(crate) fn json(status: StatusCode, value: &impl serde::Serialize) -> Respons
     response
 }
 
+async fn checkout_asset(root: &std::path::Path, path: &str) -> Response<Body> {
+    let name = if path == "/" {
+        "index.html"
+    } else {
+        path.trim_start_matches('/')
+    };
+    if name.is_empty()
+        || name.starts_with('.')
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    {
+        return error(StatusCode::NOT_FOUND, "not_found");
+    }
+    let mime = match name.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css",
+        _ => return error(StatusCode::NOT_FOUND, "not_found"),
+    };
+    let root = root.to_owned();
+    let name = name.to_owned();
+    let bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+        use std::io::Read;
+        if !std::fs::symlink_metadata(&root)?.is_dir() {
+            return Err(std::io::Error::other("linked web output refused"));
+        }
+        let path = root.join(name);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 {
+            return Err(std::io::Error::other("invalid web artifact"));
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(64 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 64 * 1024 * 1024 {
+            return Err(std::io::Error::other("web artifact too large"));
+        }
+        Ok(bytes)
+    })
+    .await;
+    let Ok(Ok(bytes)) = bytes else {
+        return error(StatusCode::NOT_FOUND, "not_found");
+    };
+    let mut response = Response::new(Full::new(Bytes::from(bytes)).boxed());
+    response.headers_mut().insert(
+        "content-type",
+        hyper::header::HeaderValue::from_static(mime),
+    );
+    response.headers_mut().insert(
+        "cache-control",
+        hyper::header::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
 fn asset(path: &str) -> Response<Body> {
     let name = if path == "/" {
         "index.html"
@@ -323,4 +388,55 @@ fn event_stream(
             .insert(name, hyper::header::HeaderValue::from_static(value));
     }
     response
+}
+
+#[cfg(test)]
+mod checkout_asset_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn serves_rebuilt_assets_without_restarting_and_without_caching() {
+        let root = tempfile::tempdir().unwrap();
+        for contents in ["first build", "second build"] {
+            std::fs::write(root.path().join("index.html"), contents).unwrap();
+            let response = checkout_asset(root.path(), "/").await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/html; charset=utf-8"
+            );
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                contents
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_traversal_links_hidden_and_non_asset_files() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("private.json"), "secret").unwrap();
+        std::fs::write(root.path().join(".private.html"), "secret").unwrap();
+        std::os::unix::fs::symlink(
+            root.path().join("private.json"),
+            root.path().join("linked.js"),
+        )
+        .unwrap();
+        for path in [
+            "/../private.html",
+            "/%2e%2e/private.html",
+            "/nested/file.js",
+            "/private.json",
+            "/.private.html",
+            "/linked.js",
+            "/missing.wasm",
+        ] {
+            assert_eq!(
+                checkout_asset(root.path(), path).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+    }
 }

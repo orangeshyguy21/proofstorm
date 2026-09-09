@@ -64,6 +64,9 @@ async fn main() -> anyhow::Result<()> {
     reason = "keep managed and manual startup policy together for auditability"
 )]
 async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
+    if let Some(home) = &args.home {
+        proofstorm_app::artifacts::check_checkout(home)?;
+    }
     let attached = args.attachment.is_some();
     let toolset = if attached {
         "developer".to_owned()

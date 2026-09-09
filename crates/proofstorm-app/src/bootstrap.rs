@@ -194,7 +194,7 @@ pub fn setup(
         home.is_absolute() && !home.as_os_str().is_empty(),
         "setup requires an absolute --home"
     );
-    crate::installer::verify(bundle, allow_development, true)?;
+    let allow_development = crate::artifacts::verify(home, bundle, allow_development)?;
     let controller = controller()?;
     ensure!(
         allow_development || controller["release_ready"] == true,
