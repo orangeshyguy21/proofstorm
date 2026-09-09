@@ -91,7 +91,9 @@ pub(crate) fn verify(root: &Path, allow_development: bool, match_binary: bool) -
     inventory(root, root, &mut observed)?;
     let manifest: Value = serde_json::from_slice(&fs::read(root.join("manifest.json"))?)?;
     ensure!(
-        manifest["format_version"] == 1 && manifest["target"] == "aarch64-apple-darwin",
+        manifest["format_version"] == 1
+            && manifest["target"] == crate::platform::target()
+            && crate::platform::container_arch().is_ok(),
         "unsupported bundle format or platform"
     );
     ensure!(
@@ -155,7 +157,8 @@ pub(crate) fn verify(root: &Path, allow_development: bool, match_binary: bool) -
     }
     let info: Value = serde_json::from_slice(&fs::read(root.join("release-info.json"))?)?;
     ensure!(
-        info["version"] == manifest["version"]
+        info["target"] == manifest["target"]
+            && info["version"] == manifest["version"]
             && info["source_revision"] == manifest["source"]["revision"]
             && info["source_sha256"] == manifest["source"]["sha256"]
             && info["build_profile"] == manifest["build_profile"],

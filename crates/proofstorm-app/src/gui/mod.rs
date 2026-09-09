@@ -94,16 +94,21 @@ pub async fn open(
             ("project", project.to_str().context("non-UTF-8 project")?),
         ])?;
         let url = format!("{}/#{fragment}", record.url());
-        // Delegate to macOS's default URL handler; never pick a browser or install one.
-        let status = Command::new("/usr/bin/open")
+        // Delegate to the desktop's default URL handler, never a specific browser.
+        let opener = if cfg!(target_os = "macos") {
+            "/usr/bin/open"
+        } else {
+            "xdg-open"
+        };
+        let status = Command::new(opener)
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()?;
+            .status().context("default browser unavailable; on a headless host use proofstorm gui --no-open (GUI server is still running)")?;
         ensure!(
             status.success(),
-            "default browser could not be opened; GUI server is still running"
+            "default browser could not be opened; GUI server is still running. On a headless host use proofstorm gui --no-open"
         );
         "opened_default_browser"
     };

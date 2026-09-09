@@ -18,7 +18,11 @@ for file in "$archive" "$archive.sha256"; do
   curl --fail --location --retry 3 --silent --show-error "$base/$file" --output "$root/.tools/downloads/$file"
 done
 expected=$(awk '{print $1}' "$root/.tools/downloads/$archive.sha256")
-actual=$(shasum -a 256 "$root/.tools/downloads/$archive" | awk '{print $1}')
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$root/.tools/downloads/$archive" | awk '{print $1}')
+else
+  actual=$(shasum -a 256 "$root/.tools/downloads/$archive" | awk '{print $1}')
+fi
 [ "$expected" = "$actual" ] || { echo 'Trunk checksum mismatch.' >&2; exit 1; }
 unpack=$(mktemp -d)
 trap 'rm -rf -- "$unpack"' EXIT HUP INT TERM

@@ -17,6 +17,14 @@ class InstallScriptTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.archive = self.root / "proofstorm-test.tar.gz"
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"])
+
+    def platform(self, system, machine):
+        path = self.bin / "uname"
+        path.write_text(f'#!/bin/sh\ncase "$1" in -s) echo {system};; -m) echo {machine};; esac\n')
+        path.chmod(0o755)
 
     def archive_with(self, name="proofstorm/bin/proofstorm", link=False):
         with tarfile.open(self.archive, "w:gz") as tar:
@@ -26,7 +34,7 @@ class InstallScriptTests(unittest.TestCase):
                 info.linkname = "/outside"
                 tar.addfile(info)
             else:
-                body = b'#!/bin/sh\n[ "$(stat -f %Lp "$0")" = 755 ] || exit 19\nexit 0\n'
+                body = b'#!/bin/sh\n[ -x "$0" ] || exit 19\nexit 0\n'
                 info.mode = 0o755
                 info.size = len(body)
                 tar.addfile(info, io.BytesIO(body))
@@ -34,7 +42,26 @@ class InstallScriptTests(unittest.TestCase):
 
     def run_installer(self, *extra):
         return subprocess.run(["sh", SCRIPT, "--artifact-dir", self.root, "--archive", self.archive.name,
-                               "--prefix", self.root / "new prefix", *extra], capture_output=True, text=True)
+                               "--prefix", self.root / "new prefix", *extra], env=self.env, capture_output=True, text=True)
+
+    def test_supported_platforms_select_the_correct_archive(self):
+        for system, machine, target in [("Darwin", "arm64", "aarch64-apple-darwin"),
+                                        ("Linux", "x86_64", "x86_64-unknown-linux-gnu")]:
+            self.platform(system, machine)
+            self.archive = self.root / f"proofstorm-0.1.0-alpha.1-{target}.tar.gz"
+            self.archive_with()
+            result = subprocess.run(["sh", SCRIPT, "--artifact-dir", self.root,
+                                     "--prefix", self.root / "prefix", "--allow-development"],
+                                    env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unsupported_hosts_fail_before_installation(self):
+        for system, machine in [("Linux", "aarch64"), ("Darwin", "x86_64"), ("Windows", "x86_64")]:
+            self.platform(system, machine)
+            result = self.run_installer()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("supports macOS Apple Silicon and Linux x86-64", result.stderr)
+            self.assertFalse((self.root / "new prefix").exists())
 
     def test_local_prebuilt_path_requires_no_compiler_or_python(self):
         self.archive_with()

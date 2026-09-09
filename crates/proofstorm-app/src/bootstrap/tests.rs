@@ -81,6 +81,16 @@ fn bootstrap_pins_are_complete_and_immutable() {
 
 #[test]
 fn published_controller_matches_compiled_contract() {
+    if crate::platform::target() == crate::platform::LINUX_AMD64 {
+        assert!(crate::release::controller().is_null());
+        assert!(
+            controller()
+                .unwrap_err()
+                .to_string()
+                .contains("linux/amd64")
+        );
+        return;
+    }
     let info = controller().unwrap();
     assert_eq!(
         info["metadata"]["runtime_contract_sha256"],

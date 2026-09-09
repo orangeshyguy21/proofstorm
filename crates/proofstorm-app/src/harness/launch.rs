@@ -71,6 +71,10 @@ pub(super) fn executable(path: &Path) -> bool {
 }
 
 pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
+    ensure!(
+        cli || cfg!(target_os = "macos"),
+        "native Codex launch currently supports macOS; omit --gui to use the CLI"
+    );
     let mut apps = vec![
         PathBuf::from("/Applications/Codex.app"),
         PathBuf::from("/Applications/ChatGPT.app"),

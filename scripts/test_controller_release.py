@@ -27,6 +27,14 @@ class ControllerPublicationTests(unittest.TestCase):
                 controller.publish(self.path, "another/account")
             run.assert_not_called()
 
+    def test_invalid_build_platform_is_rejected_before_creating_work(self):
+        work = self.path.parent / "build"
+        with patch.object(controller.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "platform"):
+                controller.build(self.path.parent, work, "linux/386")
+            run.assert_not_called()
+        self.assertFalse(work.exists())
+
     def test_refuses_mutable_alias_and_mismatched_provenance(self):
         for key, value in [("tag", controller.NAMESPACE + "/proofstormd:latest"),
                            ("metadata", {"source_sha256": "wrong"})]:

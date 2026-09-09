@@ -40,6 +40,8 @@ the folder inside OpenCode or use the default terminal launch.
 The MCP connection is always named `proofstorm`; replacing an
 old connection such as `pst` requires a separate confirmation and saves a backup.
 See [agent attachment details](release/agent-attachments.md).
+Linux x86-64 installer/packaging groundwork is in progress; the AMD64 runtime
+images and fresh-VM release gate are still pending. See [Linux bring-up](release/linux.md).
 Their packaged client-connection gate passed with private agent homes and verified
 runtime cleanup; see [OpenCode/Claude Code verification](release/agent-attachment-verification.json).
 Setup now skips the workload catalog: CLI and MCP lab creation download only

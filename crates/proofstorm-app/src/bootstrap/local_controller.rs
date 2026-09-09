@@ -29,7 +29,7 @@ fn built_identity(inspect: &Value, build_id: &str, sha: &str) -> Result<String> 
                 || inspect["Descriptor"]["digest"] == build_id
                 || inspect["Descriptor"]["annotations"]["config.digest"] == build_id)
             && inspect["Os"] == "linux"
-            && inspect["Architecture"] == "arm64"
+            && inspect["Architecture"] == crate::platform::container_arch()?
             && inspect["Config"]["Labels"]["dev.proofstorm.source-sha256"] == sha,
         "built controller identity/platform/provenance mismatch"
     );
@@ -128,7 +128,7 @@ fn verify_published_image(installation: &Installation, image: &str, image_id: &s
         ensure!(
             manifests.len() == 1
                 && manifests[0]["platform"]["os"] == "linux"
-                && manifests[0]["platform"]["architecture"] == "arm64",
+                && manifests[0]["platform"]["architecture"] == crate::platform::container_arch()?,
             "unexpected published controller platforms"
         );
         let child = manifests[0]["digest"]
@@ -197,7 +197,7 @@ pub(super) fn prepare(
             "buildx",
             "build",
             "--platform",
-            "linux/arm64",
+            &crate::platform::container_platform()?,
             "--load",
             "--provenance=false",
             "--progress",
@@ -275,7 +275,7 @@ mod tests {
         let id = format!("sha256:{}", "a".repeat(64));
         let config = format!("sha256:{}", "b".repeat(64));
         let sha = "c".repeat(64);
-        let mut inspect = json!({"Id":id,"Os":"linux","Architecture":"arm64",
+        let mut inspect = json!({"Id":id,"Os":"linux","Architecture":crate::platform::container_arch().unwrap(),
             "Config":{"Labels":{"dev.proofstorm.source-sha256":sha}}});
         assert_eq!(built_identity(&inspect, &id, &sha).unwrap(), id);
         assert!(built_identity(&inspect, &config, &sha).is_err());

@@ -7,7 +7,10 @@ test exercises the prebuilt user path without Rust or Python.
 
 ## Build a development bundle
 
-Requirements: macOS Apple Silicon, Python 3.12+, the Rust toolchain with
+Linux host support is being brought up; see [Linux status and remaining gates](linux.md).
+An accepted host target does not yet mean full Linux installed setup is ready.
+
+Requirements: macOS Apple Silicon or Linux x86-64, Python 3.12+, the Rust toolchain with
 `wasm32-unknown-unknown`, and the pinned `.tools/bin/trunk`. The build does not
 run Make, start Docker, install tools, edit shell profiles, or modify harnesses.
 
@@ -75,11 +78,13 @@ Use the archive name returned by the development builder:
 
 ```sh
 sh install.sh --artifact-dir /absolute/path/to/artifacts \
-  --archive proofstorm-VERSION-aarch64-apple-darwin.tar.gz \
+  --archive proofstorm-VERSION-TARGET.tar.gz \
   --prefix /absolute/path/to/disposable-prefix --allow-development
 ```
 
-Supported host: macOS Apple Silicon. The script uses stock shell tools, verifies
+Host package selection is automatic: macOS Apple Silicon or Linux x86-64.
+Linux requires a glibc-based distribution (not Alpine), curl, tar/gzip, and
+sha256sum; the Mac path can use shasum. The script verifies
 the archive checksum before extraction, rejects links/unsafe paths, and invokes
 the bundled installer. Rust verifies payload hashes/modes and matching embedded
 release metadata before atomically switching both CLI and MCP to one version.

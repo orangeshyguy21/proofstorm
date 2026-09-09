@@ -11,6 +11,7 @@ import gzip
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -18,7 +19,17 @@ import subprocess
 import tarfile
 import tempfile
 
-TARGET = "aarch64-apple-darwin"
+TARGETS = {"aarch64-apple-darwin": "linux/arm64", "x86_64-unknown-linux-gnu": "linux/amd64"}
+
+
+def host_target():
+    host = (platform.system(), platform.machine())
+    targets = {("Darwin", "arm64"): "aarch64-apple-darwin",
+               ("Linux", "x86_64"): "x86_64-unknown-linux-gnu"}
+    require(host in targets, "build on macOS Apple Silicon or Linux x86-64; cross-compilation is not supported")
+    return targets[host]
+
+
 LOCAL_REGISTRY = "proofstorm-registry.localhost:5000/"
 REQUIRED = {"bin/proofstorm", "bin/proofstorm-mcp", "LICENSE", "catalog.json",
             "tools/versions.env", "chart/Chart.yaml", "chart/values.yaml",
@@ -92,7 +103,9 @@ def snapshot(source, destination, development):
 
 def validate_info(info):
     require(info["format_version"] == 1, "unsupported binary metadata format")
-    require(info["target"] == TARGET, "bundle only supports macOS Apple Silicon")
+    require(info["target"] in TARGETS, "unsupported bundle target")
+    if info.get("bootstrap_tools"):
+        require(info["bootstrap_tools"].get("target") == info["target"], "bootstrap tool target mismatch")
     require(info["build_profile"] in {"debug", "release"}, "unsupported build profile")
     require(re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]*", info["version"]), "unsafe version")
     assets = info["web_assets"]
@@ -154,12 +167,18 @@ def package(source, binaries, output, provenance, development):
         write_json(root / "release-info.json", info)
         images = image_inventory(info)
         controller = info.get("controller")
-        blockers = ["Remote image availability and linux/arm64 platforms are not verified.",
-                    "Downloaded macOS signing/quarantine behavior has not been validated."]
+        target = info["target"]
+        blockers = [f"Remote image availability and {TARGETS[target]} platforms are not verified."]
+        if target == "aarch64-apple-darwin":
+            blockers.append("Downloaded macOS signing/quarantine behavior has not been validated.")
+        else:
+            blockers.append("Fresh Linux VM installation and runtime have not been validated.")
         if not controller:
             blockers.append("Published digest-pinned controller image is not configured.")
         elif not controller.get("release_ready"):
             blockers.append("Configured controller is a development preview, not a coherent release build.")
+        if controller and controller.get("platform") != TARGETS[target]:
+            blockers.append(f"Controller image is not pinned for {TARGETS[target]}.")
         if not info.get("bootstrap_tools"):
             blockers.append("Pinned bootstrap-tool downloads/checksums are not yet packaged.")
         blockers.extend(f"Missing published image source: {entry['image']}"
@@ -179,7 +198,7 @@ def package(source, binaries, output, provenance, development):
                 require(path.stat().st_size > 0, f"empty payload: {relative}")
                 files[relative] = {"sha256": digest(path), "size": path.stat().st_size, "mode": mode}
         require(REQUIRED <= files.keys(), f"missing payload: {sorted(REQUIRED - files.keys())}")
-        manifest = {"format_version": 1, "version": info["version"], "target": TARGET,
+        manifest = {"format_version": 1, "version": info["version"], "target": target,
                     "build_profile": info["build_profile"],
                     "channel": "development" if development else "release", "release_ready": not blockers,
                     "release_blockers": blockers, "source": provenance, "files": files,
@@ -187,7 +206,7 @@ def package(source, binaries, output, provenance, development):
         write_json(root / "manifest.json", manifest)
         verify(root)
         suffix = "-dev-" + info["build_profile"] + "-" + provenance["sha256"][:12] if development else ""
-        name = f"proofstorm-{info['version']}{suffix}-{TARGET}.tar.gz"
+        name = f"proofstorm-{info['version']}{suffix}-{target}.tar.gz"
         archive = Path(temporary) / name
         # Stable ordering, ownership, modes, and gzip metadata for identical inputs.
         with archive.open("wb") as stream, gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as compressed:
@@ -217,13 +236,14 @@ def verify(root):
     manifest_path = root / "manifest.json"
     require(not manifest_path.is_symlink(), "manifest symlink refused")
     manifest = json.loads(manifest_path.read_text())
-    require(manifest["format_version"] == 1 and manifest["target"] == TARGET, "unsupported bundle")
+    require(manifest["format_version"] == 1 and manifest["target"] in TARGETS, "unsupported bundle")
     require(manifest["channel"] in {"development", "release"}, "unsupported bundle channel")
     require(manifest["release_ready"] == (not manifest["release_blockers"]), "inconsistent release readiness")
     if manifest["release_ready"]:
         require(manifest["channel"] == "release" and manifest["controller"] is not None
                 and not manifest["source"]["dirty"] and manifest["build_profile"] == "release"
-                and all(image["availability_verified"] and "linux/arm64" in image["verified_platforms"]
+                and manifest["controller"].get("platform") == TARGETS[manifest["target"]]
+                and all(image["availability_verified"] and TARGETS[manifest["target"]] in image["verified_platforms"]
                         and image["published_source"] for image in manifest["workload_images"]),
                 "release readiness lacks required evidence")
     files = manifest["files"]
@@ -244,6 +264,7 @@ def verify(root):
         require(payload.stat().st_mode & 0o7777 == receipt["mode"], f"payload mode mismatch: {name}")
     info = json.loads((root / "release-info.json").read_text())
     validate_info(info)
+    require(info["target"] == manifest["target"], "manifest target mismatch")
     require(info["version"] == manifest["version"], "manifest version mismatch")
     require(info["build_profile"] == manifest["build_profile"], "manifest build profile mismatch")
     require(info["source_revision"] == manifest["source"]["revision"] and
@@ -255,6 +276,7 @@ def verify(root):
 
 
 def build(args):
+    expected_target = host_target()
     source = args.source.resolve()
     output = args.output.resolve()
     work = args.work_dir.resolve()
@@ -291,6 +313,9 @@ def build(args):
     run(command, cwd=snapshot_root, env=env)
     run(["cargo", "run", "--locked", "-p", "proofstorm-kube", "--example", "export_crds", "--",
          snapshot_root / "charts/proofstorm/crds"], cwd=snapshot_root, env=env)
+    metadata = json.loads(run([target / ("debug" if args.debug else "release") / "proofstorm", "release-info"],
+                              cwd=work, env=env, capture=True))
+    require(metadata["target"] == expected_target, "build target differs from build host")
     result = package(snapshot_root, target / ("debug" if args.debug else "release"),
                      output, provenance, args.development)
     write_json(work / "result.json", result)
@@ -298,6 +323,7 @@ def build(args):
 
 
 def smoke(archive, destination, deny_sources):
+    require(not deny_sources or platform.system() == "Darwin", "--deny-source requires macOS sandbox-exec; use source-free relocation on Linux")
     require(not destination.exists(), "smoke destination must not already exist")
     receipt = Path(str(archive) + ".sha256").read_text().strip().split()
     require(len(receipt) == 2 and receipt[1] == archive.name and receipt[0] == digest(archive),
@@ -318,6 +344,7 @@ def smoke(archive, destination, deny_sources):
         tar.extractall(destination, members=members, filter="data")
     root = destination / "proofstorm"
     manifest = verify(root)
+    require(manifest["target"] == host_target(), "smoke must run on the bundle's target host")
     env = clean_environment()
     env["PROOFSTORM_HOME"] = str(destination / "must-not-be-created")
     env["PROOFSTORM_PRINCIPAL"] = ""

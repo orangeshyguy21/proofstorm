@@ -31,12 +31,25 @@ pub fn describe() -> Value {
         "source_revision": env!("PROOFSTORM_BUILD_REVISION"),
         "source_sha256": env!("PROOFSTORM_BUILD_SOURCE_SHA256"),
         "runtime_contract_sha256": runtime_contract_sha256(),
-        "controller": serde_json::from_str::<Value>(include_str!("../../../release/controller.json")).expect("checked controller metadata"),
-        "bootstrap_tools": serde_json::from_str::<Value>(include_str!("../../../release/bootstrap-tools.json")).expect("checked bootstrap pins"),
+        "controller": controller(),
+        "bootstrap_tools": crate::platform::bootstrap_pins_for(crate::platform::target())
+            .ok().map(|pins| serde_json::from_str::<Value>(pins).expect("checked bootstrap pins")),
         "web_assets": assets, "catalog": catalog, "workload_images": images,
         "tools": include_str!("../../../tools/versions.env"),
         "image_publication": include_str!("../../../release/ghcr.json")
     })
+}
+
+/// Never advertise the ARM controller as an AMD64 runtime. A platform-matching
+/// published pin must be supplied before that platform can run installed setup.
+pub(crate) fn controller() -> Value {
+    let value: Value = serde_json::from_str(include_str!("../../../release/controller.json"))
+        .expect("checked controller metadata");
+    if crate::platform::container_platform().is_ok_and(|platform| value["platform"] == platform) {
+        value
+    } else {
+        Value::Null
+    }
 }
 
 #[must_use]
@@ -63,5 +76,6 @@ mod tests {
             assert!(images.contains(&json!(helper)));
         }
         assert_eq!(metadata["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(metadata["bootstrap_tools"]["target"], metadata["target"]);
     }
 }

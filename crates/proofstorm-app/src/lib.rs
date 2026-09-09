@@ -20,6 +20,7 @@ pub mod journal;
 pub mod lab;
 pub mod lifecycle;
 pub mod observer;
+pub mod platform;
 pub mod release;
 pub mod runtime;
 pub mod telemetry;

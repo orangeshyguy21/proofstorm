@@ -20,10 +20,13 @@ fn digest(value: &str) -> bool {
 }
 
 fn controller() -> Result<Value> {
-    let value: Value = serde_json::from_str(include_str!("../../../release/controller.json"))?;
-    let image = value["image"]
-        .as_str()
-        .context("this build has no published controller; install a newer bundle")?;
+    let value = crate::release::controller();
+    let image = value["image"].as_str().with_context(|| {
+        format!(
+            "this build has no published controller for {}; install a matching bundle",
+            crate::platform::container_platform().unwrap_or_default()
+        )
+    })?;
     ensure!(
         image
             .strip_prefix("ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:")
@@ -137,16 +140,16 @@ fn kube(installation: &Installation, args: &[&str]) -> Result<String> {
 }
 
 fn preflight(home: &Path) -> Result<Value> {
-    ensure!(
-        cfg!(all(target_os = "macos", target_arch = "aarch64")),
-        "setup currently supports macOS Apple Silicon"
-    );
+    let platform = crate::platform::container_platform()?;
     let info: Value =
         serde_json::from_str(&docker(home, &["info", "--format", "{{json .}}"], 20)?)?;
     ensure!(
-        info["OSType"] == "linux"
-            && matches!(info["Architecture"].as_str(), Some("aarch64" | "arm64")),
-        "Docker must run Linux arm64 containers"
+        crate::platform::docker_matches(
+            crate::platform::target(),
+            info["OSType"].as_str().unwrap_or_default(),
+            info["Architecture"].as_str().unwrap_or_default()
+        ),
+        "Docker must run {platform} containers for this installation"
     );
     let buildx = docker(home, &["buildx", "version"], 15)?;
     docker(home, &["buildx", "imagetools", "create", "--help"], 15).and_then(|help| {
@@ -265,12 +268,12 @@ pub fn setup_with_progress(
     );
     let allow_development = crate::artifacts::verify(home, bundle, allow_development)?;
     let checkout_source = crate::artifacts::controller_source(home)?;
-    let mut controller = if checkout_source.is_some() {
+    let mut controller = if checkout_source.is_some() || prepare_only {
         Value::Null
     } else {
         controller()?
     };
-    if checkout_source.is_none() {
+    if checkout_source.is_none() && !prepare_only {
         ensure!(
             allow_development || controller["release_ready"] == true,
             "controller is development-only; local tests require --allow-development"
@@ -314,7 +317,16 @@ pub fn setup_with_progress(
             let image = controller["image"]
                 .as_str()
                 .context("controller image missing")?;
-            docker(home, &["pull", "--platform", "linux/arm64", image], 300)?;
+            docker(
+                home,
+                &[
+                    "pull",
+                    "--platform",
+                    &crate::platform::container_platform()?,
+                    image,
+                ],
+                300,
+            )?;
             ensure!(
                 controller_metadata(home, image)? == controller["metadata"],
                 "downloaded controller metadata mismatch"

@@ -30,10 +30,32 @@ fn fixture(root: &Path) -> PathBuf {
         files.insert((*name).into(), json!({"sha256":hash(&path).unwrap(),"size":fs::metadata(&path).unwrap().len(),"mode":fs::metadata(path).unwrap().permissions().mode() & 0o777}));
     }
     fs::write(bundle.join("manifest.json"), serde_json::to_vec(&json!({
-        "format_version":1,"target":"aarch64-apple-darwin","channel":"development","release_ready":false,
+        "format_version":1,"target":crate::platform::target(),"channel":"development","release_ready":false,
         "version":info["version"],"build_profile":info["build_profile"],"source":{"revision":info["source_revision"],"sha256":info["source_sha256"],"dirty":true},"files":files
     })).unwrap()).unwrap();
     bundle
+}
+
+#[test]
+fn foreign_target_is_refused_even_in_development_mode() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = fixture(root.path());
+    let path = bundle.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["target"] = json!(if crate::platform::target() == crate::platform::MAC_ARM64 {
+        crate::platform::LINUX_AMD64
+    } else {
+        crate::platform::MAC_ARM64
+    });
+    fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let prefix = root.path().join("must-not-exist");
+    assert!(
+        install(&bundle, &prefix, true)
+            .unwrap_err()
+            .to_string()
+            .contains("platform")
+    );
+    assert!(!prefix.exists());
 }
 
 #[test]

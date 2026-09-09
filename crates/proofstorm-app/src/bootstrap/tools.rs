@@ -20,10 +20,14 @@ pub(super) struct Tool {
 }
 
 pub(super) fn pins() -> Result<Vec<Tool>> {
+    pins_for(crate::platform::target())
+}
+
+fn pins_for(target: &str) -> Result<Vec<Tool>> {
     let value: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../release/bootstrap-tools.json"))?;
+        serde_json::from_str(crate::platform::bootstrap_pins_for(target)?)?;
     ensure!(
-        value["format_version"] == 1 && value["target"] == "aarch64-apple-darwin",
+        value["format_version"] == 1 && value["target"] == target,
         "unsupported tool pins"
     );
     let tools: Vec<Tool> = serde_json::from_value(value["tools"].clone())?;
@@ -46,7 +50,7 @@ pub(super) fn pins() -> Result<Vec<Tool>> {
         ensure!(
             tool.archive_member.as_deref()
                 == if tool.name == "helm" {
-                    Some("darwin-arm64/helm")
+                    Some(crate::platform::helm_member_for(target)?)
                 } else {
                     None
                 },
@@ -155,4 +159,22 @@ pub(super) fn install(home: &Path, tool: &Tool) -> Result<()> {
     }
     fs::hard_link(executable, path(home, tool))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_supported_target_has_distinct_valid_pins() {
+        let mac = pins_for(crate::platform::MAC_ARM64).unwrap();
+        let linux = pins_for(crate::platform::LINUX_AMD64).unwrap();
+        for (mac, linux) in mac.iter().zip(&linux) {
+            assert_eq!(mac.name, linux.name);
+            assert_eq!(mac.version, linux.version);
+            assert_ne!(mac.sha256, linux.sha256);
+            assert_ne!(mac.url, linux.url);
+        }
+        assert!(pins_for("unknown").is_err());
+    }
 }

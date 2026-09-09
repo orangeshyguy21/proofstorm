@@ -32,8 +32,12 @@ while [ "$#" -gt 0 ]; do
 done
 case "$install_prefix" in /*) ;; *) fail '--prefix must be an absolute path' ;; esac
 case "$install_version" in ''|*[!A-Za-z0-9.+-]*) fail 'invalid version' ;; esac
-[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || fail 'this alpha supports macOS Apple Silicon only'
-if [ -z "$archive_name" ]; then archive_name="proofstorm-$install_version-aarch64-apple-darwin.tar.gz"; fi
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) install_target=aarch64-apple-darwin ;;
+  Linux-x86_64|Linux-amd64) install_target=x86_64-unknown-linux-gnu ;;
+  *) fail 'this alpha supports macOS Apple Silicon and Linux x86-64' ;;
+esac
+if [ -z "$archive_name" ]; then archive_name="proofstorm-$install_version-$install_target.tar.gz"; fi
 case "$archive_name" in *[!A-Za-z0-9._+-]*|'') fail 'invalid archive name' ;; esac
 case "$archive_name" in proofstorm-*.tar.gz) ;; *) fail 'expected a Proofstorm .tar.gz archive' ;; esac
 if [ "$allow_development" = true ]; then
@@ -61,7 +65,13 @@ fi
 expected=$(awk -v name="$archive_name" 'NF == 2 && $2 == name { if (++count == 1) digest=$1 } END { if (NR == 1 && count == 1) print digest; else exit 1 }' "$install_scratch/checksum") || fail 'invalid checksum receipt'
 [ "${#expected}" = 64 ] || fail 'invalid checksum length'
 case "$expected" in *[!0-9a-f]*) fail 'invalid checksum' ;; esac
-actual=$(shasum -a 256 "$install_scratch/archive.tar.gz" | awk '{print $1}')
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$install_scratch/archive.tar.gz" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  actual=$(shasum -a 256 "$install_scratch/archive.tar.gz" | awk '{print $1}')
+else
+  fail 'install sha256sum or shasum to verify the download'
+fi
 [ "$actual" = "$expected" ] || fail 'archive checksum mismatch; nothing was installed'
 
 # Published archives contain regular files only. Refuse links, traversal, and duplicates.

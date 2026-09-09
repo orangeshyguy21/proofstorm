@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "target": "x86_64-unknown-linux-gnu",
+  "tools": [
+    {
+      "name": "k3d",
+      "version": "v5.9.0",
+      "url": "https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-amd64",
+      "sha256": "06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0",
+      "executable_sha256": "06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0",
+      "archive_member": null
+    },
+    {
+      "name": "kubectl",
+      "version": "v1.34.1",
+      "url": "https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl",
+      "sha256": "7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3",
+      "executable_sha256": "7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3",
+      "archive_member": null
+    },
+    {
+      "name": "helm",
+      "version": "v4.2.3",
+      "url": "https://get.helm.sh/helm-v4.2.3-linux-amd64.tar.gz",
+      "sha256": "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c",
+      "executable_sha256": "aeb4645b9e6658948efa290e28dd23ae75a16fb73f137942f2294fd5c7fcb573",
+      "archive_member": "linux-amd64/helm"
+    }
+  ]
+}

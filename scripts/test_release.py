@@ -28,7 +28,7 @@ class PackagingTests(unittest.TestCase):
             path.write_text("fixture\n")
         (self.source / "charts/proofstorm/Chart.yaml").write_text("version: 0.1.0-alpha.1\nappVersion: 0.1.0-alpha.1\n")
         self.provenance = {"revision": "a" * 40, "sha256": "b" * 64, "dirty": True}
-        self.info = {"format_version": 1, "version": "0.1.0-alpha.1", "target": release.TARGET, "build_profile": "debug",
+        self.info = {"format_version": 1, "version": "0.1.0-alpha.1", "target": release.host_target(), "build_profile": "debug",
                      "source_revision": self.provenance["revision"], "source_sha256": self.provenance["sha256"],
                      "web_assets": [{"path": name, "sha256": "c" * 64, "size": 1}
                                     for name in ["index.html", "app.js", "app.wasm", "style.css"]],
@@ -137,9 +137,9 @@ class PackagingTests(unittest.TestCase):
 
     def test_unsupported_target_or_mutable_image_is_rejected(self):
         self.info["target"] = "x86_64-apple-darwin"
-        with self.assertRaisesRegex(ValueError, "Apple Silicon"):
+        with self.assertRaisesRegex(ValueError, "unsupported bundle target"):
             self.package()
-        self.info["target"] = release.TARGET
+        self.info["target"] = release.host_target()
         self.info["workload_images"] = ["example.org/app:latest"]
         with self.assertRaisesRegex(ValueError, "not pinned"):
             self.package()
@@ -149,6 +149,44 @@ class PackagingTests(unittest.TestCase):
         inventory = release.image_inventory(self.info)
         self.assertEqual(inventory[0]["published_source"], "ghcr.io/orangeshyguy21/proofstorm/custom@sha256:" + "d" * 64)
         self.assertFalse(inventory[0]["availability_verified"])
+
+    def test_both_targets_package_and_verify_with_platform_specific_blockers(self):
+        for target in release.TARGETS:
+            self.info["target"] = target
+            result = self.package(target)
+            self.assertTrue(result["archive"].endswith(target + ".tar.gz"))
+            blockers = "\n".join(result["release_blockers"])
+            self.assertIn(release.TARGETS[target], blockers)
+            self.assertEqual("macOS signing" in blockers, target == "aarch64-apple-darwin")
+            with tarfile.open(result["archive"]) as archive:
+                archive.extractall(self.root / target, filter="data")
+            self.assertEqual(release.verify(self.root / target / "proofstorm")["target"], target)
+
+    def test_manifest_cannot_relabel_payload_architecture(self):
+        root = self.unpack()
+        path = root / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["target"] = next(target for target in release.TARGETS if target != self.info["target"])
+        release.write_json(path, manifest)
+        with self.assertRaisesRegex(ValueError, "target mismatch"):
+            release.verify(root)
+
+    def test_foreign_helper_pins_are_rejected(self):
+        self.info["bootstrap_tools"] = {"target": "wrong-target", "tools": []}
+        with self.assertRaisesRegex(ValueError, "tool target mismatch"):
+            self.package()
+
+    def test_host_detection_and_source_denial_fail_closed(self):
+        for system, machine, target in [("Darwin", "arm64", "aarch64-apple-darwin"),
+                                        ("Linux", "x86_64", "x86_64-unknown-linux-gnu")]:
+            with patch.object(release.platform, "system", return_value=system), patch.object(release.platform, "machine", return_value=machine):
+                self.assertEqual(release.host_target(), target)
+        with patch.object(release.platform, "system", return_value="Linux"):
+            with self.assertRaisesRegex(ValueError, "requires macOS"):
+                release.smoke(self.root / "absent.tar.gz", self.root / "absent", [self.source])
+        with patch.object(release.platform, "system", return_value="Windows"):
+            with self.assertRaisesRegex(ValueError, "build on"):
+                release.host_target()
 
     def test_snapshot_is_explicit_and_excludes_unlisted_private_files(self):
         (self.source / "public.txt").write_text("public")
