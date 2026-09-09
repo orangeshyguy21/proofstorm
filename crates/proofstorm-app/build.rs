@@ -1,7 +1,37 @@
 use std::{env, fmt::Write, fs, path::PathBuf};
 fn main() {
-    let assets = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest directory"))
-        .join("../proofstorm-web/dist");
+    for key in [
+        "PROOFSTORM_WEB_DIST",
+        "PROOFSTORM_REQUIRE_WEB_ASSETS",
+        "PROOFSTORM_BUILD_REVISION",
+        "PROOFSTORM_BUILD_SOURCE_SHA256",
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
+    for key in [
+        "PROOFSTORM_BUILD_REVISION",
+        "PROOFSTORM_BUILD_SOURCE_SHA256",
+    ] {
+        println!(
+            "cargo:rustc-env={key}={}",
+            env::var(key).unwrap_or_else(|_| "unknown".into())
+        );
+    }
+    println!(
+        "cargo:rustc-env=PROOFSTORM_BUILD_TARGET={}",
+        env::var("TARGET").expect("build target")
+    );
+    println!(
+        "cargo:rustc-env=PROOFSTORM_BUILD_PROFILE={}",
+        env::var("PROFILE").expect("build profile")
+    );
+    let assets = env::var_os("PROOFSTORM_WEB_DIST").map_or_else(
+        || {
+            PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest directory"))
+                .join("../proofstorm-web/dist")
+        },
+        PathBuf::from,
+    );
     println!("cargo:rerun-if-changed={}", assets.display());
     let mut files = fs::read_dir(&assets)
         .map(|entries| {
@@ -13,6 +43,21 @@ fn main() {
         })
         .unwrap_or_default();
     files.sort();
+    if env::var("PROOFSTORM_REQUIRE_WEB_ASSETS").as_deref() == Ok("1") {
+        for extension in ["html", "js", "wasm", "css"] {
+            assert!(
+                files.iter().any(
+                    |p| p.extension().and_then(|e| e.to_str()) == Some(extension)
+                        && fs::metadata(p).is_ok_and(|m| m.len() > 0)
+                ),
+                "release requires nonempty {extension} web assets"
+            );
+        }
+        assert!(
+            assets.join("index.html").is_file(),
+            "release requires index.html"
+        );
+    }
     let mut code = String::from("pub static WEB_ASSETS: &[(&str, &str, &[u8])] = &[\n");
     for path in files {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {

@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:70476545989f363aef23610bb08830ad90e16fe2eb30a3d2d8dcea82175a4b16",
+  "metadata": {
+    "format_version": 1,
+    "runtime_contract_sha256": "6a4e0adb25a0b4abf42f23e21e4fef90582e0499a9d9faab8b6f0703d1993dd0",
+    "source_sha256": "028c8e2aed0a7c188ac21552980ac4717b7b2383cf4bc945be107ddfefba9d73",
+    "version": "0.1.0-alpha.1"
+  },
+  "platform": "linux/arm64",
+  "release_ready": false,
+  "source": {
+    "dirty": true,
+    "revision": "92cb402930e013af5a330a2b3fcbb5b15d178ec2",
+    "sha256": "028c8e2aed0a7c188ac21552980ac4717b7b2383cf4bc945be107ddfefba9d73"
+  },
+  "tag": "ghcr.io/orangeshyguy21/proofstorm/proofstormd:development-b3653815d02a48f6b064424bccfdfa95"
+}

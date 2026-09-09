@@ -6,6 +6,7 @@
 mod environment;
 pub use environment::{EnvironmentEntry, PendingObservationPage};
 mod delegation;
+mod onboarding;
 mod runs;
 #[cfg(test)]
 mod session_tests;

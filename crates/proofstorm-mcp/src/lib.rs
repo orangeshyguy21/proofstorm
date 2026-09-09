@@ -2561,8 +2561,26 @@ impl ProofstormMcp {
             client: runtime.client,
             control_namespace: runtime.control_namespace,
             cluster_source: runtime.cluster_source,
+            candidate_registry: proofstorm_app::installation::CATALOG_REGISTRY.into(),
+            installation: None,
         });
         self
+    }
+
+    /// Route candidate pushes to this installation's registry. Containerd's
+    /// pull mirror cannot redirect a `BuildKit` push to the canonical hostname.
+    #[must_use]
+    pub fn with_installation_runtime(
+        self,
+        runtime: proofstorm_app::Runtime,
+        installation: &proofstorm_app::installation::Installation,
+    ) -> Self {
+        let mut service = self.with_runtime(runtime);
+        if let Some(runtime) = &mut service.kubernetes {
+            runtime.candidate_registry = format!("{}:5000", installation.registry_name());
+            runtime.installation = Some(installation.clone());
+        }
+        service
     }
 
     /// Explicit offline authoring and cached reads; no runtime commands are advertised.
@@ -2815,6 +2833,8 @@ struct KubernetesRuntime {
     client: Client,
     control_namespace: String,
     cluster_source: String,
+    candidate_registry: String,
+    installation: Option<proofstorm_app::installation::Installation>,
 }
 
 #[tool_router(router = tool_router)]
@@ -2826,7 +2846,8 @@ impl ProofstormMcp {
             runtime.shared(),
             self.workspace.clone(),
             self.principal.clone(),
-        ))
+        )
+        .with_installation(runtime.installation.clone()))
     }
 
     #[tool(
@@ -9907,6 +9928,7 @@ impl ProofstormMcp {
 fn candidate_build_resource(
     candidate: &CandidateBuild,
     namespace: &str,
+    registry: &str,
 ) -> Result<ProofstormCandidateBuild, ErrorData> {
     let repository = candidate.repository.clone().ok_or_else(|| {
         coded_invalid_request(
@@ -9938,7 +9960,7 @@ fn candidate_build_resource(
             request_digest: candidate.request_digest.clone(),
             accepted_at_unix: candidate.accepted_at_unix,
             image_repository: format!(
-                "proofstorm-registry.localhost:5000/proofstorm-candidates/{}",
+                "{registry}/proofstorm-candidates/{}",
                 candidate.implementation
             ),
             dockerfile: candidate_build_adapter(&candidate.implementation)
@@ -10168,7 +10190,8 @@ impl KubernetesRuntime {
             self.client.clone(),
             &self.control_namespace,
         );
-        let resource = candidate_build_resource(candidate, &self.control_namespace)?;
+        let resource =
+            candidate_build_resource(candidate, &self.control_namespace, &self.candidate_registry)?;
         if let Some(existing) = builds
             .get_opt(&candidate.resource_name)
             .await
@@ -12699,6 +12722,41 @@ mod tests {
         for workflow_specific in ["liquidity_bootstrap", "peer_connect", "channel_open"] {
             assert!(!native.tool_names().contains(&workflow_specific.to_owned()));
         }
+    }
+
+    #[test]
+    fn candidate_build_pushes_to_the_selected_installation_registry() {
+        let candidate: CandidateBuild = serde_json::from_value(serde_json::json!({
+            "api_version": "proofstorm/candidate-build/v1alpha1",
+            "id": "candidate-test", "workspace_id": "workspace", "principal_id": "developer",
+            "implementation": "nutshell", "base_version": "0.19.0",
+            "pull_request_url": "https://github.com/cashubtc/nutshell/pull/1095",
+            "resource_name": "candidate-test", "request_digest": "digest",
+            "phase": "pending", "accepted_at_unix": 1,
+            "repository": "cashubtc/nutshell", "commit_sha": "abc123", "version": "test"
+        }))
+        .unwrap();
+        let first = candidate_build_resource(
+            &candidate,
+            "proofstorm-system",
+            "k3d-pst-first-registry:5000",
+        )
+        .unwrap();
+        let second = candidate_build_resource(
+            &candidate,
+            "proofstorm-system",
+            "k3d-pst-second-registry:5000",
+        )
+        .unwrap();
+        assert_eq!(
+            first.spec.image_repository,
+            "k3d-pst-first-registry:5000/proofstorm-candidates/nutshell"
+        );
+        assert_eq!(
+            second.spec.image_repository,
+            "k3d-pst-second-registry:5000/proofstorm-candidates/nutshell"
+        );
+        assert_ne!(first.spec.image_repository, second.spec.image_repository);
     }
 
     #[test]

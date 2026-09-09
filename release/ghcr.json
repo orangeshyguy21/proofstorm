@@ -1,0 +1,6 @@
+{
+  "format_version": 1,
+  "namespace": "ghcr.io/orangeshyguy21/proofstorm",
+  "repository": "https://github.com/orangeshyguy21/proofstorm",
+  "visibility": "public"
+}

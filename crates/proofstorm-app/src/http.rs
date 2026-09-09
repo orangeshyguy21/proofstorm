@@ -3,7 +3,7 @@ use crate::{Error, environment::EnvironmentQuery, lab::Labs};
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::Frame;
 use tokio::sync::{Semaphore, watch};
-type Body = BoxBody<Bytes, Infallible>;
+pub(crate) type Body = BoxBody<Bytes, Infallible>;
 use proofstorm_view::{ObserverStatus, SystemView};
 use std::sync::{Arc, RwLock};
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
@@ -31,6 +31,22 @@ pub async fn serve(labs: Labs, port: u16) -> Result<(), Error> {
 }
 /// Serve an already-bound loopback listener, also used by transport contract tests.
 pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Error> {
+    serve_inner(labs, listener, None).await
+}
+
+pub(crate) async fn serve_managed(
+    labs: Labs,
+    listener: TcpListener,
+    session: Arc<crate::gui::Session>,
+) -> Result<(), Error> {
+    serve_inner(labs, listener, Some(session)).await
+}
+
+async fn serve_inner(
+    labs: Labs,
+    listener: TcpListener,
+    managed: Option<Arc<crate::gui::Session>>,
+) -> Result<(), Error> {
     let address = listener
         .local_addr()
         .map_err(|e| Error::failure(e.to_string(), None))?;
@@ -48,6 +64,7 @@ pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Err
     loop {
         tokio::select! {
             _=tokio::signal::ctrl_c()=>return Ok(()),
+            ()=async { if let Some(session)=&managed { session.shutdown.notified().await; } else { std::future::pending::<()>().await; } }=>return Ok(()),
             accepted=listener.accept(),if tasks.len()<16=> {
                 let (socket,_)=accepted.map_err(|e|Error::failure(e.to_string(),None))?;
                 let labs=labs.clone();
@@ -55,8 +72,22 @@ pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Err
                 let events=events.receiver.clone();
                 let telemetry=telemetry.receiver.clone();
                 let streams=streams.clone();
+                let managed=managed.clone();
                 tasks.spawn(async move {
-                    let service=service_fn(move |request|handle(labs.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),request));
+                    let service=service_fn(move |mut request| {
+                        let (labs,status,events,telemetry,streams,managed)=(labs.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),managed.clone());
+                        async move {
+                            if let Some(session)=&managed {
+                                if let Some(mut response)=crate::gui::transport::route(&mut request,session.clone()).await {
+                                    crate::gui::transport::secure(&mut response);
+                                    return Ok::<_,Infallible>(response);
+                                }
+                            }
+                            let mut response=handle(labs,status,events,telemetry,streams,request).await?;
+                            if managed.is_some() { crate::gui::transport::secure(&mut response); }
+                            Ok(response)
+                        }
+                    });
                     let _=http1::Builder::new().timer(TokioTimer::new()).header_read_timeout(Duration::from_secs(10)).keep_alive(false).max_buf_size(8192).serve_connection(TokioIo::new(socket),service).await;
                 });
             },
@@ -172,7 +203,7 @@ async fn handle(
 fn error(status: StatusCode, code: &str) -> Response<Body> {
     json(status, &serde_json::json!({"error":{"code":code}}))
 }
-fn json(status: StatusCode, value: &impl serde::Serialize) -> Response<Body> {
+pub(crate) fn json(status: StatusCode, value: &impl serde::Serialize) -> Response<Body> {
     let bytes = serde_json::to_vec(value)
         .unwrap_or_else(|_| b"{\"error\":{\"code\":\"serialization_failed\"}}".to_vec());
     let mut response = Response::new(Full::new(Bytes::from(bytes)).boxed());

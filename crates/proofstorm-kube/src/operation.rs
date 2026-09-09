@@ -18,7 +18,7 @@ use crate::{
     WalletQuoteClaimAction, WalletRoundTripAction, component_ports, instance_namespace,
 };
 
-const REACHABILITY_PROBE_IMAGE: &str = "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+use crate::images::PROBE_IMAGE as REACHABILITY_PROBE_IMAGE;
 
 /// Fixed driver for the secret-bearing OIDC/CAT/BAT baseline. It writes only
 /// an allowlisted result to the termination log.
@@ -2173,7 +2173,7 @@ pub fn render_bootstrap_job(spec: &BootstrapJobSpec<'_>) -> Result<Job, serde_js
             container("channel-confirm", bitcoin_image, &confirm, &[mount("shared", "/shared", false)]),
             container("channel-verify", lnd_image, &channel_verify, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
         ],
-        "containers": [container("result", "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[mount("shared", "/shared", true)])],
+        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[mount("shared", "/shared", true)])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},
             {"name": "mint-lnd", "persistentVolumeClaim": {"claimName": format!("data-{mint_lightning}-0")}},
@@ -2475,7 +2475,7 @@ pub fn render_channel_open_job(spec: &ChannelOpenJobSpec<'_>) -> Result<Job, ser
             container("channel-confirm", bitcoin_image, &confirm, &[]),
             container("channel-verify", from_image, &verify, &[mount("shared", "/shared", false), mount("from", "/from", true)])
         ],
-        "containers": [container("result", "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[mount("shared", "/shared", true)])],
+        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[mount("shared", "/shared", true)])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},
             {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
@@ -2816,7 +2816,7 @@ pub fn render_channel_close_job(spec: &ChannelCloseJobSpec<'_>) -> Result<Job, s
             container("channel-confirm", bitcoin_image, &confirm, &[]),
             container("channel-verify", from_image, &verify, &[mount("shared", "/shared", true), mount("from", "/from", true)])
         ],
-        "containers": [container("result", "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[])],
+        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},
             {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},

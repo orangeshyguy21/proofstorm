@@ -231,7 +231,7 @@ fn CanvasTile(
             .map_or("unknown", |c| health(&c))
     };
     view! {
-        <g data-node-id=move ||data.get().map(|n|n.id) class=move ||data.get().map(|n|format!("graph-node type-{} {} {}",canvas_model::appearance(n.kind).0,if selected.get()==n.id {"active"}else{""},if n.parent.is_some(){"embedded-node"}else{""})).unwrap_or_default()
+        <g data-node-id=move ||data.get().map(|n|n.id) class=move ||data.get().map(|n|format!("graph-node type-{} {} {}",canvas_model::appearance(n.kind).0,if selected.get()==n.id {"active"}else{""},if n.is_embedded(){"embedded-node"}else{""})).unwrap_or_default()
             transform=move ||data.get().map(|n|{let p=canvas_model::world_position(&n,&positions.get());format!("translate({} {})",p.0,p.1)})
             role="button" tabindex="0" aria-label=move ||data.get().map(|n|format!("Inspect {}{}",n.name,n.parent.map(|p|format!(" in {p}")).unwrap_or_default()))
             on:click=move |_|{if !suppress_click.get_untracked(){if let Some(n)=data.get_untracked(){selected.set(n.id);}}}
@@ -242,13 +242,13 @@ fn CanvasTile(
                 let delta=match event.key().as_str(){"ArrowLeft"=>(-step,0.0),"ArrowRight"=>(step,0.0),"ArrowUp"=>(0.0,-step),"ArrowDown"=>(0.0,step),_=>return};
                 event.prevent_default();selected.set(node.id.clone());positions.update(|p|canvas_model::move_node(&node,&nodes.get_untracked(),p,delta));on_save();
             }>
-            {move ||data.get().filter(|n|n.embedded_count>0).map(|n|view!{<rect class="component-group" x="-12" y="-12" width="284" height={canvas_model::group_height(&n)+24.0} rx="16" />})}
-            <rect class="node-body" width=move ||data.get().map_or(260,|n|if n.parent.is_some(){232}else{260}) height=move ||data.get().map_or(144,|n|if n.parent.is_some(){88}else{144}) rx="10" />
+            {move ||data.get().filter(|n|n.children_height>0.0).map(|n|view!{<rect class="component-group" x="-12" y="-12" width="284" height={canvas_model::group_height(&n)+24.0} rx="16" />})}
+            <rect class="node-body" width=move ||data.get().map_or(260.0,|n|n.width()) height=move ||data.get().map_or(144.0,|n|n.height()) rx="10" />
             <path class="type-icon" transform="translate(16 12) scale(.65)" d=move ||data.get().map(|n|canvas_model::appearance(n.kind).2) />
             <text class="node-kind" x="39" y="25">{move ||data.get().map(|n|canvas_model::appearance(n.kind).1)}</text>
             <text class="node-name" x="17" y="52">{move ||data.get().map(|n|short(&n.name,26))}</text>
-            <text class="node-impl" x="17" y="73">{move ||data.get().map(|n|if n.parent.is_some(){"Embedded · shares parent process".into()}else{short(&n.implementation,30)})}</text>
-            <Show when=move ||data.get().is_some_and(|n|n.parent.is_none())>
+            <text class="node-impl" x="17" y="73">{move ||data.get().map(|n|if n.is_embedded(){"Embedded · shares parent process".into()}else{short(&n.implementation,30)})}</text>
+            <Show when=move ||data.get().is_some_and(|n|!n.is_embedded())>
                 <NodeBalance telemetry lab data />
                 <text class="node-health" x="17" y="132">{status}</text><circle class=move ||format!("status-dot {}",status()) cx="241" cy="127" r="4" />
             </Show>

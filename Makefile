@@ -11,6 +11,10 @@ BIN_DIR := $(TOOLS_DIR)/bin
 DOWNLOAD_DIR := $(TOOLS_DIR)/downloads
 ACCEPTANCE := $(ROOT)target/debug/proofstorm-acceptance
 
+# This Makefile owns the legacy contributor cluster, not an alpha installation.
+# Do not let installation selection inherited from a shell redirect its clients.
+unexport PROOFSTORM_HOME PROOFSTORM_KUBECONFIG
+
 # Pinned host tools and Proofstorm release version; component images live in the catalog.
 include $(ROOT)tools/versions.env
 

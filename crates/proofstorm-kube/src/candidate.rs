@@ -7,9 +7,7 @@ use crate::ProofstormCandidateBuild;
 pub const CANDIDATE_BUILD_LABEL: &str = "proofstorm.dev/candidate-build";
 pub const CANDIDATE_CANCEL_ANNOTATION: &str = "proofstorm.dev/cancel-token";
 
-const GIT_IMAGE: &str =
-    "docker.io/alpine/git@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26";
-const BUILDKIT_IMAGE: &str = "docker.io/moby/buildkit@sha256:a02f6571999693089dc928e9bbb64836c21703b214195d8637c011f1a7025ef6";
+use crate::images::{BUILDKIT_IMAGE, GIT_IMAGE};
 
 #[derive(Debug, Error)]
 pub enum CandidateBuildRenderError {

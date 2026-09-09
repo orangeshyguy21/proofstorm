@@ -1,9 +1,9 @@
 //! Stable canvas identities and geometry, independent of browser rendering.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-use proofstorm_core::ComponentKind;
+use proofstorm_core::{ComponentKind, LinkKind};
 use proofstorm_view::{ComponentView, EnvironmentLab};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const WIDTH: f64 = 260.0;
 pub const HEIGHT: f64 = 144.0;
@@ -20,7 +20,7 @@ pub struct CanvasNode {
     pub name: String,
     pub implementation: String,
     pub kind: ComponentKind,
-    pub embedded_count: usize,
+    pub children_height: f64,
 }
 pub fn embedded_id(parent: &str, resource: &str) -> String {
     format!(
@@ -28,8 +28,72 @@ pub fn embedded_id(parent: &str, resource: &str) -> String {
         serde_json::to_string(&(parent, resource)).unwrap_or_default()
     )
 }
-pub fn nodes(lab: &EnvironmentLab) -> Vec<CanvasNode> {
+impl CanvasNode {
+    pub fn is_embedded(&self) -> bool {
+        self.id != self.owner
+    }
+    pub fn height(&self) -> f64 {
+        if self.is_embedded() { 88.0 } else { HEIGHT }
+    }
+    pub fn width(&self) -> f64 {
+        if self.is_embedded() { 232.0 } else { WIDTH }
+    }
+    // Grouped workloads retain their component identity and their old standalone
+    // position, but store their new relative position separately per parent.
+    pub fn position_key(&self) -> String {
+        match &self.parent {
+            Some(parent) if !self.is_embedded() => format!(
+                "resource:{}",
+                serde_json::to_string(&(parent, &self.id)).unwrap_or_default()
+            ),
+            _ => self.id.clone(),
+        }
+    }
+}
+pub fn resource_parents(lab: &EnvironmentLab) -> BTreeMap<String, String> {
     lab.components
+        .items
+        .iter()
+        .filter(|c| c.kind == ComponentKind::Database)
+        .filter_map(|resource| {
+            let consumers = lab
+                .links
+                .items
+                .iter()
+                .filter_map(|l| {
+                    if l.to == resource.id {
+                        Some(l.from.as_str())
+                    } else if l.from == resource.id {
+                        Some(l.to.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<BTreeSet<_>>();
+            if consumers.len() != 1 {
+                return None;
+            }
+            let parent = *consumers.first()?;
+            let owner = lab.components.items.iter().find(|c| c.id == parent)?;
+            if owner.kind == ComponentKind::Database
+                || resource
+                    .details
+                    .as_ref()
+                    .is_some_and(|d| !d.embedded.is_empty())
+                || !lab.links.items.iter().any(|l| {
+                    l.kind == LinkKind::DatabaseBackend && l.from == parent && l.to == resource.id
+                })
+            {
+                return None;
+            }
+            Some((resource.id.clone(), parent.to_owned()))
+        })
+        .collect()
+}
+pub fn nodes(lab: &EnvironmentLab) -> Vec<CanvasNode> {
+    let parents = resource_parents(lab);
+    let mut nodes = lab
+        .components
         .items
         .iter()
         .flat_map(|component| {
@@ -41,11 +105,11 @@ pub fn nodes(lab: &EnvironmentLab) -> Vec<CanvasNode> {
             let mut result = vec![CanvasNode {
                 id: component.id.clone(),
                 owner: component.id.clone(),
-                parent: None,
+                parent: parents.get(&component.id).cloned(),
                 name: component.id.clone(),
                 implementation: component.implementation.clone(),
                 kind: component.kind,
-                embedded_count: embedded.len(),
+                children_height: 0.0,
             }];
             result.extend(embedded.iter().map(|resource| CanvasNode {
                 id: embedded_id(&component.id, &resource.id),
@@ -54,11 +118,24 @@ pub fn nodes(lab: &EnvironmentLab) -> Vec<CanvasNode> {
                 name: resource.name.clone(),
                 implementation: resource.id.clone(),
                 kind: resource.kind,
-                embedded_count: 0,
+                children_height: 0.0,
             }));
             result
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let mut heights = BTreeMap::<String, f64>::new();
+    for node in &nodes {
+        if let Some(parent) = &node.parent {
+            *heights.entry(parent.clone()).or_default() += node.height() + 20.0;
+        }
+    }
+    for node in &mut nodes {
+        node.children_height = heights.get(&node.id).copied().unwrap_or_default();
+    }
+    // Paint wrappers before their children, even when a database precedes its
+    // consumer in the API response.
+    nodes.sort_by_key(|node| (node.parent.is_some(), !node.is_embedded()));
+    nodes
 }
 pub fn selected_owner<'a>(lab: &'a EnvironmentLab, id: &str) -> Option<&'a ComponentView> {
     lab.components.items.iter().find(|c| {
@@ -69,12 +146,19 @@ pub fn selected_owner<'a>(lab: &'a EnvironmentLab, id: &str) -> Option<&'a Compo
     })
 }
 pub fn group_height(node: &CanvasNode) -> f64 {
-    HEIGHT
-        + f64::from(u32::try_from(node.embedded_count).unwrap_or(0)) * 108.0
-        + if node.embedded_count > 0 { 20.0 } else { 0.0 }
+    node.height()
+        + node.children_height
+        + if node.children_height > 0.0 {
+            20.0
+        } else {
+            0.0
+        }
 }
 pub fn world_position(node: &CanvasNode, positions: &Positions) -> (f64, f64) {
-    let local = positions.get(&node.id).copied().unwrap_or_default();
+    let local = positions
+        .get(&node.position_key())
+        .copied()
+        .unwrap_or_default();
     node.parent.as_ref().map_or(local, |parent| {
         let parent = positions.get(parent).copied().unwrap_or_default();
         (parent.0 + local.0, parent.1 + local.1)
@@ -106,14 +190,19 @@ pub fn ensure_positions(nodes: &[CanvasNode], positions: &mut Positions) {
         }
         positions.insert(node.id.clone(), (x, y));
     }
-    let mut counts = BTreeMap::<String, u32>::new();
+    let mut offsets = BTreeMap::<String, f64>::new();
     for node in nodes.iter().filter(|n| n.parent.is_some()) {
         let parent = node.parent.as_ref().unwrap();
-        let index = counts.entry(parent.clone()).or_default();
-        positions
-            .entry(node.id.clone())
-            .or_insert((14.0, 164.0 + f64::from(*index) * 108.0));
-        *index += 1;
+        let offset = offsets.entry(parent.clone()).or_insert(164.0);
+        let position = positions
+            .entry(node.position_key())
+            .or_insert(((WIDTH - node.width()) / 2.0, *offset));
+        let parent = nodes.iter().find(|n| &n.id == parent).unwrap();
+        position.0 = position.0.clamp(0.0, WIDTH - node.width());
+        position.1 = position
+            .1
+            .clamp(154.0, group_height(parent) - node.height());
+        *offset += node.height() + 20.0;
     }
 }
 pub fn move_node(
@@ -122,17 +211,20 @@ pub fn move_node(
     positions: &mut Positions,
     delta: (f64, f64),
 ) {
-    let previous = positions.get(&node.id).copied().unwrap_or_default();
+    let previous = positions
+        .get(&node.position_key())
+        .copied()
+        .unwrap_or_default();
     let mut next = (previous.0 + delta.0, previous.1 + delta.1);
     if let Some(parent) = node
         .parent
         .as_ref()
         .and_then(|id| nodes.iter().find(|n| &n.id == id))
     {
-        next.0 = next.0.clamp(0.0, 28.0);
-        next.1 = next.1.clamp(154.0, group_height(parent) - 88.0);
+        next.0 = next.0.clamp(0.0, WIDTH - node.width());
+        next.1 = next.1.clamp(154.0, group_height(parent) - node.height());
     }
-    positions.insert(node.id.clone(), next);
+    positions.insert(node.position_key(), next);
 }
 pub fn bounds(nodes: &[CanvasNode], positions: &Positions) -> (f64, f64, f64, f64) {
     let roots = nodes
@@ -213,7 +305,7 @@ mod tests {
             name: id.into(),
             implementation: id.into(),
             kind,
-            embedded_count: 0,
+            children_height: 0.0,
         }
     }
     #[test]
@@ -240,9 +332,10 @@ mod tests {
     #[test]
     fn parent_moves_children_and_embedded_moves_remain_inside_group() {
         let mut parent = node("mint", ComponentKind::Mint);
-        parent.embedded_count = 1;
+        parent.children_height = 108.0;
         let mut child = node(&embedded_id("mint", "ldk-node"), ComponentKind::Lightning);
         child.parent = Some("mint".into());
+        child.owner = "mint".into();
         let items = vec![parent, child];
         let mut p = Positions::new();
         ensure_positions(&items, &mut p);
@@ -255,6 +348,84 @@ mod tests {
         move_node(&items[1], &items, &mut p, (10000.0, -10000.0));
         assert_eq!(p[&items[1].id], (28.0, 154.0));
         assert_ne!(embedded_id("a::b", "c"), embedded_id("a", "b::c"));
+    }
+    fn resource_lab(shared: bool) -> EnvironmentLab {
+        use serde_json::json;
+        let component = |id, kind| json!({"id":id,"kind":kind,"implementation":"test","conditions":[],"endpoints":[]});
+        let mut mint = component("mint", "mint");
+        mint["details"] = json!({"resolved_version":"1", "image":"test", "adapter_version":"1",
+            "embedded":[{"id":"bdk", "name":"BDK wallet", "kind":"wallet"}]});
+        let mut links = vec![
+            json!({"id":"db", "from":"mint", "to":"db", "kind":"database_backend"}),
+            json!({"id":"cache", "from":"mint", "to":"cache", "kind":"database_backend"}),
+        ];
+        if shared {
+            links
+                .push(json!({"id":"shared", "from":"other", "to":"db", "kind":"database_backend"}));
+        }
+        serde_json::from_value(json!({"id":"lab", "journal_read_at_unix":10,
+            "runtime":{"state":"available","fetched_at_unix":10},
+            "components":{"items":[component("db","database"), mint, component("cache","database"), component("other","mint")]},
+            "links":{"items":links}, "sessions":{"items":[]}, "activity":{"items":[]}})).unwrap()
+    }
+    #[test]
+    fn dedicated_databases_share_the_wrapper_but_keep_their_own_identity() {
+        let lab = resource_lab(false);
+        let items = nodes(&lab);
+        let db = items.iter().find(|n| n.id == "db").unwrap();
+        let mint = items.iter().find(|n| n.id == "mint").unwrap();
+        assert_eq!(db.parent.as_deref(), Some("mint"));
+        assert_eq!(db.owner, "db");
+        assert!(!db.is_embedded());
+        assert_eq!(selected_owner(&lab, "db").unwrap().id, "db");
+        assert_eq!(group_height(mint), 600.0);
+        assert!(
+            items.iter().position(|n| n.id == "mint") < items.iter().position(|n| n.id == "db")
+        );
+        assert!(crate::relationships::edges(&lab, None, 0).is_empty());
+
+        let embedded = embedded_id("mint", "bdk");
+        let mut p = Positions::from([
+            ("db".into(), (1400.0, 800.0)),
+            (embedded.clone(), (14.0, 164.0)),
+        ]);
+        ensure_positions(&items, &mut p);
+        assert_eq!(p[&embedded], (14.0, 164.0));
+        assert_eq!(p[&db.position_key()], (0.0, 272.0));
+        assert_eq!(p["db"], (1400.0, 800.0));
+        let before = world_position(db, &p);
+        move_node(mint, &items, &mut p, (100.0, 50.0));
+        assert_eq!(world_position(db, &p), (before.0 + 100.0, before.1 + 50.0));
+        move_node(db, &items, &mut p, (10000.0, 10000.0));
+        assert_eq!(p[&db.position_key()], (0.0, 456.0));
+        let saved = serde_json::to_string(&Layout {
+            positions: p.clone(),
+        })
+        .unwrap();
+        let mut restored = serde_json::from_str::<Layout>(&saved).unwrap().positions;
+        ensure_positions(&items, &mut restored);
+        assert_eq!(restored, p);
+    }
+    #[test]
+    fn shared_or_unowned_databases_stay_standalone() {
+        let mut lab = resource_lab(true);
+        let items = nodes(&lab);
+        assert!(
+            items
+                .iter()
+                .find(|n| n.id == "db")
+                .unwrap()
+                .parent
+                .is_none()
+        );
+        assert_eq!(crate::relationships::edges(&lab, None, 0).len(), 2);
+        lab.links.items.clear();
+        assert!(
+            nodes(&lab)
+                .iter()
+                .filter(|n| n.kind == ComponentKind::Database)
+                .all(|n| n.parent.is_none())
+        );
     }
     #[test]
     fn invalid_saved_coordinates_are_replaced() {

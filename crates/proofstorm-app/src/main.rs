@@ -1,30 +1,32 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use proofstorm_app::{
-    config::{DEFAULT_CONTEXT, DEFAULT_DATABASE, DEFAULT_NAMESPACE, DEFAULT_WORKSPACE},
+    config::{DEFAULT_NAMESPACE, DEFAULT_WORKSPACE},
     lab::Labs,
 };
 use proofstorm_core::{
     Capability, InstancePhase, LabSpec, OperationPhase,
     native::{NativeCommand, NativeOutput, OutputMode},
 };
-use proofstorm_store::{Store, Workspace};
+use proofstorm_store::Store;
 use std::{fmt::Write, path::PathBuf, time::Duration};
 mod server_restart;
 
 #[derive(Parser)]
 #[command(
     name = "proofstorm",
+    version,
     about = "Start protocol labs, connect your app, and inspect what happened"
 )]
 struct Args {
-    #[arg(
-        long,
-        global = true,
-        env = "PROOFSTORM_DB",
-        default_value = DEFAULT_DATABASE
-    )]
-    database: PathBuf,
+    /// Isolated installation home. Initialize with `--home PATH init` first.
+    #[arg(long, global = true, env = "PROOFSTORM_HOME")]
+    home: Option<PathBuf>,
+    /// Read only this kubeconfig; never merge or change the user's current context.
+    #[arg(long, global = true, env = "PROOFSTORM_KUBECONFIG")]
+    kubeconfig: Option<PathBuf>,
+    #[arg(long, global = true, env = "PROOFSTORM_DB")]
+    database: Option<PathBuf>,
     #[arg(
         long,
         global = true,
@@ -39,13 +41,8 @@ struct Args {
         default_value = "developer"
     )]
     principal: String,
-    #[arg(
-        long,
-        global = true,
-        env = "PROOFSTORM_CONTEXT",
-        default_value = DEFAULT_CONTEXT
-    )]
-    context: String,
+    #[arg(long, global = true, env = "PROOFSTORM_CONTEXT")]
+    context: Option<String>,
     #[arg(
         long,
         global = true,
@@ -59,8 +56,91 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open this installation's GUI in the default browser. Does not attach tools.
+    Gui {
+        /// Prefill this project folder; defaults to the caller's current directory.
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        #[arg(long)]
+        allow_development: bool,
+        /// Start/reuse the GUI without opening a browser (for diagnostics).
+        #[arg(long)]
+        no_open: bool,
+    },
+    /// Stop only this installation's managed GUI. Labs keep running.
+    Stop,
+    #[command(hide = true)]
+    GuiServe {
+        #[arg(long)]
+        instance: String,
+        #[arg(long)]
+        allow_development: bool,
+    },
+    /// Configure project-scoped MCP and verify its server without opening an app.
+    Attach {
+        #[arg(value_enum)]
+        harness: Harness,
+        /// Project directory to connect; defaults to the current directory.
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        /// Show the proposed managed entry without changing files or permissions.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        allow_development: bool,
+    },
+    /// Attach, then open Codex's native app or OpenCode/Claude Code in this terminal.
+    Open {
+        #[arg(value_enum)]
+        harness: Harness,
+        /// Project directory to connect; defaults to the current directory.
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        /// Use Codex's CLI instead of its native app; other agents always use the terminal.
+        #[arg(long)]
+        cli: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        allow_development: bool,
+    },
+    /// Prepare and start this installed bundle's isolated runtime (never the dev cluster).
+    Setup {
+        /// Explicit opt-in for a local development bundle.
+        #[arg(long)]
+        allow_development: bool,
+        /// Download verified tools and initialize private identity without starting a runtime.
+        #[arg(long)]
+        prepare_only: bool,
+        /// Download the entire catalog now instead of only a lab's images on first use.
+        #[arg(long, conflicts_with = "prepare_only")]
+        prefetch_all: bool,
+    },
+    /// Read-only installation/runtime checks. Does not assert harness discovery.
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report embedded release contents without reading state or contacting a cluster.
+    ReleaseInfo,
+    /// Install a verified release bundle into a user-owned prefix (no runtime setup).
+    InstallBundle {
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        prefix: PathBuf,
+        #[arg(long)]
+        allow_development: bool,
+    },
     /// Explicitly configure this local developer's permissions (no cluster changes).
-    Init,
+    Init {
+        /// Reserve a port choice in a new installation (requires --home).
+        #[arg(long, requires = "home", value_parser = clap::value_parser!(u16).range(1..))]
+        api_port: Option<u16>,
+        /// Reserve a registry port choice in a new installation (requires --home).
+        #[arg(long, requires = "home", value_parser = clap::value_parser!(u16).range(1..))]
+        registry_port: Option<u16>,
+    },
     /// Create or update a lab from JSON, preserving unchanged components.
     Up {
         /// Preview a live edit without applying it.
@@ -149,61 +229,235 @@ enum Command {
     },
 }
 
+use proofstorm_app::harness::Harness;
+
 #[allow(
     clippy::too_many_lines,
     reason = "CLI command dispatch keeps argument-to-application mappings together"
 )]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut args = Args::parse();
+    let args = Args::parse();
+    if matches!(
+        args.command,
+        Command::Gui { .. } | Command::GuiServe { .. } | Command::Stop
+    ) {
+        let home = args
+            .home
+            .as_ref()
+            .context("GUI requires an installed --home; run setup first")?;
+        anyhow::ensure!(
+            args.context.is_none()
+                && args.kubeconfig.is_none()
+                && args.database.is_none()
+                && args.workspace == DEFAULT_WORKSPACE
+                && args.principal == "developer"
+                && args.namespace == DEFAULT_NAMESPACE,
+            "the managed GUI uses only the installation's private runtime; remove overrides"
+        );
+        let executable = std::env::current_exe()?.canonicalize()?;
+        let bundle = executable
+            .parent()
+            .and_then(std::path::Path::parent)
+            .context("installed bundle not found")?;
+        return match &args.command {
+            Command::Gui {
+                project,
+                allow_development,
+                no_open,
+            } => print(
+                &proofstorm_app::gui::open(home, project, bundle, *allow_development, *no_open)
+                    .await?,
+            ),
+            Command::Stop => print(&proofstorm_app::gui::stop(home).await?),
+            Command::GuiServe {
+                instance,
+                allow_development,
+            } => proofstorm_app::gui::serve(home, bundle, instance, *allow_development).await,
+            _ => unreachable!(),
+        };
+    }
+    if let Command::Attach {
+        harness,
+        project,
+        dry_run,
+        allow_development,
+        ..
+    }
+    | Command::Open {
+        harness,
+        project,
+        dry_run,
+        allow_development,
+        ..
+    } = &args.command
+    {
+        let home = args
+            .home
+            .as_ref()
+            .context("attachment requires an installed --home; run setup first")?;
+        anyhow::ensure!(
+            args.context.is_none()
+                && args.kubeconfig.is_none()
+                && args.database.is_none()
+                && args.workspace == DEFAULT_WORKSPACE
+                && args.principal == "developer"
+                && args.namespace == DEFAULT_NAMESPACE,
+            "attachment uses only this installation's private runtime and default workspace; remove overrides"
+        );
+        let executable = std::env::current_exe()?.canonicalize()?;
+        let bundle = executable
+            .parent()
+            .and_then(std::path::Path::parent)
+            .context("installed bundle not found")?;
+        let plan = proofstorm_app::harness::plan_for(*harness, home, project, bundle, *allow_development)?;
+        let launch = if let Command::Open { cli, .. } = &args.command {
+            let launch = proofstorm_app::harness::launch::detect_for(*harness, &plan.project, *cli)?;
+            if launch.interface == "cli" && !dry_run {
+                proofstorm_app::harness::launch::require_terminal()?;
+            }
+            Some(launch)
+        } else {
+            None
+        };
+        if *dry_run {
+            return print(
+                &serde_json::json!({"attachment":plan,"launch":launch,"changes_applied":false}),
+            );
+        }
+        let attached = proofstorm_app::harness::apply(plan).await?;
+        print(&attached)?;
+        if let Some(launch) = launch {
+            proofstorm_app::harness::launch::run(&launch)?;
+        }
+        return Ok(());
+    }
+    if matches!(args.command, Command::Setup { .. } | Command::Doctor { .. }) {
+        let home = args.home.as_ref().context(
+            "installed setup/doctor requires --home (installed launchers supply a private default)",
+        )?;
+        anyhow::ensure!(home.is_absolute(), "--home must be absolute");
+        anyhow::ensure!(
+            args.context.is_none() && args.kubeconfig.is_none() && args.database.is_none(),
+            "setup/doctor refuses context, kubeconfig, and database overrides; use only the installation home"
+        );
+        anyhow::ensure!(
+            args.workspace == DEFAULT_WORKSPACE
+                && args.principal == "developer"
+                && args.namespace == DEFAULT_NAMESPACE,
+            "installed setup/doctor currently requires the default developer, workspace, and namespace"
+        );
+        if let Command::Doctor { json } = args.command {
+            let report = proofstorm_app::bootstrap::doctor(home);
+            if json {
+                print(&report)?;
+            } else {
+                for check in report["checks"]
+                    .as_array()
+                    .context("doctor checks missing")?
+                {
+                    println!(
+                        "{}: {}{}",
+                        check["name"].as_str().unwrap_or("check"),
+                        if check["ok"] == true {
+                            "OK"
+                        } else {
+                            "NOT READY"
+                        },
+                        check["message"]
+                            .as_str()
+                            .map_or_else(String::new, |message| format!(" — {message}"))
+                    );
+                }
+                println!("MCP server and harness discovery: not checked.");
+            }
+            anyhow::ensure!(
+                report["ok"] == true,
+                "installation is not ready; see doctor checks"
+            );
+            return Ok(());
+        }
+        if let Command::Setup {
+            allow_development,
+            prepare_only,
+            prefetch_all,
+        } = args.command
+        {
+            let executable = std::env::current_exe()?.canonicalize()?;
+            let bundle = executable
+                .parent()
+                .and_then(std::path::Path::parent)
+                .context("cannot locate installed bundle")?;
+            return print(&proofstorm_app::bootstrap::setup(
+                home,
+                bundle,
+                allow_development,
+                prepare_only,
+                prefetch_all,
+            )?);
+        }
+    }
+    if matches!(args.command, Command::ReleaseInfo) {
+        return print(&proofstorm_app::release::describe());
+    }
+    if let Command::InstallBundle {
+        bundle,
+        prefix,
+        allow_development,
+    } = &args.command
+    {
+        return print(&proofstorm_app::installer::install(
+            bundle,
+            prefix,
+            *allow_development,
+        )?);
+    }
+    if let (
+        Some(home),
+        Command::Init {
+            api_port,
+            registry_port,
+        },
+    ) = (&args.home, &args.command)
+    {
+        anyhow::ensure!(!home.as_os_str().is_empty(), "--home must not be empty");
+        proofstorm_app::installation::Installation::initialize(home, *api_port, *registry_port)?;
+    }
     let environment = proofstorm_app::config::Environment::resolve(
         |key| match key {
-            "PROOFSTORM_DB" => Some(args.database.to_string_lossy().into_owned()),
+            "PROOFSTORM_HOME" => args
+                .home
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            "PROOFSTORM_KUBECONFIG" => args
+                .kubeconfig
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            "PROOFSTORM_DB" => args
+                .database
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             "PROOFSTORM_WORKSPACE" => Some(args.workspace.clone()),
             "PROOFSTORM_PRINCIPAL" => Some(args.principal.clone()),
-            "PROOFSTORM_CONTEXT" => Some(args.context.clone()),
+            "PROOFSTORM_CONTEXT" => args.context.clone(),
             "PROOFSTORM_CONTROL_NAMESPACE" => Some(args.namespace.clone()),
             _ => None,
         },
         &std::env::current_dir()?,
     )?;
-    args.database.clone_from(&environment.database);
     environment.report();
-    if let Some(parent) = args.database.parent().filter(|p| !p.as_os_str().is_empty()) {
+    if let Some(parent) = environment
+        .database
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
         std::fs::create_dir_all(parent)?;
     }
-    let store = Store::open(&args.database)?;
-    if matches!(args.command, Command::Init) {
-        store.put_workspace(&Workspace {
-            id: args.workspace.clone(),
-            name: args.workspace.clone(),
-        })?;
-        store.put_principal(&args.principal)?;
-        store.replace_grants(
-            &args.workspace,
-            &args.principal,
-            [
-                Capability::CatalogRead,
-                Capability::LabCreate,
-                Capability::LabEdit,
-                Capability::LabRead,
-                Capability::LabPublish,
-                Capability::LabMaterialize,
-                Capability::LabStatus,
-                Capability::LabClose,
-                Capability::LabConnect,
-                Capability::ExperimentCreate,
-                Capability::ExperimentRead,
-                Capability::ExperimentClose,
-                Capability::LabOperate,
-                Capability::ExperimentRead,
-                Capability::ComponentExecLive,
-                Capability::ArtifactRead,
-                Capability::ActionCancel,
-            ],
-        )?;
+    let store = Store::open(&environment.database)?;
+    if matches!(args.command, Command::Init { .. }) {
+        proofstorm_app::developer::configure(&store, &args.workspace, &args.principal)?;
         return print(
-            &serde_json::json!({"database":args.database,"workspace":args.workspace,"principal":args.principal,"context":args.context,"capabilities":store.capabilities(&args.workspace,&args.principal)?}),
+            &serde_json::json!({"database":environment.database,"workspace":args.workspace,"principal":args.principal,"context":environment.context,"installation":environment.installation,"kubeconfig":environment.kubeconfig,"capabilities":store.capabilities(&args.workspace,&args.principal)?}),
         );
     }
     if matches!(args.command, Command::Result { .. }) {
@@ -213,8 +467,20 @@ async fn main() -> Result<()> {
     }
     store.authorize(&args.workspace,&args.principal,Capability::LabStatus).context("developer is not configured; run proofstorm init explicitly to configure local permissions")?;
     let runtime = environment.runtime().await?;
-    let labs = Labs::new(store, runtime, args.workspace, args.principal);
+    let labs = Labs::new(store, runtime, args.workspace, args.principal)
+        .with_installation(environment.installation.clone());
     match args.command {
+        Command::ReleaseInfo
+        | Command::Gui { .. }
+        | Command::GuiServe { .. }
+        | Command::Stop
+        | Command::Attach { .. }
+        | Command::Open { .. }
+        | Command::InstallBundle { .. }
+        | Command::Setup { .. }
+        | Command::Doctor { .. } => {
+            unreachable!("release metadata is handled before environment resolution")
+        }
         Command::Up {
             file,
             name,
@@ -293,6 +559,10 @@ async fn main() -> Result<()> {
         )?,
         Command::Serve { port, replace } => {
             if replace {
+                anyhow::ensure!(
+                    environment.installation.is_none(),
+                    "--replace is only for the contributor server; an isolated installation must use its own free port"
+                );
                 server_restart::stop_previous(port).await?;
             }
             proofstorm_app::http::serve(labs, port).await?;
@@ -372,7 +642,7 @@ async fn main() -> Result<()> {
             print(&connection.descriptor)?;
             tokio::select! {result=connection.serve()=>result?, result=tokio::signal::ctrl_c()=>result?}
         }
-        Command::Init | Command::Result { .. } => {
+        Command::Init { .. } | Command::Result { .. } => {
             unreachable!("handled before connecting to runtime")
         }
     }
@@ -399,4 +669,56 @@ fn new_request_id() -> Result<String> {
 fn print(value: &impl serde::Serialize) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod attachment_args_tests {
+    use super::*;
+
+    #[test]
+    fn gui_defaults_to_current_directory_and_default_browser() {
+        let args = Args::try_parse_from(["proofstorm", "gui"]).unwrap();
+        assert!(
+            matches!(args.command,Command::Gui {project,no_open:false,..} if project==PathBuf::from("."))
+        );
+        let args = Args::try_parse_from(["proofstorm", "gui", "/a project", "--no-open"]).unwrap();
+        assert!(
+            matches!(args.command,Command::Gui {project,no_open:true,..} if project==PathBuf::from("/a project"))
+        );
+        assert!(matches!(
+            Args::try_parse_from(["proofstorm", "stop"])
+                .unwrap()
+                .command,
+            Command::Stop
+        ));
+        assert!(Args::try_parse_from(["proofstorm", "ui"]).is_err());
+    }
+
+    #[test]
+    fn attachment_defaults_to_current_directory_and_accepts_explicit_paths() {
+        for action in ["open", "attach"] {
+            for path in [None, Some("/a project/with spaces")] {
+                let mut input = vec!["proofstorm", action, "codex"];
+                if let Some(path) = path {
+                    input.push(path);
+                }
+                let args = Args::try_parse_from(input).unwrap();
+                let (Command::Open { project, .. } | Command::Attach { project, .. }) =
+                    args.command
+                else {
+                    panic!("expected attachment command");
+                };
+                assert_eq!(project, PathBuf::from(path.unwrap_or(".")));
+            }
+        }
+    }
+
+    #[test]
+    fn current_directory_open_accepts_cli_and_dry_run_flags() {
+        let args =
+            Args::try_parse_from(["proofstorm", "open", "codex", "--cli", "--dry-run"]).unwrap();
+        assert!(
+            matches!(args.command, Command::Open { project, cli: true, dry_run: true, .. } if project == PathBuf::from("."))
+        );
+    }
 }

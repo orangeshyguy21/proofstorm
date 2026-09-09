@@ -38,6 +38,14 @@ impl Labs {
         key: &str,
         plan: Option<&str>,
     ) -> Result<LabInstanceStatus, Error> {
+        self.authorize(&[
+            proofstorm_core::Capability::LabMaterialize,
+            proofstorm_core::Capability::LabStatus,
+        ])?;
+        let published =
+            self.store
+                .revision_for_materialize(&self.workspace, &self.principal, revision)?;
+        self.prepare_images(&published).await?;
         let id = match self.resolve(reference) {
             Ok(lab) => lab.instance_id,
             Err(error) if error.kind == ErrorKind::Missing => reference.to_owned(),
@@ -130,6 +138,7 @@ impl Labs {
             draft.version,
             &format!("{key}:publish"),
         )?;
+        self.prepare_images(&revision).await?;
         let instance = self.store.materialize(
             &self.workspace,
             &self.principal,
@@ -162,13 +171,22 @@ impl Labs {
         let accepted = self
             .store
             .accept_update(&self.workspace, &self.principal, plan, key)?;
-        let result = crate::updates::reconcile(
-            &self.runtime,
-            &self.store,
-            &self.workspace,
-            &self.principal,
-            &accepted.id,
-        )
+        let result = async {
+            let revision = self.store.revision_for_materialize(
+                &self.workspace,
+                &self.principal,
+                &plan.target_revision,
+            )?;
+            self.prepare_images(&revision).await?;
+            crate::updates::reconcile(
+                &self.runtime,
+                &self.store,
+                &self.workspace,
+                &self.principal,
+                &accepted.id,
+            )
+            .await
+        }
         .await;
         let (instance, phase, reconciliation_error) = match result {
             Ok(status) => (status.instance, status.phase, None),

@@ -8,6 +8,30 @@ use crate::Kubectl;
 
 const LOCAL_REGISTRY: &str = "proofstorm-registry.localhost:5000/";
 
+pub struct RegistryTarget {
+    host: String,
+    node_prefix: String,
+}
+
+impl Default for RegistryTarget {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1:5111".into(),
+            node_prefix: "k3d-proofstorm-".into(),
+        }
+    }
+}
+
+impl RegistryTarget {
+    #[must_use]
+    pub fn for_installation(installation: &proofstorm_app::installation::Installation) -> Self {
+        Self {
+            host: installation.host_registry(),
+            node_prefix: format!("{}-", installation.context()),
+        }
+    }
+}
+
 fn catalog_images() -> BTreeSet<String> {
     proofstorm_core::default_catalog()
         .entries
@@ -20,11 +44,11 @@ fn local_reference(image: &str) -> Option<(&str, &str)> {
     image.strip_prefix(LOCAL_REGISTRY)?.split_once('@')
 }
 
-fn registry_has(repository: &str, digest: &str) -> Result<bool> {
+fn registry_has(target: &RegistryTarget, repository: &str, digest: &str) -> Result<bool> {
     let output = Command::new("curl").args([
         "--silent", "--show-error", "--fail", "--head", "--max-time", "15",
         "-H", "Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json",
-        &format!("http://127.0.0.1:5111/v2/{repository}/manifests/{digest}"),
+        &format!("http://{}/v2/{repository}/manifests/{digest}", target.host),
     ]).output().context("query local image registry")?;
     Ok(output.status.success()
         && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
@@ -67,6 +91,10 @@ fn upstream_reference(repository: &str, digest: &str) -> Option<String> {
 /// Mirror publisher images by digest and restore local builds from exact cached
 /// digests. A rebuild is never silently substituted for a reviewed artifact.
 pub fn provision() -> Result<()> {
+    provision_for(&RegistryTarget::default())
+}
+
+pub fn provision_for(target: &RegistryTarget) -> Result<()> {
     let cache = Command::new("docker")
         .args(["image", "ls", "--digests", "--format", "{{json .}}"])
         .output()
@@ -79,12 +107,13 @@ pub fn provision() -> Result<()> {
         let Some((repository, digest)) = local_reference(&image) else {
             continue;
         };
-        if registry_has(repository, digest)? {
+        if registry_has(target, repository, digest)? {
             println!("Catalog image available: {image}");
             continue;
         }
         let tag = format!(
-            "localhost:5111/{repository}:catalog-{}",
+            "{}/{repository}:catalog-{}",
+            target.host,
             digest
                 .strip_prefix("sha256:")
                 .context("catalog image must use a sha256 digest")?
@@ -111,7 +140,7 @@ pub fn provision() -> Result<()> {
             run("docker", &["tag", &cached, &tag])?;
             run("docker", &["push", &tag])?;
         }
-        if !registry_has(repository, digest)? {
+        if !registry_has(target, repository, digest)? {
             bail!("registry did not retain the exact catalog digest for {image}");
         }
     }
@@ -120,6 +149,10 @@ pub fn provision() -> Result<()> {
 
 /// Prove every catalog image is pullable by each schedulable local cluster node.
 pub fn verify(kubectl: &Kubectl) -> Result<()> {
+    verify_for(kubectl, &RegistryTarget::default())
+}
+
+pub fn verify_for(kubectl: &Kubectl, target: &RegistryTarget) -> Result<()> {
     let inventory = kubectl.get_json(&["get", "nodes"])?;
     let nodes = inventory["items"]
         .as_array()
@@ -137,15 +170,15 @@ pub fn verify(kubectl: &Kubectl) -> Result<()> {
     }
     for image in catalog_images() {
         if let Some((repository, digest)) = local_reference(&image) {
-            if !registry_has(repository, digest)? {
+            if !registry_has(target, repository, digest)? {
                 bail!(
                     "catalog image missing: {image}\nRun make images to restore required local images, then rerun make doctor."
                 );
             }
         }
         for node in &nodes {
-            if !node.starts_with("k3d-proofstorm-") {
-                bail!("image checks require a local k3d-proofstorm node, got {node}");
+            if !node.starts_with(&target.node_prefix) {
+                bail!("image check refused node {node} outside the selected installation");
             }
             println!("Checking image on {node}: {image}");
             run("docker", &["exec", node, "crictl", "--timeout=120s", "pull", &image])
@@ -158,6 +191,18 @@ pub fn verify(kubectl: &Kubectl) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_installation_changes_host_and_node_scope() {
+        let home = tempfile::tempdir().unwrap();
+        let installation =
+            proofstorm_app::installation::Installation::initialize(home.path(), None, None)
+                .unwrap();
+        let target = RegistryTarget::for_installation(&installation);
+        assert_eq!(target.host, installation.host_registry());
+        assert_eq!(target.node_prefix, format!("{}-", installation.context()));
+        assert!(!"k3d-proofstorm-server-0".starts_with(&target.node_prefix));
+    }
+
     #[test]
     fn restoration_uses_exact_digests_not_mutable_tags() {
         let rows = "{\"Repository\":\"localhost:5111/wallet\",\"Tag\":\"latest\",\"Digest\":\"sha256:wrong\"}\n{\"Repository\":\"other/wallet\",\"Tag\":\"old\",\"Digest\":\"sha256:required\"}";

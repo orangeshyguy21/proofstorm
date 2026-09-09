@@ -38,12 +38,14 @@ pub fn edges(lab: &EnvironmentLab, usage: Option<&LabUsage>, now: i64) -> Vec<Ed
             .find(|c| c.id == id)
             .map(|c| c.kind)
     };
+    let resource_parents = crate::canvas_model::resource_parents(lab);
     let mut result = lab
         .links
         .items
         .iter()
         .filter(|l| {
-            l.kind != LinkKind::LightningPeer
+            resource_parents.get(&l.to) != Some(&l.from)
+                && l.kind != LinkKind::LightningPeer
                 && !matches!(
                     (kind(&l.from), kind(&l.to)),
                     (

@@ -1,7 +1,9 @@
 mod adapter;
 mod api;
 mod candidate;
+pub mod images;
 mod operation;
+pub mod release;
 mod render;
 mod scheduler;
 

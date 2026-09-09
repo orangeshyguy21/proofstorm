@@ -21,6 +21,7 @@ pub const CONTROL_NAMESPACE: &str = "proofstorm-system";
 pub struct Kubectl {
     binary: PathBuf,
     context: String,
+    kubeconfig: Option<PathBuf>,
 }
 
 impl Kubectl {
@@ -34,7 +35,19 @@ impl Kubectl {
                 PathBuf::from("kubectl")
             },
             context: DEFAULT_CONTEXT.to_string(),
+            kubeconfig: None,
         }
+    }
+
+    #[must_use]
+    pub fn for_installation(
+        root: &Path,
+        installation: &proofstorm_app::installation::Installation,
+    ) -> Self {
+        let mut client = Self::pinned(root);
+        client.context = installation.context();
+        client.kubeconfig = Some(installation.kubeconfig());
+        client
     }
 
     /// Run a command that must succeed, returning trimmed stdout.
@@ -49,6 +62,9 @@ impl Kubectl {
     /// Build a context-pinned command without running it.
     pub fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(&self.binary);
+        if let Some(path) = &self.kubeconfig {
+            command.arg("--kubeconfig").arg(path);
+        }
         command.arg("--context").arg(&self.context).args(args);
         command
     }
@@ -310,5 +326,35 @@ impl Kubectl {
             "--timeout=90s",
         ])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_kubeconfig_and_context_are_explicit_arguments() {
+        let home = tempfile::tempdir().unwrap();
+        let installation =
+            proofstorm_app::installation::Installation::initialize(home.path(), None, None)
+                .unwrap();
+        let client = Kubectl::for_installation(Path::new("/test checkout"), &installation);
+        let command = client.command(&["get", "nodes"]);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "--kubeconfig".to_string(),
+                installation.kubeconfig().display().to_string(),
+                "--context".to_string(),
+                installation.context(),
+                "get".to_string(),
+                "nodes".to_string()
+            ]
+        );
     }
 }

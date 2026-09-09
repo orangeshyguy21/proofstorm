@@ -6,6 +6,75 @@ your app, test failures, and see what happened.
 The runtime uses Kubernetes. The developer CLI and MCP share the same Rust
 application layer. Start here; the advanced agent workflows remain below.
 
+## Alpha onboarding work
+
+The [alpha onboarding plan](dev/ALPHA-ONBOARDING-PLAN.md) tracks the packaged
+installer, setup, and Codex/OpenCode attachment work. Those public commands are
+not available as a published release yet. Maintainers can now build, verify, and
+install a checkout-independent [development release bundle](release/README.md).
+The installer uses prebuilt binaries, preserves unrelated executables, and does
+not change shell profiles or start a cluster. Compilation is release-side work,
+not a step for first-time users. Matching development bundles now include
+isolated `setup` and read-only `doctor`; see the release guide for the explicit
+development opt-in, test commands, and remaining alpha limitations.
+The managed GUI is now available in development bundles: run `proofstorm gui`
+from your app directory (add `--allow-development` for these bundles), then use
+**Connect coding agent…** to choose Codex, OpenCode, or Claude Code and confirm
+that project's connection. Opening the
+GUI alone changes no agent configuration. It uses your default browser and
+reuses one local server; existing-tab focus is best effort. `proofstorm stop`
+stops only that GUI, not your labs. See the [GUI workflow](release/README.md#managed-gui-development-preview).
+The packaged Chrome/Codex GUI gate passed on 2026-09-09, including server reuse,
+project-only confirmation, restart/session checks, and verified runtime cleanup;
+see [GUI verification](release/gui-verification.json). This is still a development
+preview, not a published or clean-Mac-certified alpha release.
+The next adapter slice adds `proofstorm open opencode` and `proofstorm open claude`
+for terminal use. The GUI connects these agents and provides a terminal command;
+it does not claim to open their native apps. See [agent attachment details](release/agent-attachments.md).
+Their packaged client-connection gate passed with private agent homes and verified
+runtime cleanup; see [OpenCode/Claude Code verification](release/agent-attachment-verification.json).
+Setup now skips the workload catalog: CLI and MCP lab creation download only
+the selected images. `setup --prefetch-all` optionally prewarms the whole catalog.
+The isolated CLI/MCP download test passed with verified cleanup and unchanged
+development state; [dated evidence](release/on-demand-images-verification.json)
+does not yet certify Codex/OpenCode attachment or a clean-Mac release download.
+The original local-only runtime foundation is
+an opt-in isolated installation:
+
+```sh
+target/debug/proofstorm --home /absolute/path/to/alpha-home init
+```
+
+This only initializes private state and generates a k3d configuration. It does
+**not** create a cluster, deploy a controller, or modify the user's kubeconfig.
+`--home` / `PROOFSTORM_HOME` selects the same installation in CLI and MCP,
+independent of the caller's working directory. Missing private kubeconfig is
+an error; it never falls back to the development cluster. Explicit database,
+context, and kubeconfig overrides still take precedence. Do not copy an
+installation home to clone its runtime; initialize a new home instead.
+
+The contributor Makefile retains its existing development cluster and ignores
+`PROOFSTORM_HOME` and `PROOFSTORM_KUBECONFIG`. It is not an isolated setup path.
+To build and run the opt-in two-cluster isolation test without replacing
+checkout binaries:
+
+```sh
+scratch="$(mktemp -d)"
+CARGO_TARGET_DIR="$scratch/target" cargo build --locked -p proofstorm-app --bin proofstorm
+python3 scripts/test-installation-isolation.py \
+  --binary "$scratch/target/debug/proofstorm" \
+  --k3d "$PWD/.tools/bin/k3d" \
+  --output "$scratch/isolation-report.json"
+```
+
+This test requires running Docker and the pinned k3d tool. It creates two
+temporary one-server clusters with 1 GiB memory limits, tests image-registry
+separation, then removes only its owned resources. It checks existing Docker
+containers, networks, volumes, and the default kubeconfig afterward. Add
+`--kubectl "$PWD/.tools/bin/kubectl"` when the existing `k3d-proofstorm` cluster
+is available to also check controller identity/restarts and lab definitions.
+The test is not a full installed-product or candidate-build acceptance gate.
+
 ## Developer quick start
 
 With Docker running and Rust installed:

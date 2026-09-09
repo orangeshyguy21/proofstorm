@@ -42,7 +42,7 @@ pub const PROTOCOL_PROBER_LABEL: &str = "proofstorm.dev/prober";
 pub const PROTOCOL_PROBER_DIGEST_ANNOTATION: &str = "proofstorm.dev/prober-digest";
 pub const PROTOCOL_PROBER_LEASE_ANNOTATION: &str = "proofstorm.dev/prober-lease";
 const INACTIVE_PROBER_LEASE: &str = "inactive";
-const PROBER_IMAGE: &str = "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+use crate::images::PROBE_IMAGE as PROBER_IMAGE;
 
 type ComponentRenderer = fn(&ComponentPlanContract) -> Result<RenderedComponent, AdapterError>;
 

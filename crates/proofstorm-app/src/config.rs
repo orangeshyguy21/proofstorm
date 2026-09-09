@@ -17,6 +17,8 @@ pub enum Mode {
 
 #[derive(Debug, Clone)]
 pub struct Environment {
+    pub installation: Option<crate::installation::Installation>,
+    pub kubeconfig: Option<PathBuf>,
     pub database: PathBuf,
     pub workspace: String,
     pub principal: String,
@@ -47,31 +49,61 @@ impl Environment {
                 "set PROOFSTORM_PRINCIPAL to the configured agent identity; use examples/opencode/proofstorm-only.json for local setup"
             ),
         };
-        let database = PathBuf::from(value("PROOFSTORM_DB", DEFAULT_DATABASE)?);
-        Ok(Self {
-            database: if database.is_absolute() {
-                database
+        let absolute = |path: PathBuf| {
+            if path.is_absolute() {
+                path
             } else {
-                cwd.join(database)
-            },
+                cwd.join(path)
+            }
+        };
+        let optional_path = |key: &str| -> Result<Option<PathBuf>> {
+            get(key)
+                .map(|path| {
+                    ensure_path_not_empty(key, &path)?;
+                    Ok(absolute(PathBuf::from(path)))
+                })
+                .transpose()
+        };
+        let installation = optional_path("PROOFSTORM_HOME")?
+            .map(|home| crate::installation::Installation::load(&home))
+            .transpose()?;
+        let database = optional_path("PROOFSTORM_DB")?.unwrap_or_else(|| {
+            installation.as_ref().map_or_else(
+                || cwd.join(DEFAULT_DATABASE),
+                crate::installation::Installation::database,
+            )
+        });
+        let kubeconfig = optional_path("PROOFSTORM_KUBECONFIG")?.or_else(|| {
+            installation
+                .as_ref()
+                .map(crate::installation::Installation::kubeconfig)
+        });
+        let default_context = installation.as_ref().map_or_else(
+            || DEFAULT_CONTEXT.into(),
+            crate::installation::Installation::context,
+        );
+        Ok(Self {
+            installation,
+            kubeconfig,
+            database,
             workspace: value("PROOFSTORM_WORKSPACE", DEFAULT_WORKSPACE)?,
             principal,
-            context: value("PROOFSTORM_CONTEXT", DEFAULT_CONTEXT)?,
+            context: value("PROOFSTORM_CONTEXT", &default_context)?,
             namespace: value("PROOFSTORM_CONTROL_NAMESPACE", DEFAULT_NAMESPACE)?,
             mode,
         })
     }
 
     pub async fn runtime(&self) -> Result<crate::Runtime> {
-        if self.mode != Mode::Connected {
-            bail!("runtime access requires PROOFSTORM_MODE=connected");
+        if let Some(installation) = &self.installation {
+            anyhow::ensure!(
+                self.context == installation.context()
+                    && self.kubeconfig.as_ref() == Some(&installation.kubeconfig())
+                    && self.namespace == DEFAULT_NAMESPACE,
+                "an installed runtime requires its private context, kubeconfig and namespace; omit --home for an explicitly selected external runtime"
+            );
         }
-        let config = kube::Config::from_kubeconfig(&kube::config::KubeConfigOptions {
-            context: Some(self.context.clone()),
-            ..Default::default()
-        })
-        .await
-        .with_context(|| format!("read Kubernetes context {:?}; run make setup or select PROOFSTORM_CONTEXT explicitly", self.context))?;
+        let config = self.kubernetes_config().await?;
         Ok(crate::Runtime {
             client: kube::Client::try_from(config)?,
             control_namespace: self.namespace.clone(),
@@ -79,9 +111,28 @@ impl Environment {
         })
     }
 
+    pub(crate) async fn kubernetes_config(&self) -> Result<kube::Config> {
+        if self.mode != Mode::Connected {
+            bail!("runtime access requires PROOFSTORM_MODE=connected");
+        }
+        let options = kube::config::KubeConfigOptions {
+            context: Some(self.context.clone()),
+            ..Default::default()
+        };
+        let config = if let Some(path) = &self.kubeconfig {
+            let kubeconfig = kube::config::Kubeconfig::read_from(path)
+                .with_context(|| format!("read selected kubeconfig {}; no fallback to the developer cluster", path.display()))?;
+            kube::Config::from_custom_kubeconfig(kubeconfig, &options).await
+        } else {
+            kube::Config::from_kubeconfig(&options).await
+        }
+        .with_context(|| format!("read Kubernetes context {:?}; run make setup or select PROOFSTORM_CONTEXT explicitly", self.context))?;
+        Ok(config)
+    }
+
     pub fn report(&self) {
         eprintln!(
-            "mode={:?} database={} workspace={} principal={} context={} namespace={}",
+            "mode={:?} database={} workspace={} principal={} context={} namespace={} kubeconfig={}",
             self.mode,
             if self.mode == Mode::Memory {
                 "<memory>".into()
@@ -91,9 +142,19 @@ impl Environment {
             self.workspace,
             self.principal,
             self.context,
-            self.namespace
+            self.namespace,
+            self.kubeconfig
+                .as_ref()
+                .map_or_else(|| "<user config>".into(), |path| path.display().to_string())
         );
     }
+}
+
+fn ensure_path_not_empty(key: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{key} must not be empty");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

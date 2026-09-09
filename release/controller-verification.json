@@ -1,0 +1,9 @@
+{
+  "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:70476545989f363aef23610bb08830ad90e16fe2eb30a3d2d8dcea82175a4b16",
+  "verified_at": "2026-09-08 23:26:48 UTC",
+  "anonymous_platforms": [
+    "linux/arm64"
+  ],
+  "arm64_blobs_accessible": true,
+  "scope": "Digest-checked manifest/config and anonymous HEAD access to arm64 layers. Controller metadata smoke passed with network disabled; not a clean-Mac release certification."
+}

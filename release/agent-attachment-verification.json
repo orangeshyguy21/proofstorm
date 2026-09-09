@@ -1,0 +1,124 @@
+{
+  "format_version": 1,
+  "verified_at": "2026-09-09",
+  "status": "passed_local_opencode_claude_attachment_gate",
+  "bundle": {
+    "archive": "/private/tmp/proofstorm-agent-adapters-final-artifacts-20260909/proofstorm-0.1.0-alpha.1-dev-debug-0b6abf25c886-aarch64-apple-darwin.tar.gz",
+    "sha256": "6c56bab7ab263f1a6b0436658d1b344151cb94bd0d1f45dae3fc4a97e43ddfcd",
+    "source_revision": "92cb402930e013af5a330a2b3fcbb5b15d178ec2",
+    "source_sha256": "0b6abf25c88683cae350c320f604d529761a21ed7c36699adf7bffce7b47d6c8",
+    "development": true,
+    "release_ready": false,
+    "source_snapshot": "/private/tmp/proofstorm-agent-adapters-final-build-20260909/source"
+  },
+  "automated_checks": {
+    "backend_unit_tests": {
+      "passed": 62,
+      "failed": 0,
+      "harness_tests": 14,
+      "gui_tests": 6
+    },
+    "python_fixture_tests": {
+      "passed": 27,
+      "failed": 0
+    },
+    "backend_all_targets_clippy": "passed",
+    "wasm_check_and_clippy": "passed",
+    "frozen_packaged_web_build": "passed",
+    "source_denied_integrity_and_relocation": "passed",
+    "source_denied_report": "/private/tmp/proofstorm-agent-adapters-final-source-denied-20260909/smoke-report.json"
+  },
+  "installed_gate": {
+    "test_completed": true,
+    "checks": [
+      "development_guard",
+      "doctor_no_initialization",
+      "verified_tool_downloads",
+      "prepare_idempotency",
+      "setup_skips_catalog_downloads",
+      "runtime_setup",
+      "doctor_ready",
+      "setup_retry_preserves_controller_and_permissions",
+      "cli_fetches_only_selected_images",
+      "mcp_fetches_only_new_selected_images",
+      "example_lab_up_returned_success",
+      "opencode_and_claude_project_discovery_and_gui_api"
+    ],
+    "agents": {
+      "opencode": {
+        "version": "1.18.30",
+        "dry_run_read_only": true,
+        "project_config_only": true,
+        "gui_preview_and_confirmation": true,
+        "terminal_handoff_truthful": true,
+        "backup_verified": true,
+        "repeat_idempotent": true,
+        "modified_entry_preserved": true,
+        "client_mcp_connected": true,
+        "unrelated_project_has_no_proofstorm": true,
+        "server_verified": {
+          "environment_read": true,
+          "initialize": true,
+          "tool_count": 15,
+          "tools_list": true
+        },
+        "model_tool_call": false
+      },
+      "claude": {
+        "version": "2.1.69 (Claude Code)",
+        "dry_run_read_only": true,
+        "project_config_only": true,
+        "gui_preview_and_confirmation": true,
+        "terminal_handoff_truthful": true,
+        "backup_verified": true,
+        "repeat_idempotent": true,
+        "modified_entry_preserved": true,
+        "client_mcp_connected": true,
+        "unrelated_project_has_no_proofstorm": true,
+        "server_verified": {
+          "environment_read": true,
+          "initialize": true,
+          "tool_count": 15,
+          "tools_list": true
+        },
+        "model_tool_call": false
+      },
+      "per_agent_identity": true,
+      "private_agent_homes": true
+    },
+    "cleanup_errors": [],
+    "interrupted_helper_download_retries": 1,
+    "docker_inventory_restored": true,
+    "docker_networks_and_volumes_restored": true,
+    "preexisting_containers_unchanged": true,
+    "user_kubeconfig_unchanged": true,
+    "development_controller_and_labs_unchanged": true
+  },
+  "evidence": {
+    "installed_report": "/private/tmp/proofstorm-agent-adapters-final-live-20260909/report.json",
+    "opencode_log": "/private/tmp/proofstorm-agent-adapters-final-live-20260909/agent attachment tests/opencode-mcp-list.log",
+    "claude_log": "/private/tmp/proofstorm-agent-adapters-final-live-20260909/agent attachment tests/claude-mcp-list.log",
+    "runtime_removed": "pst-e2a155aacda4ab6dfa05148d236b",
+    "source_tree_read_and_write_strategy": "Built in an external source snapshot and Cargo cache; no checkout target or checkout web-dist outputs were overwritten by this task.",
+    "test_files_retained": true,
+    "managed_gui_stopped": true,
+    "desktop_screenshots_used": false
+  },
+  "historical_attempt": {
+    "report": "/private/tmp/proofstorm-agent-adapters-live-20260909/report.json",
+    "completed": false,
+    "reason": "OpenCode's successful --help is written to stderr; initial detection inspected stdout only.",
+    "fix": "Inspect both streams for --help only, retain bounded capture, and add a regression test.",
+    "runtime_cleanup_and_dev_preservation_passed": true
+  },
+  "limitations": [
+    "A development/debug bundle, not a published or clean-Mac-certified release.",
+    "OpenCode 1.x and Claude Code 2.x supported; OpenCode v2 schema deliberately rejected.",
+    "Actual installed clients discovered and connected via mcp list. No interactive model session or agent-initiated tool call was run.",
+    "The GUI's selected-agent preview and confirmation API passed. The new selector was compiled and packaged, but was not clicked through in a live browser during this gate.",
+    "OpenCode and Claude Code use a terminal handoff; native desktop launch is not implemented or claimed.",
+    "Normal agent trust/MCP approval prompts, managed policies, and tool permissions remain in force.",
+    "Project configuration follows each agent's directory inheritance and is not a separate data or filesystem security boundary.",
+    "The installed test runner retried one interrupted helper download; this is not a claim that production setup automatically retries that failure."
+  ]
+}

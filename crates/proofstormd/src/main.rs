@@ -105,6 +105,21 @@ fn pod_belongs_to_instance(pod: &Pod, key: &str) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(argument) = std::env::args().nth(1) {
+        if argument == "--release-info" {
+            use sha2::{Digest, Sha256};
+            println!(
+                "{}",
+                serde_json::json!({
+                    "format_version": 1, "version": env!("CARGO_PKG_VERSION"),
+                    "source_sha256": option_env!("PROOFSTORM_CONTROLLER_SOURCE_SHA256").unwrap_or("development"),
+                    "runtime_contract_sha256": format!("{:x}", Sha256::digest(proofstorm_kube::release::contract().to_string()))
+                })
+            );
+            return Ok(());
+        }
+        return Err(format!("unknown argument: {argument}").into());
+    }
     let client = Client::try_default().await?;
     let labs = Api::<ProofstormLab>::all(client.clone());
     let actions = Api::<ProofstormLabAction>::all(client.clone());

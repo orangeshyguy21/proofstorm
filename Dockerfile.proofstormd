@@ -1,4 +1,5 @@
 FROM rust:1.88.0-alpine AS native
+ARG CARGO_BUILD_JOBS=2
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -9,15 +10,20 @@ COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
 RUN cargo build --locked --release -p proofstorm-exec
 
 FROM rust:1.88.0-bookworm AS build
+ARG CARGO_BUILD_JOBS=2
+ARG PROOFSTORM_CONTROLLER_SOURCE_SHA256=development
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY docker/wallet/*-provenance.json ./docker/wallet/
 COPY docker/mint/*-provenance.json ./docker/mint/
 COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
-RUN cargo build --locked --release -p proofstormd
+RUN PROOFSTORM_CONTROLLER_SOURCE_SHA256=$PROOFSTORM_CONTROLLER_SOURCE_SHA256 cargo build --locked --release -p proofstormd
 
 FROM gcr.io/distroless/cc-debian12:nonroot
+ARG PROOFSTORM_CONTROLLER_SOURCE_SHA256=development
+LABEL org.opencontainers.image.source="https://github.com/orangeshyguy21/proofstorm" \
+      dev.proofstorm.source-sha256=$PROOFSTORM_CONTROLLER_SOURCE_SHA256
 COPY --from=build /src/target/release/proofstormd /usr/local/bin/proofstormd
 COPY --from=native /src/target/release/proofstorm-exec /usr/local/lib/proofstorm-exec
 USER 65532:65532

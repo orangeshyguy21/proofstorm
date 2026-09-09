@@ -7,6 +7,56 @@ fn binary() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_proofstorm-mcp"))
 }
 
+#[test]
+fn release_metadata_exits_without_starting_transport_or_resolving_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(binary())
+        .current_dir(directory.path())
+        .env("PROOFSTORM_HOME", directory.path().join("missing"))
+        .env("PROOFSTORM_PRINCIPAL", "")
+        .arg("--release-info")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let info: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(info["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn isolated_stdio_uses_the_selected_home_for_persistent_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let installation =
+        proofstorm_app::installation::Installation::initialize(directory.path(), None, None)
+            .unwrap();
+    let mut client = McpClient::spawn(
+        binary(),
+        "isolated-home-test",
+        &[
+            ("PROOFSTORM_HOME", installation.home.as_os_str()),
+            ("PROOFSTORM_MODE", "offline".as_ref()),
+            ("PROOFSTORM_PRINCIPAL", "isolated-reader".as_ref()),
+            ("PROOFSTORM_CAPABILITIES", "catalog.read".as_ref()),
+        ],
+    )
+    .unwrap();
+    let listed = client.request("tools/list", json!({})).unwrap();
+    assert!(!listed["tools"].as_array().unwrap().is_empty());
+    assert!(installation.database().is_file());
+    let store = proofstorm_store::Store::open(installation.database()).unwrap();
+    assert!(
+        !store
+            .capabilities(proofstorm_app::config::DEFAULT_WORKSPACE, "isolated-reader")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!installation.kubeconfig().exists());
+}
+
 fn assert_resource_contract(client: &mut McpClient) {
     let templates = client
         .request("resources/templates/list", json!({}))
