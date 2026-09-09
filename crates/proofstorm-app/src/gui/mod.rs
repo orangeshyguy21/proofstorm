@@ -10,6 +10,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 pub(crate) use server::Session;
 use state::{RECORD, Record};
+use std::os::unix::fs::FileExt;
 use std::os::unix::process::CommandExt;
 use std::{
     io::{Read, Seek},
@@ -41,48 +42,52 @@ async fn health(record: &Record) -> Result<bool> {
 pub async fn open(
     home: &Path,
     project: &Path,
-    bundle: &Path,
     allow_development: bool,
     no_open: bool,
+    progress: &dyn Fn(&str),
 ) -> Result<Value> {
-    let installation = Installation::load(home)?;
-    let allow_development = crate::artifacts::verify(home, bundle, allow_development)?;
+    progress("Checking Proofstorm files");
+    let verified = crate::artifacts::Verified::load(home, allow_development)?;
+    let installation = &verified.installation;
+    progress("Checking project folder");
     let project = project
         .canonicalize()
         .context("GUI project directory must exist")?;
     ensure!(project.is_dir(), "GUI project must be a directory");
+    progress("Checking existing GUI");
     let _control = state::lease(&installation.home, "gui-control-lock.sqlite3")?;
-    let executable = std::env::current_exe()?.canonicalize()?;
     let previous = state::record(&installation.home, &installation.id)?;
     let (record, reused) = if let Some(record) = previous.as_ref().filter(|r| r.port != 0) {
         if health(record).await.unwrap_or(false) {
             ensure!(
-                record.executable == executable
+                record.executable == verified.executable
                     && record
                         .build_sha256
                         .as_ref()
-                        .is_none_or(|sha| crate::artifacts::hash(&executable)
-                            .is_ok_and(|current| &current == sha)),
+                        .is_none_or(|sha| sha == &verified.executable_sha256),
                 "GUI uses an older bundle; run proofstorm stop, then proofstorm gui"
             );
+            progress("Reusing running GUI");
             (record.clone(), true)
         } else {
-            (
-                start(&installation, &executable, allow_development).await?,
-                false,
-            )
+            (start(&verified, progress).await?, false)
         }
     } else {
-        (
-            start(&installation, &executable, allow_development).await?,
-            false,
-        )
+        (start(&verified, progress).await?, false)
     };
+    progress(if no_open {
+        "GUI is ready"
+    } else if !reused {
+        "Opening default browser"
+    } else {
+        "Focusing existing browser tab"
+    });
     let browser = if no_open {
         "not_requested"
-    } else if activate(&record, &project).await.unwrap_or(false) {
+    } else if reused && activate(&record, &project).await.unwrap_or(false) {
         "existing_tab_focused"
     } else {
+        progress("Opening default browser");
         let fragment = serde_urlencoded::to_string([
             ("session", record.token.as_str()),
             ("project", project.to_str().context("non-UTF-8 project")?),
@@ -107,11 +112,9 @@ pub async fn open(
     )
 }
 
-async fn start(
-    installation: &Installation,
-    executable: &Path,
-    allow_development: bool,
-) -> Result<Record> {
+async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -> Result<Record> {
+    let installation = &verified.installation;
+    progress("Starting GUI server");
     // A held lifetime lease prevents replacing an unresponsive but live GUI.
     let lifetime = state::lease(&installation.home, "gui-runtime-lock.sqlite3")
         .context("GUI is running but not responding; no process was stopped or replaced")?;
@@ -120,14 +123,14 @@ async fn start(
         installation_id: installation.id.clone(),
         instance: state::random::<16>()?,
         token: state::random::<32>()?,
-        executable: executable.to_path_buf(),
-        build_sha256: Some(crate::artifacts::hash(executable)?),
+        executable: verified.executable.clone(),
+        build_sha256: Some(verified.executable_sha256.clone()),
         pid: 0,
         port: 0,
     };
     state::save(&installation.home.join(RECORD), &record)?;
     drop(lifetime);
-    let mut command = tokio::process::Command::new(executable);
+    let mut command = tokio::process::Command::new(&verified.executable);
     command.as_std_mut().process_group(0);
     command.current_dir(&installation.home);
     command
@@ -136,7 +139,7 @@ async fn start(
         .arg("gui-serve")
         .arg("--instance")
         .arg(&record.instance);
-    if allow_development {
+    if verified.allow_development {
         command.arg("--allow-development");
     }
     // Never carry developer runtime overrides into the installed GUI process.
@@ -152,7 +155,18 @@ async fn start(
         .stderr(startup_errors.try_clone()?);
     let mut child = command.spawn().context("start installed GUI")?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    let mut last_progress = None;
     loop {
+        // Positional reads leave the child's stderr write offset untouched. Only
+        // allowlisted status lines are displayed; error details stay private until failure.
+        let mut bytes = [0_u8; 8192];
+        let count = startup_errors.read_at(&mut bytes, 0)?;
+        if let Some(label) = startup_progress(&bytes[..count]) {
+            if last_progress != Some(label) {
+                progress(label);
+                last_progress = Some(label);
+            }
+        }
         if child.try_wait()?.is_some() {
             startup_errors.rewind()?;
             let mut details = String::new();
@@ -230,11 +244,37 @@ pub async fn stop(home: &Path) -> Result<Value> {
     }
 }
 
-pub async fn serve(
-    home: &Path,
-    bundle: &Path,
-    instance: &str,
-    allow_development: bool,
-) -> Result<()> {
-    server::serve(home, bundle, instance, allow_development).await
+pub async fn serve(home: &Path, instance: &str, allow_development: bool) -> Result<()> {
+    server::serve(home, instance, allow_development).await
+}
+
+const STARTUP_LABELS: &[&str] = &[
+    "Verifying GUI server files",
+    "Checking controller compatibility",
+    "Checking runtime ownership",
+    "Checking controller health",
+    "Starting local GUI service",
+];
+
+fn report_startup(label: &str) {
+    if STARTUP_LABELS.contains(&label) {
+        eprintln!("proofstorm-gui-startup:{label}");
+    }
+}
+
+fn startup_progress(bytes: &[u8]) -> Option<&'static str> {
+    std::str::from_utf8(bytes)
+        .ok()?
+        .split_inclusive('\n')
+        .filter_map(|line| {
+            line.strip_suffix('\n')?
+                .strip_prefix("proofstorm-gui-startup:")
+        })
+        .filter_map(|label| {
+            STARTUP_LABELS
+                .iter()
+                .copied()
+                .find(|allowed| *allowed == label)
+        })
+        .next_back()
 }

@@ -33,6 +33,8 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
     record_path = installation_home / "gui-process.json"
 
     def cli(*args, expected=0, cwd=project):
+        if "--json" not in args:
+            args = ("--json", *args)
         if not allow_development:
             args = tuple(arg for arg in args if arg != "--allow-development")
         result = subprocess.run([executable, "--home", installation_home, *args], env=isolated, cwd=cwd,

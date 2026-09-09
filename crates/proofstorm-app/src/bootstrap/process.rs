@@ -10,6 +10,39 @@ use std::{
 };
 
 pub(super) fn run(home: &Path, program: &Path, args: &[&str], seconds: u64) -> Result<String> {
+    run_inner(home, program, args, seconds, None)
+}
+
+pub(super) fn controller_build(home: &Path, args: &[&str]) -> Result<String> {
+    run_inner(
+        home,
+        Path::new("docker"),
+        args,
+        3600,
+        Some(&home.join("controller-build.log")),
+    )
+}
+
+fn build_log(log: Option<&Path>, out: &fs::File, err: &fs::File) -> Result<()> {
+    if let Some(path) = log {
+        let mut bytes = Vec::new();
+        for file in [out, err] {
+            let mut file = file.try_clone()?;
+            file.seek(SeekFrom::Start(0))?;
+            file.take(8 * 1024 * 1024).read_to_end(&mut bytes)?;
+        }
+        save(path, &bytes)?;
+    }
+    Ok(())
+}
+
+fn run_inner(
+    home: &Path,
+    program: &Path,
+    args: &[&str],
+    seconds: u64,
+    log: Option<&Path>,
+) -> Result<String> {
     let out = tempfile::tempfile()?;
     let err = tempfile::tempfile()?;
     let mut command = Command::new(program);
@@ -40,6 +73,7 @@ pub(super) fn run(home: &Path, program: &Path, args: &[&str], seconds: u64) -> R
         {
             let _ = child.kill();
             let _ = child.wait();
+            build_log(log, &out, &err)?;
             anyhow::bail!(
                 "{} exceeded its time/output limit; retry the current setup stage",
                 program.display()
@@ -48,6 +82,15 @@ pub(super) fn run(home: &Path, program: &Path, args: &[&str], seconds: u64) -> R
         thread::sleep(Duration::from_millis(100));
     };
     // Errors deliberately omit potentially sensitive subprocess output (kubeconfig/tokens).
+    build_log(log, &out, &err)?;
+    if !status.success() {
+        if let Some(path) = log {
+            anyhow::bail!(
+                "controller build failed; inspect private log {} and retry setup",
+                path.display()
+            );
+        }
+    }
     ensure!(
         status.success(),
         "{} failed ({}); check Docker/network access and retry",
@@ -72,4 +115,29 @@ pub(super) fn save(path: &Path, value: &[u8]) -> Result<()> {
     file.as_file().sync_all()?;
     file.persist(path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn failed_build_diagnostics_stay_private_and_out_of_error_text() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("controller-build.log");
+        let error = run_inner(
+            root.path(),
+            Path::new("/bin/sh"),
+            &["-c", "printf 'private-build-output' >&2; exit 1"],
+            5,
+            Some(&log),
+        )
+        .unwrap_err();
+        assert!(!error.to_string().contains("private-build-output"));
+        assert_eq!(fs::read_to_string(&log).unwrap(), "private-build-output");
+        assert_eq!(
+            fs::metadata(log).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

@@ -71,6 +71,19 @@ fn inventory(root: &Path, directory: &Path, files: &mut BTreeMap<String, String>
     Ok(())
 }
 
+pub(crate) fn tree_sha256(root: &Path) -> Result<String> {
+    let mut files = BTreeMap::new();
+    inventory(root, root, &mut files)?;
+    let mut digest = Sha256::new();
+    for (name, sha) in files {
+        digest.update(name.as_bytes());
+        digest.update(b"\0");
+        digest.update(sha.as_bytes());
+        digest.update(b"\n");
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 fn read(home: &Path) -> Result<Option<Checkout>> {
     let path = home.join(RECORD);
     let meta = match fs::symlink_metadata(&path) {
@@ -118,6 +131,94 @@ fn read(home: &Path) -> Result<Option<Checkout>> {
         );
     }
     Ok(Some(record))
+}
+
+/// Short-lived proof of a complete verification for one GUI startup operation.
+/// Never persisted or shared with another process: the child verifies independently.
+/// New requests still verify changed binaries, resources and registration normally.
+pub(crate) struct Verified {
+    pub installation: crate::installation::Installation,
+    pub root: PathBuf,
+    pub executable: PathBuf,
+    pub executable_sha256: String,
+    pub allow_development: bool,
+    pub controller_sha256: Option<String>,
+}
+
+impl Verified {
+    pub fn load(home: &Path, allow_development: bool) -> Result<Self> {
+        let installation = crate::installation::Installation::load(home)?;
+        let executable = std::env::current_exe()?.canonicalize()?;
+        if let Some(record) = read(home)? {
+            record.verify(&executable)?;
+            ensure!(
+                record.installation_id == installation.id,
+                "installation changed during verification"
+            );
+            let executable_sha256 = if executable == record.cli {
+                record.cli_sha256.clone()
+            } else {
+                record.mcp_sha256.clone()
+            };
+            ensure!(
+                fs::symlink_metadata(record.resources.join("controller-source"))?.is_dir(),
+                "controller source snapshot missing or linked; run make dev-build"
+            );
+            // The inventory was just hashed and verified. Derive the controller
+            // snapshot digest from those receipts, without rereading every file.
+            let files = record.files.iter().filter_map(|(name, sha)| {
+                name.strip_prefix("controller-source/")
+                    .map(|name| (name, sha))
+            });
+            let mut digest = Sha256::new();
+            for (name, sha) in files {
+                digest.update(name.as_bytes());
+                digest.update(b"\0");
+                digest.update(sha.as_bytes());
+                digest.update(b"\n");
+            }
+            let controller_sha256 = format!("{:x}", digest.finalize());
+            let manifest: Value = serde_json::from_slice(
+                &fs::read(record.resources.join("controller-source.json"))
+                    .context("checkout controller snapshot missing; run make dev-build")?,
+            )?;
+            ensure!(
+                manifest["format_version"] == 1 && manifest["sha256"] == controller_sha256,
+                "controller source snapshot changed; run make dev-build"
+            );
+            Ok(Self {
+                installation,
+                root: record.resources,
+                executable,
+                executable_sha256,
+                allow_development: true,
+                controller_sha256: Some(controller_sha256),
+            })
+        } else {
+            let root = executable
+                .parent()
+                .and_then(Path::parent)
+                .context("cannot locate release bundle")?
+                .to_path_buf();
+            let manifest = crate::installer::verify(&root, allow_development, true)?;
+            let name = executable
+                .strip_prefix(&root)?
+                .to_str()
+                .context("non-UTF-8 executable")?;
+            let executable_sha256 = manifest["files"][name]["sha256"]
+                .as_str()
+                .context("executable is not a verified bundle member")?
+                .to_owned();
+            Ok(Self {
+                installation,
+                root,
+                executable,
+                executable_sha256,
+                allow_development,
+                controller_sha256: None,
+            })
+        }
+    }
 }
 
 impl Checkout {
@@ -204,6 +305,25 @@ pub(crate) fn web_dist(home: &Path) -> Result<Option<PathBuf>> {
             Ok(record.web_dist)
         })
         .transpose()
+}
+
+/// Checkout controller input is immutable registered build output, not the live tree.
+pub(crate) fn controller_source(home: &Path) -> Result<Option<(PathBuf, String)>> {
+    let Some(record) = read(home)? else {
+        return Ok(None);
+    };
+    record.verify(&std::env::current_exe()?.canonicalize()?)?;
+    let root = record.resources.join("controller-source");
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(record.resources.join("controller-source.json"))
+            .context("checkout controller snapshot missing; run make dev-build")?,
+    )?;
+    let sha = tree_sha256(&root)?;
+    ensure!(
+        manifest["format_version"] == 1 && manifest["sha256"] == sha,
+        "controller source snapshot changed; run make dev-build"
+    );
+    Ok(Some((root, sha)))
 }
 
 /// Explicit contributor action. No Docker, cluster mutation, grants, or agent
@@ -359,6 +479,56 @@ mod tests {
                 &self.web,
             )
         }
+    }
+
+    #[test]
+    fn gui_verification_reuses_receipts_but_never_caches_between_requests() {
+        let fixture = Fixture::new();
+        let source = fixture.resources.join("controller-source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("Dockerfile.proofstormd"), "recipe").unwrap();
+        let sha = tree_sha256(&source).unwrap();
+        fs::write(
+            fixture.resources.join("controller-source.json"),
+            json!({"format_version":1,"sha256":sha}).to_string(),
+        )
+        .unwrap();
+        fixture.register().unwrap();
+        let verified = Verified::load(&fixture.home, false).unwrap();
+        assert_eq!(verified.root, fixture.resources);
+        assert_eq!(verified.controller_sha256.as_deref(), Some(sha.as_str()));
+        assert_eq!(
+            verified.executable_sha256,
+            hash(&verified.executable).unwrap()
+        );
+        assert!(verified.allow_development);
+        // A fresh request must reject edits, even when the previous request verified.
+        fs::write(source.join("Dockerfile.proofstormd"), "tampered").unwrap();
+        assert!(Verified::load(&fixture.home, false).is_err());
+        fs::write(source.join("Dockerfile.proofstormd"), "recipe").unwrap();
+        fs::write(&fixture.mcp, "tampered peer").unwrap();
+        assert!(Verified::load(&fixture.home, false).is_err());
+    }
+
+    #[test]
+    fn controller_snapshot_is_bound_to_registration_and_detects_tampering() {
+        let fixture = Fixture::new();
+        let source = fixture.resources.join("controller-source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("Dockerfile.proofstormd"), "recorded recipe").unwrap();
+        let sha = tree_sha256(&source).unwrap();
+        fs::write(
+            fixture.resources.join("controller-source.json"),
+            json!({"format_version":1,"sha256":sha}).to_string(),
+        )
+        .unwrap();
+        fixture.register().unwrap();
+        assert_eq!(
+            controller_source(&fixture.home).unwrap(),
+            Some((source.clone(), sha))
+        );
+        fs::write(source.join("Dockerfile.proofstormd"), "changed recipe").unwrap();
+        assert!(controller_source(&fixture.home).is_err());
     }
 
     #[test]

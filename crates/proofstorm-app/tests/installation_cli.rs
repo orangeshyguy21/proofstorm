@@ -3,6 +3,7 @@ use std::{path::Path, process::Command};
 fn cli(cwd: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_proofstorm"));
     command.current_dir(cwd);
+    command.arg("--json");
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("PROOFSTORM_") {
             command.env_remove(key);

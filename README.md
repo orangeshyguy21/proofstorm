@@ -24,6 +24,10 @@ that project's connection. Opening the
 GUI alone changes no agent configuration. It uses your default browser and
 reuses one local server; existing-tab focus is best effort. `proofstorm stop`
 stops only that GUI, not your labs. See the [GUI workflow](release/README.md#managed-gui-development-preview).
+Long-running CLI commands show progress and finish with readable results.
+For automation, add `--json` (for example, `proofstorm setup --json` or
+`proofstorm gui --json`) to get the full result without a spinner. This behavior
+is shared by checkout builds and installed bundles.
 The packaged Chrome/Codex GUI gate passed on 2026-09-09, including server reuse,
 project-only confirmation, restart/session checks, and verified runtime cleanup;
 see [GUI verification](release/gui-verification.json). This is still a development
@@ -92,8 +96,10 @@ proofstorm gui
 This builds directly from source—no release archive or installer—and selects
 `.proofstorm-dev/state` for CLI, GUI, MCP, and attached coding agents. The normal
 product commands own setup, image downloads, labs, permissions, and attachment.
-The controller currently comes from the same pinned prebuilt image as releases;
-local controller rebuild/deploy is the next consolidation step.
+For a checkout, setup builds its recorded controller source, checks compatibility,
+and deploys the digest-pinned result through its private registry. Unchanged
+setup reuses the image and deployment. Releases still download their pinned
+controller. No development image is published to GHCR by setup.
 
 `make dev-build` rebuilds and registers artifacts without entering a shell or
 starting Docker resources. Rebuilds preserve installation identity, labs, and

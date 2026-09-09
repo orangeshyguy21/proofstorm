@@ -120,7 +120,7 @@ def native_handoff(prefix, env, work):
     project = work / "native codex project"
     project.mkdir(mode=0o700)
     result = isolation.run(
-        [prefix / "bin/proofstorm", "open", "codex", "--allow-development"],
+        [prefix / "bin/proofstorm", "--json", "open", "codex", "--allow-development"],
         env, cwd=project, timeout=240,
     )
     attached = json.loads(result.stdout)
@@ -181,12 +181,14 @@ def main():
     report = {"full_runtime_requested": args.start_runtime, "checks": [], "cleanup_errors": [], "test_completed":False}
 
     def cli(*arguments, expect=0):
+        if "--json" not in arguments:
+            arguments = ("--json", *arguments)
         result = isolation.run([prefix / "bin/proofstorm", *arguments], env, check=False, timeout=1800)
         assert result.returncode == expect, result.stderr[-2000:]
         return result
 
     def setup(prepare):
-        arguments = [prefix / "bin/proofstorm", "setup", "--allow-development"]
+        arguments = [prefix / "bin/proofstorm", "setup", "--json", "--allow-development"]
         if prepare:
             arguments.append("--prepare-only")
         for attempt in range(3):
@@ -265,6 +267,8 @@ def main():
                 actor_db = home / "proofstorm.sqlite3"
 
                 def attach(*arguments, expect=0):
+                    if "--json" not in arguments:
+                        arguments = ("--json", *arguments)
                     result = isolation.run([prefix / "bin/proofstorm", *arguments], attach_env, check=False, timeout=240, cwd=project)
                     assert result.returncode == expect, result.stderr[-2000:]
                     return result

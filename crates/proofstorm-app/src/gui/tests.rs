@@ -408,3 +408,22 @@ async fn browser_activation_requires_a_fresh_acknowledgement() {
     assert_eq!(session.activate("/next project").await["focused"], false);
     task.abort();
 }
+#[test]
+fn startup_progress_only_relays_complete_known_status_lines() {
+    assert_eq!(
+        super::startup_progress(b"proofstorm-gui-startup:Checking controller health\n"),
+        Some("Checking controller health")
+    );
+    assert_eq!(
+        super::startup_progress(b"proofstorm-gui-startup:Checking controller health"),
+        None
+    );
+    assert_eq!(
+        super::startup_progress(
+            b"private error details\nproofstorm-gui-startup:untrusted message\n"
+        ),
+        None
+    );
+    assert_eq!(super::startup_progress(b"proofstorm-gui-startup:Verifying GUI server files\nproofstorm-gui-startup:Checking runtime ownership\n"),
+        Some("Checking runtime ownership"));
+}

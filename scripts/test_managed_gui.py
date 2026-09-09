@@ -18,6 +18,8 @@ def run(prefix, env, work, browser=False, chrome=False):
     record_path = prefix / "lib/proofstorm/state/gui-process.json"
 
     def cli(*args, cwd=project):
+        if "--json" not in args:
+            args = ("--json", *args)
         result = subprocess.run([prefix / "bin/proofstorm", *args], cwd=cwd, env=env,
                                 capture_output=True, text=True, timeout=180, check=False)
         assert result.returncode == 0, result.stderr[-4000:]

@@ -45,8 +45,8 @@ EXPECTED_FAIL_GATES := nutshell-oidc
 # Development checkpoints needing an image provisioned in the local registry.
 LOCAL_IMAGE_GATES := private-handoff private-transfer cdk-wallet cdk-wallet-fees reliable-exec cocod-wallet cocod-projection
 
-.PHONY: help dev dev-build build legacy-gate-build serve gui stop web web-tools web-dev test lint tools images images-build cluster-up docker-build docker-push install \
-	deploy setup doctor cluster-schema e2e build-installer down clean-tools \
+.PHONY: help dev dev-build build legacy-gate-build serve gui stop web web-tools web-dev test lint tools images images-build cluster-up \
+	deploy setup doctor e2e build-installer down clean-tools \
 	$(addprefix e2e-,$(GATES) $(EXPECTED_FAIL_GATES) $(LOCAL_IMAGE_GATES))
 
 help:
@@ -55,6 +55,7 @@ help:
 	@echo "  make dev-build        rebuild/register checkout artifacts; preserve labs and permissions"
 	@echo "  make setup            build, then run the product CLI setup for this checkout"
 	@echo "  make doctor           run the product CLI doctor for this checkout"
+	@echo "  make deploy           alias for setup: build/verify/deploy the local controller"
 	@echo ""
 	@echo "  make build            alias for make dev-build"
 	@echo "  make gui / serve      open the checkout's managed GUI (run make setup first)"
@@ -72,9 +73,6 @@ help:
 	@echo "                        $(EXPECTED_FAIL_GATES) (expected to fail, upstream defect)"
 	@echo "                        $(LOCAL_IMAGE_GATES) (local arm64 wallet image required)"
 	@echo ""
-	@echo "  make docker-build     build the controller image"
-	@echo "  make install          apply the CRDs"
-	@echo "  make deploy           schema check, then Helm upgrade and rollout"
 	@echo "  make build-installer  render dist/install.yaml for a release"
 	@echo ""
 	@echo "  make compose-<target> the legacy Compose harness in Makefile.compose"
@@ -181,30 +179,7 @@ cluster-up: tools
 	@$(K3D) cluster get proofstorm >/dev/null 2>&1 || \
 		$(K3D) cluster create --config $(ROOT)infra/k3d/proofstorm.yaml
 
-docker-build:
-	docker build --file $(ROOT)Dockerfile.proofstormd --tag $(IMAGE) $(ROOT)
-
-docker-push: docker-build
-	docker push $(IMAGE)
-
-# The Makefile is the sole CRD field owner. Helm skips chart CRD installation
-# on both fresh installs and upgrades so server-side apply can reconcile the
-# checked-in API before the controller that depends on it.
-install: tools
-	$(KUBECTL) apply --server-side --force-conflicts \
-		--field-manager=proofstorm-make -f $(CHART)/crds
-
-cluster-schema: legacy-gate-build
-	$(ACCEPTANCE) cluster-schema
-
-deploy: install cluster-schema
-	$(HELM) upgrade --install proofstorm $(CHART) \
-		--kube-context $(CONTEXT) \
-		--namespace $(CONTROL_NAMESPACE) --create-namespace --skip-crds \
-		--set image.tag=$(PROOFSTORM_VERSION) \
-		--rollback-on-failure --wait
-	$(KUBECTL) rollout restart deployment/proofstormd -n $(CONTROL_NAMESPACE)
-	$(KUBECTL) rollout status deployment/proofstormd -n $(CONTROL_NAMESPACE) --timeout=90s
+deploy: setup
 
 images-build:
 	cargo build --locked -p proofstorm-acceptance

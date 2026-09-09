@@ -32,6 +32,8 @@ def main():
     before = json.loads((home / "installation.json").read_text())
 
     def cli(*arguments):
+        if "--json" not in arguments:
+            arguments = ("--json", *arguments)
         result = subprocess.run([executable, "--home", home, *arguments], env=env,
                                 cwd=work, capture_output=True, text=True, timeout=240)
         assert result.returncode == 0, result.stderr[-3000:]

@@ -1,7 +1,7 @@
 # Checkout workflow
 
 Run `make dev` from the Proofstorm checkout. It builds matching CLI/MCP binaries,
-web assets, and chart/CRD resources, then enters a shell selecting this checkout's
+web assets, chart/CRD resources, and controller source snapshot, then enters a shell selecting this checkout's
 private installation. Docker is not touched by the build. Inside that shell:
 
 ```sh
@@ -10,6 +10,29 @@ proofstorm doctor
 proofstorm up examples/developer-lab.json
 proofstorm gui
 ```
+
+Leaving the development shell with `exit` or Ctrl-D is a successful session end,
+even after an interrupted or failed command. Command failures still appear in
+the shell; build/registration failures before it opens still fail `make dev`.
+
+Commands show an ASCII spinner and status text in an interactive terminal,
+starting before installation checks. Setup reports its current stage. Ordinary
+results are human-readable; use `proofstorm setup --json`, `proofstorm gui --json`,
+or the global `--json` flag on another command for the full machine-readable
+result, with no spinner. Redirected output uses plain progress lines on stderr,
+not terminal animation. `release-info` and internal checkout registration retain
+their machine-readable output. This is the same CLI behavior in release bundles.
+
+GUI startup verifies artifacts once in the launcher and independently once in
+the new backend. The verified snapshot is reused only within that startup; it is
+not a persistent cache. Subsequent requests still detect changed artifacts and
+stale GUI builds. Progress reports file checks, server startup, runtime ownership
+and health checks, and browser activation. A new server opens the browser directly;
+an existing server first attempts to focus its tab.
+
+The checksum dependency is optimized in debug builds via `.cargo/config.toml`;
+application debugging and integrity checks are unchanged. This host-only build
+setting does not invalidate the controller snapshot or require rebuilding images.
 
 For agent attachment, change to the application's directory and run
 `proofstorm open codex`, `proofstorm open opencode`, or `proofstorm open claude`.
@@ -30,9 +53,20 @@ global PATH mutation, or legacy lab migration is involved.
 - Host code: run `make dev-build`; stop/reopen the GUI and reconnect agent
   sessions afterward. Existing labs, installation identity, and grants survive.
 - Chart/CRDs: rebuild, then run `proofstorm setup` to apply the new snapshot.
-- Controller/runtime-contract changes: local build/deploy support is still the
-  next slice. Setup currently uses the pinned release controller and rejects a
-  runtime-contract mismatch; do not use the old `make deploy` against this home.
+- Controller/runtime-contract changes: run `make dev-build`, then `proofstorm
+  setup` (or simply `make deploy`). Setup builds the recorded linux/arm64 source,
+  verifies source identity, platform, and client compatibility, publishes only
+  to this installation's loopback registry, and deploys by immutable digest.
+  The first build can take several minutes. Subsequent changed-source builds
+  reuse Docker/Cargo caches; unchanged source reuses its verified image and
+  healthy deployment. Host/web source edits do not invalidate controller source.
+  Runtime contract changes require this setup before reconnecting agents/GUI.
+  Failed build diagnostics stay in private `state/controller-build.log`.
+
+The old `make docker-build`, `docker-push`, `install`, and `cluster-schema`
+controller workflow has been removed. `make deploy` now uses the same setup
+path as the CLI, including chart/CRD updates and ownership checks. No global
+kubeconfig, fixed legacy registry, or manually selected deployment context is used.
 
 Build output, immutable resource snapshots, launchers, and private state live
 under ignored `.proofstorm-dev/`. Do not delete it casually: it also identifies
@@ -47,8 +81,8 @@ registration is intentionally refused rather than silently retargeting agents.
 
 ## Remaining consolidation
 
-Controller builds/image publication, owned runtime teardown, and older acceptance
-gates still need to move behind the installation-aware path. The low-level
+Owned runtime teardown and older acceptance gates still need to move behind
+the installation-aware path. The remaining low-level
 legacy Makefile targets are not part of this new workflow. Release packaging and
 installer tests remain separate because they test distribution, not a second
 product runtime.
@@ -69,3 +103,15 @@ OpenCode/Claude Code connection scenario used for installed releases. It starts
 no model sessions and stops its GUI afterward. Test attachment receipts and
 private test projects remain for inspection. Do not overlap it with lab creation
 or another installation write; those operations intentionally serialize.
+
+For a controller update/reuse check, run `scripts/test_checkout_controller.py`
+with the same `--cli`, `--home`, and a new `--work-dir`. It verifies setup/doctor,
+image identity, unchanged repeated deployment, and preservation of installation,
+runtime ownership, and existing database contents. It creates no labs and
+publishes nothing outside the installation's private registry.
+
+For terminal-output verification, run `scripts/test_cli_progress.py` with the same
+`--cli`, `--home`, and a new `--work-dir`. It checks immediate animated progress,
+line cleanup, readable setup/GUI summaries, and explicit JSON results against the
+ready installation. It creates no labs or agent connections, opens no browser,
+and stops the GUI only if one was not already running when the test began.

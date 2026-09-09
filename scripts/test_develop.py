@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +12,63 @@ import develop
 
 
 class DevelopmentTests(unittest.TestCase):
+    def test_normal_shell_exit_does_not_relay_last_command_failure(self):
+        for ending in ["exit\n", ""]:  # Bare exit and end-of-input.
+            for status in [0, 1, 130]:
+                with self.subTest(ending=ending, status=status):
+                    result = subprocess.run(
+                        [sys.executable, "-c", "import os, develop; develop.development_shell(os.environ.copy())"],
+                        cwd=Path(develop.__file__).parent,
+                        input=f'/bin/sh -c "exit {status}"\n{ending}',
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_shell_launch_and_signal_failures_remain_visible(self):
+        with patch.object(develop.subprocess, "run", side_effect=OSError("cannot launch shell")):
+            with self.assertRaisesRegex(OSError, "cannot launch"):
+                develop.development_shell({})
+        with patch.object(develop.subprocess, "run", return_value=subprocess.CompletedProcess([], -15)):
+            with self.assertRaises(SystemExit) as error:
+                develop.development_shell({})
+            self.assertEqual(error.exception.code, 143)
+
+    def test_build_failure_still_propagates(self):
+        with patch.object(develop.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["cargo"])) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                develop.run(["cargo", "build"], {})
+            self.assertTrue(run.call_args.kwargs["check"])
+
+    def test_controller_snapshot_excludes_local_state_and_web_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / "source"
+            names = ["Cargo.toml", "Cargo.lock", "Dockerfile.proofstormd", "crates/proofstormd/Cargo.toml",
+                     "crates/proofstormd/src/main.rs", "crates/proofstorm-web/Cargo.toml",
+                     "crates/proofstorm-web/src/lib.rs", ".env", ".proofstorm-dev/state/private.json", ".cargo/config.toml"]
+            for name in names:
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+            first = develop.controller_snapshot(source, root / "first", names)
+            self.assertFalse((root / "first/.env").exists())
+            self.assertFalse((root / "first/.proofstorm-dev").exists())
+            self.assertFalse((root / "first/.cargo").exists())
+            self.assertIn("Unbuilt", (root / "first/crates/proofstorm-web/src/lib.rs").read_text())
+            (source / "crates/proofstorm-web/src/lib.rs").write_text("changed UI")
+            self.assertEqual(first, develop.controller_snapshot(source, root / "second", names))
+            (source / "crates/proofstormd/src/main.rs").write_text("changed controller")
+            self.assertNotEqual(first, develop.controller_snapshot(source, root / "third", names))
+
+    def test_controller_snapshot_refuses_linked_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / "source"
+            source.mkdir()
+            (source / "Cargo.toml").symlink_to(root / "secret")
+            with self.assertRaisesRegex(ValueError, "linked"):
+                develop.controller_snapshot(source, root / "snapshot", ["Cargo.toml"])
+
     def test_build_environment_drops_ambient_runtime_and_build_selection(self):
         with patch.dict(os.environ, {"PROOFSTORM_HOME": "/foreign", "PROOFSTORM_DB": "foreign",
                                      "CARGO_TARGET_DIR": "foreign", "CARGO_BUILD_TARGET": "foreign",

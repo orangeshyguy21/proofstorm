@@ -133,7 +133,7 @@ def main():
         try:
             for index in range(2):
                 home = Path(root) / f"installation {index}"
-                result = run([args.binary, "--home", home, "init"], env)
+                result = run([args.binary, "--home", home, "init", "--json"], env)
                 installation = json.loads(result.stdout)["installation"]
                 config = json.loads((home / "k3d.yaml").read_text())
                 cluster = config["metadata"]["name"]

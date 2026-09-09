@@ -17,6 +17,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_CRATES = {"proofstorm-core", "proofstorm-kube", "proofstorm-transfer", "proofstorm-exec", "proofstormd"}
 
 
 def environment():
@@ -68,6 +69,54 @@ def launcher(binary, home):
     return ("#!/bin/sh\n# Proofstorm checkout launcher v1\n"
             f"export PROOFSTORM_HOME={shlex.quote(str(home))}\n"
             f'exec {shlex.quote(str(binary))} "$@"\n')
+
+
+def development_shell(env):
+    # A completed interactive session is not a build result. Bare exit and EOF
+    # inherit the last command's status, including 130 after Ctrl-C.
+    # Keep launch failures and abnormal signal termination visible to Make.
+    result = subprocess.run(["/bin/zsh", "-f", "-i"], env=env, check=False)
+    if result.returncode < 0:
+        raise SystemExit(128 - result.returncode)
+
+
+def controller_snapshot(source, destination, names):
+    """Only controller build inputs, never state, credentials, or web build output."""
+    destination.mkdir()
+    for name in sorted(set(filter(None, names))):
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("unsafe controller source path")
+        parts = relative.parts
+        selected = name in {"Cargo.toml", "Cargo.lock", "Dockerfile.proofstormd", ".dockerignore"}
+        if len(parts) >= 3 and parts[0] == "crates":
+            selected |= parts[1] in RUNTIME_CRATES or (len(parts) == 3 and parts[2] == "Cargo.toml")
+        selected |= (len(parts) == 3 and parts[0] == "docker" and parts[1] in {"wallet", "mint", "bitcoin"}
+                     and parts[2].endswith("-provenance.json"))
+        if not selected:
+            continue
+        original = source / relative
+        if original.is_symlink():
+            raise ValueError("linked controller source refused")
+        if not original.exists():  # tracked development deletion
+            continue
+        if not original.is_file() or any(parent.is_symlink() for parent in original.parents if parent != source.parent):
+            raise ValueError("non-regular controller source refused")
+        output = destination / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(original, output)
+    # Cargo resolves all workspace members. Unbuilt host/web members need targets,
+    # but their source/assets must not invalidate the controller build cache.
+    for manifest in (destination / "crates").glob("*/Cargo.toml"):
+        if manifest.parent.name not in RUNTIME_CRATES:
+            (manifest.parent / "src").mkdir(exist_ok=True)
+            (manifest.parent / "src/lib.rs").write_text("// Unbuilt workspace member.\n")
+            (manifest.parent / "src/main.rs").write_text("fn main() {}\n")
+    files = inventory(destination)
+    digest = hashlib.sha256()
+    for name, sha in sorted(files.items()):
+        digest.update(name.encode() + b"\0" + sha.encode() + b"\n")
+    return {"format_version": 1, "sha256": digest.hexdigest()}
 
 
 def main():
@@ -133,6 +182,9 @@ def main():
         shutil.copytree(ROOT / "charts/proofstorm", stage / "chart")
         run(["cargo", "run", "--locked", "-p", "proofstorm-kube", "--example", "export_crds", "--", stage / "chart/crds"], env)
         (stage / "release-info.json").write_text(info)
+        names = run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], env, capture=True).split("\0")
+        controller = controller_snapshot(ROOT, stage / "controller-source", names)
+        (stage / "controller-source.json").write_text(json.dumps(controller))
         files = inventory(stage)
         name = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
         destination = resources / name
@@ -158,7 +210,7 @@ def main():
         shell_env.update(PROOFSTORM_HOME=str(home), PATH=str(work / "bin") + os.pathsep + env.get("PATH", ""),
                          PROMPT="(proofstorm dev) %~ %# ")
         print("Development shell selected. Run proofstorm setup first. Exit returns to your normal shell.", flush=True)
-        os.execve("/bin/zsh", ["zsh", "-f", "-i"], shell_env)
+        development_shell(shell_env)
 
 
 if __name__ == "__main__":

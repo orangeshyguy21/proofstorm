@@ -1,5 +1,6 @@
 //! Installed runtime orchestration. Never selects the contributor context.
 mod cluster;
+mod local_controller;
 mod process;
 mod tools;
 
@@ -35,6 +36,38 @@ fn controller() -> Result<Value> {
         "controller/client compatibility mismatch; install a matching bundle"
     );
     Ok(value)
+}
+
+fn selected_controller(home: &Path) -> Result<Value> {
+    if let Some((_, sha)) = crate::artifacts::controller_source(home)? {
+        local_controller::current(&Installation::load(home)?, &sha)
+    } else {
+        controller()
+    }
+}
+
+fn controller_metadata(home: &Path, image: &str) -> Result<Value> {
+    Ok(serde_json::from_str(&docker(
+        home,
+        &[
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--memory",
+            "128m",
+            "--cpus",
+            "1",
+            image,
+            "--release-info",
+        ],
+        30,
+    )?)?)
 }
 
 fn images() -> BTreeSet<String> {
@@ -145,8 +178,25 @@ fn preflight(home: &Path) -> Result<Value> {
 
 /// Read-only checks, including before an installation exists. No grants or state writes.
 pub fn check_installed_runtime(installation: &Installation) -> Result<()> {
-    let controller = controller()?;
+    let controller = selected_controller(&installation.home)?;
     cluster::owned(installation)?;
+    healthy(installation, &controller)
+}
+
+/// Startup consumes a verified artifact snapshot; runtime ownership/health remain live checks.
+pub(crate) fn check_verified_runtime(
+    verified: &crate::artifacts::Verified,
+    progress: &dyn Fn(&str),
+) -> Result<()> {
+    let installation = &verified.installation;
+    progress("Checking controller compatibility");
+    let controller = match &verified.controller_sha256 {
+        Some(sha) => local_controller::current(installation, sha)?,
+        None => controller()?,
+    };
+    progress("Checking runtime ownership");
+    cluster::owned(installation)?;
+    progress("Checking controller health");
     healthy(installation, &controller)
 }
 
@@ -159,7 +209,7 @@ pub fn doctor(home: &Path) -> Value {
         Err(error) => checks.push(json!({"name":name,"ok":false,"message":format!("{error:#}")})),
     };
     check("docker", preflight(home));
-    check("controller_compatibility", controller());
+    check("controller_compatibility", selected_controller(home));
     check(
         "tools",
         (|| {
@@ -174,7 +224,7 @@ pub fn doctor(home: &Path) -> Value {
         (|| {
             let installation = Installation::load(home)?;
             cluster::owned(&installation)?;
-            healthy(&installation, &controller()?)?;
+            healthy(&installation, &selected_controller(home)?)?;
             Ok(json!({"cluster":installation.cluster_name(),"controller_ready":true}))
         })(),
     );
@@ -190,21 +240,62 @@ pub fn setup(
     prepare_only: bool,
     prefetch_all: bool,
 ) -> Result<Value> {
+    setup_with_progress(
+        home,
+        bundle,
+        allow_development,
+        prepare_only,
+        prefetch_all,
+        &|label| eprintln!("{label}..."),
+    )
+}
+
+/// Setup with caller-owned progress; callbacks never change runtime behavior.
+pub fn setup_with_progress(
+    home: &Path,
+    bundle: &Path,
+    allow_development: bool,
+    prepare_only: bool,
+    prefetch_all: bool,
+    progress: &dyn Fn(&str),
+) -> Result<Value> {
     ensure!(
         home.is_absolute() && !home.as_os_str().is_empty(),
         "setup requires an absolute --home"
     );
     let allow_development = crate::artifacts::verify(home, bundle, allow_development)?;
-    let controller = controller()?;
-    ensure!(
-        allow_development || controller["release_ready"] == true,
-        "controller is development-only; local tests require --allow-development"
-    );
+    let checkout_source = crate::artifacts::controller_source(home)?;
+    let mut controller = if checkout_source.is_some() {
+        Value::Null
+    } else {
+        controller()?
+    };
+    if checkout_source.is_none() {
+        ensure!(
+            allow_development || controller["release_ready"] == true,
+            "controller is development-only; local tests require --allow-development"
+        );
+    }
+    progress("Checking Docker");
     let capacity = preflight(home)?;
     let installation = Installation::initialize(home, None, None)?;
     let home = &installation.home;
+    progress("Waiting for installation lock");
     let _guard = Installation::lock(home)?;
-    stage(home, "tools", || {
+    let stage = |name, action: &mut dyn FnMut() -> Result<()>| {
+        progress(match name {
+            "tools" => "Preparing tools",
+            "cluster" => "Preparing local runtime",
+            "controller" => "Preparing controller",
+            "images" => "Downloading catalog images",
+            "deployment" => "Applying runtime configuration",
+            "health" => "Checking runtime health",
+            "permissions" => "Checking permissions",
+            _ => "Preparing Proofstorm",
+        });
+        stage(home, name, action)
+    };
+    stage("tools", &mut || {
         for pin in tools::pins()? {
             tools::install(home, &pin)?;
         }
@@ -215,49 +306,32 @@ pub fn setup(
             json!({"prepared":true,"runtime_started":false,"home":home,"capacity":capacity}),
         );
     }
-    stage(home, "controller", || {
-        let image = controller["image"]
-            .as_str()
-            .context("controller image missing")?;
-        docker(home, &["pull", "--platform", "linux/arm64", image], 300)?;
-        let metadata: Value = serde_json::from_str(&docker(
-            home,
-            &[
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--read-only",
-                "--cap-drop",
-                "ALL",
-                "--security-opt",
-                "no-new-privileges",
-                "--memory",
-                "128m",
-                "--cpus",
-                "1",
-                image,
-                "--release-info",
-            ],
-            30,
-        )?)?;
-        ensure!(
-            metadata == controller["metadata"],
-            "downloaded controller metadata mismatch"
-        );
+    stage("cluster", &mut || cluster::create(&installation))?;
+    stage("controller", &mut || {
+        if let Some((source, sha)) = &checkout_source {
+            controller = local_controller::prepare(&installation, source, sha, progress)?;
+        } else {
+            let image = controller["image"]
+                .as_str()
+                .context("controller image missing")?;
+            docker(home, &["pull", "--platform", "linux/arm64", image], 300)?;
+            ensure!(
+                controller_metadata(home, image)? == controller["metadata"],
+                "downloaded controller metadata mismatch"
+            );
+        }
         Ok(())
     })?;
-    stage(home, "cluster", || cluster::create(&installation))?;
     if prefetch_all {
-        stage(home, "images", || mirror(&installation, images()))?;
+        stage("images", &mut || {
+            mirror_with_progress(&installation, images(), progress)
+        })?;
     }
-    stage(home, "deployment", || {
+    stage("deployment", &mut || {
         deploy(&installation, bundle, &controller)
     })?;
-    stage(home, "health", || healthy(&installation, &controller))?;
-    stage(home, "permissions", || {
-        initialize_permissions(&installation)
-    })?;
+    stage("health", &mut || healthy(&installation, &controller))?;
+    stage("permissions", &mut || initialize_permissions(&installation))?;
     Ok(
         json!({"ready":true,"home":home,"cluster":installation.cluster_name(),"capacity":capacity,
         "permissions_initialized":true,"image_policy":if prefetch_all {"prefetch_all"} else {"on_demand"},
@@ -284,7 +358,6 @@ fn initialize_permissions(installation: &Installation) -> Result<()> {
 }
 
 fn stage(home: &Path, name: &str, action: impl FnOnce() -> Result<()>) -> Result<()> {
-    eprintln!("Proofstorm setup: {name}");
     let path = home.join("setup-progress.json");
     process::save(
         &path,
@@ -345,10 +418,19 @@ fn selected_images(
 }
 
 fn mirror(installation: &Installation, selected: BTreeSet<String>) -> Result<()> {
+    mirror_with_progress(installation, selected, &|_| {})
+}
+
+fn mirror_with_progress(
+    installation: &Installation,
+    selected: BTreeSet<String>,
+    progress: &dyn Fn(&str),
+) -> Result<()> {
     cluster::owned(installation)?;
     cluster::verify_kubeconfig(installation)?;
-    for image in selected {
-        eprintln!("Checking image: {image}");
+    let total = selected.len();
+    for (index, image) in selected.into_iter().enumerate() {
+        progress(&format!("Checking catalog image {} of {total}", index + 1));
         if let Some(local) = image
             .strip_prefix("proofstorm-registry.localhost:5000/")
             .filter(|local| !local.starts_with("candidates/"))
@@ -445,8 +527,17 @@ fn deploy(installation: &Installation, bundle: &Path, controller: &Value) -> Res
     let image = controller["image"].as_str().context("controller image")?;
     let (repository, digest) = image.split_once('@').context("controller digest")?;
     let expected = format!("{repository}@{digest}");
+    let inputs = json!({"installation_id":installation.id, "image":expected,
+        "chart_sha256":crate::artifacts::tree_sha256(&bundle.join("chart"))?});
+    let receipt = installation.home.join("deployment-inputs.json");
+    let same_inputs = std::fs::symlink_metadata(&receipt).is_ok_and(|meta| meta.is_file())
+        && std::fs::read(&receipt)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .as_ref()
+            == Some(&inputs);
     // Skip Helm entirely on a healthy, identical deployment: no restarts/revisions.
-    if healthy(installation, controller).is_ok() {
+    if same_inputs && healthy(installation, controller).is_ok() {
         return Ok(());
     }
     process::run(
@@ -480,6 +571,8 @@ fn deploy(installation: &Installation, bundle: &Path, controller: &Value) -> Res
         150,
     )?;
     ensure!(!expected.is_empty(), "missing deployment image");
+    healthy(installation, controller)?;
+    process::save(&receipt, &serde_json::to_vec(&inputs)?)?;
     Ok(())
 }
 

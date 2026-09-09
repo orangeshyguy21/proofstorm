@@ -194,13 +194,12 @@ pub(super) fn environment(installation: &Installation) -> Result<Environment> {
     )
 }
 
-pub(super) async fn serve(
-    home: &Path,
-    bundle: &Path,
-    instance: &str,
-    allow_development: bool,
-) -> Result<()> {
-    let installation = Installation::load(home)?;
+pub(super) async fn serve(home: &Path, instance: &str, allow_development: bool) -> Result<()> {
+    super::report_startup("Verifying GUI server files");
+    let verified = crate::artifacts::Verified::load(home, allow_development)?;
+    let installation = &verified.installation;
+    let bundle = &verified.root;
+    let allow_development = verified.allow_development;
     let _lifetime = state::lease(&installation.home, "gui-runtime-lock.sqlite3")?;
     let mut record = state::record(&installation.home, &installation.id)?
         .context("missing GUI launch reservation")?;
@@ -215,13 +214,12 @@ pub(super) async fn serve(
         record
             .build_sha256
             .as_ref()
-            .is_none_or(|sha| crate::artifacts::hash(&record.executable)
-                .is_ok_and(|current| &current == sha)),
+            .is_none_or(|sha| sha == &verified.executable_sha256),
         "GUI executable changed during launch; stop and reopen the GUI"
     );
-    let allow_development = crate::artifacts::verify(home, bundle, allow_development)?;
-    crate::bootstrap::check_installed_runtime(&installation)?;
-    let environment = environment(&installation)?;
+    crate::bootstrap::check_verified_runtime(&verified, &super::report_startup)?;
+    super::report_startup("Starting local GUI service");
+    let environment = environment(installation)?;
     ensure!(
         std::fs::symlink_metadata(environment.database.as_path())?.is_file(),
         "missing installation database; run setup first"
@@ -242,7 +240,7 @@ pub(super) async fn serve(
     let mut session = Session::new(
         record.clone(),
         installation.home.clone(),
-        bundle.to_path_buf(),
+        bundle.clone(),
         allow_development,
     );
     session.web_dist = crate::artifacts::web_dist(home)?;

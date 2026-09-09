@@ -1,0 +1,5 @@
+# Keep integrity verification fast in debug builds without changing its checks
+# or removing debug information from application code. Release builds already
+# optimize this dependency. This host-build setting is not a controller input.
+[profile.dev.package.sha2]
+opt-level = 3

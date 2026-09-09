@@ -160,6 +160,14 @@ the developer permission preset only when the database is new; retries never
 regrant revoked permissions. No Rust, Makefile, acceptance binary, checkout tools,
 default kubeconfig, shell-profile changes, or harness edits are required.
 
+Setup and other long-running commands show an ASCII spinner with status text
+in interactive terminals. Default results are human-readable, including a short
+setup success message and the GUI URL. Use `--json` on any command to request
+its complete machine-readable result with no spinner (for example,
+`proofstorm setup --allow-development --json`). Redirected human-mode progress
+uses plain stderr lines; stdout contains only the result. `release-info` and
+internal checkout registration remain JSON by default.
+
 Stages are recorded in `setup-progress.json`. Retries recheck actual state; healthy
 identical deployments skip Helm and are not restarted. Runtime operations require
 matching recorded Docker container/network IDs and installation labels. A changed

@@ -10,6 +10,7 @@ use proofstorm_core::{
 };
 use proofstorm_store::Store;
 use std::{fmt::Write, path::PathBuf, time::Duration};
+mod cli_output;
 mod server_restart;
 
 #[derive(Parser)]
@@ -19,6 +20,9 @@ mod server_restart;
     about = "Start protocol labs, connect your app, and inspect what happened"
 )]
 struct Args {
+    /// Print machine-readable JSON instead of human-readable results; suppress progress.
+    #[arg(long, global = true)]
+    json: bool,
     /// Isolated installation home. Initialize with `--home PATH init` first.
     #[arg(long, global = true, env = "PROOFSTORM_HOME")]
     home: Option<PathBuf>,
@@ -115,7 +119,7 @@ enum Command {
         #[arg(long)]
         allow_development: bool,
     },
-    /// Prepare and start this installed bundle's isolated runtime (never the dev cluster).
+    /// Prepare and start this installation's isolated runtime.
     Setup {
         /// Explicit opt-in for a local development bundle.
         #[arg(long)]
@@ -128,10 +132,7 @@ enum Command {
         prefetch_all: bool,
     },
     /// Read-only installation/runtime checks. Does not assert harness discovery.
-    Doctor {
-        #[arg(long)]
-        json: bool,
-    },
+    Doctor {},
     /// Report embedded release contents without reading state or contacting a cluster.
     ReleaseInfo,
     /// Install a verified release bundle into a user-owned prefix (no runtime setup).
@@ -175,7 +176,7 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         after: u64,
     },
-    /// Read current cluster labs, topology, resource demand, sessions and activity as JSON.
+    /// List current labs; use --json for topology, resource demand, sessions and activity.
     Environment {
         #[arg(long)]
         instance_id: Option<String>,
@@ -249,6 +250,30 @@ use proofstorm_app::harness::Harness;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let (command, label) = match &args.command {
+        Command::Setup { .. } => ("setup", Some("Checking installation")),
+        Command::Gui { .. } => ("gui", Some("Checking Proofstorm files")),
+        Command::Stop => ("stop", Some("Stopping GUI")),
+        Command::Attach { .. } => ("attach", Some("Checking project connection")),
+        Command::Open { .. } => ("open", Some("Preparing coding agent")),
+        Command::Doctor { .. } => ("doctor", Some("Checking Proofstorm health")),
+        Command::InstallBundle { .. } => ("install", Some("Installing Proofstorm")),
+        Command::Init { .. } => ("init", Some("Configuring local permissions")),
+        Command::Up { preview: true, .. } => ("up", Some("Reviewing lab changes")),
+        Command::Up { .. } => ("up", Some("Starting lab; checking images and readiness")),
+        Command::Down { .. } => ("down", Some("Stopping lab and verifying cleanup")),
+        Command::Status { .. } => ("status", Some("Reading lab status")),
+        Command::Environment { .. } => ("environment", Some("Reading environment")),
+        Command::Exec { .. } => ("exec", Some("Running lab command")),
+        Command::Result { .. } => ("result", Some("Reading operation result")),
+        Command::Sync { .. } => ("sync", Some("Syncing lab activity")),
+        Command::Connect { .. } => ("connect", Some("Opening lab connection")),
+        Command::Serve { .. } => ("serve", Some("Preparing server")),
+        Command::ReleaseInfo | Command::CheckoutRegister { .. } | Command::GuiServe { .. } => {
+            ("internal", None)
+        }
+    };
+    let mut output = cli_output::Output::new(args.json, command, label);
     // Metadata and registration must work before a coherent checkout is selected.
     if matches!(args.command, Command::ReleaseInfo) {
         return print(&proofstorm_app::release::describe());
@@ -270,11 +295,16 @@ async fn main() -> Result<()> {
     }
     // Stopping an owned GUI remains possible even after a checkout was rebuilt.
     if matches!(args.command, Command::Stop) {
-        return print(
+        return output.show(
             &proofstorm_app::gui::stop(args.home.as_ref().context("stop requires --home")?).await?,
         );
     }
-    if !matches!(args.command, Command::InstallBundle { .. }) {
+    // GUI startup owns one verified snapshot in each process. Do not repeat its
+    // verification here and again while locating resources or checking runtime.
+    if !matches!(
+        args.command,
+        Command::InstallBundle { .. } | Command::Gui { .. } | Command::GuiServe { .. }
+    ) {
         if let Some(home) = &args.home {
             proofstorm_app::artifacts::check_checkout(home)?;
         }
@@ -296,21 +326,22 @@ async fn main() -> Result<()> {
                 && args.namespace == DEFAULT_NAMESPACE,
             "the managed GUI uses only the installation's private runtime; remove overrides"
         );
-        let bundle = proofstorm_app::artifacts::root(home)?;
         return match &args.command {
             Command::Gui {
                 project,
                 allow_development,
                 no_open,
-            } => print(
-                &proofstorm_app::gui::open(home, project, &bundle, *allow_development, *no_open)
-                    .await?,
+            } => output.show(
+                &proofstorm_app::gui::open(home, project, *allow_development, *no_open, &|label| {
+                    output.update(label);
+                })
+                .await?,
             ),
-            Command::Stop => print(&proofstorm_app::gui::stop(home).await?),
+            Command::Stop => output.show(&proofstorm_app::gui::stop(home).await?),
             Command::GuiServe {
                 instance,
                 allow_development,
-            } => proofstorm_app::gui::serve(home, &bundle, instance, *allow_development).await,
+            } => proofstorm_app::gui::serve(home, instance, *allow_development).await,
             _ => unreachable!(),
         };
     }
@@ -361,12 +392,12 @@ async fn main() -> Result<()> {
             None
         };
         if *dry_run {
-            return print(
+            return output.show(
                 &serde_json::json!({"attachment":plan,"launch":launch,"changes_applied":false}),
             );
         }
         let attached = proofstorm_app::harness::apply(plan).await?;
-        print(&attached)?;
+        output.show(&attached)?;
         if let Some(launch) = launch {
             proofstorm_app::harness::launch::run(&launch)?;
         }
@@ -387,9 +418,10 @@ async fn main() -> Result<()> {
                 && args.namespace == DEFAULT_NAMESPACE,
             "installed setup/doctor currently requires the default developer, workspace, and namespace"
         );
-        if let Command::Doctor { json } = args.command {
+        if let Command::Doctor {} = args.command {
             let report = proofstorm_app::bootstrap::doctor(home);
-            if json {
+            output.stop();
+            if args.json {
                 print(&report)?;
             } else {
                 for check in report["checks"]
@@ -424,13 +456,15 @@ async fn main() -> Result<()> {
         } = args.command
         {
             let bundle = proofstorm_app::artifacts::root(home)?;
-            return print(&proofstorm_app::bootstrap::setup(
+            let result = proofstorm_app::bootstrap::setup_with_progress(
                 home,
                 &bundle,
                 allow_development,
                 prepare_only,
                 prefetch_all,
-            )?);
+                &|label| output.update(label),
+            )?;
+            return output.show(&result);
         }
     }
     if matches!(args.command, Command::ReleaseInfo) {
@@ -442,7 +476,7 @@ async fn main() -> Result<()> {
         allow_development,
     } = &args.command
     {
-        return print(&proofstorm_app::installer::install(
+        return output.show(&proofstorm_app::installer::install(
             bundle,
             prefix,
             *allow_development,
@@ -481,7 +515,9 @@ async fn main() -> Result<()> {
         },
         &std::env::current_dir()?,
     )?;
-    environment.report();
+    if args.json {
+        environment.report();
+    }
     if let Some(parent) = environment
         .database
         .parent()
@@ -492,13 +528,13 @@ async fn main() -> Result<()> {
     let store = Store::open(&environment.database)?;
     if matches!(args.command, Command::Init { .. }) {
         proofstorm_app::developer::configure(&store, &args.workspace, &args.principal)?;
-        return print(
+        return output.show(
             &serde_json::json!({"database":environment.database,"workspace":args.workspace,"principal":args.principal,"context":environment.context,"installation":environment.installation,"kubeconfig":environment.kubeconfig,"capabilities":store.capabilities(&args.workspace,&args.principal)?}),
         );
     }
     if matches!(args.command, Command::Result { .. }) {
         if let Command::Result { id } = args.command {
-            return print(&store.operation(&args.workspace, &args.principal, &id)?);
+            return output.show(&store.operation(&args.workspace, &args.principal, &id)?);
         }
     }
     store.authorize(&args.workspace,&args.principal,Capability::LabStatus).context("developer is not configured; run proofstorm init explicitly to configure local permissions")?;
@@ -529,7 +565,7 @@ async fn main() -> Result<()> {
             let spec: LabSpec = serde_json::from_slice(&std::fs::read(file)?)?;
             let name = name.as_deref().unwrap_or(&spec.name);
             if preview {
-                print(&labs.plan_edit(name, &spec, delete_data, &delete_retained)?)?;
+                output.show(&labs.plan_edit(name, &spec, delete_data, &delete_retained)?)?;
                 return Ok(());
             }
             let mut view = if delete_data || !delete_retained.is_empty() {
@@ -562,7 +598,7 @@ async fn main() -> Result<()> {
             if let Some(waited) = waited? {
                 view.runtime = Some(waited.status);
             }
-            print(&view)?;
+            output.show(&view)?;
             if !view
                 .runtime
                 .as_ref()
@@ -581,7 +617,7 @@ async fn main() -> Result<()> {
             activity_cursor,
             component_cursor,
             link_cursor,
-        } => print(
+        } => output.show(
             &labs
                 .environment(&proofstorm_app::environment::EnvironmentQuery {
                     instance_id,
@@ -602,12 +638,16 @@ async fn main() -> Result<()> {
                 );
                 server_restart::stop_previous(port).await?;
             }
+            output.stop();
             proofstorm_app::http::serve(labs, port).await?;
         }
-        Command::Status { name, after } => print(&labs.inspect(&name, after).await?)?,
+        Command::Status { name, after } => output.show(&labs.inspect(&name, after).await?)?,
         Command::Sync { name, watch } => loop {
+            // Re-arm after each snapshot, but never animate during the watch interval.
+            output.stop();
+            output = cli_output::Output::new(args.json, "sync", Some("Syncing lab activity"));
             labs.sync(&name).await?;
-            print(&labs.inspect(&name, 0).await?)?;
+            output.show(&labs.inspect(&name, 0).await?)?;
             if !watch {
                 break;
             }
@@ -622,9 +662,10 @@ async fn main() -> Result<()> {
             argv,
         } => {
             let request_id = request_id.map_or_else(new_request_id, Ok)?;
-            eprintln!(
-                "request_id={request_id}; reuse --request-id {request_id} if submission is interrupted"
-            );
+            // Preserve retry identity before submission without interleaving with progress.
+            output.stop();
+            eprintln!("Request: {request_id}; reuse --request-id {request_id} if interrupted");
+            output = cli_output::Output::new(args.json, "exec", Some("Running lab command"));
             let command = NativeCommand {
                 private_io: None,
                 script: String::new(),
@@ -653,7 +694,7 @@ async fn main() -> Result<()> {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }
-            print(&op)?;
+            output.show(&op)?;
             if op.phase != OperationPhase::Succeeded
                 || !op.artifact.as_ref().is_some_and(|artifact| {
                     artifact.content["exit_code"] == 0
@@ -665,7 +706,7 @@ async fn main() -> Result<()> {
                 bail!("operation did not report success; inspect its receipt before any retry");
             }
         }
-        Command::Down { name, wait } => print(&labs.down(&name, wait).await?)?,
+        Command::Down { name, wait } => output.show(&labs.down(&name, wait).await?)?,
         Command::Connect {
             name,
             component,
@@ -676,7 +717,7 @@ async fn main() -> Result<()> {
             let connection = labs.connect(&name, &component, &endpoint, port).await?;
             connection.write_config(&config)?;
             let _config_guard = ConfigFile(config);
-            print(&connection.descriptor)?;
+            output.show(&connection.descriptor)?;
             tokio::select! {result=connection.serve()=>result?, result=tokio::signal::ctrl_c()=>result?}
         }
         Command::Init { .. } | Command::Result { .. } => {
