@@ -101,7 +101,7 @@ pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
     });
     let executable = if cli { path_cli.or_else(|| desktop.as_ref().map(|app| app.join("Contents/Resources/codex"))) }
         else { desktop.as_ref().map(|app| app.join("Contents/Resources/codex")) }
-        .context(if cli {"Codex CLI is not installed; install Codex, then retry"} else {"Codex desktop app was not found; install it yourself or choose --cli. Nothing was installed or attached."})?;
+        .context(if cli {"Codex CLI is not installed; install Codex, then retry"} else {"Codex desktop app was not found; install it yourself or omit --gui to use the CLI. Nothing was installed or attached."})?;
     let version = capture(&executable, &["--version"])?;
     ensure!(
         version.starts_with("codex-cli "),
@@ -171,7 +171,7 @@ pub fn run(plan: &LaunchPlan) -> Result<()> {
     Ok(())
 }
 
-/// Native project handoff by default; terminal interfaces require explicit --cli.
+/// Select the terminal interface when `cli` is true, otherwise the native app.
 pub fn detect_for(harness: super::Harness, project: &Path, cli: bool) -> Result<LaunchPlan> {
     if harness == super::Harness::Codex {
         return detect(project, cli);

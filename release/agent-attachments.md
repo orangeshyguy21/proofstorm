@@ -11,8 +11,8 @@ proofstorm open opencode
 proofstorm open claude
 ```
 
-Both commands attach and verify Proofstorm, then open the installed native app
-at that directory on macOS. Add `--cli` to run in the current interactive terminal.
+Both commands attach and verify Proofstorm, then start the agent in the current
+interactive terminal. Add `--gui` to open the installed native app on macOS.
 `claude-code` is also accepted as
 an alias for `claude`. An explicit path works, including paths containing spaces.
 Use `proofstorm attach opencode` or `proofstorm attach claude` to connect without
@@ -39,9 +39,14 @@ Multiple duplicates and inherited/global connections still require manual review
 
 | Agent | Project configuration | Launch |
 | --- | --- | --- |
-| Codex | `.codex/config.toml` | Native app by default; `--cli` for terminal |
-| OpenCode 1.x | Existing `opencode.jsonc`, otherwise `opencode.json` | Native OpenCode 1.18.30+ (1.x); `--cli` for terminal |
-| Claude Code 2.x | `.mcp.json` | Native Claude 1.40609.1+ (1.x); `--cli` for terminal |
+| Codex | `.codex/config.toml` | Terminal by default; `--gui` for native app |
+| OpenCode 1.x | Existing `opencode.jsonc`, otherwise `opencode.json` | Terminal by default; `--gui` for native OpenCode 1.18.30+ (1.x), with limitation below |
+| Claude Code 2.x | `.mcp.json` | Terminal by default; `--gui` for native Claude 1.40609.1+ (1.x) |
+
+GUI launch buttons always request the native app, independently of the CLI default.
+OpenCode 1.18.30's new layout ignores project links: the app opens, but the folder
+must be selected inside OpenCode. The default terminal launch avoids this upstream
+bug ([#35225](https://github.com/anomalyco/opencode/issues/35225)).
 
 Configuration applies through each agent's normal project/directory lookup,
 including subdirectories. This is not a filesystem access sandbox. The generated

@@ -33,8 +33,11 @@ project-only confirmation, restart/session checks, and verified runtime cleanup;
 see [GUI verification](release/gui-verification.json). This is still a development
 preview, not a published or clean-Mac-certified alpha release.
 `proofstorm open codex`, `proofstorm open opencode`, and `proofstorm open claude`
-attach the project and hand it to the installed native app on macOS. Add `--cli`
-for terminal use. The MCP connection is always named `proofstorm`; replacing an
+attach the project and start the agent in your terminal. Add `--gui` to open
+the installed native app on macOS; the GUI's launch buttons always use native apps.
+OpenCode 1.18.30's new layout currently ignores native project links, so select
+the folder inside OpenCode or use the default terminal launch.
+The MCP connection is always named `proofstorm`; replacing an
 old connection such as `pst` requires a separate confirmation and saves a backup.
 See [agent attachment details](release/agent-attachments.md).
 Their packaged client-connection gate passed with private agent homes and verified

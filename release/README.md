@@ -239,8 +239,10 @@ The **Launch Agent** dialog shows branded buttons for supported installed native
 apps. Clicking one verifies and attaches `proofstorm` for the launch folder, then
 opens Codex, OpenCode, or Claude Code there. Legacy connections get an explicit
 backup-and-replace choice. See [native handoff details](agent-attachments.md).
-For a terminal session, add `--cli` to
-`proofstorm open opencode` or `proofstorm open claude`. See
+Terminal sessions are the default for `proofstorm open codex`,
+`proofstorm open opencode`, and `proofstorm open claude`. Add `--gui` to request
+the native app instead; GUI launch buttons always use native apps. OpenCode
+1.18.30's new layout ignores project links, requiring manual folder selection. See
 [agent attachment formats, safeguards, and tests](agent-attachments.md).
 
 The existing tab receives a focus request first. Browser focus restrictions may

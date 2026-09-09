@@ -104,16 +104,16 @@ enum Command {
         #[arg(long)]
         allow_development: bool,
     },
-    /// Attach, then open the installed native agent app at this project (macOS).
+    /// Attach, then open the agent's CLI at this project.
     Open {
         #[arg(value_enum)]
         harness: Harness,
         /// Project directory to connect; defaults to the current directory.
         #[arg(default_value = ".")]
         project: PathBuf,
-        /// Use the agent's CLI in this terminal instead of its native app.
+        /// Open the native agent app instead of this terminal (macOS).
         #[arg(long)]
-        cli: bool,
+        gui: bool,
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -381,9 +381,9 @@ async fn main() -> Result<()> {
             &bundle,
             *allow_development,
         )?;
-        let launch = if let Command::Open { cli, .. } = &args.command {
+        let launch = if let Command::Open { gui, .. } = &args.command {
             let launch =
-                proofstorm_app::harness::launch::detect_for(*harness, &plan.project, *cli)?;
+                proofstorm_app::harness::launch::detect_for(*harness, &plan.project, !*gui)?;
             if launch.interface == "cli" && !dry_run {
                 proofstorm_app::harness::launch::require_terminal()?;
             }
@@ -792,11 +792,25 @@ mod attachment_args_tests {
     }
 
     #[test]
-    fn current_directory_open_accepts_cli_and_dry_run_flags() {
-        let args =
-            Args::try_parse_from(["proofstorm", "open", "codex", "--cli", "--dry-run"]).unwrap();
-        assert!(
-            matches!(args.command, Command::Open { project, cli: true, dry_run: true, .. } if project == PathBuf::from("."))
-        );
+    fn open_defaults_to_cli_and_gui_is_explicit_for_every_agent() {
+        for agent in ["codex", "opencode", "claude", "claude-code"] {
+            for path in [None, Some("/a project/with spaces")] {
+                for gui in [false, true] {
+                    let mut input = vec!["proofstorm", "open", agent];
+                    if let Some(path) = path {
+                        input.push(path);
+                    }
+                    if gui {
+                        input.push("--gui");
+                    }
+                    input.push("--dry-run");
+                    let args = Args::try_parse_from(input).unwrap();
+                    assert!(matches!(args.command,
+                        Command::Open { project, gui: actual, dry_run: true, .. }
+                        if actual == gui && project == PathBuf::from(path.unwrap_or("."))));
+                }
+            }
+            assert!(Args::try_parse_from(["proofstorm", "open", agent, "--cli"]).is_err());
+        }
     }
 }

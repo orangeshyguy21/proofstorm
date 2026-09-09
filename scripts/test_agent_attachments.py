@@ -59,7 +59,7 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
             path = project / file
             original = '{\n  "' + key + '": {}\n}\n'
             path.write_text(original)
-            dry = cli("open", agent, "--cli", "--dry-run", "--allow-development")
+            dry = cli("open", agent, "--dry-run", "--allow-development")
             assert dry["attachment"]["harness"] == agent and dry["launch"]["interface"] == "cli"
             assert dry["launch"]["project"] == str(project.resolve())
             assert dry["launch"]["arguments"] == [] and not dry["changes_applied"]
