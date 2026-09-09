@@ -188,6 +188,43 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "build on"):
                 release.host_target()
 
+    def test_stale_controller_contract_is_refused_even_for_development_bundles(self):
+        self.info["runtime_contract_sha256"] = "1" * 64
+        self.info["controller"] = {"platform": release.TARGETS[self.info["target"]], "release_ready": False,
+                                   "metadata": {"version": self.info["version"], "runtime_contract_sha256": "2" * 64}}
+        with self.assertRaisesRegex(ValueError, "runtime contract"):
+            self.package()
+        self.info["controller"]["metadata"]["runtime_contract_sha256"] = "1" * 64
+        self.assertFalse(self.package("matching")["release_ready"])
+
+    def test_snapshot_compiler_preserves_metadata_and_uses_matching_profile(self):
+        tools = self.source / "tools/versions.env"
+        tools.write_text("TRUNK_VERSION=0.21.14\n")
+        trunk = self.root / "trunk"
+        trunk.write_text("fixture")
+        work = self.root / "build"
+        work.mkdir()
+        target = work / "target"
+        for debug in [False, True]:
+            def run(args, **kwargs):
+                if args[-1] == "--version":
+                    return "trunk 0.21.14\n"
+                if args[-1] == "release-info":
+                    return json.dumps({"target": release.host_target()})
+                return ""
+            with patch.object(release, "run", side_effect=run) as runner, \
+                 patch.object(release, "package", return_value={"release_ready": False}) as package:
+                release.compile_snapshot(self.source, self.provenance, work=work, output=work / "out",
+                                         target=target, trunk=trunk, development=True, debug=debug,
+                                         expected_target=release.host_target())
+            calls = runner.call_args_list
+            web = next(call for call in calls if call.args[0][0] == trunk and "build" in call.args[0])
+            host = next(call for call in calls if call.args[0][:2] == ["cargo", "build"])
+            self.assertEqual("--release" in host.args[0], not debug)
+            self.assertEqual(web.kwargs["env"]["PROOFSTORM_BUILD_SOURCE_SHA256"], self.provenance["sha256"])
+            self.assertEqual(host.kwargs["env"]["PROOFSTORM_BUILD_REVISION"], self.provenance["revision"])
+            self.assertEqual(package.call_args.args[1], target / ("debug" if debug else "release"))
+
     def test_snapshot_is_explicit_and_excludes_unlisted_private_files(self):
         (self.source / "public.txt").write_text("public")
         (self.source / ".env").write_text("private")

@@ -26,5 +26,6 @@ fi
 [ "$expected" = "$actual" ] || { echo 'Trunk checksum mismatch.' >&2; exit 1; }
 unpack=$(mktemp -d)
 trap 'rm -rf -- "$unpack"' EXIT HUP INT TERM
-tar -xzf "$root/.tools/downloads/$archive" -C "$unpack" trunk
+# Keep local ownership; vendor archive UIDs are not meaningful on this machine.
+tar --no-same-owner -xzf "$root/.tools/downloads/$archive" -C "$unpack" trunk
 install -m 0755 "$unpack/trunk" "$root/.tools/bin/trunk"

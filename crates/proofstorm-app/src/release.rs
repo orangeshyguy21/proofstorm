@@ -43,9 +43,21 @@ pub fn describe() -> Value {
 /// Never advertise the ARM controller as an AMD64 runtime. A platform-matching
 /// published pin must be supplied before that platform can run installed setup.
 pub(crate) fn controller() -> Value {
-    let value: Value = serde_json::from_str(include_str!("../../../release/controller.json"))
-        .expect("checked controller metadata");
-    if crate::platform::container_platform().is_ok_and(|platform| value["platform"] == platform) {
+    controller_for(crate::platform::target())
+}
+
+fn controller_for(target: &str) -> Value {
+    let encoded = match target {
+        crate::platform::MAC_ARM64 => include_str!("../../../release/controller.json"),
+        crate::platform::LINUX_AMD64 => {
+            include_str!("../../../release/controller-linux-amd64.json")
+        }
+        _ => return Value::Null,
+    };
+    let value: Value = serde_json::from_str(encoded).expect("checked controller metadata");
+    if crate::platform::container_arch_for(target)
+        .is_ok_and(|arch| value["platform"] == format!("linux/{arch}"))
+    {
         value
     } else {
         Value::Null
@@ -63,6 +75,18 @@ pub fn runtime_contract_sha256() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_pins_are_platform_specific_and_preserve_the_mac_pin() {
+        let mac: Value =
+            serde_json::from_str(include_str!("../../../release/controller.json")).unwrap();
+        assert_eq!(controller_for(crate::platform::MAC_ARM64), mac);
+        let linux = controller_for(crate::platform::LINUX_AMD64);
+        assert_eq!(linux["platform"], "linux/amd64");
+        assert_eq!(linux["anonymous_verified"], true);
+        assert!(linux["image"].as_str().unwrap().contains("@sha256:"));
+        assert!(controller_for("unsupported").is_null());
+    }
 
     #[test]
     fn inventory_covers_catalog_and_helpers_without_mutable_tags() {

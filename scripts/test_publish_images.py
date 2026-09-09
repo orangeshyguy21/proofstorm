@@ -50,6 +50,28 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(result["anonymous_verified"], [])
         self.assertEqual(len(result["needs_public_visibility"]), 1)
 
+    def test_amd64_audit_distinguishes_missing_architecture_from_private_package(self):
+        with patch.object(publish, "Registry") as registry:
+            registry.return_value.inspect.return_value = {"linux/arm64"}
+            result = publish.verify(self.plan, "linux/amd64")
+        self.assertEqual(result["needs_public_visibility"], [])
+        self.assertEqual(len(result["missing_platform"]), 1)
+        self.assertEqual(result["anonymous_verified"][0]["verified_blob_platforms"], ["linux/arm64"])
+        with patch.object(publish, "Registry") as registry:
+            registry.return_value.inspect.return_value = {"linux/amd64"}
+            result = publish.verify(self.plan, "linux/amd64")
+        self.assertEqual(result["missing_platform"], [])
+        self.assertFalse(result["anonymous_verified"][0]["arm64_blobs_accessible"])
+
+    def test_amd64_layers_are_checked_not_just_config_architecture(self):
+        registry = object.__new__(publish.Registry)
+        with patch.object(registry, "data", side_effect=[
+            {"config": {"digest": "sha256:" + "a" * 64}, "layers": [{"digest": "sha256:" + "b" * 64}]},
+            {"os": "linux", "architecture": "amd64"},
+        ]), patch.object(registry, "blob_available") as available:
+            self.assertEqual(registry.inspect("sha256:" + "c" * 64), {"linux/amd64"})
+        available.assert_called_once_with("sha256:" + "b" * 64)
+
 
 if __name__ == "__main__":
     unittest.main()

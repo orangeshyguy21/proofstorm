@@ -1,0 +1,120 @@
+{
+  "format_version": 1,
+  "verified_on": "2026-09-09",
+  "environment": "Linux AMD64 emulated by Docker Desktop on macOS ARM64",
+  "release_ready": false,
+  "bundle": {
+    "archive": "proofstorm-0.1.0-alpha.1-dev-debug-55edd047b076-x86_64-unknown-linux-gnu.tar.gz",
+    "sha256": "98dc313436447567350cf516f9046fbed0bcec9aecf8e2a80c2555795189160e",
+    "target": "x86_64-unknown-linux-gnu",
+    "build_profile": "debug",
+    "source": {
+      "revision": "9c75d6893f891bc4636896068412a03804b28636",
+      "sha256": "55edd047b076964a88075e7068f9af38fcfc219860d85ebd89b2f9e13a89f30c",
+      "dirty": true
+    },
+    "integrity_verified": true,
+    "relocated_binaries_verified": true,
+    "source_free_install_verified": true,
+    "source_free_reinstall_verified": true,
+    "source_free_install_status": "Passed: user ran the prepared offline non-root Debian test; report and archive checksum verified",
+    "tested_installer_sha256": "9a6ed7944f350b161170c55ab3a845beb37d6cb1f22ebac42692a4970f5120a3",
+    "github_download_verified": false
+  },
+  "anonymous_ghcr_audit": {
+    "scope": "Six custom catalog images and the pinned controller; upstream/helper images not audited",
+    "method": "Anonymous pull token; hash-verified manifests/configs and layer HEAD checks",
+    "amd64_and_arm64": [
+      "ghcr.io/orangeshyguy21/proofstorm/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+      "ghcr.io/orangeshyguy21/proofstorm/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+      "ghcr.io/orangeshyguy21/proofstorm/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+      "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d"
+    ],
+    "arm64_only": [
+      "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+      "ghcr.io/orangeshyguy21/proofstorm/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+      "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:70476545989f363aef23610bb08830ad90e16fe2eb30a3d2d8dcea82175a4b16"
+    ]
+  },
+  "local_amd64_wallet_builds": [
+    {
+      "tag": "proofstorm-linux-check/cdk-cli-wallet:20260909",
+      "local_image_id": "sha256:a02dfc4f849d011737a8a778aecfa8d159c1b9f4c716f8f869590dc810573136",
+      "recipe": "docker/wallet/Dockerfile.kube-cdk",
+      "version_output": "cdk-cli 0.18.0",
+      "offline_read_only_version_check": true,
+      "published": true
+    },
+    {
+      "tag": "proofstorm-linux-check/cocod-wallet:20260909",
+      "build_manifest_digest": "sha256:7e313c8f020e3f8eb4989e00006516cac325eb29f64ddf2ca7d1996a68203114",
+      "recipe": "docker/wallet/Dockerfile.kube-cocod",
+      "version_output_during_build": "0.0.17",
+      "offline_read_only_version_check": true,
+      "offline_check_status": "Passed during publication preflight; see linux-amd64-publication.json",
+      "published": true
+    }
+  ],
+  "amd64_controller_build": {
+    "status": "Passed locally: user ran the build and the generated receipt was verified",
+    "local_image_id": "sha256:37be6628b9d74a5de9299ca1879a4136221952bbda2e3790f05b09408013814a",
+    "source_sha256": "b3bb962fb6253d819c12c1e778c9fc4ded25ce130e85406e7b6304a9c899069a",
+    "runtime_contract_sha256": "6a4e0adb25a0b4abf42f23e21e4fef90582e0499a9d9faab8b6f0703d1993dd0",
+    "offline_metadata": true,
+    "non_root": true,
+    "helper_startup": true,
+    "host_contract_match": true,
+    "verification_tests_passed": 9,
+    "host_bundle_compatibility_check_prepared": true,
+    "published": true,
+    "matches_current_linux_catalog": false,
+    "follow_up_build_status": "Passed locally: user completed the updated-wallet controller build; see refreshed_amd64_controller_build",
+    "follow_up_required": "Matching host bundle and source-free installation verified; isolated runtime testing remains"
+  },
+  "refreshed_amd64_controller_build": {
+    "local_image_id": "sha256:062ab1929d67632daf58184bd5119d5363651613aadd944d5754dc14dc5abbe4",
+    "source_sha256": "7e0c9e37922c2318b313fe88ec4b25faf42cddab83aeb43b58fb21f4a5822d10",
+    "runtime_contract_sha256": "4a9dd781b53436818582ceb20744454755728bceaa3908bb24b7f35f635ac93e",
+    "tag": "ghcr.io/orangeshyguy21/proofstorm/proofstormd:development-a2a8ac70d647467e838e409a6052a232",
+    "publication_status": "Passed: user completed publication; receipt confirms anonymous manifest/config hashes, layer access, architecture, and image identity checks",
+    "publication_receipt": "controller-linux-amd64.json",
+    "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:062ab1929d67632daf58184bd5119d5363651613aadd944d5754dc14dc5abbe4",
+    "anonymous_verified": true,
+    "offline_metadata": true,
+    "non_root": true,
+    "helper_startup": true,
+    "host_contract_match": false,
+    "published": true,
+    "cluster_reconciliation": false
+  },
+  "host_bundle_refresh": {
+    "status": "Passed: user completed the isolated build; archive checksum, reports, and embedded controller compatibility verified",
+    "archive": "proofstorm-0.1.0-alpha.1-dev-debug-0289567bba49-x86_64-unknown-linux-gnu.tar.gz",
+    "sha256": "90131c9832cb7d3853f427aa2a006e2f1169aad50226182be8b934db316d69e8",
+    "source_sha256": "0289567bba49bf7d0a49c69b5b4e6c15b96318d31116cdb995731f2b12478e5e",
+    "target": "x86_64-unknown-linux-gnu",
+    "build_profile": "debug",
+    "integrity_verified": true,
+    "relocated_binaries_verified": true,
+    "controller_pin": "controller-linux-amd64.json",
+    "controller_contract_match_verified": true,
+    "runtime_contract_sha256": "4a9dd781b53436818582ceb20744454755728bceaa3908bb24b7f35f635ac93e",
+    "installer_sha256": "9a6ed7944f350b161170c55ab3a845beb37d6cb1f22ebac42692a4970f5120a3",
+    "source_free_install_status": "Passed: user completed the offline non-root Debian test; saved report matches the refreshed archive and installer checksums",
+    "source_free_install_verified": true,
+    "source_free_reinstall_verified": true,
+    "cli_mcp_metadata_match": true,
+    "source_checkout_present": false,
+    "build_tools_present": false,
+    "network_enabled_during_install_test": false,
+    "github_download_verified": false,
+    "release_ready": false
+  },
+  "runtime_setup_tested": false,
+  "agent_mcp_discovery_tested": false,
+  "lab_lifecycle_tested": false,
+  "privileged_containers_started": false,
+  "existing_arm64_catalog_pins_changed": false,
+  "linux_wallet_catalog_pins_updated": true,
+  "publication_receipt": "linux-amd64-publication.json"
+}

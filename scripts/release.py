@@ -168,6 +168,12 @@ def package(source, binaries, output, provenance, development):
         images = image_inventory(info)
         controller = info.get("controller")
         target = info["target"]
+        if controller:
+            require(controller.get("platform") == TARGETS[target], "controller platform does not match host bundle")
+            require(controller.get("metadata", {}).get("version") == info["version"] and
+                    controller.get("metadata", {}).get("runtime_contract_sha256") == info.get("runtime_contract_sha256")
+                    and bool(info.get("runtime_contract_sha256")),
+                    "controller runtime contract does not match host bundle; rebuild the controller after changing image pins")
         blockers = [f"Remote image availability and {TARGETS[target]} platforms are not verified."]
         if target == "aarch64-apple-darwin":
             blockers.append("Downloaded macOS signing/quarantine behavior has not been validated.")
@@ -288,13 +294,23 @@ def build(args):
     provenance = snapshot(source, snapshot_root, args.development)
     write_json(work / "source.json", provenance)
     trunk = (source / ".tools/bin/trunk").resolve()
+    target = args.target_dir.resolve() if args.target_dir else work / "target"
+    require(not target.is_relative_to(source), "target directory must not be in the development checkout")
+    compile_snapshot(snapshot_root, provenance, work=work, output=output, target=target,
+                     trunk=trunk, development=args.development, debug=args.debug,
+                     expected_target=expected_target)
+
+
+def compile_snapshot(snapshot_root, provenance, *, work, output, target, trunk,
+                     development, debug, expected_target):
+    """Compile a caller-verified snapshot; never infer provenance from a copied .git."""
+    require(development or not debug, "debug binaries require --development")
+    require(host_target() == expected_target, "build target differs from build host")
     require(trunk.is_file(), "install the pinned Trunk tool before packaging")
     pins = dict(line.split("=", 1) for line in (snapshot_root / "tools/versions.env").read_text().splitlines()
                 if line and not line.startswith("#"))
     require(run([trunk, "--version"], cwd=work, capture=True).strip() == "trunk " + pins["TRUNK_VERSION"],
             "Trunk version does not match tools/versions.env")
-    target = args.target_dir.resolve() if args.target_dir else work / "target"
-    require(not target.is_relative_to(source), "target directory must not be in the development checkout")
     env = clean_environment()
     # Trunk parses NO_COLOR as a bool, while many shells set it to "1".
     if "NO_COLOR" in env:
@@ -308,16 +324,16 @@ def build(args):
     env["PROOFSTORM_REQUIRE_WEB_ASSETS"] = "1"
     print("Building CLI and MCP with required embedded assets", flush=True)
     command = ["cargo", "build", "--locked", "-p", "proofstorm-app", "-p", "proofstorm-mcp", "--bins"]
-    if not args.debug:
+    if not debug:
         command.append("--release")
     run(command, cwd=snapshot_root, env=env)
     run(["cargo", "run", "--locked", "-p", "proofstorm-kube", "--example", "export_crds", "--",
          snapshot_root / "charts/proofstorm/crds"], cwd=snapshot_root, env=env)
-    metadata = json.loads(run([target / ("debug" if args.debug else "release") / "proofstorm", "release-info"],
+    metadata = json.loads(run([target / ("debug" if debug else "release") / "proofstorm", "release-info"],
                               cwd=work, env=env, capture=True))
     require(metadata["target"] == expected_target, "build target differs from build host")
-    result = package(snapshot_root, target / ("debug" if args.debug else "release"),
-                     output, provenance, args.development)
+    result = package(snapshot_root, target / ("debug" if debug else "release"),
+                     output, provenance, development)
     write_json(work / "result.json", result)
     print(json.dumps(result, indent=2))
 

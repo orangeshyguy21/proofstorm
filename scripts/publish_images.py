@@ -82,10 +82,22 @@ class Registry:
             return platforms
         config = self.data("blobs", manifest["config"]["digest"])
         platform = config["os"] + "/" + config["architecture"]
-        if platform == "linux/arm64":
+        if platform in {"linux/arm64", "linux/amd64"}:
             for layer in manifest["layers"]:
                 self.blob_available(layer["digest"])
         return {platform}
+
+
+def contains_identity(registry, digest, image_id, depth=0):
+    """Support Docker stores whose local ID is an index, manifest, or config hash."""
+    require(depth <= 3, "registry index nesting exceeds limit")
+    if digest == image_id:
+        return True
+    manifest = registry.data("manifests", digest)
+    if "manifests" in manifest:
+        return any(contains_identity(registry, child["digest"], image_id, depth + 1)
+                   for child in manifest["manifests"] if child.get("platform", {}).get("os") != "unknown")
+    return manifest["config"]["digest"] == image_id
 
 
 def plan(info):
@@ -119,15 +131,23 @@ def preflight(value):
         print(f"Source verified: {entry['repository']} ({', '.join(sorted(platforms))})", flush=True)
 
 
-def verify(value):
+def verify(value, required_platform="linux/arm64"):
     validate_plan(value)
-    report = {"namespace": NAMESPACE, "anonymous_verified": [], "needs_public_visibility": []}
+    require(required_platform in {"linux/arm64", "linux/amd64"}, "unsupported verification platform")
+    report = {"namespace": NAMESPACE, "required_platform": required_platform,
+              "anonymous_verified": [], "needs_public_visibility": [], "missing_platform": []}
     for entry in value["images"]:
         try:
             repository = entry["destination"].removeprefix("ghcr.io/").split("@")[0]
             platforms = Registry(repository).inspect(entry["digest"])
-            require("linux/arm64" in platforms, "published image lacks Linux arm64")
-            report["anonymous_verified"].append({"image": entry["destination"], "platforms": sorted(platforms), "arm64_blobs_accessible": True})
+            verified = {"image": entry["destination"], "platforms": sorted(platforms),
+                        "verified_blob_platforms": sorted(platforms & {"linux/arm64", "linux/amd64"})}
+            # Retain the existing receipt field, without claiming untested AMD64 layers.
+            verified["arm64_blobs_accessible"] = "linux/arm64" in platforms
+            report["anonymous_verified"].append(verified)
+            if required_platform not in platforms:
+                report["missing_platform"].append({"image": entry["destination"],
+                                                  "required_platform": required_platform})
             print(f"Anonymous download verified: {entry['repository']}", flush=True)
         except (urllib.error.HTTPError, urllib.error.URLError, ValueError) as error:
             # Do not print token-bearing URLs or request headers.
@@ -167,6 +187,8 @@ def main():
             command.add_argument("--output", type=Path, required=True)
         if name == "publish":
             command.add_argument("--confirm-namespace", required=True)
+        if name == "verify":
+            command.add_argument("--platform", choices=["linux/arm64", "linux/amd64"], default="linux/arm64")
     args = parser.parse_args()
     if args.command == "plan":
         write_json(args.output, plan(json.loads(args.release_info.read_text())))
@@ -177,9 +199,10 @@ def main():
         elif args.command == "publish":
             publish(value, args.confirm_namespace, args.output)
         else:
-            result = verify(value)
+            result = verify(value, args.platform)
             write_json(args.output, result)
             require(not result["needs_public_visibility"], "some images are not anonymously downloadable; see report")
+            require(not result["missing_platform"], "some images lack the required platform; see report")
 
 
 if __name__ == "__main__":

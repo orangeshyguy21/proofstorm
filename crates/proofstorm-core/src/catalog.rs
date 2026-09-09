@@ -1105,15 +1105,21 @@ fn mirror_image(image: &str) -> String {
 }
 
 fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
+    let amd64 = crate::wallet_builds::LINUX_AMD64;
+    let (image, encoded) = crate::wallet_builds::cdk(amd64);
     let mut entry = catalog_entry(
         "cdk-cli-wallet",
         backends,
         ComponentKind::Wallet,
-        "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 laboratory build",
+        if amd64 {
+            "CDK CLI 0.18.0 persistent wallet; Linux amd64 laboratory build"
+        } else {
+            "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 laboratory build"
+        },
         adapter_version,
         "0.18.0",
         ReleaseChannel::Stable,
-        "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+        image,
         BTreeSet::from([
             CatalogFeature::NativeCli,
             CatalogFeature::PersistentState,
@@ -1133,25 +1139,29 @@ fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &st
         vec![ControlClass::Laboratory, ControlClass::Attacker],
     );
     entry.protocol_action_adapter_version = Some("cdk-cli/0.18/observations/v1".into());
-    let provenance: BuildProvenance = serde_json::from_str(include_str!(
-        "../../../docker/wallet/cdk-cli-0.18.0-provenance.json"
-    ))
-    .expect("pinned wallet build provenance");
+    let provenance: BuildProvenance =
+        serde_json::from_str(encoded).expect("pinned wallet build provenance");
     entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
     entry.build_provenance = Some(provenance);
     entry
 }
 
 fn cocod_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
+    let amd64 = crate::wallet_builds::LINUX_AMD64;
+    let (image, encoded) = crate::wallet_builds::cocod(amd64);
     let mut entry = catalog_entry(
         "cocod-wallet",
         backends,
         ComponentKind::Wallet,
-        "Unreleased cocod daemon from Coco 44e5101c; experimental Linux arm64 laboratory build",
+        if amd64 {
+            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux amd64 laboratory build"
+        } else {
+            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux arm64 laboratory build"
+        },
         adapter_version,
         "0.0.17-dev.44e5101c",
         ReleaseChannel::Prerelease,
-        "proofstorm-registry.localhost:5000/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+        image,
         BTreeSet::from([
             CatalogFeature::NativeCli,
             CatalogFeature::PersistentState,
@@ -1172,10 +1182,8 @@ fn cocod_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str)
     );
     entry.support_lifecycle = SupportLifecycle::Experimental;
     entry.protocol_action_adapter_version = Some("cocod/44e5101c/observations/v1".into());
-    let provenance: BuildProvenance = serde_json::from_str(include_str!(
-        "../../../docker/wallet/cocod-44e5101c-provenance.json"
-    ))
-    .expect("pinned wallet build provenance");
+    let provenance: BuildProvenance =
+        serde_json::from_str(encoded).expect("pinned wallet build provenance");
     entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
     entry.build_provenance = Some(provenance);
     entry
@@ -1213,7 +1221,16 @@ fn runtime_endpoint(
         controls,
         limitations: limitations
             .iter()
-            .map(|limitation| (*limitation).into())
+            .map(|limitation| {
+                if crate::wallet_builds::LINUX_AMD64 {
+                    limitation.replace(
+                        "Initial image is Linux arm64 only.",
+                        "Packaged image is Linux amd64.",
+                    )
+                } else {
+                    (*limitation).into()
+                }
+            })
             .collect(),
     }
 }
@@ -1636,7 +1653,14 @@ mod tests {
             provenance.commit_sha,
             "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
         );
-        assert_eq!(provenance.platform, "linux/arm64");
+        assert_eq!(
+            provenance.platform,
+            if crate::wallet_builds::LINUX_AMD64 {
+                "linux/amd64"
+            } else {
+                "linux/arm64"
+            }
+        );
         let controls = &entry.runtime_endpoints[0].controls;
         assert!(controls.contains("wallet_balance"));
         assert!(controls.contains("component_exec_live"));

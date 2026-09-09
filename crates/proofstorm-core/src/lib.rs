@@ -16,6 +16,7 @@ mod quote;
 mod schema;
 mod update;
 mod validation;
+mod wallet_builds;
 pub use update::{LabChanges, LabUpdatePlan, LabUpdateTarget};
 
 pub use backend::{

@@ -1,5 +1,6 @@
 FROM rust:1.88.0-alpine AS native
 ARG CARGO_BUILD_JOBS=2
+ARG TARGETARCH
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -7,13 +8,14 @@ COPY crates ./crates
 COPY docker/wallet/*-provenance.json ./docker/wallet/
 COPY docker/mint/*-provenance.json ./docker/mint/
 COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
-RUN --mount=type=cache,id=proofstorm-native-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=proofstorm-native-target,target=/src/target,sharing=locked \
+RUN --mount=type=cache,id=proofstorm-native-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=proofstorm-native-target-${TARGETARCH},target=/src/target,sharing=locked \
     cargo build --locked --release -p proofstorm-exec && \
     cp target/release/proofstorm-exec /proofstorm-exec
 
 FROM rust:1.88.0-bookworm AS build
 ARG CARGO_BUILD_JOBS=2
+ARG TARGETARCH
 ARG PROOFSTORM_CONTROLLER_SOURCE_SHA256=development
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -21,8 +23,8 @@ COPY crates ./crates
 COPY docker/wallet/*-provenance.json ./docker/wallet/
 COPY docker/mint/*-provenance.json ./docker/mint/
 COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
-RUN --mount=type=cache,id=proofstorm-controller-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=proofstorm-controller-target,target=/src/target,sharing=locked \
+RUN --mount=type=cache,id=proofstorm-controller-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=proofstorm-controller-target-${TARGETARCH},target=/src/target,sharing=locked \
     PROOFSTORM_CONTROLLER_SOURCE_SHA256=$PROOFSTORM_CONTROLLER_SOURCE_SHA256 cargo build --locked --release -p proofstormd && \
     cp target/release/proofstormd /proofstormd
 
