@@ -59,16 +59,25 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
             path = project / file
             original = '{\n  "' + key + '": {}\n}\n'
             path.write_text(original)
-            dry = cli("open", agent, "--dry-run", "--allow-development")
+            dry = cli("open", agent, "--cli", "--dry-run", "--allow-development")
             assert dry["attachment"]["harness"] == agent and dry["launch"]["interface"] == "cli"
             assert dry["launch"]["project"] == str(project.resolve())
             assert dry["launch"]["arguments"] == [] and not dry["changes_applied"]
-            preview = api(record, "plan", agent)
-            assert preview["harness"] == agent and preview["interface"] == "cli"
+            # GUI open now launches a native app. Keep this unattended gate
+            # model/window-free: only preview when a native app is available.
+            native_preview = False
+            try:
+                preview = api(record, "plan", agent)
+                assert preview["harness"] == agent and preview["interface"] == "desktop"
+                native_preview = True
+            except urllib.error.HTTPError as error:
+                assert error.code == 409
+                message = json.load(error)["error"]["message"]
+                assert "desktop" in message or "native" in message, message
             assert path.read_text() == original and not (other / file).exists()
-            attached = api(record, "open", agent)
+            attached = cli("attach", agent, "--allow-development")
             assert attached["server_verified"]["environment_read"] and not attached["harness_loaded"]
-            assert attached["terminal_required"] and not attached["app_opened"]
+            assert "app_opened" not in attached
             assert Path(attached["backup"]).read_text() == original
             assert attached["actor"].startswith(agent + "-")
             actors.append(attached["actor"])
@@ -96,8 +105,8 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
             # Restore only this test-owned fixture, not an operator's project.
             path.write_bytes(before)
             report[agent] = {"version":dry["launch"]["version"], "dry_run_read_only":True,
-                "project_config_only":True, "gui_preview_and_confirmation":True,
-                "terminal_handoff_truthful":True, "backup_verified":True,
+                "project_config_only":True, "gui_native_preview":native_preview,
+                "native_app_opened":False, "explicit_cli_handoff":True, "backup_verified":True,
                 "repeat_idempotent":True, "modified_entry_preserved":True,
                 "client_mcp_connected":True, "unrelated_project_has_no_proofstorm":True,
                 "server_verified":attached["server_verified"], "model_tool_call":False}

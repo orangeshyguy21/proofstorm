@@ -100,10 +100,17 @@ impl Session {
     pub(super) fn context(&self) -> Value {
         let runtime = Installation::load(&self.home)
             .and_then(|i| crate::bootstrap::check_installed_runtime(&i));
-        let codex = crate::harness::launch::detect(&self.home, false);
+        let agents = [
+            crate::harness::Harness::Codex,
+            crate::harness::Harness::Opencode,
+            crate::harness::Harness::Claude,
+        ]
+        .into_iter()
+        .filter(|agent| crate::harness::launch::detect_for(*agent, &self.home, false).is_ok())
+        .collect::<Vec<_>>();
         json!({"managed":true,"home":self.home,"recent_projects":self.recent(),"csrf":self.record.token,
             "runtime_ready":runtime.is_ok(),"runtime_error":runtime.err().map(|e|format!("{e:#}")),
-            "codex_available":codex.is_ok(),"codex_error":codex.err().map(|e|format!("{e:#}")),
+            "codex_available":agents.contains(&crate::harness::Harness::Codex),"agents":agents,
             "activation_generation":self.activation.lock().unwrap().generation})
     }
     pub(super) async fn open_project(
@@ -111,7 +118,18 @@ impl Session {
         harness: crate::harness::Harness,
         project: PathBuf,
         preview: bool,
+        confirmation: Option<String>,
     ) -> Result<Value> {
+        self.ensure_current_build()?;
+        ensure!(
+            project.is_absolute() && !project.as_os_str().is_empty(),
+            "choose an absolute project folder"
+        );
+        self.attach_and_open(harness, project, preview, confirmation)
+            .await
+    }
+
+    fn ensure_current_build(&self) -> Result<()> {
         ensure!(
             self.record
                 .build_sha256
@@ -120,20 +138,41 @@ impl Session {
                     .is_ok_and(|current| &current == sha)),
             "GUI build changed; run proofstorm stop, then proofstorm gui"
         );
-        ensure!(
-            project.is_absolute() && !project.as_os_str().is_empty(),
-            "choose an absolute project folder"
-        );
+        Ok(())
+    }
+
+    pub(super) async fn pick_folder(&self, initial: Option<PathBuf>) -> Result<Value> {
+        self.ensure_current_build()?;
+        let project = super::folder::choose(initial.as_deref()).await?;
+        Ok(json!({"project":project,"cancelled":project.is_none()}))
+    }
+
+    async fn attach_and_open(
+        &self,
+        harness: crate::harness::Harness,
+        project: PathBuf,
+        preview: bool,
+        confirmation: Option<String>,
+    ) -> Result<Value> {
         let home = self.home.clone();
         let bundle = self.bundle.clone();
         let allow = self.allow_development;
         let (plan, launch) = tokio::task::spawn_blocking(move || {
-            let plan = crate::harness::plan_for(harness, &home, &project, &bundle, allow)?;
+            // No attachment or grants if the native app is absent. GUI actions
+            // never fall back to a terminal (which the browser cannot provide).
+            let launch = crate::harness::launch::detect_for(harness, &project, false)?;
+            let plan = crate::harness::plan_confirmed(
+                harness,
+                &home,
+                &project,
+                &bundle,
+                allow,
+                confirmation.as_deref(),
+            )?;
             ensure!(
                 preview || plan.project == project,
                 "project folder changed after its preview; select it again"
             );
-            let launch = crate::harness::launch::detect_for(harness, &plan.project, false)?;
             Ok::<_, anyhow::Error>((plan, launch))
         })
         .await??;
@@ -144,16 +183,7 @@ impl Session {
             );
         }
         let project = plan.project.clone();
-        let terminal =
-            (launch.interface == "cli").then(|| crate::harness::launch::terminal_command(&launch));
         let mut attached = crate::harness::apply(plan).await?;
-        if let Some(command) = terminal {
-            attached["project"] = json!(project);
-            attached["app_opened"] = json!(false);
-            attached["terminal_required"] = json!(true);
-            attached["terminal_command"] = json!(command);
-            return Ok(attached);
-        }
         let opened =
             tokio::task::spawn_blocking(move || crate::harness::launch::run(&launch)).await?;
         attached["project"] = json!(project);

@@ -223,22 +223,23 @@ was unimplemented. The OpenCode/Claude Code adapter slice refreshes that hint.
 `proofstorm gui [PATH]` starts or reuses one background server for this private
 installation and opens your **default browser**. With no PATH, the current
 directory pre-fills the project dialog; it does not attach anything automatically.
-Choose **Connect coding agent…**, select Codex, review the absolute folder, and
-confirm **Open in Codex**. Only the
+Choose **Launch Agent** and click **Codex**. Only the
 selected project's `.codex/config.toml` receives the managed entry. Existing
 settings, conflict refusal, backups, project trust, and server verification use
 the same implementation as `proofstorm open codex`. Other projects and global
 Codex settings are not edited. Codex's normal directory inheritance still applies;
 this configuration scope is not a separate runtime or security sandbox.
 
-The dialog shows configured, MCP server verified, and app opened separately from
-agent activity. It provides a starter request for a new Codex task, but does not
-submit it or claim the agent has loaded the tools. Recent attached folders are
-offered locally. Paths can be pasted; there is no native folder picker yet.
+The dialog reports the native handoff without claiming that the agent has loaded
+the tools. It never submits a prompt. The folder field below the agent buttons
+opens the native macOS directory picker. Cancelling keeps the existing folder;
+selection alone never attaches anything. The empty state reuses this same control.
 
-OpenCode and Claude Code are also available in the project dialog. Their
-**Connect project** button verifies and attaches MCP, then provides the terminal
-command to run; native app launching is not claimed. From a terminal, use
+The **Launch Agent** dialog shows branded buttons for supported installed native
+apps. Clicking one verifies and attaches `proofstorm` for the launch folder, then
+opens Codex, OpenCode, or Claude Code there. Legacy connections get an explicit
+backup-and-replace choice. See [native handoff details](agent-attachments.md).
+For a terminal session, add `--cli` to
 `proofstorm open opencode` or `proofstorm open claude`. See
 [agent attachment formats, safeguards, and tests](agent-attachments.md).
 

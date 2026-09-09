@@ -178,6 +178,10 @@ pub(super) fn inherited(harness: Harness, project: &Path) -> Result<()> {
             let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
                 .map_or_else(|| home.join(".claude"), PathBuf::from);
             ensure!(dir.is_absolute(), "CLAUDE_CONFIG_DIR must be absolute");
+            // Local Code sessions also inherit Desktop-chat MCP servers, which
+            // take precedence over project entries with the same name.
+            paths
+                .insert(home.join("Library/Application Support/Claude/claude_desktop_config.json"));
             paths.insert(home.join(".claude.json"));
             paths.insert(dir.join(".claude.json"));
             paths.insert(PathBuf::from(

@@ -19,8 +19,8 @@ isolated `setup` and read-only `doctor`; see the release guide for the explicit
 development opt-in, test commands, and remaining alpha limitations.
 The managed GUI is now available in development bundles: run `proofstorm gui`
 from your app directory (add `--allow-development` for these bundles), then use
-**Connect coding agent…** to choose Codex, OpenCode, or Claude Code and confirm
-that project's connection. Opening the
+**Launch Agent** and click an installed native app: Codex, OpenCode, or Claude Code.
+The folder where you launched the GUI is already selected. Opening the
 GUI alone changes no agent configuration. It uses your default browser and
 reuses one local server; existing-tab focus is best effort. `proofstorm stop`
 stops only that GUI, not your labs. See the [GUI workflow](release/README.md#managed-gui-development-preview).
@@ -32,9 +32,11 @@ The packaged Chrome/Codex GUI gate passed on 2026-09-09, including server reuse,
 project-only confirmation, restart/session checks, and verified runtime cleanup;
 see [GUI verification](release/gui-verification.json). This is still a development
 preview, not a published or clean-Mac-certified alpha release.
-The next adapter slice adds `proofstorm open opencode` and `proofstorm open claude`
-for terminal use. The GUI connects these agents and provides a terminal command;
-it does not claim to open their native apps. See [agent attachment details](release/agent-attachments.md).
+`proofstorm open codex`, `proofstorm open opencode`, and `proofstorm open claude`
+attach the project and hand it to the installed native app on macOS. Add `--cli`
+for terminal use. The MCP connection is always named `proofstorm`; replacing an
+old connection such as `pst` requires a separate confirmation and saves a backup.
+See [agent attachment details](release/agent-attachments.md).
 Their packaged client-connection gate passed with private agent homes and verified
 runtime cleanup; see [OpenCode/Claude Code verification](release/agent-attachment-verification.json).
 Setup now skips the workload catalog: CLI and MCP lab creation download only

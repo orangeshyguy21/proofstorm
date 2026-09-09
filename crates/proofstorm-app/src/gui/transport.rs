@@ -73,15 +73,23 @@ async fn body<T: serde::de::DeserializeOwned>(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Project {
+struct ProjectRequest {
     project: PathBuf,
     #[serde(default)]
     harness: crate::harness::Harness,
+    #[serde(default)]
+    replace_connection: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Focus {
     generation: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FolderRequest {
+    project: Option<PathBuf>,
 }
 
 /// Return None only for authenticated reads or public static assets.
@@ -171,7 +179,7 @@ pub(crate) async fn route(
             }
             Err(_) => fail(StatusCode::BAD_REQUEST, "Invalid focus acknowledgement."),
         },
-        ("POST", "/v1/gui/activate") if bearer => match body::<Project>(request).await {
+        ("POST", "/v1/gui/activate") if bearer => match body::<ProjectRequest>(request).await {
             Ok(project) if project.project.is_absolute() => json(
                 StatusCode::OK,
                 &session.activate(&project.project.to_string_lossy()).await,
@@ -198,8 +206,20 @@ pub(crate) async fn route(
                 )
             }
         }
-        ("POST", "/v1/gui/plan" | "/v1/gui/open") => {
-            let Ok(project) = body::<Project>(request).await else {
+        ("POST", "/v1/gui/plan" | "/v1/gui/open" | "/v1/gui/pick-folder") => {
+            let picking = path.ends_with("/pick-folder");
+            let project = if picking {
+                body::<FolderRequest>(request)
+                    .await
+                    .map(|folder| ProjectRequest {
+                        project: folder.project.unwrap_or_default(),
+                        harness: crate::harness::Harness::Codex,
+                        replace_connection: None,
+                    })
+            } else {
+                body::<ProjectRequest>(request).await
+            };
+            let Ok(project) = project else {
                 return Some(fail(
                     StatusCode::BAD_REQUEST,
                     "Choose an absolute project folder; no other options are accepted.",
@@ -221,13 +241,36 @@ pub(crate) async fn route(
             // Keep the operation alive if a browser disconnects after confirming it.
             let job = tokio::spawn(async move {
                 let _permit = permit;
+                if picking {
+                    return session
+                        .pick_folder(
+                            (!project.project.as_os_str().is_empty()).then_some(project.project),
+                        )
+                        .await;
+                }
                 session
-                    .open_project(project.harness, project.project, preview)
+                    .open_project(
+                        project.harness,
+                        project.project,
+                        preview,
+                        project.replace_connection,
+                    )
                     .await
             });
             match job.await {
                 Ok(Ok(value)) => json(StatusCode::OK, &value),
-                Ok(Err(error)) => fail(StatusCode::CONFLICT, &format!("{error:#}")),
+                Ok(Err(error)) => {
+                    if let Some(conflict) =
+                        error.downcast_ref::<crate::harness::ConnectionConflict>()
+                    {
+                        json(
+                            StatusCode::CONFLICT,
+                            &json!({"error":{"message":error.to_string()},"connection_conflict":conflict}),
+                        )
+                    } else {
+                        fail(StatusCode::CONFLICT, &format!("{error:#}"))
+                    }
+                }
                 Err(_) => fail(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "The operation was interrupted. Recheck the project before retrying.",

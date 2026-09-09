@@ -1,15 +1,40 @@
+/*! Vendor mark source notice — retained with the distributed GUI assets.
+MIT License
+
+Copyright (c) 2025 opencode
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 .gui-trigger{border:1px solid var(--line);border-radius:6px;padding:7px 11px;font-size:11px;white-space:nowrap;color:var(--text)}
-.gui-dialog{box-sizing:border-box;width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;margin:auto;padding:26px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--text);box-shadow:0 24px 100px #0006;font:13px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}
-.gui-dialog::backdrop{background:#080d1777;backdrop-filter:blur(3px)}
-.gui-dialog-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:14px}
-.gui-dialog h2{font-size:22px;letter-spacing:-.5px;font-weight:600}.gui-eyebrow{font-size:9px;letter-spacing:1.4px;color:var(--muted);margin-bottom:4px}
-.gui-description,.gui-muted{color:var(--muted)}.gui-description{margin-bottom:22px}.gui-label{display:block;font-size:11px;font-weight:600;margin:14px 0 7px}
-.gui-path{width:100%;padding:11px 12px;background:var(--bg);border:1px solid var(--line);border-radius:7px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}
-.gui-recents{display:flex;flex-direction:column;align-items:flex-start;gap:3px;margin:8px 0}.gui-recent{max-width:100%;text-align:left;overflow-wrap:anywhere;color:var(--muted);font-size:11px;padding:3px 5px;border-radius:4px}
-.gui-check{margin-top:16px;min-height:30px}.gui-check p{margin:7px 0}.gui-check code{display:block;padding:9px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);color:var(--text);overflow-wrap:anywhere}
-.gui-check .gui-muted{font-size:11px}.gui-error{color:var(--danger);overflow-wrap:anywhere}.gui-success{color:var(--ready);font-weight:600}
-.gui-starter{width:100%;resize:vertical;min-height:80px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:10px;font-family:inherit;font-size:12px;line-height:1.6}.gui-starter:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.gui-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:24px}.gui-primary,.gui-secondary{padding:9px 15px;border-radius:6px;font-weight:600;font-size:12px}.gui-primary{background:var(--accent);color:var(--bg)}.gui-primary:hover{background:var(--selection-line)}.gui-secondary{border:1px solid var(--line)}
-.gui-dialog button:disabled{cursor:default;opacity:.5}.gui-dialog .gui-primary:disabled{background:var(--line);color:var(--muted)}
-@media(max-width:600px){.header-right{gap:8px}.app-header:has(.gui-trigger) .brand-wordmark{display:none}.gui-trigger{padding:7px 8px;font-size:10px}.gui-dialog{padding:20px}}
-@media(prefers-reduced-motion:reduce){.gui-dialog::backdrop{backdrop-filter:none}}
+.gui-dialog{box-sizing:border-box;width:min(550px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;margin:auto;padding:28px;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text);box-shadow:0 24px 100px #0006;font:13px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}
+.gui-dialog::backdrop{background:#080d1788;backdrop-filter:blur(4px)}
+.gui-dialog-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:20px}.gui-dialog h2{font-size:24px;letter-spacing:-.7px;font-weight:600}
+.gui-project{display:flex;gap:10px;align-items:baseline;padding:11px 13px;background:var(--bg);border:1px solid var(--line);border-radius:8px;font:11px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace}.gui-project span:last-child{overflow-wrap:anywhere;min-width:0}.gui-project span:first-child{color:var(--muted)}
+
+.gui-agents{display:grid;grid-template-columns:1fr;gap:10px;margin:18px 0 14px}.gui-agent{position:relative;display:flex;flex-direction:row;align-items:center;gap:12px;min-height:66px;padding:13px 16px;border-radius:11px;border:1px solid #ffffff18;font-size:13px;font-weight:600;text-align:left;transition:filter .15s}.gui-agent-codex{--agent-bg:#202123;background:var(--agent-bg);color:#fff}.gui-agent-opencode{--agent-bg:#eeeae4;background:var(--agent-bg);color:#25211e;border-color:#25211e15}.gui-agent-claude{--agent-bg:#c96442;background:var(--agent-bg);color:#1c100c}.gui-agent-mark{height:35px;width:35px;display:block}.gui-agent-opencode .gui-agent-mark{padding:4px;box-sizing:border-box}.gui-agent-arrow{position:absolute;right:16px;top:18px;opacity:.6;font-size:17px;font-weight:400}.gui-agent:not(:disabled):hover{background:var(--agent-bg);filter:brightness(1.08)}.gui-agent:focus-visible,.gui-dialog summary:focus-visible,.gui-dialog input:focus-visible,.gui-dialog button:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.gui-muted{color:var(--muted);font-size:11px}.gui-check p{margin:9px 0}.gui-check code{display:block;font-size:10px;overflow-wrap:anywhere;margin:8px 0}.gui-error{color:var(--danger);overflow-wrap:anywhere}.gui-success{color:var(--ready);font-weight:500}.gui-conflict{margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}.gui-primary,.gui-secondary{padding:8px 12px;border-radius:6px;font-weight:600;font-size:11px;margin:7px 7px 0 0}.gui-primary{background:var(--accent);color:var(--bg)}.gui-secondary{border:1px solid var(--line)}.gui-dialog button:disabled,.gui-launcher button:disabled{cursor:default;opacity:.45}
+.gui-connecting{display:inline-block;width:10px;height:10px;border:1.5px solid var(--line);border-top-color:var(--text);border-radius:50%;margin-right:8px;animation:gui-spin .8s linear infinite}@keyframes gui-spin{to{transform:rotate(360deg)}}
+@media(max-width:600px){.header-right{gap:8px}.app-header:has(.gui-trigger) .brand-wordmark{display:none}.gui-trigger{padding:7px 8px;font-size:10px}.gui-dialog{padding:20px}.gui-agents{grid-template-columns:1fr}.gui-agent{flex-direction:row;align-items:center;gap:12px;min-height:64px;padding:13px 16px}.gui-agent-arrow{top:18px}}
+@media(prefers-reduced-motion:reduce){.gui-dialog::backdrop{backdrop-filter:none}.gui-agent{transition:none}.gui-connecting{animation:none}}
+.empty-agent-launcher{width:min(490px,100%);text-align:left}.empty-state .gui-project{font-size:11px}.empty-state .gui-check code,.empty-state .empty-agent-launcher .gui-conflict button:disabled,.empty-agent-launcher .gui-agent:disabled{cursor:default;opacity:.45}
+.empty-state:has(.empty-agent-launcher){overflow:auto;justify-content:flex-start;padding-top:clamp(24px,8vh,90px);padding-bottom:32px}.empty-state:has(.empty-agent-launcher) .empty-mark{width:64px;height:64px}.empty-state:has(.empty-agent-launcher) h1{font-size:24px;margin-bottom:4px}
+
+.empty-state:has(.empty-agent-launcher)>*{flex-shrink:0}
+.empty-agent-intro{color:var(--muted);font-size:13px;text-align:center;margin-bottom:20px}
+.gui-folder-picker{width:100%;align-items:center;text-align:left;color:var(--muted);cursor:pointer;margin-top:16px;min-height:44px}.gui-folder-picker:hover{background:var(--raised);border-color:var(--faint)}.gui-folder-picker svg{width:17px;height:17px;flex-shrink:0}.gui-folder-picker>span:not(.gui-folder-chevron){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gui-folder-chevron{margin-left:auto;padding-left:8px;color:var(--muted)}.gui-folder-picker:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.empty-state:has(.empty-agent-launcher){justify-content:safe center;padding-top:32px}

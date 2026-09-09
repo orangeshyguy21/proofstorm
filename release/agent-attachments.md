@@ -11,24 +11,37 @@ proofstorm open opencode
 proofstorm open claude
 ```
 
-Both commands attach and verify Proofstorm, then run the installed agent in that
-directory in the current interactive terminal. `claude-code` is also accepted as
+Both commands attach and verify Proofstorm, then open the installed native app
+at that directory on macOS. Add `--cli` to run in the current interactive terminal.
+`claude-code` is also accepted as
 an alias for `claude`. An explicit path works, including paths containing spaces.
 Use `proofstorm attach opencode` or `proofstorm attach claude` to connect without
 starting an interactive agent. `--dry-run` previews without writes, grants, or
 MCP server startup. Development bundles still require `--allow-development`.
 
-In `proofstorm gui`, choose **Connect coding agent**, select the agent and folder,
-review the configuration path, then confirm. Codex retains its native launch.
-OpenCode and Claude Code attach and display a safely quoted terminal command;
-the GUI does not claim to have opened them. Native desktop launch is deferred
-until a supported, project-specific launch interface is verified.
+In `proofstorm gui`, choose **Launch Agent**, then click a vendor button. Only
+supported native apps found in `/Applications` or `~/Applications` are shown
+(Codex can also be discovered through its bundled executable on PATH). The folder
+where the GUI was launched is selected. Click the folder field beneath the buttons
+to open the native macOS directory picker. Picking or cancelling never attaches
+an agent; cancellation keeps the previous folder.
+Opening the dialog is read-only; clicking a vendor button attaches and opens.
+There is no automatic installation or terminal fallback from the browser.
+The no-labs screen reuses the same full-width button rows, folder selection,
+busy state and replacement confirmation as the dialog. It does not maintain
+a second attachment flow.
+
+The MCP entry is named **proofstorm** in every client. An old alias such as `pst`,
+or a manually edited connection, gets an explicit **Replace and open** choice.
+This backs up the original config and replaces only that one project connection.
+Consent is invalidated if the file, project, agent, or proposed connection changes.
+Multiple duplicates and inherited/global connections still require manual review.
 
 | Agent | Project configuration | Launch |
 | --- | --- | --- |
 | Codex | `.codex/config.toml` | Native app by default; `--cli` for terminal |
-| OpenCode 1.x | Existing `opencode.jsonc`, otherwise `opencode.json` | Terminal |
-| Claude Code 2.x | `.mcp.json` | Terminal |
+| OpenCode 1.x | Existing `opencode.jsonc`, otherwise `opencode.json` | Native OpenCode 1.18.30+ (1.x); `--cli` for terminal |
+| Claude Code 2.x | `.mcp.json` | Native Claude 1.40609.1+ (1.x); `--cli` for terminal |
 
 Configuration applies through each agent's normal project/directory lookup,
 including subdirectories. This is not a filesystem access sandbox. The generated
@@ -44,8 +57,9 @@ configuration, especially Claude's normally team-shared `.mcp.json`.
   a model tool call; the result keeps `harness_loaded: false`.
 - Only the owned Proofstorm entry is edited. Other settings and JSONC comments
   are preserved. Existing files receive private, content-addressed backups.
-- Manual, changed, duplicate, malformed, linked, or ambiguous configurations are
-  refused. Two OpenCode project config files must be resolved explicitly.
+- Manual or changed connections require explicit replacement consent. Duplicate,
+  malformed, linked, or ambiguous configurations are refused. Two OpenCode
+  project config files must be resolved explicitly.
 - Known global/ancestor/local Proofstorm conflicts are inspected read-only.
   OpenCode custom configuration overrides are refused, not unset or overwritten.
   Remote organization settings, plugins, managed policies, and tool permissions
@@ -60,6 +74,13 @@ Official references checked September 9, 2026:
 [OpenCode configuration precedence](https://opencode.ai/docs/config/),
 [OpenCode v2 MCP changes](https://opencode.ai/v2/docs/mcp-servers), and
 [Claude Code MCP scopes and approval](https://code.claude.com/docs/en/mcp).
+
+Native project links: [Claude Desktop Code links](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link)
+and [OpenCode desktop protocol handler](https://github.com/anomalyco/opencode/blob/dev/packages/desktop/src/main/index.ts).
+OpenCode's `open-project?directory=` parser was also inspected in installed 1.18.30.
+Only an encoded absolute folder is passed—no prompt, model choice or auto-submit.
+Claude always asks the user to confirm the folder. A successful OS handoff does
+not prove that an agent has loaded MCP: approve prompts and check its MCP status.
 
 ## Verification
 

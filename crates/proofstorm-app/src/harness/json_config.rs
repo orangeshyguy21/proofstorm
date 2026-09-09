@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use std::{collections::BTreeMap, ops::Range};
 
 struct Node {
+    key_span: Option<Range<usize>>,
     value: Value,
     span: Range<usize>,
     members: BTreeMap<String, Node>,
@@ -86,14 +87,17 @@ impl Parser<'_> {
                     break;
                 }
                 if byte == b'{' {
+                    let key_start = self.pos;
                     let key = self.string()?;
+                    let key_end = self.pos;
                     self.skip()?;
                     ensure!(
                         self.text.as_bytes().get(self.pos) == Some(&b':'),
                         "expected JSON colon"
                     );
                     self.pos += 1;
-                    let node = self.node(depth + 1)?;
+                    let mut node = self.node(depth + 1)?;
+                    node.key_span = Some(key_start..key_end);
                     ensure!(
                         members.insert(key, node).is_none(),
                         "duplicate JSON property; resolve it explicitly"
@@ -138,6 +142,7 @@ impl Parser<'_> {
             serde_json::from_str(&self.text[start..self.pos])?
         };
         Ok(Node {
+            key_span: None,
             value,
             span: start..self.pos,
             members,
@@ -161,6 +166,35 @@ fn parse(text: &str, comments: bool) -> Result<Node> {
 }
 pub(super) fn value(text: &str, comments: bool) -> Result<Value> {
     Ok(parse(text, comments)?.value)
+}
+
+pub(super) fn rename(
+    text: &str,
+    key: &str,
+    from: &str,
+    to: &str,
+    comments: bool,
+) -> Result<String> {
+    let root = parse(text, comments)?;
+    let servers = root
+        .members
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("missing MCP object"))?;
+    ensure!(
+        !servers.members.contains_key(to),
+        "target MCP name already exists"
+    );
+    let span = servers
+        .members
+        .get(from)
+        .and_then(|n| n.key_span.clone())
+        .ok_or_else(|| anyhow::anyhow!("missing MCP key"))?;
+    Ok(format!(
+        "{}{}{}",
+        &text[..span.start],
+        serde_json::to_string(to)?,
+        &text[span.end..]
+    ))
 }
 
 fn insert(text: &str, object: &Node, key: &str, value: &Value) -> Result<String> {

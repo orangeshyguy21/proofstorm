@@ -1,7 +1,10 @@
 //! Project-scoped agent attachment. GUI callers reuse these same plan/apply/launch steps.
 mod agents;
 mod config;
+mod desktop;
 mod json_config;
+mod replacement;
+pub use replacement::ConnectionConflict;
 pub mod launch;
 #[cfg(test)]
 mod tests;
@@ -107,6 +110,17 @@ pub fn plan_for(
     bundle: &Path,
     allow_development: bool,
 ) -> Result<AttachmentPlan> {
+    plan_confirmed(harness, home, project, bundle, allow_development, None)
+}
+
+pub(crate) fn plan_confirmed(
+    harness: Harness,
+    home: &Path,
+    project: &Path,
+    bundle: &Path,
+    allow_development: bool,
+    confirmation: Option<&str>,
+) -> Result<AttachmentPlan> {
     let installation = Installation::load(home)?;
     let bundle = bundle.canonicalize()?;
     crate::artifacts::verify(home, &bundle, allow_development)?;
@@ -127,7 +141,8 @@ pub fn plan_for(
     config::directory(&installation.home.join("attachments"), false)?;
     agents::inherited(harness, &project)?;
     if harness != Harness::Codex {
-        launch::detect_for(harness, &project, true)?;
+        launch::detect_for(harness, &project, false)
+            .or_else(|_| launch::detect_for(harness, &project, true))?;
     }
     let identity = serde_json::to_string(&json!([installation.id, project, harness.name()]))?;
     let actor = format!("{}-{}", harness.name(), &hash(identity.as_bytes())[..32]);
@@ -178,14 +193,23 @@ pub fn plan_for(
         "startup_timeout_sec":60,"tool_timeout_sec":1800,"required":true,"enabled":true});
     let entry = agents::entry(harness, &server_entry)?;
     let original = config::read(&config_path)?;
-    let proposed = agents::merge(harness, &config_path, original.as_deref(), &entry, &owned)?;
+    let proposed = replacement::merge(
+        harness,
+        &config_path,
+        original.as_deref(),
+        &entry,
+        &owned,
+        confirmation,
+    )?;
     Ok(AttachmentPlan {
         harness,
         home: installation.home.clone(),
         project,
         actor,
         config_path,
-        changes_configuration: original.as_deref() != Some(&proposed),
+        // Explicit adoption also records ownership when the existing bytes
+        // already match; otherwise every subsequent click would ask again.
+        changes_configuration: original.as_deref() != Some(&proposed) || confirmation.is_some(),
         entry,
         preset: crate::developer::PRESET,
         guidance: harness.guidance(),

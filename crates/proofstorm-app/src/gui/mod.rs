@@ -1,4 +1,5 @@
 //! Installed GUI lifecycle and authenticated, project-scoped onboarding.
+mod folder;
 mod server;
 mod state;
 #[cfg(test)]

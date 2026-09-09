@@ -299,6 +299,36 @@ async fn transport_blocks_unauthenticated_cross_origin_and_untyped_writes() {
             .header("Origin", &origin)
             .header("X-Proofstorm-Session", token)
     };
+    // Native UI is user-triggered and shares the exact authentication boundary.
+    // Invalid inputs must fail before opening any OS window in this test.
+    assert_eq!(
+        client
+            .post(format!("{base}/v1/gui/pick-folder"))
+            .json(&json!({"project":root.path()}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        browser("/v1/gui/pick-folder")
+            .json(&json!({"project":root.path(),"script":"anything"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        browser("/v1/gui/pick-folder")
+            .json(&json!({"project":"relative"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
     assert_eq!(
         browser("/v1/gui/open")
             .json(&json!({"project":root.path(),"command":"anything"}))
@@ -318,6 +348,15 @@ async fn transport_blocks_unauthenticated_cross_origin_and_untyped_writes() {
         400
     );
     assert_eq!(browser("/v1/gui/stop").send().await.unwrap().status(), 404);
+    assert_eq!(
+        browser("/v1/gui/open")
+            .json(&json!({"project":root.path(),"replace_connection":true}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
     assert_eq!(
         browser("/v1/gui/plan")
             .json(&json!({"project":root.path(),"harness":"arbitrary-command"}))

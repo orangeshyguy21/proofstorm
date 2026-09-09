@@ -58,7 +58,7 @@ pub(crate) fn capture(executable: &Path, args: &[&str]) -> Result<String> {
     Ok(result)
 }
 
-fn executable(path: &Path) -> bool {
+pub(super) fn executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -171,10 +171,13 @@ pub fn run(plan: &LaunchPlan) -> Result<()> {
     Ok(())
 }
 
-/// Only verified CLI interfaces: no URI guesses, shell scripts or trust bypasses.
+/// Native project handoff by default; terminal interfaces require explicit --cli.
 pub fn detect_for(harness: super::Harness, project: &Path, cli: bool) -> Result<LaunchPlan> {
     if harness == super::Harness::Codex {
         return detect(project, cli);
+    }
+    if !cli {
+        return super::desktop::detect(harness, project);
     }
     let executable = std::env::var_os("PATH")
         .into_iter()

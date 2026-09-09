@@ -104,14 +104,14 @@ enum Command {
         #[arg(long)]
         allow_development: bool,
     },
-    /// Attach, then open Codex's native app or OpenCode/Claude Code in this terminal.
+    /// Attach, then open the installed native agent app at this project (macOS).
     Open {
         #[arg(value_enum)]
         harness: Harness,
         /// Project directory to connect; defaults to the current directory.
         #[arg(default_value = ".")]
         project: PathBuf,
-        /// Use Codex's CLI instead of its native app; other agents always use the terminal.
+        /// Use the agent's CLI in this terminal instead of its native app.
         #[arg(long)]
         cli: bool,
         #[arg(long)]

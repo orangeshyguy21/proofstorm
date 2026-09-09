@@ -333,3 +333,188 @@ fn successful_help_on_stderr_is_inspected_without_exposing_launch_diagnostics() 
     .unwrap();
     assert_eq!(output, "1.18.30");
 }
+
+#[test]
+fn desktop_project_links_encode_paths_without_prompts_or_shells() {
+    let project = Path::new("/project/it's &q=run# now/☃");
+    let encoded = "%2Fproject%2Fit%27s%20%26q%3Drun%23%20now%2F%E2%98%83";
+    assert_eq!(
+        desktop::project_url(Harness::Opencode, project).unwrap(),
+        format!("opencode://open-project?directory={encoded}")
+    );
+    assert_eq!(
+        desktop::project_url(Harness::Claude, project).unwrap(),
+        format!("claude://code/new?folder={encoded}")
+    );
+    assert!(desktop::project_url(Harness::Claude, Path::new("relative")).is_err());
+}
+
+#[test]
+fn desktop_detection_requires_identity_scheme_and_tested_version() {
+    for (agent, bundle, scheme, version) in [
+        (
+            Harness::Opencode,
+            "ai.opencode.desktop",
+            "opencode",
+            "1.18.30",
+        ),
+        (
+            Harness::Claude,
+            "com.anthropic.claudefordesktop",
+            "claude",
+            "1.40609.1",
+        ),
+    ] {
+        let info = json!({"CFBundleIdentifier":bundle,"CFBundleURLTypes":[{"CFBundleURLSchemes":[scheme]}],"CFBundleShortVersionString":version});
+        assert_eq!(desktop::validate(agent, &info).unwrap(), version);
+        for (key, value) in [
+            ("CFBundleIdentifier", json!("imposter")),
+            ("CFBundleURLTypes", json!([])),
+            ("CFBundleShortVersionString", json!("1.0.0")),
+            ("CFBundleShortVersionString", json!("2.0.0")),
+            ("CFBundleShortVersionString", json!("1.beta.0")),
+        ] {
+            let mut bad = info.clone();
+            bad[key] = value;
+            assert!(desktop::validate(agent, &bad).is_err());
+        }
+    }
+}
+
+#[test]
+fn replacement_requires_exact_consent_and_preserves_other_toml_settings() {
+    let path = Path::new("/project/.codex/config.toml");
+    let text = "# my model\nmodel='keep'\n[mcp_servers.other]\ncommand='keep' # keep comment\n[mcp_servers.pst]\ncommand='/legacy/proofstorm-mcp'\n";
+    let error =
+        replacement::merge(Harness::Codex, path, Some(text), &entry(), &[], None).unwrap_err();
+    let conflict = error.downcast_ref::<ConnectionConflict>().unwrap();
+    assert_eq!(conflict.name, "pst");
+    assert_eq!(conflict.config, path);
+    assert!(error.to_string().contains("pst"));
+    let consent = Some(conflict.confirmation.as_str());
+    let output =
+        replacement::merge(Harness::Codex, path, Some(text), &entry(), &[], consent).unwrap();
+    assert!(output.starts_with(
+        "# my model\nmodel='keep'\n[mcp_servers.other]\ncommand='keep' # keep comment\n"
+    ));
+    let value = config::value(&config::document(path, &output).unwrap()).unwrap();
+    assert_eq!(value["mcp_servers"]["proofstorm"], entry());
+    assert!(value["mcp_servers"].get("pst").is_none());
+    assert_eq!(
+        replacement::merge(
+            Harness::Codex,
+            path,
+            Some(&output),
+            &entry(),
+            &[entry()],
+            None
+        )
+        .unwrap(),
+        output
+    );
+    // Consent cannot authorize another file, modified config, or upgraded entry.
+    assert!(
+        replacement::merge(
+            Harness::Codex,
+            Path::new("/other/config.toml"),
+            Some(text),
+            &entry(),
+            &[],
+            consent
+        )
+        .is_err()
+    );
+    assert!(
+        replacement::merge(
+            Harness::Codex,
+            path,
+            Some(&format!("{text}\n")),
+            &entry(),
+            &[],
+            consent
+        )
+        .is_err()
+    );
+    let mut changed = entry();
+    changed["command"] = json!("/new/proofstorm-mcp");
+    assert!(replacement::merge(Harness::Codex, path, Some(text), &changed, &[], consent).is_err());
+    assert!(replacement::merge(Harness::Codex, path, None, &entry(), &[], consent).is_err());
+}
+
+#[test]
+fn confirmed_json_alias_rename_is_lossless_for_unrelated_content() {
+    for harness in [Harness::Opencode, Harness::Claude] {
+        let key = agents::key(harness);
+        let original = format!(
+            "{{\n  \"model\" : \"keep\",\n  \"{key}\": {{\n    \"other\" : {{\"command\":\"keep\"}},\n    \"p\\u0073t\" : {{\"command\": \"/old/proofstorm-mcp\"}}\n  }}\n}}\n"
+        );
+        let original = if harness == Harness::Opencode {
+            original
+                .replace("\"model\"", "/* my model */ \"model\"")
+                .replace("\n  }", ", // trailing comment\n  }")
+        } else {
+            original
+        };
+        let entry = agents::entry(harness, &entry()).unwrap();
+        let path = Path::new("/project/config.json");
+        let error =
+            replacement::merge(harness, path, Some(&original), &entry, &[], None).unwrap_err();
+        let confirmation = &error
+            .downcast_ref::<ConnectionConflict>()
+            .unwrap()
+            .confirmation;
+        let output = replacement::merge(
+            harness,
+            path,
+            Some(&original),
+            &entry,
+            &[],
+            Some(confirmation),
+        )
+        .unwrap();
+        assert!(output.contains("\"other\" : {\"command\":\"keep\"}"));
+        let value = json_config::value(&output, harness == Harness::Opencode).unwrap();
+        assert_eq!(value[key]["proofstorm"], entry);
+        assert!(value[key].get("pst").is_none());
+        if harness == Harness::Opencode {
+            assert!(output.contains("/* my model */"));
+            assert!(output.contains("// trailing comment"));
+        }
+    }
+}
+
+#[test]
+fn replacement_never_guesses_between_multiple_connections() {
+    let path = Path::new("/project/config.toml");
+    for text in [
+        "[mcp_servers.pst]\ncommand='/old/proofstorm-mcp'\n[mcp_servers.proofstorm]\ncommand='manual'\n",
+        "[mcp_servers.pst]\ncommand='/old/proofstorm-mcp'\n[mcp_servers.another]\ncommand='/another/proofstorm-mcp'\n",
+    ] {
+        let error =
+            replacement::merge(Harness::Codex, path, Some(text), &entry(), &[], None).unwrap_err();
+        assert!(error.downcast_ref::<ConnectionConflict>().is_none());
+        assert!(error.to_string().contains("multiple"));
+    }
+}
+
+#[test]
+fn manual_named_entry_still_needs_approval_even_if_identical() {
+    let path = Path::new("/project/config.toml");
+    let original = config::merge(path, None, &entry(), &[]).unwrap();
+    let error =
+        replacement::merge(Harness::Codex, path, Some(&original), &entry(), &[], None).unwrap_err();
+    let conflict = error.downcast_ref::<ConnectionConflict>().unwrap();
+    assert_eq!(conflict.name, "proofstorm");
+    assert_eq!(
+        replacement::merge(
+            Harness::Codex,
+            path,
+            Some(&original),
+            &entry(),
+            &[],
+            Some(&conflict.confirmation)
+        )
+        .unwrap(),
+        original
+    );
+}

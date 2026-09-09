@@ -20,6 +20,7 @@ const WORDMARK_SVG: &str = include_str!("../assets/proofstorm-word-mark.svg");
 )]
 pub fn App() -> impl IntoView {
     crate::freshness::provide_clock();
+    crate::gui::provide_launcher();
     let system_open = RwSignal::new(false);
     let navigation = RwSignal::new(
         web_sys::window()
@@ -211,7 +212,7 @@ pub fn App() -> impl IntoView {
             <button class="icon-button" aria-label="Toggle lab navigation" aria-expanded=move || navigation.get() on:click=move |_| navigation.update(|open| *open = !*open)>"☰"</button>
             <a class="brand" href="/" aria-label="Proofstorm home"><span class="brand-mark" aria-hidden="true" inner_html=LOGO_SVG></span><span class="brand-wordmark" aria-hidden="true" inner_html=WORDMARK_SVG></span></a>
             <span class="header-context">{move || environment.get().map(|v| v.workspace_id)}</span>
-            <div class="header-right"><crate::gui::GuiControls /><crate::freshness::FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||error.get().is_some()||telemetry.get().is_some_and(|s|s.error.is_some()||s.labs.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /><ThemePicker /></div>
+            <div class="header-right"><crate::freshness::FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||error.get().is_some()||telemetry.get().is_some_and(|s|s.error.is_some()||s.labs.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /><crate::gui::GuiControls /></div>
         </header>
         <div class=move || if navigation.get() { "workspace-shell" } else { "workspace-shell nav-collapsed" }>
             <aside class="sidebar" aria-label="Workspace navigation">
@@ -229,6 +230,7 @@ pub fn App() -> impl IntoView {
                         }><span class="lab-icon">"⬡"</span><span><strong>{name}</strong><small>{status}</small></span></button> }
                     }).collect_view())
                 }}</nav>
+                <footer class="sidebar-footer"><span class="sidebar-footer-label">"Theme"</span><ThemePicker /></footer>
             </aside>
             <main class=move || if !connected.get() || telemetry_error.get() { "measurements-stale" } else { "" }>
                 <div class="notifications">
@@ -240,7 +242,7 @@ pub fn App() -> impl IntoView {
                 <Show when=move || system_open.get()><SystemPanel telemetry selected_lab=selected selected_component=component open=system_open /></Show>
                 <Show when=move || !system_open.get()>
                     <LabPanel lab=detail selected_component=component history_pages zoom pan telemetry drawer />
-                    <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark" aria-hidden="true" inner_html=LOGO_SVG></span><h1>{move || if loaded.get() && selected.get().is_empty() { "No labs" } else { "Loading lab…" }}</h1><Show when=move || loaded.get() && selected.get().is_empty()><code>"proofstorm up examples/developer-lab.json --name demo"</code></Show></div></Show>
+                    <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark" aria-hidden="true" inner_html=LOGO_SVG></span><Show when=move || !loaded.get() || !selected.get().is_empty()><h1>"Loading lab…"</h1></Show><Show when=move || loaded.get() && selected.get().is_empty()><crate::gui::EmptyAgentLauncher /></Show></div></Show>
                 </Show>
             </main>
         </div>
