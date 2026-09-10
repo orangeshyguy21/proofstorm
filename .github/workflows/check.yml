@@ -70,8 +70,11 @@ jobs:
       packages: write
     env:
       BUNDLE_WORK_NAME: proofstorm-linux-${{ github.run_id }}-${{ github.run_attempt }}
-      DOCKER_CONFIG: ${{ runner.temp }}/proofstorm-ghcr-auth
     steps:
+      # runner context is unavailable in jobs.<job_id>.env. Export it at runtime
+      # before any Docker commands so all later steps share isolated credentials.
+      - name: Initialize isolated Docker configuration
+        run: printf 'DOCKER_CONFIG=%s/proofstorm-ghcr-auth\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
