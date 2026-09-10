@@ -26,13 +26,16 @@ Docker, Kubernetes, Helm, Python, Node, and Trunk are not needed by these checks
 | Command | Checks |
 | --- | --- |
 | `just check` | Everything below, quick checks first |
-| `just check-quick` | Just dispatch and Linux CI orchestration fixtures, Rust formatting, shell syntax, scoped ShellCheck |
+| `just check-quick` | Just dispatch, Linux CI/worker orchestration fixtures, Rust formatting, shell syntax, scoped ShellCheck |
 | `just check-rust` | Strict workspace Clippy, then workspace tests |
 | `just test` | Workspace unit and integration tests only |
 | `just lint` | Formatting, shell checks, and strict Clippy |
 | `just lint-helm` | Separate chart validation using the pinned Helm tool |
 | `just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--development] [--debug] [--json]` | Build and package an isolated source snapshot using Bash and Rust |
-| `just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--debug]` | Build in isolated Debian, test source-free install/reinstall, collect checked artifacts; requires Docker and Python 3.12+ |
+| `just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--debug]` | Build in isolated Debian, test source-free install/reinstall, collect checked artifacts; requires Docker and Rust, no Python |
+| `just release-build-linux --work-dir NEW_EXTERNAL_DIRECTORY [--source DIRECTORY] [--development] [--debug]` | Build and relocate Linux binaries in isolated Debian using Bash/Rust; no host mounts or publication |
+| `just release-install-linux --archive FILE --installer FILE --work-dir NEW_EXTERNAL_DIRECTORY [--development]` | Test an existing Linux bundle's installer offline using Bash/Rust and Docker; no Python |
+| `just release-smoke ARCHIVE NEW_DESTINATION [--deny-source DIRECTORY] [--json]` | Verify, extract, and execute trusted local CLI/MCP build outputs from a relocated directory |
 | `just release-check FILE [--alpha] [--json]` | Offline release metadata validation; no builds of product binaries or runtime access |
 | `just release-verify DIRECTORY [--json]` | Verify an unpacked bundle's files and metadata without executing its binaries |
 | `just release-package SOURCE BINARIES PROVENANCE_JSON OUTPUT [--development] [--json]` | Assemble and verify a bundle from trusted local build outputs |
@@ -65,7 +68,10 @@ ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
 `tools/install-host-tools.sh`, `scripts/check.sh`, `scripts/test-just.sh`,
 `scripts/develop.sh`, `scripts/test-develop.sh`, `scripts/release-build.sh`, and
 `scripts/test-release-build.sh`, `scripts/ci-linux-bundle.sh`, and
-`scripts/test-ci-linux-bundle.sh`;
+`scripts/test-ci-linux-bundle.sh`, `scripts/linux-install-smoke.sh`,
+`scripts/linux-install-check.sh`, `scripts/test-linux-install-smoke.sh`,
+`scripts/linux-build-worker.sh`, `scripts/test-linux-build-worker.sh`,
+`scripts/linux-build.sh`, and `scripts/test-linux-build.sh`;
 legacy scenario/lab scripts are syntax-only until formalized.
 Development-wrapper tests now live in the Rust `proofstorm-xtask` package and
 its Bash integration fixture. Other Python packaging/helper tests remain separate.
@@ -187,12 +193,103 @@ directories are never replaced; failures clean up private staging. Payload names
 must match the installer's ASCII path rules and fit USTAR headers. Extraction
 does not execute downloaded binaries or install anything.
 
-Linux container orchestration and executable relocation smoke tests still use
-Python. The legacy packaging implementation remains as a
+Linux host/container build orchestration, executable relocation checks, and
+source-free installer orchestration now use Bash/Rust; the standard flow has
+no Python prerequisite. The legacy packaging implementation remains as a
 compatibility oracle for tests, not the normal build's packaging backend. No new
 Python dependency is introduced for end users. The Rust archive tests also use
 system `tar` with the installer's extraction flags; a fresh-VM install remains a
 separate release gate.
+
+## Linux worker and relocation checks
+
+The toolchain image now uses pinned Debian plus the existing pinned Rust stage,
+without a Python base. Docker starts `linux-build-worker.sh` directly. The worker
+refuses non-Linux/AMD64 hosts, bootstraps the maintainer helper, validates the
+transported source receipt and typed build options, and makes a verified owned
+copy for installing Trunk. It keeps the original transported snapshot pristine
+for the release-build driver's second fingerprint check. Product compilation,
+CRD generation, and packaging use the existing shared Bash/Rust build driver.
+
+`just release-smoke` uses the strict Rust extractor, verifies the host target,
+then executes `--version`, `--help`, and metadata commands for both bundled
+executables from the relocated directory. **Only use trusted local build
+outputs:** checksum verification alone does not establish publisher authenticity.
+Each executable call has a 30-second deadline and a 4 MiB output limit. Metadata
+must exactly match the bundled receipt, and these calls must not create runtime
+state. A failed check produces no success report. Existing destinations are not
+overwritten; extracted diagnostics are retained after an executable failure.
+
+The optional repeatable `--deny-source` option uses macOS `sandbox-exec` and is
+rejected on Linux. A normal relocation report does not claim source access was
+denied, runtime setup worked, or the release is ready. Legacy `release.py smoke`
+calls delegate to Rust; `linux_container.py worker` delegates to Bash.
+
+Quick CI tests worker sequencing and failure propagation with fake tools.
+Rust tests exercise real snapshot verification and fixture-bundle relocation,
+including wrong-host bundles, corrupt archives, mismatched/empty output, and
+unexpected runtime state. They require no Docker, Trunk, or Python. The actual
+new toolchain image and product build are verified by the Linux bundle CI job,
+not by these fixtures.
+
+## Host-side Linux builds
+
+`just release-build-linux` runs the Bash host driver. Rust makes a Git-filtered
+snapshot with the same filename/mode/content fingerprint used by the worker.
+Ignored source, credentials, and development outputs are excluded. Stable
+releases require clean source; alpha/development builds record dirty provenance.
+The selected work directory must be new, outside the source checkout, with an
+existing parent. Host helper compilation uses a disposable external cache.
+
+Only the Dockerfile enters the toolchain build context. Verified source is
+copied into the uniquely named container afterward. The worker still has no host
+mounts or Docker socket, all capabilities dropped, no privilege escalation,
+2 CPUs, 3 GiB of memory, and a 512-process limit. The driver keeps the 15-minute
+toolchain and 60-minute worker deadlines, checks the worker exit code after
+attach, and exports artifacts only after success. Logs and exact-container
+cleanup run on success or failure; log retrieval errors do not skip shutdown.
+No images are published or globally pruned. Toolchain/input images remain cached.
+
+`just release-ci-linux` calls this driver and the Bash installer test directly.
+`linux_container.py` remains only an optional compatibility shim for old command
+lines; it contains no Docker or snapshot implementation and is not used by CI.
+Its small legacy adapter tests remain separate from the normal Rust/Bash checks.
+
+The Rust job also runs the combined host build/install fixture with real Rust
+snapshot, checksum, and receipt helpers, fake Docker, and a deliberately failing
+Python command. It checks containment arguments, transport boundaries, profile
+forwarding, the six collected artifacts, and failure/cleanup sequencing across
+both containers. This does not substitute for the actual Docker job on `main`.
+
+## Source-free Linux installer checks
+
+`just release-install-linux` checks an already built Linux AMD64 archive and its
+adjacent checksum. It requires Cargo and Docker on the maintainer host, not Python.
+The work directory must be new, outside the checkout, with an existing parent.
+The command bootstraps the Rust maintainer helper into disposable storage; it
+does not rebuild product binaries or use the development target directory.
+The old `linux_container.py smoke` entrypoint delegates to this same Bash driver.
+
+Rust validates and rechecks the staged archive/installer checksums, writes the
+public-only image context and run receipt, and emits the success report only
+after the container exits successfully. Bash handles Docker sequencing, log
+collection, and cleanup of the uniquely named test container. Operations retain
+bounded deadlines without requiring GNU `timeout` on macOS. A failed log read
+does not prevent shutdown, and failed cleanup prints the exact remaining target.
+The input image is retained for diagnostics, as before; no global Docker cleanup
+or image publication is performed.
+
+The test container remains non-root, offline, read-only, capability-dropped, and
+resource-capped, with only a temporary writable filesystem. It gets the archive,
+checksum, and installer—no source, host mounts, or Docker socket. It checks install
+and reinstall, CLI/MCP metadata agreement, and absence of runtime/agent setup.
+The report explicitly does not claim runtime or GitHub-download validation.
+
+The Rust CI job exercises this path with real checksum/report helpers and fake
+Docker, covering containment arguments, quoted paths, development opt-in,
+tampering, worker failures despite successful attach, and cleanup failures.
+Quick CI checks its Bash syntax, ShellCheck, and Just/CI dispatch. The actual
+Docker install remains in the post-merge Linux bundle job.
 
 ## Linux artifact builds on main
 

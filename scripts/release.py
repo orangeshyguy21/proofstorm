@@ -344,51 +344,19 @@ def compile_snapshot(snapshot_root, provenance, *, work, output, target, trunk,
 
 
 def smoke(archive, destination, deny_sources):
-    require(not deny_sources or platform.system() == "Darwin", "--deny-source requires macOS sandbox-exec; use source-free relocation on Linux")
-    require(not destination.exists(), "smoke destination must not already exist")
-    receipt = Path(str(archive) + ".sha256").read_text().strip().split()
-    require(len(receipt) == 2 and receipt[1] == archive.name and receipt[0] == digest(archive),
-            "archive checksum mismatch")
-    destination.mkdir(parents=True)
-    with tarfile.open(archive) as tar:
-        members = tar.getmembers()
-        require(len(members) <= 10_000 and sum(member.size for member in members) <= 1024**3,
-                "archive exceeds bundle size limits")
-        names = set()
-        for member in members:
-            path = Path(member.name)
-            require(member.isfile() and not path.is_absolute() and ".." not in path.parts
-                    and len(path.parts) >= 2 and path.parts[0] == "proofstorm"
-                    and path.as_posix() == member.name and member.name not in names,
-                    "unsafe or duplicate archive member")
-            names.add(member.name)
-        tar.extractall(destination, members=members, filter="data")
-    root = destination / "proofstorm"
-    manifest = verify(root)
-    require(manifest["target"] == host_target(), "smoke must run on the bundle's target host")
-    env = clean_environment()
-    env["PROOFSTORM_HOME"] = str(destination / "must-not-be-created")
-    env["PROOFSTORM_PRINCIPAL"] = ""
-    prefix = []
-    if deny_sources:
-        # Negative-access smoke check on macOS. No changes to the source tree.
-        policy = '(version 1) (allow default)'
+    """Compatibility entrypoint; Rust owns extraction and executable relocation."""
+    require(not deny_sources or platform.system() == "Darwin",
+            "--deny-source requires macOS sandbox-exec; use source-free relocation on Linux")
+    root = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory(prefix="proofstorm-release-smoke-") as scratch:
+        env = clean_environment()
+        env["CARGO_TARGET_DIR"] = str(Path(scratch) / "target")
+        command = ["cargo", "run", "--locked", "--manifest-path", root / "Cargo.toml",
+                   "-p", "proofstorm-xtask", "--", "release-smoke",
+                   archive, destination, "--json"]
         for source in deny_sources:
-            policy += ' (deny file-read* (subpath ' + json.dumps(str(source.resolve())) + '))'
-        prefix = ["/usr/bin/sandbox-exec", "-p", policy]
-    for name, metadata_flag in [("proofstorm", "release-info"), ("proofstorm-mcp", "--release-info")]:
-        binary = root / "bin" / name
-        for flag in ["--version", "--help"]:
-            require(bool(run([*prefix, binary, flag], cwd=destination, env=env, capture=True)),
-                    "empty executable help/version output")
-        embedded = json.loads(run([*prefix, binary, metadata_flag], cwd=destination, env=env, capture=True))
-        require(embedded == json.loads((root / "release-info.json").read_text()), "relocated metadata mismatch")
-    require(not (destination / "must-not-be-created").exists() and
-            not (destination / ".proofstorm").exists(), "metadata command created runtime state")
-    result = {"integrity_verified": True, "relocated_binaries_verified": True,
-              "source_read_access_denied": bool(deny_sources), "release_ready": manifest["release_ready"]}
-    write_json(destination / "smoke-report.json", result)
-    print(json.dumps(result, indent=2))
+            command.extend(["--deny-source", source])
+        run(command, cwd=root, env=env)
 
 
 def main():

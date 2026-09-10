@@ -83,9 +83,21 @@ release-package +args:
 release-build +args:
     bash scripts/release-build.sh "$@"
 
-# Build Linux and test source-free install/reinstall; requires Docker and Python.
+# Build Linux and test source-free install/reinstall; requires Docker and Rust.
 release-ci-linux +args:
     bash scripts/ci-linux-bundle.sh "$@"
+
+# Build and relocate Linux binaries in isolated Debian; no Python or host mounts.
+release-build-linux +args:
+    bash scripts/linux-build.sh "$@"
+
+# Test an existing Linux bundle's installer offline; requires Rust and Docker, not Python.
+release-install-linux +args:
+    bash scripts/linux-install-smoke.sh "$@"
+
+# Execute trusted bundled CLI/MCP binaries after checked extraction: ARCHIVE NEW_DESTINATION.
+release-smoke +args:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-smoke "$@"
 
 # Archive a verified unpacked bundle: DIRECTORY OUTPUT.
 release-pack +args:

@@ -16,8 +16,22 @@ fn main() -> Result<()> {
     if command == "release-verify" {
         return release::verify_cli(args);
     }
-    if let Some(command @ ("release-prepare" | "release-host-check")) = command.to_str() {
+    if let Some(command @ ("linux-install-prepare" | "linux-install-finish" | "release-run")) =
+        command.to_str()
+    {
+        return release::linux_install_cli(command, args);
+    }
+    if let Some(
+        command @ ("release-prepare"
+        | "release-host-check"
+        | "release-worker-prepare"
+        | "linux-build-prepare"),
+    ) = command.to_str()
+    {
         return release::build_cli(command, args);
+    }
+    if command == "release-smoke" {
+        return release::smoke_cli(args);
     }
     if let Some(command @ ("release-pack" | "release-extract" | "release-package")) =
         command.to_str()

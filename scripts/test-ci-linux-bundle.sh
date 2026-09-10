@@ -10,12 +10,11 @@ fixture="$scratch/checkout with spaces"
 mkdir -p "$fixture/scripts" "$scratch/bin"
 cp "$root/scripts/ci-linux-bundle.sh" "$fixture/scripts/"
 export TEST_CI_TRACE="$scratch/trace"
-cat > "$scratch/bin/python3" <<'STUB'
+export TEST_CI_ADAPTER="$scratch/adapter"
+cat > "$TEST_CI_ADAPTER" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ ${PROOFSTORM_HOME-unset} == unset && ${CARGO_TARGET_DIR-unset} == unset ]] || exit 97
-[[ "$1" == -B && "$2" == scripts/linux_container.py ]] || exit 97
-shift 2
 mode=$1
 shift
 printf '<%s>' "$mode" "$@" >> "$TEST_CI_TRACE"
@@ -63,7 +62,16 @@ cat > "$scratch/bin/docker" <<'STUB'
 # The adapter is stubbed too, so no Docker invocation should reach here.
 exit 97
 STUB
-chmod +x "$scratch/bin/python3" "$scratch/bin/docker"
+chmod +x "$TEST_CI_ADAPTER" "$scratch/bin/docker"
+# Reuse the staged-output fixture behind the new Bash installer entrypoint.
+cat > "$fixture/scripts/linux-install-smoke.sh" <<'STUB'
+#!/usr/bin/env bash
+exec "$TEST_CI_ADAPTER" smoke "$@"
+STUB
+cat > "$fixture/scripts/linux-build.sh" <<'STUB'
+#!/usr/bin/env bash
+exec "$TEST_CI_ADAPTER" build "$@"
+STUB
 run() {
   : > "$TEST_CI_TRACE"
   PATH="$scratch/bin:$PATH" PROOFSTORM_HOME=foreign CARGO_TARGET_DIR=foreign \

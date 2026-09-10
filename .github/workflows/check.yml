@@ -74,6 +74,8 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
         with:
           just-version: ${{ env.JUST_VERSION }}
+      - name: Select repository Rust toolchain for installer verification
+        run: rustup show active-toolchain
       - name: Build optimized Linux bundle and test installation
         run: just release-ci-linux --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME"
       - name: Upload checked bundle
