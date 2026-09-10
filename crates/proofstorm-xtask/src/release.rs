@@ -2,9 +2,11 @@
 mod archive;
 mod build;
 mod bundle;
+mod controller;
 mod linux_install;
 mod package;
 mod promotion;
+mod shortcuts;
 mod smoke;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
@@ -28,6 +30,14 @@ pub(super) fn smoke_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
 
 pub(super) fn promotion_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
     promotion::cli(args)
+}
+
+pub(super) fn shortcuts_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
+    shortcuts::cli(args)
+}
+
+pub(super) fn controller_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
+    controller::cli(args)
 }
 
 pub(super) fn artifact_cli(command: &str, args: impl Iterator<Item = OsString>) -> Result<()> {

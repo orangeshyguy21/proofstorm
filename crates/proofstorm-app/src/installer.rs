@@ -129,6 +129,15 @@ fn validate_alpha(manifest: &Value, info: &Value) -> Result<()> {
 }
 
 pub(crate) fn verify(root: &Path, allow_development: bool, match_binary: bool) -> Result<Value> {
+    let expected = match_binary.then(crate::release::describe);
+    verify_with_metadata(root, allow_development, expected.as_ref())
+}
+
+fn verify_with_metadata(
+    root: &Path,
+    allow_development: bool,
+    expected_info: Option<&Value>,
+) -> Result<Value> {
     ensure!(
         fs::symlink_metadata(root)?.is_dir(),
         "bundle root must be a directory, not a symlink"
@@ -216,7 +225,7 @@ pub(crate) fn verify(root: &Path, allow_development: bool, match_binary: bool) -
         "release metadata mismatch"
     );
     ensure!(
-        !match_binary || info == crate::release::describe(),
+        expected_info.is_none_or(|expected| info == *expected),
         "run install-bundle using the executable inside this bundle"
     );
     Ok(manifest)
@@ -290,7 +299,21 @@ fn write_new(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
 
 /// All files are verified before activation. One symlink switch activates both binaries.
 pub fn install(bundle: &Path, prefix: &Path, allow_development: bool) -> Result<Value> {
-    let manifest = verify(bundle, allow_development, true)?;
+    install_with_metadata(
+        bundle,
+        prefix,
+        allow_development,
+        &crate::release::describe(),
+    )
+}
+
+fn install_with_metadata(
+    bundle: &Path,
+    prefix: &Path,
+    allow_development: bool,
+    expected: &Value,
+) -> Result<Value> {
+    let manifest = verify_with_metadata(bundle, allow_development, Some(expected))?;
     ensure!(prefix.is_absolute(), "installation prefix must be absolute");
     shell_quote(prefix)?;
     create_parents(prefix)?;
@@ -365,10 +388,10 @@ pub fn install(bundle: &Path, prefix: &Path, allow_development: bool) -> Result<
             }
             fs::copy(bundle.join(name), target)?;
         }
-        verify(stage.path(), allow_development, true)?;
+        verify_with_metadata(stage.path(), allow_development, Some(expected))?;
         fs::rename(stage.path(), &version)?;
     } else {
-        verify(&version, allow_development, true)?;
+        verify_with_metadata(&version, allow_development, Some(expected))?;
         ensure!(
             hash(&version.join("manifest.json"))? == id,
             "installed version was changed"

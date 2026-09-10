@@ -103,6 +103,22 @@ release-smoke +args:
 release-promote-linux +args:
     bash scripts/release-promote-linux.sh "$@"
 
+# Prepare source version fields for review; never commits or publishes.
+release-prepare version:
+    bash scripts/release.sh prepare "$@"
+
+# Select current main's tested Linux build and confirm draft preparation using GitHub login.
+release *args:
+    bash scripts/release.sh draft "$@"
+
+# Low-level controller build/startup checks; normally handled by main CI.
+release-controller-build +args:
+    bash scripts/controller-build.sh build "$@"
+
+# Publish a verified controller with explicit namespace confirmation; normally handled by main CI.
+release-controller-publish +args:
+    bash scripts/controller-build.sh publish "$@"
+
 # Archive a verified unpacked bundle: DIRECTORY OUTPUT.
 release-pack +args:
     CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-pack "$@"

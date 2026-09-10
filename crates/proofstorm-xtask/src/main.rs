@@ -36,6 +36,12 @@ fn main() -> Result<()> {
     if command == "release-promotion" {
         return release::promotion_cli(args);
     }
+    if command == "release-shortcut" {
+        return release::shortcuts_cli(args);
+    }
+    if command == "release-controller" {
+        return release::controller_cli(args);
+    }
     if let Some(command @ ("release-pack" | "release-extract" | "release-package")) =
         command.to_str()
     {

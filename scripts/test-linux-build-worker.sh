@@ -34,6 +34,7 @@ case "$1" in
     [[ "$2" == "$WORKER_TEST_INPUT" && ! -e "$3" && ! -e "$4" ]] || exit 97
     mkdir "$3"
     cp -R "$2/source" "$3/source"
+    [[ ${WORKER_TEST_CONTROLLER:-false} == false ]] || printf '{}\n' > "$3/controller.json"
     printf '%s\0' "$3" "$4" "${WORKER_TEST_DEVELOPMENT:-false}" "${WORKER_TEST_DEBUG:-false}" ;;
   release-smoke)
     printf 'relocate\n' >> "$WORKER_TEST_TRACE"
@@ -63,7 +64,7 @@ set -euo pipefail
 printf 'build\n' >> "$WORKER_TEST_TRACE"
 [[ ${WORKER_TEST_FAIL:-none} != build ]] || exit 26
 [[ ! -e "$WORKER_TEST_INPUT/source/.tools" ]] || exit 97
-output='' work='' trunk='' development=false debug=false
+output='' work='' trunk='' controller='' development=false debug=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source) [[ "$2" == "$WORKER_TEST_INPUT/source" ]] || exit 97; shift 2 ;;
@@ -72,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --output) output=$2; shift 2 ;;
     --target-dir) [[ "$2" == "${work%/release-build}/target" ]] || exit 97; shift 2 ;;
     --trunk) trunk=$2; shift 2 ;;
+    --controller-receipt) controller=$2; shift 2 ;;
     --development) development=true; shift ;;
     --debug) debug=true; shift ;;
     --json) shift ;;
@@ -79,6 +81,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -f "$trunk" && "$development" == "${WORKER_TEST_DEVELOPMENT:-false}" && "$debug" == "${WORKER_TEST_DEBUG:-false}" ]] || exit 97
+if [[ ${WORKER_TEST_CONTROLLER:-false} == true ]]; then
+  [[ "$controller" == "${work%/release-build}/controller.json" && -f "$controller" ]] || exit 97
+else
+  [[ -z "$controller" ]] || exit 97
+fi
 mkdir -p "$output" "$work"
 [[ ${WORKER_TEST_FAIL:-none} == missing ]] || touch "$output/proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz"
 if [[ ${WORKER_TEST_FAIL:-none} == duplicate ]]; then touch "$output/proofstorm-extra-x86_64-unknown-linux-gnu.tar.gz"; fi
@@ -98,6 +105,7 @@ diff -u "$scratch/expected" "$WORKER_TEST_TRACE"
 [[ ! -e "$input/source/.tools" ]] || exit 1
 for name in build-report.json smoke-report.json install.sh; do [[ -s "$scratch/normal-output/$name" ]] || exit 1; done
 WORKER_TEST_DEBUG=true run debug
+WORKER_TEST_CONTROLLER=true run controller
 WORKER_TEST_DEVELOPMENT=true WORKER_TEST_DEBUG=true run development
 for failure in verify tools build relocate missing duplicate; do
   if WORKER_TEST_FAIL=$failure run "$failure"; then printf 'Unexpected success: %s\n' "$failure" >&2; exit 1; fi

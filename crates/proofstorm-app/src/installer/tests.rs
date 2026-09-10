@@ -2,6 +2,10 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 
 fn fixture(root: &Path) -> PathBuf {
+    fixture_with_info(root, &crate::release::describe())
+}
+
+fn fixture_with_info(root: &Path, info: &Value) -> PathBuf {
     let bundle = root.join("bundle");
     fs::create_dir(&bundle).unwrap();
     for name in REQUIRED {
@@ -18,10 +22,9 @@ fn fixture(root: &Path) -> PathBuf {
         )
         .unwrap();
     }
-    let info = crate::release::describe();
     fs::write(
         bundle.join("release-info.json"),
-        serde_json::to_vec(&info).unwrap(),
+        serde_json::to_vec(info).unwrap(),
     )
     .unwrap();
     let mut files = serde_json::Map::new();
@@ -36,27 +39,40 @@ fn fixture(root: &Path) -> PathBuf {
     bundle
 }
 
+fn alpha_info() -> Value {
+    let mut info = crate::release::describe();
+    // Explicit synthetic image evidence, not a relabelled checked-in release.
+    info["controller"] = json!({"image":format!("ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:{}", "a".repeat(64)),"platform":crate::platform::container_platform().unwrap(),"release_ready":false,"metadata":{"version":info["version"],"runtime_contract_sha256":info["runtime_contract_sha256"]}});
+    info
+}
+
 #[test]
 fn alpha_installs_reinstalls_and_permits_its_controller_without_override() {
     let root = tempfile::tempdir().unwrap();
-    let bundle = fixture(root.path());
+    let info = alpha_info();
+    let bundle = fixture_with_info(root.path(), &info);
     let path = bundle.join("manifest.json");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     manifest["channel"] = json!("alpha");
-    manifest["controller"] = crate::release::describe()["controller"].clone();
+    manifest["controller"] = info["controller"].clone();
     fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let prefix = root.path().join("prefix");
-    let first = install(&bundle, &prefix, false).unwrap();
-    assert_eq!(first, install(&bundle, &prefix, false).unwrap());
+    let first = install_with_metadata(&bundle, &prefix, false, &info).unwrap();
+    assert_eq!(
+        first,
+        install_with_metadata(&bundle, &prefix, false, &info).unwrap()
+    );
     assert!(!prefix.join("lib/proofstorm/state").exists());
-    assert!(crate::artifacts::verify(&root.path().join("home"), &bundle, false).unwrap());
+    assert!(verify_with_metadata(&bundle, false, Some(&info)).is_ok());
+    // The production entrypoint still refuses metadata different from its binary.
+    assert!(install(&bundle, &root.path().join("foreign-prefix"), false).is_err());
     fs::write(bundle.join("LICENSE"), b"tampered").unwrap();
-    assert!(install(&bundle, &prefix, false).is_err());
+    assert!(install_with_metadata(&bundle, &prefix, false, &info).is_err());
 }
 
 #[test]
 fn alpha_never_waives_controller_compatibility_or_stable_release_gates() {
-    let info = crate::release::describe();
+    let info = alpha_info();
     let manifest = json!({"release_ready":false,"controller":info["controller"]});
     validate_alpha(&manifest, &info).unwrap();
     for version in ["0.1.0", "0.1.0-alpha.", "0.1-alpha.1", "0.1.0-alpha.1-dev"] {

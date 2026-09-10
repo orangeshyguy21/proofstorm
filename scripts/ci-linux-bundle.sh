@@ -4,13 +4,14 @@ set -Eeuo pipefail
 stage=arguments
 trap 'printf "Linux bundle check failed during %s (line %s, status %s)\n" "$stage" "$LINENO" "$?" >&2' ERR
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
-work='' debug=false
+work='' debug=false controller=''
 usage() {
-  printf 'Usage: just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--debug]\n'
+  printf 'Usage: just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--controller-receipt FILE] [--debug]\n'
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work-dir) [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }; work=$2; shift 2 ;;
+    --controller-receipt) [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }; controller=$2; shift 2 ;;
     --debug) debug=true; shift ;;
     --help|-h) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
@@ -34,6 +35,7 @@ stage='Linux build and relocation'
 printf 'Building Linux bundle in the isolated Debian toolchain\n'
 args=(--work-dir "$work/build")
 [[ "$debug" == false ]] || args+=(--debug)
+[[ -z "$controller" ]] || args+=(--controller-receipt "$controller")
 bash scripts/linux-build.sh "${args[@]}" 2>&1 | tee "$work/build.log"
 stage='build outputs'
 # Exactly one normal-channel archive; do not guess or silently select a stale one.

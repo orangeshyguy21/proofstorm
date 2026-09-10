@@ -5,9 +5,24 @@ fn main() {
         "PROOFSTORM_REQUIRE_WEB_ASSETS",
         "PROOFSTORM_BUILD_REVISION",
         "PROOFSTORM_BUILD_SOURCE_SHA256",
+        "PROOFSTORM_CONTROLLER_RECEIPT",
     ] {
         println!("cargo:rerun-if-env-changed={key}");
     }
+    let controller = env::var_os("PROOFSTORM_CONTROLLER_RECEIPT").map_or_else(
+        || b"null".to_vec(),
+        |path| {
+            let path = PathBuf::from(path);
+            println!("cargo:rerun-if-changed={}", path.display());
+            fs::read(path).expect("read explicit controller build receipt")
+        },
+    );
+    fs::write(
+        PathBuf::from(env::var("OUT_DIR").expect("output directory"))
+            .join("controller_receipt.json"),
+        controller,
+    )
+    .expect("write embedded controller receipt");
     for key in [
         "PROOFSTORM_BUILD_REVISION",
         "PROOFSTORM_BUILD_SOURCE_SHA256",

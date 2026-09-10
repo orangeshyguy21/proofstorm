@@ -23,6 +23,7 @@ require() {
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"$root/target/check"}
 export PROOFSTORM_WEB_DIST="$root/target/check/no-web-assets"
 unset PROOFSTORM_REQUIRE_WEB_ASSETS PROOFSTORM_BUILD_REVISION PROOFSTORM_BUILD_SOURCE_SHA256
+unset PROOFSTORM_CONTROLLER_RECEIPT
 unset PROOFSTORM_HOME PROOFSTORM_KUBECONFIG
 
 check_fmt() {
@@ -62,6 +63,8 @@ check_shell() {
   # those workflows are formalized; do not globally suppress their diagnostics.
   shellcheck --external-sources install.sh tools/install-trunk.sh tools/install-host-tools.sh scripts/check.sh scripts/test-just.sh scripts/develop.sh scripts/test-develop.sh scripts/release-build.sh scripts/test-release-build.sh scripts/ci-linux-bundle.sh scripts/test-ci-linux-bundle.sh scripts/linux-install-smoke.sh scripts/linux-install-check.sh scripts/test-linux-install-smoke.sh scripts/linux-build-worker.sh scripts/test-linux-build-worker.sh scripts/linux-build.sh scripts/test-linux-build.sh
   shellcheck --external-sources scripts/release-promote-linux.sh scripts/test-release-promote-linux.sh
+  shellcheck --external-sources scripts/release.sh scripts/test-release-shortcuts.sh
+  shellcheck --external-sources scripts/controller-build.sh scripts/test-controller-build.sh
 }
 
 check_clippy() {

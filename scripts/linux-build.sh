@@ -4,15 +4,15 @@ set -Eeuo pipefail
 stage=arguments
 trap 'printf "Linux build failed during %s (line %s, status %s)\n" "$stage" "$LINENO" "$?" >&2' ERR
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
-source_dir=$root work='' development=false debug=false
+source_dir=$root work='' development=false debug=false controller=''
 usage() {
-  printf 'Usage: just release-build-linux --work-dir NEW_EXTERNAL_DIRECTORY [--source DIRECTORY] [--development] [--debug]\n'
+  printf 'Usage: just release-build-linux --work-dir NEW_EXTERNAL_DIRECTORY [--source DIRECTORY] [--controller-receipt FILE] [--development] [--debug]\n'
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --work-dir|--source)
+    --work-dir|--source|--controller-receipt)
       [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }
-      case "$1" in --work-dir) work=$2 ;; --source) source_dir=$2 ;; esac
+      case "$1" in --work-dir) work=$2 ;; --source) source_dir=$2 ;; --controller-receipt) controller=$2 ;; esac
       shift 2 ;;
     --development) development=true; shift ;;
     --debug) debug=true; shift ;;
@@ -53,7 +53,9 @@ printf 'Preparing Linux source verification tools\n'
 (cd "$root"; CARGO_TARGET_DIR="$scratch/target" cargo build --locked --manifest-path "$root/Cargo.toml" -p proofstorm-xtask)
 helper="$scratch/target/debug/proofstorm-xtask"
 stage='source snapshot'
-"$helper" linux-build-prepare "$source_dir" "$work" "$development" "$debug" > "$scratch/plan"
+prepare_args=("$source_dir" "$work" "$development" "$debug")
+[[ -z "$controller" ]] || prepare_args+=("$controller")
+"$helper" linux-build-prepare "${prepare_args[@]}" > "$scratch/plan"
 plan=()
 while IFS= read -r -d '' field; do plan+=("$field"); done < "$scratch/plan"
 [[ ${#plan[@]} == 3 ]] || { printf 'Invalid Linux build plan\n' >&2; exit 1; }

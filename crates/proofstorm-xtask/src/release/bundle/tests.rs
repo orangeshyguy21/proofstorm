@@ -75,6 +75,18 @@ impl Bundle {
         self.refresh("release-info.json");
     }
 
+    pub(crate) fn matching_controller(&mut self) {
+        self.info["controller"]["format_version"] = json!(1);
+        self.info["controller"]["source"] = self.manifest["source"].clone();
+        self.info["controller"]["metadata"]["source_sha256"] =
+            self.manifest["source"]["sha256"].clone();
+        self.info["controller"]["anonymous_verified"] = json!(true);
+        self.info["controller"]["verification"] = json!({"registry_identity":true,"offline_metadata":true,"non_root":true,"helper_startup":true});
+        self.manifest["controller"] = self.info["controller"].clone();
+        fs::write(self.root().join("release-info.json"), self.info.to_string()).unwrap();
+        self.refresh("release-info.json");
+    }
+
     fn save(&self) {
         fs::write(self.root().join("manifest.json"), self.manifest.to_string()).unwrap();
     }
