@@ -73,7 +73,7 @@
     "execution_context": {
       "component_id": "identity",
       "environment": {},
-      "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+      "image": "proofstorm-registry.localhost:5000/upstream/quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
       "mounts": [],
       "state_contract": "proofstorm/keycloak-oidc-state/v1"
     },
@@ -168,7 +168,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:c81c21bb981cb00855c279b109b7d31efd785dd4a2b34ed4026add7eb545ad8a",
+    "rollout_digest": "sha256:92b1fe621082fe1779d123a7e1649ec6d32edb01858da505f75d83c812b01c55",
     "storage": [],
     "target_descriptor": {
       "backend_id": "keycloak",
@@ -219,7 +219,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:c81c21bb981cb00855c279b109b7d31efd785dd4a2b34ed4026add7eb545ad8a"
+                "proofstorm.dev/rollout-digest": "sha256:92b1fe621082fe1779d123a7e1649ec6d32edb01858da505f75d83c812b01c55"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -324,7 +324,7 @@
                       }
                     }
                   ],
-                  "image": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+                  "image": "proofstorm-registry.localhost:5000/upstream/quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [

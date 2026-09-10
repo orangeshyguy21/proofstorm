@@ -1,0 +1,24 @@
+{
+  "full_runtime_requested": true,
+  "checks": [
+    "development_guard",
+    "doctor_no_initialization",
+    "verified_tool_downloads",
+    "prepare_idempotency",
+    "runtime_setup",
+    "doctor_ready",
+    "setup_retry_preserves_controller_and_permissions",
+    "example_lab_up_returned_success"
+  ],
+  "cleanup_errors": [],
+  "docker_inventory_restored": true,
+  "docker_networks_and_volumes_restored": true,
+  "preexisting_containers_unchanged": true,
+  "user_kubeconfig_unchanged": true,
+  "development_controller_and_labs_unchanged": true,
+  "example_lab_phase": "ready",
+  "verified_at": "2026-09-09 00:12:31 UTC",
+  "bundle": "proofstorm-0.1.0-alpha.1-dev-debug-3e293c50fd59-aarch64-apple-darwin.tar.gz",
+  "bundle_sha256": "90391337f7222d75e741ad9af6159d0cb4ddcfa453a2c8d2178e97e41365b1cf",
+  "scope": "Installed local development bundle on this macOS arm64 machine with Docker already installed. Not a clean-Mac download/signing test or public-release certification."
+}

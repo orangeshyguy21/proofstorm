@@ -162,10 +162,12 @@ pub struct ProofstormLabActionSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "parameters", rename_all = "snake_case")]
 pub enum LabAction {
-    NodeStart(NodeControlAction),
-    NodeStop(NodeControlAction),
-    NodeRestart(NodeControlAction),
-    ComponentRestart(NodeControlAction),
+    NodeStart(ComponentControlAction),
+    NodeStop(ComponentControlAction),
+    NodeRestart(ComponentControlAction),
+    ComponentStart(ComponentControlAction),
+    ComponentStop(ComponentControlAction),
+    ComponentRestart(ComponentControlAction),
     BootstrapLiquidity(BootstrapLiquidityAction),
     PeerConnect(PeerConnectAction),
     PeerDisconnect(PeerDisconnectAction),
@@ -214,6 +216,8 @@ enum LabActionKindSchema {
     NodeStart,
     NodeStop,
     NodeRestart,
+    ComponentStart,
+    ComponentStop,
     ComponentRestart,
     BootstrapLiquidity,
     PeerConnect,
@@ -300,7 +304,7 @@ struct LabActionParametersSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct NodeControlAction {
+pub struct ComponentControlAction {
     pub component: String,
 }
 

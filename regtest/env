@@ -3,8 +3,8 @@
 # regtest stack and by regtest/scripts/*.sh.
 
 # ----- bitcoind RPC -----
-BTC_RPC_USER=polar
-BTC_RPC_PASS=polar
+BTC_RPC_USER=proofstorm
+BTC_RPC_PASS=proofstorm-regtest-only
 
 # ----- Channel funding (fund-topology.sh) -----
 CHANNEL_CAPACITY_SAT=10000000    # 0.1 BTC channel between lnd-a and lnd-b

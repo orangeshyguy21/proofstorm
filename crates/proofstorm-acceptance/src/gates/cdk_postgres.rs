@@ -20,8 +20,8 @@ fn lab_document() -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-postgres-live-lab",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-postgres-lnd"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-postgres-lnd"}},
             {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "laboratory", "config": {"database_name": "proofstorm_mint", "storage_size": "2Gi"}},
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK PostgreSQL", "description": "Secret-backed PostgreSQL persistence acceptance", "mint_quote_ttl_seconds": 601, "melt_quote_ttl_seconds": 121}}
         ],
@@ -220,10 +220,22 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("CDK did not initialize its PostgreSQL schema: only {tables} public tables");
     }
 
+    let management_args = [
+        "get",
+        "secret/mint-management-tls",
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.data}",
+    ];
+    let management_digest = context.kubectl.digest(&management_args)?;
     context
         .kubectl
         .rollout_restart(CONTROL_NAMESPACE, "deployment/proofstormd")?;
     sleep(Duration::from_secs(5));
+    if context.kubectl.digest(&management_args)? != management_digest {
+        bail!("controller restart rotated management TLS credentials");
+    }
     if context.kubectl.digest(&secret_args)? != secret_digest {
         bail!("controller reconciliation rotated or mutated the generated database Secret");
     }

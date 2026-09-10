@@ -29,7 +29,7 @@ volumes:
   adversary-data:
 
 x-lnd: &lnd
-  image: polarlightning/lnd:${LND_VERSION:-0.20.0-beta}
+  image: ${LND_IMAGE:-localhost:5111/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c}
   restart: on-failure
   networks: [net]
   depends_on:
@@ -43,7 +43,7 @@ x-lnd: &lnd
 
 services:
   bitcoind:
-    image: polarlightning/bitcoind:${BITCOIND_VERSION:-30.0}
+    image: ${BITCOIND_IMAGE:-localhost:5111/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6}
     container_name: proofstorm-rt-bitcoind
     restart: on-failure
     networks: [net]
@@ -56,8 +56,8 @@ services:
       -server=1
       -rpcbind=0.0.0.0
       -rpcallowip=0.0.0.0/0
-      -rpcuser=${BTC_RPC_USER:-polar}
-      -rpcpassword=${BTC_RPC_PASS:-polar}
+      -rpcuser=${BTC_RPC_USER:-proofstorm}
+      -rpcpassword=${BTC_RPC_PASS:-proofstorm-regtest-only}
       -rpcport=18443
       -txindex=1
       -zmqpubrawblock=tcp://0.0.0.0:28334
@@ -67,7 +67,7 @@ services:
     healthcheck:
       test: >
         bitcoin-cli -regtest
-        -rpcuser=${BTC_RPC_USER:-polar} -rpcpassword=${BTC_RPC_PASS:-polar}
+        -rpcuser=${BTC_RPC_USER:-proofstorm} -rpcpassword=${BTC_RPC_PASS:-proofstorm-regtest-only}
         getblockchaininfo
       interval: 3s
       timeout: 5s
@@ -77,7 +77,7 @@ services:
   # `default` wallet (created by fund-topology.sh). Started by the Makefile
   # AFTER setup, so getnewaddress resolves on first try.
   block-miner:
-    image: polarlightning/bitcoind:${BITCOIND_VERSION:-30.0}
+    image: ${BITCOIND_IMAGE:-localhost:5111/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6}
     container_name: proofstorm-rt-block-miner
     restart: on-failure
     networks: [net]
@@ -87,8 +87,8 @@ services:
     volumes:
       - ./regtest/scripts:/scripts:ro
     environment:
-      - BTC_RPC_USER=${BTC_RPC_USER:-polar}
-      - BTC_RPC_PASS=${BTC_RPC_PASS:-polar}
+      - BTC_RPC_USER=${BTC_RPC_USER:-proofstorm}
+      - BTC_RPC_PASS=${BTC_RPC_PASS:-proofstorm-regtest-only}
       - MINE_INTERVAL_SECONDS=${MINE_INTERVAL_SECONDS:-30}
     entrypoint: ["/scripts/block-miner.sh"]
 
@@ -99,11 +99,11 @@ services:
     volumes:
       - lnd-a-data:/home/lnd/.lnd
     command: >
-      lnd --noseedbackup --alias=lnd-a --externalip=lnd-a
+      --lnddir=/home/lnd/.lnd --noseedbackup --alias=lnd-a --externalip=lnd-a
       --listen=0.0.0.0:9735 --rpclisten=0.0.0.0:10009 --restlisten=0.0.0.0:8080
       --bitcoin.active --bitcoin.regtest --bitcoin.node=bitcoind
       --bitcoind.rpchost=bitcoind:18443
-      --bitcoind.rpcuser=${BTC_RPC_USER:-polar} --bitcoind.rpcpass=${BTC_RPC_PASS:-polar}
+      --bitcoind.rpcuser=${BTC_RPC_USER:-proofstorm} --bitcoind.rpcpass=${BTC_RPC_PASS:-proofstorm-regtest-only}
       --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
       --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
       --tlsextradomain=lnd-a --tlsextradomain=localhost
@@ -116,11 +116,11 @@ services:
     volumes:
       - lnd-b-data:/home/lnd/.lnd
     command: >
-      lnd --noseedbackup --alias=lnd-b --externalip=lnd-b
+      --lnddir=/home/lnd/.lnd --noseedbackup --alias=lnd-b --externalip=lnd-b
       --listen=0.0.0.0:9735 --rpclisten=0.0.0.0:10009 --restlisten=0.0.0.0:8080
       --bitcoin.active --bitcoin.regtest --bitcoin.node=bitcoind
       --bitcoind.rpchost=bitcoind:18443
-      --bitcoind.rpcuser=${BTC_RPC_USER:-polar} --bitcoind.rpcpass=${BTC_RPC_PASS:-polar}
+      --bitcoind.rpcuser=${BTC_RPC_USER:-proofstorm} --bitcoind.rpcpass=${BTC_RPC_PASS:-proofstorm-regtest-only}
       --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
       --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
       --tlsextradomain=lnd-b --tlsextradomain=localhost

@@ -13,7 +13,7 @@ const SETTINGS_DRIVER: &str = include_str!("../../drivers/nutshell_settings.py")
 
 const INSTANCE: &str = "nutshell-mint-instance";
 const DRAFT: &str = "nutshell-mint";
-const IMAGE: &str = "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed";
+const IMAGE: &str = "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d";
 
 fn lab_document() -> Value {
     json!({
@@ -24,8 +24,8 @@ fn lab_document() -> Value {
                 "id": "chain",
                 "kind": "bitcoin",
                 "implementation": "bitcoin-core",
-                "version": "30.0",
-                "config_version": "bitcoin-core/30/v1",
+                "version": "31.1",
+                "config_version": "bitcoin-core/31/v1",
                 "control": "laboratory",
                 "config": {}
             },
@@ -33,7 +33,7 @@ fn lab_document() -> Value {
                 "id": "lightning",
                 "kind": "lightning",
                 "implementation": "lnd",
-                "version": "0.20.0-beta",
+                "version": "0.21.3-beta",
                 "config_version": "lnd/0.20/v1",
                 "control": "laboratory",
                 "config": {"alias": "proofstorm-nutshell-lnd"}

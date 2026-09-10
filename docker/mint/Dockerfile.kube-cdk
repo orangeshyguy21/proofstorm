@@ -1,0 +1,15 @@
+# Standard and LDK runtimes retain their exact upstream daemon binaries.
+ARG MINT_IMAGE=docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0
+FROM rust:1-alpine@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce AS client
+RUN apk add --no-cache musl-dev protobuf-dev curl make perl clang
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/cashubtc/cdk/tar.gz/d3dec24c784e8fec1fd65f853241c7a2261c7abd -o /tmp/source.tar.gz \
+    && echo '95251896f5696472a5a6708637b56ce728125db321afba9f3f27118414b7b818  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/src/target,sharing=locked \
+    cargo build --locked --release --bin cdk-mint-cli \
+    && cp target/release/cdk-mint-cli /usr/local/bin/cdk-mint-cli
+
+FROM ${MINT_IMAGE}
+COPY --from=client /usr/local/bin/cdk-mint-cli /usr/local/bin/cdk-mint-cli
+RUN cdk-mint-cli --version

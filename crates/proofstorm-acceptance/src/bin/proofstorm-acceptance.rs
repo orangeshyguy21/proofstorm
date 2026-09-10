@@ -16,6 +16,9 @@ use proofstorm_acceptance::{GateContext, Kubectl, doctor, gates};
     about = "Run one live Proofstorm acceptance gate against the lab cluster"
 )]
 struct Arguments {
+    /// Isolated installation for images, images-check, or cluster-schema only.
+    #[arg(long, env = "PROOFSTORM_HOME")]
+    home: Option<PathBuf>,
     /// Gate to run, matching its `make e2e-<gate>` target.
     #[arg(required_unless_present = "list")]
     gate: Option<String>,
@@ -47,6 +50,20 @@ fn main() -> Result<()> {
         None => std::env::current_dir().context("resolve repository root")?,
     };
     let gate = arguments.gate.context("no gate given")?;
+    if let Some(home) = &arguments.home {
+        let installation = proofstorm_app::installation::Installation::load(home)?;
+        let kubectl = Kubectl::for_installation(&root, &installation);
+        let registry =
+            proofstorm_acceptance::images::RegistryTarget::for_installation(&installation);
+        return match gate.as_str() {
+            "images" => proofstorm_acceptance::images::provision_for(&registry),
+            "images-check" => proofstorm_acceptance::images::verify_for(&kubectl, &registry),
+            "cluster-schema" => doctor::cluster_schema(&kubectl),
+            _ => anyhow::bail!(
+                "gate {gate} is not installation-aware; refusing to fall back to the development cluster"
+            ),
+        };
+    }
     match gate.as_str() {
         "images" => proofstorm_acceptance::images::provision(),
         "images-check" => proofstorm_acceptance::images::verify(&Kubectl::pinned(&root)),

@@ -663,6 +663,7 @@ impl BackendContractRegistry {
                 input.component.id, input.lock.config_version, backend.id, backend.config_version
             ));
         }
+        require_mint_management_image(input)?;
         let effective = self.resolve_effective_component(&input.component)?;
         let effective_config = EffectiveComponentConfig::try_from_component(&effective)?;
         let mut relevant_links = input.relevant_links.clone();
@@ -736,6 +737,23 @@ impl BackendContractRegistry {
             operation_admission: backend.operation_admission.clone(),
         })
     }
+}
+
+fn require_mint_management_image(input: &ComponentPlanInput) -> Result<(), String> {
+    if matches!(
+        input.lock.catalog_id.as_str(),
+        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
+    ) && !input
+        .lock
+        .features
+        .contains(&crate::CatalogFeature::MintManagementRpc)
+    {
+        return Err(format!(
+            "mint_management_image_required: component {:?} uses a lock from before native management RPC support; resolve a new lab revision (and rebuild old candidates) before upgrading this mint",
+            input.component.id
+        ));
+    }
+    Ok(())
 }
 
 impl EffectiveComponentConfig {
@@ -1533,7 +1551,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         contract(
             "bitcoin-core",
             ComponentKind::Bitcoin,
-            "bitcoin-core/30/v1",
+            "bitcoin-core/31/v1",
             BTreeMap::from([
                 (
                     "fallback_fee".into(),
@@ -2598,10 +2616,6 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Derived mint listen address", Topology),
             ),
             (
-                "management_rpc".into(),
-                string("Disabled management RPC service", Policy),
-            ),
-            (
                 "mint_private_key".into(),
                 string("Controller-generated mint root key", Secret),
             ),
@@ -2842,6 +2856,24 @@ fn contract(
     applicable_conditions: BTreeSet<ComponentConditionType>,
 ) -> ComponentBackendContract {
     config_fields.extend(managed_config_fields(id));
+    if matches!(id, "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell") {
+        config_fields.insert(
+            "management_rpc".into(),
+            managed_field(
+                "Always-on loopback management RPC with mandatory mutual TLS",
+                ConfigValueKind::String,
+                ConfigSettingClass::RuntimePolicy,
+            ),
+        );
+        config_fields.insert(
+            "management_credentials".into(),
+            managed_field(
+                "Controller-generated per-mint management TLS identities",
+                ConfigValueKind::String,
+                ConfigSettingClass::GeneratedInstanceSecret,
+            ),
+        );
+    }
     let (execution_mounts, execution_environment) = execution_contract(id);
     let (workload_kind, storage_requirements) = observation_contract(id);
     let config_rules = if matches!(id, "cdk" | "cdk-ldk" | "cdk-bdk") {
@@ -3313,7 +3345,7 @@ mod tests {
             implementation: implementation.into(),
             version: None,
             config_version: match implementation {
-                "bitcoin-core" => "bitcoin-core/30/v1",
+                "bitcoin-core" => "bitcoin-core/31/v1",
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",
@@ -3813,6 +3845,35 @@ mod tests {
     }
 
     #[test]
+    fn management_upgrade_refuses_old_images_before_compiling_workloads() {
+        let mut component = component("mint", "cdk", ComponentKind::Mint);
+        component.control = ControlClass::Target;
+        let lab = crate::LabSpec {
+            api_version: crate::API_VERSION.into(),
+            name: "old-mint-image".into(),
+            components: vec![component.clone()],
+            links: vec![],
+            policy: crate::LabPolicy::default(),
+        };
+        let mut lock = resolve_lock(&lab, crate::default_catalog()).unwrap();
+        lock.entries[0]
+            .features
+            .remove(&crate::CatalogFeature::MintManagementRpc);
+        let error = default_backend_registry()
+            .compile_contract(&ComponentPlanInput {
+                instance_key: "instance-key".into(),
+                revision_digest: "sha256:revision".into(),
+                component,
+                lock: lock.entries[0].clone(),
+                relevant_links: vec![],
+                linked_targets: BTreeMap::new(),
+                linked_state: BTreeMap::new(),
+            })
+            .unwrap_err();
+        assert!(error.starts_with("mint_management_image_required:"));
+    }
+
+    #[test]
     fn execution_mount_templates_resolve_one_exact_typed_binding() {
         let backend = default_backend_registry()
             .require("cdk")
@@ -3841,8 +3902,8 @@ mod tests {
                 ports: BTreeMap::new(),
             };
         let mut targets = BTreeMap::from([
-            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.0-beta")),
-            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.0-beta")),
+            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.4-beta")),
+            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.4-beta")),
         ]);
         let mounts = resolve_execution_mounts(&backend, "mint", &links, &targets)
             .expect("unselected methods and implementations do not collide");
@@ -3868,7 +3929,7 @@ mod tests {
         links.push(payment("bolt11-secondary", crate::PaymentMethod::Bolt11));
         targets.insert(
             "bolt11-secondary".into(),
-            target("bolt11-secondary-node", "lnd", "0.20.0-beta"),
+            target("bolt11-secondary-node", "lnd", "0.20.4-beta"),
         );
         let error = resolve_execution_mounts(&backend, "mint", &links, &targets)
             .expect_err("duplicate exact selectors must refuse");
@@ -3917,7 +3978,7 @@ mod tests {
                         component_id: "lightning".into(),
                         kind: ComponentKind::Lightning,
                         backend_id: "lnd".into(),
-                        version: "0.20.0-beta".into(),
+                        version: "0.20.4-beta".into(),
                         ports: BTreeMap::from([("rpc".into(), 10_009)]),
                     },
                 )]),

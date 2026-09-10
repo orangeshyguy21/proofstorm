@@ -10,7 +10,7 @@ use crate::{GateContext, LIFECYCLE_CAPABILITIES, json as expect, lab};
 
 const INSTANCE: &str = "cdk-cln-instance";
 const DRAFT: &str = "cdk-cln";
-const IMAGE: &str = "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0";
+const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
 
 fn lab_document() -> Value {
     json!({
@@ -21,8 +21,8 @@ fn lab_document() -> Value {
                 "id": "chain",
                 "kind": "bitcoin",
                 "implementation": "bitcoin-core",
-                "version": "30.0",
-                "config_version": "bitcoin-core/30/v1",
+                "version": "31.1",
+                "config_version": "bitcoin-core/31/v1",
                 "control": "laboratory",
                 "config": {"txindex": true, "fallback_fee": 0.0002}
             },

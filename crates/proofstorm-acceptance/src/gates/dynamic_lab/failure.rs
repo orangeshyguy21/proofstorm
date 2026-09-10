@@ -23,6 +23,9 @@ pub fn check(
         pull_request_url: "https://github.com/cashubtc/nutshell/pull/1".into(),
         resource_name: "synthetic-missing-image-fixture".into(),
         request_digest: "sha256:test-fixture".into(),
+        build_features: [proofstorm_core::CatalogFeature::MintManagementRpc]
+            .into_iter()
+            .collect(),
         phase: CandidateBuildPhase::Pending,
         accepted_at_unix: 1,
         started_at_unix: None,

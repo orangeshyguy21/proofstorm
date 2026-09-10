@@ -14,6 +14,7 @@ pub mod cross_implementation_wallet;
 pub mod cross_lab_scheduler;
 pub mod dynamic_lab;
 pub mod failed_melt;
+pub mod mint_management;
 pub mod native_exec;
 pub mod nutshell_cln;
 pub mod nutshell_mint;
@@ -29,6 +30,7 @@ pub mod slice5;
 
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
+    "mint-management",
     "dynamic-lab",
     "nutshell-mint",
     "cdk-cln",
@@ -52,6 +54,9 @@ pub const NAMES: &[&str] = &[
     "reliable-exec",
     "slice2",
     "slice5",
+    "controller-recovery",
+    "network-faults",
+    "channel-lifecycle",
     "failed-melt",
     "quote-composition",
     "nutshell-oidc",
@@ -60,6 +65,7 @@ pub const NAMES: &[&str] = &[
 /// Dispatch a gate by the name its Makefile target uses.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
+        "mint-management" => mint_management::run(context),
         "dynamic-lab" => dynamic_lab::run(context),
         "nutshell-mint" => nutshell_mint::run(context),
         "cdk-cln" => cdk_cln::run(context),
@@ -82,7 +88,10 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "native-exec" => native_exec::run(context),
         "reliable-exec" => reliable_exec::run(context),
         "slice2" => slice2::run(context),
-        "slice5" => slice5::run(context),
+        "slice5" => slice5::run(context, slice5::Scenario::Smoke),
+        "controller-recovery" => slice5::run(context, slice5::Scenario::Recovery),
+        "network-faults" => slice5::run(context, slice5::Scenario::Network),
+        "channel-lifecycle" => slice5::run(context, slice5::Scenario::Channels),
         "failed-melt" => failed_melt::run(context),
         "quote-composition" => quote_composition::run(context),
         "nutshell-oidc" => nutshell_oidc::run(context),

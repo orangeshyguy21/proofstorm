@@ -1,5 +1,5 @@
 //! Nutshell 0.20.3 + Core Lightning 26.06.7 REST: restricted rune contract,
-//! wallet round trip, conservation, and verified teardown.
+//! wallet round trip, balance accounting, and verified teardown.
 //!
 //! Ported from `tests/kubernetes/nutshell_cln_mcp_client.py`.
 
@@ -21,9 +21,9 @@ fn lab_document() -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "nutshell-cln-live-lab",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {}},
-            {"id": "seed-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-seed"}},
-            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.20.0-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-payer"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
+            {"id": "seed-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-seed"}},
+            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-payer"}},
             {"id": "mint-cln", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-mint"}},
             {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell CLN", "description": "Core Lightning REST acceptance", "clnrest_enable_mpp": true}},
             {"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}
@@ -217,6 +217,9 @@ pub fn run(context: &GateContext) -> Result<()> {
     if !expect::boolean(lab::artifact_content(&bootstrap)?, "/ready")? {
         bail!("LND bootstrap failed: {bootstrap}");
     }
+    // Workload restart and bootstrap can invalidate the aggregate dependency
+    // observation. Wait for the current lab before admitting the next mutation.
+    lab::wait_ready(&mut client, INSTANCE)?;
 
     client.call(
         "peer_connect",
@@ -313,10 +316,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("Nutshell CLN wallet round trip failed: {round_trip}");
     }
 
-    client.call(
+    // Round trip mints external value before selfpay. It is intentionally not
+    // an admissible wallet_pay treatment for the conservation oracle.
+    let rejected = client.call_error(
         "conservation_oracle",
         with(
-            with(common("nutshell-cln-conservation"), wallet),
+            with(common("nutshell-cln-conservation"), wallet.clone()),
             json!({
                 "baseline_operation_id": "nutshell-cln-balance-before-round-trip",
                 "treatment_operation_id": "nutshell-cln-round-trip",
@@ -324,9 +329,27 @@ pub fn run(context: &GateContext) -> Result<()> {
             }),
         ),
     )?;
-    let oracle = lab::wait_succeeded(&mut client, "nutshell-cln-conservation")?;
-    if !expect::boolean(lab::artifact_content(&oracle)?, "/conserved")? {
-        bail!("Nutshell CLN conservation failed: {oracle}");
+    expect::equals(
+        &rejected,
+        "/data/code",
+        &json!("conservation_treatment_invalid"),
+    )?;
+    client.call(
+        "wallet_balance",
+        with(
+            with(common("nutshell-cln-balance-after-round-trip"), wallet),
+            json!({"idempotency_key":"balance-after-round-trip-nutshell-cln"}),
+        ),
+    )?;
+    let after = lab::wait_succeeded(&mut client, "nutshell-cln-balance-after-round-trip")?;
+    let balance_after = expect::integer(lab::artifact_content(&after)?, "/balance_sat")?;
+    let funded_balance = expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")?
+        + expect::integer(round_content, "/minted_sat")?;
+    if expect::integer(round_content, "/balance_before_swap_sat")? != funded_balance
+        || expect::integer(round_content, "/balance_after_swap_sat")? != balance_after
+        || !(funded_balance - 100..=funded_balance).contains(&balance_after)
+    {
+        bail!("Nutshell CLN round-trip balance accounting failed: {after}");
     }
 
     client.call(
@@ -349,7 +372,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     println!(
-        "Nutshell 0.20.3 + Core Lightning 26.06.7 REST, restricted rune, wallet round-trip, conservation, and teardown passed"
+        "Nutshell 0.20.3 + Core Lightning 26.06.7 REST, restricted rune, wallet round-trip, balance accounting, and teardown passed"
     );
     Ok(())
 }

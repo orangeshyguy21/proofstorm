@@ -8,6 +8,8 @@ pub enum OperationKind {
     NodeStart,
     NodeStop,
     NodeRestart,
+    ComponentStart,
+    ComponentStop,
     ComponentRestart,
     BootstrapLiquidity,
     PeerConnect,
@@ -63,6 +65,7 @@ pub struct LabOperation {
     pub experiment_id: String,
     pub session_id: String,
     pub principal_id: String,
+    /// Monotonic across this lab, including operations from other actors and runs.
     pub sequence: u64,
     pub kind: OperationKind,
     pub capability: crate::Capability,

@@ -1,4 +1,5 @@
 use anyhow::Context;
+use clap::Parser;
 use futures::{StreamExt, future};
 use proofstorm_core::Capability;
 use proofstorm_mcp::{ProofstormMcp, ProofstormToolset};
@@ -13,9 +14,34 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 const MAX_MCP_FRAME_BYTES: usize = 1024 * 1024;
 
+#[derive(Parser)]
+#[command(name = "proofstorm-mcp", version)]
+struct Args {
+    /// Report embedded release contents and exit; do not start the MCP transport.
+    #[arg(long)]
+    release_info: bool,
+    /// Select an initialized isolated installation independent of working directory.
+    #[arg(long, env = "PROOFSTORM_HOME")]
+    home: Option<std::path::PathBuf>,
+    /// Explicit kubeconfig; never fall back to the user's configuration.
+    #[arg(long, env = "PROOFSTORM_KUBECONFIG")]
+    kubeconfig: Option<std::path::PathBuf>,
+    /// Managed project actor; ignores ambient Proofstorm configuration and never grants permissions.
+    #[arg(long, requires = "home")]
+    attachment: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let service = configured_service().await?;
+    let args = Args::parse();
+    if args.release_info {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&proofstorm_app::release::describe())?
+        );
+        return Ok(());
+    }
+    let service = configured_service(args).await?;
     let requests = FramedRead::new(
         stdin(),
         JsonRpcMessageCodec::<RxJsonRpcMessage<RoleServer>>::new_with_max_length(
@@ -33,13 +59,37 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn configured_service() -> anyhow::Result<ProofstormMcp> {
-    let toolset = std::env::var("PROOFSTORM_TOOLSET")
-        .unwrap_or_else(|_| "developer".into())
-        .parse::<ProofstormToolset>()
-        .map_err(anyhow::Error::msg)?;
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep managed and manual startup policy together for auditability"
+)]
+async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
+    if let Some(home) = &args.home {
+        proofstorm_app::artifacts::check_checkout(home)?;
+    }
+    let attached = args.attachment.is_some();
+    let toolset = if attached {
+        "developer".to_owned()
+    } else {
+        std::env::var("PROOFSTORM_TOOLSET").unwrap_or_else(|_| "developer".into())
+    }
+    .parse::<ProofstormToolset>()
+    .map_err(anyhow::Error::msg)?;
     let environment = proofstorm_app::config::Environment::resolve(
-        |key| std::env::var(key).ok(),
+        |key| match key {
+            "PROOFSTORM_HOME" => args
+                .home
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            "PROOFSTORM_KUBECONFIG" if attached => None,
+            "PROOFSTORM_KUBECONFIG" => args
+                .kubeconfig
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            "PROOFSTORM_PRINCIPAL" if attached => args.attachment.clone(),
+            _ if attached => None,
+            _ => std::env::var(key).ok(),
+        },
         &std::env::current_dir()?,
     )?;
     environment.report();
@@ -61,13 +111,24 @@ async fn configured_service() -> anyhow::Result<ProofstormMcp> {
                 .offline(),
         );
     }
-    if let Some(parent) = environment.database.parent() {
+    if attached {
+        anyhow::ensure!(
+            std::fs::symlink_metadata(&environment.database)?.is_file(),
+            "managed attachment needs an existing installation database"
+        );
+    } else if let Some(parent) = environment.database.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let store = Store::open(&environment.database)?;
     let workspace = environment.workspace.clone();
     let principal = environment.principal.clone();
-    if let Ok(encoded) = std::env::var("PROOFSTORM_CAPABILITIES") {
+    if attached {
+        anyhow::ensure!(
+            store.actor_preset(&workspace, &principal)?.as_deref()
+                == Some(proofstorm_app::developer::PRESET),
+            "managed actor is not configured; run proofstorm attach with your agent name for this project"
+        );
+    } else if let Ok(encoded) = std::env::var("PROOFSTORM_CAPABILITIES") {
         let capabilities = encoded
             .split(',')
             .filter(|value| !value.is_empty())
@@ -92,8 +153,23 @@ async fn configured_service() -> anyhow::Result<ProofstormMcp> {
     if environment.mode == proofstorm_app::config::Mode::Offline {
         return Ok(service.offline());
     }
+    if attached {
+        proofstorm_app::bootstrap::check_installed_runtime(
+            environment
+                .installation
+                .as_ref()
+                .context("managed attachment requires an installation")?,
+        )?;
+    }
     let runtime = environment.runtime().await?;
-    let _recovery =
-        proofstorm_app::updates::start_recovery(runtime.clone(), store, workspace, principal);
-    Ok(service.with_runtime(runtime))
+    // Managed startup/verification stays passive. Explicit mutations reconcile their
+    // own durable intent; CLI-owned recovery remains available for interrupted work.
+    let _recovery = (!attached).then(|| {
+        proofstorm_app::updates::start_recovery(runtime.clone(), store, workspace, principal)
+    });
+    Ok(if let Some(installation) = &environment.installation {
+        service.with_installation_runtime(runtime, installation)
+    } else {
+        service.with_runtime(runtime)
+    })
 }

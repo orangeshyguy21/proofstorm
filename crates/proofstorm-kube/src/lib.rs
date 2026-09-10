@@ -1,7 +1,9 @@
 mod adapter;
 mod api;
 mod candidate;
+pub mod images;
 mod operation;
+pub mod release;
 mod render;
 mod scheduler;
 
@@ -29,10 +31,10 @@ pub use api::{
     AuthenticationConformanceResult, AuthenticationProtectedSpendAction,
     AuthenticationProtectedSpendResult, AuthenticationReplayAction, AuthenticationReplayResult,
     AuthenticationSessionFailureStage, BootstrapLiquidityAction, ChannelCloseAction,
-    ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction, ComponentExecLiveAction,
-    ComponentForensicsAction, ComponentLogsAction, ConservationOracleAction, LabAction, LabPhase,
-    NativeExecutionRef, NetworkHealAction, NetworkPartitionAction, NodeControlAction,
-    PeerConnectAction, PeerDisconnectAction, ProofstormCandidateBuild,
+    ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction, ComponentControlAction,
+    ComponentExecLiveAction, ComponentForensicsAction, ComponentLogsAction,
+    ConservationOracleAction, LabAction, LabPhase, NativeExecutionRef, NetworkHealAction,
+    NetworkPartitionAction, PeerConnectAction, PeerDisconnectAction, ProofstormCandidateBuild,
     ProofstormCandidateBuildSpec, ProofstormCandidateBuildStatus, ProofstormLab,
     ProofstormLabAction, ProofstormLabActionSpec, ProofstormLabActionStatus, ProofstormLabSpec,
     ProofstormLabStatus, ReachabilityOracleAction, TeardownReceipt, WalletBalanceAction,

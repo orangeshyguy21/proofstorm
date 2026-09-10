@@ -34,9 +34,9 @@ fn document() -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cocod-wallet-checkpoint",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"30.0","config_version":"bitcoin-core/30/v1","control":"laboratory","config":{}},
-            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.20.0-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.20.0-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}},
+            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
             {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.0","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":0}},
             {"id":"wallet-a","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"laboratory","config":{}},
             {"id":"wallet-b","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"laboratory","config":{}}

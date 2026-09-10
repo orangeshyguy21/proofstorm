@@ -37,6 +37,9 @@ fn successful_candidate_becomes_a_workspace_catalog_version() {
         pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
         resource_name: "candidate-aabbccdd".into(),
         request_digest: "sha256:request".into(),
+        build_features: [proofstorm_core::CatalogFeature::MintManagementRpc]
+            .into_iter()
+            .collect(),
         phase: CandidateBuildPhase::Pending,
         accepted_at_unix: 1,
         started_at_unix: None,
@@ -220,8 +223,8 @@ fn composer_mutations_are_idempotent_and_optimistic() {
             id: "chain".into(),
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
-            version: Some("30.0".into()),
-            config_version: "bitcoin-core/30/v1".into(),
+            version: Some("31.1".into()),
+            config_version: "bitcoin-core/31/v1".into(),
             control: ControlClass::Laboratory,
             config: BTreeMap::new(),
         },
@@ -260,8 +263,8 @@ fn publication_keeps_requested_draft_and_persists_effective_configuration() {
         id: "chain".into(),
         kind: ComponentKind::Bitcoin,
         implementation: "bitcoin-core".into(),
-        version: Some("30.0".into()),
-        config_version: "bitcoin-core/30/v1".into(),
+        version: Some("31.1".into()),
+        config_version: "bitcoin-core/31/v1".into(),
         control: ControlClass::Laboratory,
         config: BTreeMap::new(),
     });

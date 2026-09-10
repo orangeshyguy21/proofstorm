@@ -1,6 +1,5 @@
 //! Pure presentation helpers, also checked by native tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-use proofstorm_core::ComponentKind;
 use proofstorm_view::{ComponentView, EnvironmentLab, ResourceDemand};
 
 pub fn label(value: &impl serde::Serialize) -> String {
@@ -45,39 +44,6 @@ pub fn health(component: &ComponentView) -> &'static str {
         Some(true) => "ready",
         Some(false) => "pending",
         None => "unknown",
-    }
-}
-pub fn position(components: &[ComponentView], id: &str) -> (i32, i32) {
-    let Some(component) = components.iter().find(|c| c.id == id) else {
-        return (0, 0);
-    };
-    let group = column(component.kind);
-    let row = components
-        .iter()
-        .filter(|c| group == column(c.kind) && c.id.as_str() < id)
-        .count();
-    let previous_columns: usize = (0..group)
-        .map(|group| {
-            components
-                .iter()
-                .filter(|c| column(c.kind) == group)
-                .count()
-                .div_ceil(4)
-                .max(1)
-        })
-        .sum();
-    (
-        40 + i32::try_from(previous_columns + row / 4).unwrap_or(0) * 292,
-        40 + i32::try_from(row % 4).unwrap_or(0) * 170,
-    )
-}
-
-fn column(kind: ComponentKind) -> i32 {
-    match kind {
-        ComponentKind::Bitcoin | ComponentKind::Database | ComponentKind::IdentityProvider => 0,
-        ComponentKind::Lightning | ComponentKind::Proxy => 1,
-        ComponentKind::Mint | ComponentKind::Oracle => 2,
-        ComponentKind::Wallet | ComponentKind::Attacker => 3,
     }
 }
 pub fn merge_resources(target: &mut Option<ResourceDemand>, page: Option<ResourceDemand>) {
@@ -140,21 +106,51 @@ pub fn cpu_quantity(value: &str) -> String {
     .unwrap_or((value, 1000.0));
     cpu(number.parse::<f64>().ok().map(|number| number * factor))
 }
-pub fn elapsed_time(timestamp: i64, now: i64) -> String {
-    let seconds = now.saturating_sub(timestamp).max(0);
-    if seconds == 0 {
-        return "just now".into();
+pub const OBSERVATION_MAX_AGE: i64 = 20;
+// Kubernetes metrics refresh less often than the lab observations.
+pub const METRICS_MAX_AGE: i64 = 60;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Freshness {
+    Live,
+    Delayed,
+    Disconnected,
+    Unavailable,
+}
+impl Freshness {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Live => "Live",
+            Self::Delayed => "Delayed",
+            Self::Disconnected => "Disconnected",
+            Self::Unavailable => "Unavailable",
+        }
     }
-    let (amount, unit) = if seconds < 60 {
-        (seconds, "second")
-    } else if seconds < 3600 {
-        (seconds / 60, "minute")
-    } else if seconds < 86400 {
-        (seconds / 3600, "hour")
+    pub fn class(self) -> &'static str {
+        match self {
+            Self::Live => "freshness-live",
+            Self::Delayed => "freshness-delayed",
+            Self::Disconnected => "freshness-disconnected",
+            Self::Unavailable => "freshness-unavailable",
+        }
+    }
+}
+pub fn observation_freshness(
+    timestamp: i64,
+    now: i64,
+    failed: bool,
+    connected: bool,
+    max_age: i64,
+) -> Freshness {
+    if !connected {
+        Freshness::Disconnected
+    } else if timestamp <= 0 {
+        Freshness::Unavailable
+    } else if failed || now.saturating_sub(timestamp) > max_age {
+        Freshness::Delayed
     } else {
-        (seconds / 86400, "day")
-    };
-    format!("{amount} {unit}{} ago", if amount == 1 { "" } else { "s" })
+        Freshness::Live
+    }
 }
 pub fn memory(value: Option<f64>) -> String {
     value.map_or_else(
@@ -205,10 +201,75 @@ pub fn process_group(process: &proofstorm_view::ProcessUsage) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn freshness_changes_only_at_status_boundaries() {
+        for age in 0..=super::OBSERVATION_MAX_AGE {
+            assert_eq!(
+                super::observation_freshness(
+                    100,
+                    100 + age,
+                    false,
+                    true,
+                    super::OBSERVATION_MAX_AGE
+                ),
+                super::Freshness::Live
+            );
+        }
+        assert_eq!(
+            super::observation_freshness(100, 121, false, true, 20),
+            super::Freshness::Delayed
+        );
+        assert_eq!(
+            super::observation_freshness(121, 121, false, true, 20),
+            super::Freshness::Live
+        );
+        assert_eq!(
+            super::observation_freshness(130, 121, false, true, 20),
+            super::Freshness::Live
+        );
+    }
+    #[test]
+    fn failed_and_missing_observations_cannot_report_live() {
+        assert_eq!(
+            super::observation_freshness(100, 100, true, true, 20),
+            super::Freshness::Delayed
+        );
+        assert_eq!(
+            super::observation_freshness(0, 100, false, true, 20),
+            super::Freshness::Unavailable
+        );
+        assert_eq!(
+            super::observation_freshness(0, 100, true, true, 20),
+            super::Freshness::Unavailable
+        );
+        assert_eq!(
+            super::observation_freshness(100, 100, false, false, 20),
+            super::Freshness::Disconnected
+        );
+        assert_eq!(
+            super::observation_freshness(100, 100, true, false, 20),
+            super::Freshness::Disconnected
+        );
+    }
+    #[test]
+    fn process_metrics_allow_for_their_slower_sampling_cycle() {
+        assert_eq!(
+            super::observation_freshness(100, 160, false, true, super::METRICS_MAX_AGE),
+            super::Freshness::Live
+        );
+        assert_eq!(
+            super::observation_freshness(100, 161, false, true, super::METRICS_MAX_AGE),
+            super::Freshness::Delayed
+        );
+    }
+
     use super::*;
     #[test]
     fn height_tracks_the_current_lab_and_can_decrease() {
         let observation = |height, error| proofstorm_view::ComponentBalance {
+            rollout_digest: None,
+            lightning: None,
+            holdings: None,
             component: "chain".into(),
             observed_at_unix: 1,
             error,
@@ -230,26 +291,6 @@ mod tests {
         assert_eq!(block_height(&lab), None);
     }
     #[test]
-    fn large_layouts_wrap_each_kind_without_overlapping_tiles() {
-        let nodes = (0..10)
-            .map(|i| ComponentView {
-                id: format!("node-{i}"),
-                kind: ComponentKind::Lightning,
-                implementation: "lnd".into(),
-                version: None,
-                ready: None,
-                conditions: vec![],
-                endpoints: vec![],
-            })
-            .collect::<Vec<_>>();
-        let positions = nodes
-            .iter()
-            .map(|n| position(&nodes, &n.id))
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(positions.len(), 10);
-        assert!(positions.iter().all(|(_, y)| *y <= 550));
-    }
-    #[test]
     fn merges_component_pages_without_duplicating_shared_demands() {
         let resource = || ResourceDemand {
             retained_storage: std::collections::BTreeMap::new(),
@@ -264,23 +305,5 @@ mod tests {
         let mut result = Some(resource());
         merge_resources(&mut result, Some(resource()));
         assert_eq!(result.unwrap().workloads.len(), 1);
-    }
-    #[test]
-    fn layout_is_stable_when_input_order_changes() {
-        let node = |id: &str| ComponentView {
-            id: id.into(),
-            kind: ComponentKind::Bitcoin,
-            implementation: "bitcoind".into(),
-            version: None,
-            ready: None,
-            conditions: vec![],
-            endpoints: vec![],
-        };
-        let nodes = vec![node("b"), node("a")];
-        assert_eq!(position(&nodes, "a"), (40, 40));
-        assert_eq!(
-            position(&[nodes[1].clone(), nodes[0].clone()], "b"),
-            (40, 210)
-        );
     }
 }

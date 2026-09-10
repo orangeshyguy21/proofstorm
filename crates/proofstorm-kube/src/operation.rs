@@ -18,7 +18,7 @@ use crate::{
     WalletQuoteClaimAction, WalletRoundTripAction, component_ports, instance_namespace,
 };
 
-const REACHABILITY_PROBE_IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+use crate::images::PROBE_IMAGE as REACHABILITY_PROBE_IMAGE;
 
 /// Fixed driver for the secret-bearing OIDC/CAT/BAT baseline. It writes only
 /// an allowlisted result to the termination log.
@@ -555,8 +555,12 @@ fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
 fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
     use OperationClass as Operation;
     match action {
-        LabAction::NodeStart(request) => vec![(&request.component, Operation::Start)],
-        LabAction::NodeStop(request) => vec![(&request.component, Operation::Stop)],
+        LabAction::NodeStart(request) | LabAction::ComponentStart(request) => {
+            vec![(&request.component, Operation::Start)]
+        }
+        LabAction::NodeStop(request) | LabAction::ComponentStop(request) => {
+            vec![(&request.component, Operation::Stop)]
+        }
         LabAction::NodeRestart(request) | LabAction::ComponentRestart(request) => {
             vec![(&request.component, Operation::Restart)]
         }
@@ -669,6 +673,8 @@ pub const fn action_result_container(action: &LabAction) -> &'static str {
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentStart(_)
+        | LabAction::ComponentStop(_)
         | LabAction::ComponentRestart(_)
         | LabAction::NetworkPartition(_)
         | LabAction::NetworkHeal(_)
@@ -715,6 +721,8 @@ pub fn render_lab_action_job(
         LabAction::NodeStart(_)
         | LabAction::NodeStop(_)
         | LabAction::NodeRestart(_)
+        | LabAction::ComponentStart(_)
+        | LabAction::ComponentStop(_)
         | LabAction::ComponentRestart(_)
         | LabAction::ComponentExecLive(_)
         | LabAction::PrivateTransfer(_)
@@ -2165,7 +2173,7 @@ pub fn render_bootstrap_job(spec: &BootstrapJobSpec<'_>) -> Result<Job, serde_js
             container("channel-confirm", bitcoin_image, &confirm, &[mount("shared", "/shared", false)]),
             container("channel-verify", lnd_image, &channel_verify, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
         ],
-        "containers": [container("result", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[mount("shared", "/shared", true)])],
+        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[mount("shared", "/shared", true)])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},
             {"name": "mint-lnd", "persistentVolumeClaim": {"claimName": format!("data-{mint_lightning}-0")}},
@@ -2295,7 +2303,7 @@ pub fn render_peer_connect_job(spec: &PeerConnectJobSpec<'_>) -> Result<Job, ser
             mount("shared", "/shared", false), mount("to", "/to", true)
         ])],
         "containers": [container("result", from_image, &script, &[
-            mount("shared", "/shared", true), mount("from", "/from", true)
+            mount("shared", "/shared", false), mount("from", "/from", true)
         ])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},
@@ -2467,7 +2475,7 @@ pub fn render_channel_open_job(spec: &ChannelOpenJobSpec<'_>) -> Result<Job, ser
             container("channel-confirm", bitcoin_image, &confirm, &[]),
             container("channel-verify", from_image, &verify, &[mount("shared", "/shared", false), mount("from", "/from", true)])
         ],
-        "containers": [container("result", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[mount("shared", "/shared", true)])],
+        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[mount("shared", "/shared", true)])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},
             {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
@@ -2808,7 +2816,7 @@ pub fn render_channel_close_job(spec: &ChannelCloseJobSpec<'_>) -> Result<Job, s
             container("channel-confirm", bitcoin_image, &confirm, &[]),
             container("channel-verify", from_image, &verify, &[mount("shared", "/shared", true), mount("from", "/from", true)])
         ],
-        "containers": [container("result", "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", &result, &[])],
+        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[])],
         "volumes": [
             {"name": "shared", "emptyDir": {}},
             {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
@@ -3575,7 +3583,7 @@ mod tests {
             implementation: implementation.into(),
             version: None,
             config_version: match implementation {
-                "bitcoin-core" => "bitcoin-core/30/v1",
+                "bitcoin-core" => "bitcoin-core/31/v1",
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",
@@ -3791,7 +3799,7 @@ mod tests {
             ComponentConditionState::False,
             ComponentConditionReason::ProtocolProbeFailed,
         );
-        action.spec.action = LabAction::NodeStart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeStart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(
@@ -3834,7 +3842,7 @@ mod tests {
             ComponentConditionReason::IntentionallyStopped,
         );
 
-        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
             component: "mint-lnd".into(),
         });
         assert!(evaluate_action_admission(&action, &lab).is_ok());
@@ -3869,7 +3877,7 @@ mod tests {
             .expect("chain")
             .observed_rollout_digest = "sha256:stale".into();
 
-        action.spec.action = LabAction::NodeStop(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeStop(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(matches!(
@@ -3933,7 +3941,7 @@ mod tests {
             .expect("status")
             .observed_revision_digest = "sha256:previous-revision".into();
 
-        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(matches!(
@@ -3985,7 +3993,7 @@ mod tests {
             })
         ));
 
-        action.spec.action = LabAction::NodeStart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeStart(crate::ComponentControlAction {
             component: "mint-lnd".into(),
         });
         assert!(evaluate_action_admission(&action, &lab).is_ok());
@@ -4655,7 +4663,7 @@ mod tests {
             identity
                 .image
                 .as_deref()
-                .is_some_and(|image| image.contains("polarlightning/lnd"))
+                .is_some_and(|image| image.contains("lightninglabs/lnd"))
         );
         let connect = peer_pod.containers[0]
             .command
@@ -5178,7 +5186,7 @@ mod tests {
     fn node_lifecycle_is_typed_and_never_renders_a_privileged_job() {
         let (lab, mut action) = typed_bootstrap();
         action.spec.capability = Capability::NodeControl;
-        action.spec.action = LabAction::NodeRestart(crate::NodeControlAction {
+        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         let serialized = serde_json::to_value(&action.spec.action).expect("serialize action");

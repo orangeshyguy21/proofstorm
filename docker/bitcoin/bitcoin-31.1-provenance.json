@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/bitcoin/bitcoin",
+  "commit_sha": "9be056a8a72b624dae9623b2f7bded92c2a21c91",
+  "artifact_url": "https://bitcoincore.org/bin/bitcoin-core-31.1/SHA256SUMS",
+  "artifact_sha256": "e63028d0bb33d22c847479d73866be8c1142246911765c005efbf611b645e706",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+  "recipe_digest": "sha256:e29c456303605c1b418e7f428d1eb16bf3d3c466449ade7ae0ae02794a5d79ca",
+  "transformations": [
+    "Verify the release checksum document against its pinned SHA-256 and Michael Ford's signature (primary E777299FC265DD04793070EB944D35F9AC3DB76A, signing subkey CFB16E21C950F67FA95E558F2EEB9F5CC09526C1).",
+    "Fetch the signing key from bitcoin-core/guix.sigs commit 3b667ee3ebb3dcd9e1990cf03e38a0935eec1683.",
+    "Verify amd64 archive bitcoin-31.1-x86_64-linux-gnu.tar.gz: b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e.",
+    "Verify arm64 archive bitcoin-31.1-aarch64-linux-gnu.tar.gz: dcf1873f2208ba4f962f3398d47e154c39c0084be8f4553e05c940d0ace3d004.",
+    "Copy unmodified release binaries into the pinned Debian runtime; run as uid/gid 1000 with HOME=/home/bitcoin."
+  ]
+}

@@ -77,7 +77,7 @@
       "environment": {
         "PGDATA": "/var/lib/postgresql/data/pgdata"
       },
-      "image": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
       "mounts": [
         {
           "mount_path": "/var/lib/postgresql/data",
@@ -159,7 +159,7 @@
     },
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:1c9ae523d44e66407f252d1a0394956ce94d7d94e4a39dffe759d85aad61dcdb",
+    "rollout_digest": "sha256:42e6fe3c882eb87b55ab165e9c4b73e56f1c5ccd7b64f06ee9bb22feaef2a6ca",
     "storage": [
       {
         "claim_name": "data-database-0"
@@ -269,7 +269,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:1c9ae523d44e66407f252d1a0394956ce94d7d94e4a39dffe759d85aad61dcdb"
+                "proofstorm.dev/rollout-digest": "sha256:42e6fe3c882eb87b55ab165e9c4b73e56f1c5ccd7b64f06ee9bb22feaef2a6ca"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -329,7 +329,7 @@
                       }
                     }
                   ],
-                  "image": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [

@@ -3,7 +3,7 @@ use crate::{Error, environment::EnvironmentQuery, lab::Labs};
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::Frame;
 use tokio::sync::{Semaphore, watch};
-type Body = BoxBody<Bytes, Infallible>;
+pub(crate) type Body = BoxBody<Bytes, Infallible>;
 use proofstorm_view::{ObserverStatus, SystemView};
 use std::sync::{Arc, RwLock};
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
@@ -31,6 +31,22 @@ pub async fn serve(labs: Labs, port: u16) -> Result<(), Error> {
 }
 /// Serve an already-bound loopback listener, also used by transport contract tests.
 pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Error> {
+    serve_inner(labs, listener, None).await
+}
+
+pub(crate) async fn serve_managed(
+    labs: Labs,
+    listener: TcpListener,
+    session: Arc<crate::gui::Session>,
+) -> Result<(), Error> {
+    serve_inner(labs, listener, Some(session)).await
+}
+
+async fn serve_inner(
+    labs: Labs,
+    listener: TcpListener,
+    managed: Option<Arc<crate::gui::Session>>,
+) -> Result<(), Error> {
     let address = listener
         .local_addr()
         .map_err(|e| Error::failure(e.to_string(), None))?;
@@ -48,6 +64,7 @@ pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Err
     loop {
         tokio::select! {
             _=tokio::signal::ctrl_c()=>return Ok(()),
+            ()=async { if let Some(session)=&managed { session.shutdown.notified().await; } else { std::future::pending::<()>().await; } }=>return Ok(()),
             accepted=listener.accept(),if tasks.len()<16=> {
                 let (socket,_)=accepted.map_err(|e|Error::failure(e.to_string(),None))?;
                 let labs=labs.clone();
@@ -55,8 +72,29 @@ pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Err
                 let events=events.receiver.clone();
                 let telemetry=telemetry.receiver.clone();
                 let streams=streams.clone();
+                let managed=managed.clone();
                 tasks.spawn(async move {
-                    let service=service_fn(move |request|handle(labs.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),request));
+                    let service=service_fn(move |mut request| {
+                        let (labs,status,events,telemetry,streams,managed)=(labs.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),managed.clone());
+                        async move {
+                            if let Some(session)=&managed {
+                                if let Some(mut response)=crate::gui::transport::route(&mut request,session.clone()).await {
+                                    crate::gui::transport::secure(&mut response);
+                                    return Ok::<_,Infallible>(response);
+                                }
+                                if request.method() == hyper::Method::GET && !request.uri().path().starts_with("/v1/") {
+                                    if let Some(root) = &session.web_dist {
+                                        let mut response = checkout_asset(root, request.uri().path()).await;
+                                        crate::gui::transport::secure(&mut response);
+                                        return Ok(response);
+                                    }
+                                }
+                            }
+                            let mut response=handle(labs,status,events,telemetry,streams,request).await?;
+                            if managed.is_some() { crate::gui::transport::secure(&mut response); }
+                            Ok(response)
+                        }
+                    });
                     let _=http1::Builder::new().timer(TokioTimer::new()).header_read_timeout(Duration::from_secs(10)).keep_alive(false).max_buf_size(8192).serve_connection(TokioIo::new(socket),service).await;
                 });
             },
@@ -172,7 +210,7 @@ async fn handle(
 fn error(status: StatusCode, code: &str) -> Response<Body> {
     json(status, &serde_json::json!({"error":{"code":code}}))
 }
-fn json(status: StatusCode, value: &impl serde::Serialize) -> Response<Body> {
+pub(crate) fn json(status: StatusCode, value: &impl serde::Serialize) -> Response<Body> {
     let bytes = serde_json::to_vec(value)
         .unwrap_or_else(|_| b"{\"error\":{\"code\":\"serialization_failed\"}}".to_vec());
     let mut response = Response::new(Full::new(Bytes::from(bytes)).boxed());
@@ -188,6 +226,64 @@ fn json(status: StatusCode, value: &impl serde::Serialize) -> Response<Body> {
     response.headers_mut().insert(
         "x-content-type-options",
         hyper::header::HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+async fn checkout_asset(root: &std::path::Path, path: &str) -> Response<Body> {
+    let name = if path == "/" {
+        "index.html"
+    } else {
+        path.trim_start_matches('/')
+    };
+    if name.is_empty()
+        || name.starts_with('.')
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    {
+        return error(StatusCode::NOT_FOUND, "not_found");
+    }
+    let mime = match name.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css",
+        _ => return error(StatusCode::NOT_FOUND, "not_found"),
+    };
+    let root = root.to_owned();
+    let name = name.to_owned();
+    let bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+        use std::io::Read;
+        if !std::fs::symlink_metadata(&root)?.is_dir() {
+            return Err(std::io::Error::other("linked web output refused"));
+        }
+        let path = root.join(name);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 {
+            return Err(std::io::Error::other("invalid web artifact"));
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(64 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 64 * 1024 * 1024 {
+            return Err(std::io::Error::other("web artifact too large"));
+        }
+        Ok(bytes)
+    })
+    .await;
+    let Ok(Ok(bytes)) = bytes else {
+        return error(StatusCode::NOT_FOUND, "not_found");
+    };
+    let mut response = Response::new(Full::new(Bytes::from(bytes)).boxed());
+    response.headers_mut().insert(
+        "content-type",
+        hyper::header::HeaderValue::from_static(mime),
+    );
+    response.headers_mut().insert(
+        "cache-control",
+        hyper::header::HeaderValue::from_static("no-store"),
     );
     response
 }
@@ -292,4 +388,55 @@ fn event_stream(
             .insert(name, hyper::header::HeaderValue::from_static(value));
     }
     response
+}
+
+#[cfg(test)]
+mod checkout_asset_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn serves_rebuilt_assets_without_restarting_and_without_caching() {
+        let root = tempfile::tempdir().unwrap();
+        for contents in ["first build", "second build"] {
+            std::fs::write(root.path().join("index.html"), contents).unwrap();
+            let response = checkout_asset(root.path(), "/").await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/html; charset=utf-8"
+            );
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                contents
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_traversal_links_hidden_and_non_asset_files() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("private.json"), "secret").unwrap();
+        std::fs::write(root.path().join(".private.html"), "secret").unwrap();
+        std::os::unix::fs::symlink(
+            root.path().join("private.json"),
+            root.path().join("linked.js"),
+        )
+        .unwrap();
+        for path in [
+            "/../private.html",
+            "/%2e%2e/private.html",
+            "/nested/file.js",
+            "/private.json",
+            "/.private.html",
+            "/linked.js",
+            "/missing.wasm",
+        ] {
+            assert_eq!(
+                checkout_asset(root.path(), path).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+    }
 }

@@ -336,6 +336,7 @@ spec:
                           items:
                             enum:
                             - native_cli
+                            - mint_management_rpc
                             - regtest
                             - persistent_state
                             - bolt11

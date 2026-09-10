@@ -81,9 +81,7 @@ impl Labs {
     ) -> Result<Connection, Error> {
         self.store
             .authorize(&self.workspace, &self.principal, Capability::LabConnect)?;
-        let lab = self
-            .store
-            .lab_handle(&self.workspace, &self.principal, name)?;
+        let lab = self.resolve(name)?;
         if lab.phase != LabHandlePhase::Open {
             return Err(Error::problem(
                 "connection_refused",
@@ -162,8 +160,8 @@ impl Connection {
                 },
                 _=health.tick()=> {
                     self.labs.store.authorize(&self.labs.workspace,&self.labs.principal,Capability::LabConnect)?;
-                    let lab=self.labs.store.lab_handle(&self.labs.workspace,&self.labs.principal,&self.descriptor.lab)?;
-                    if lab.phase!=LabHandlePhase::Open || lab.instance_id!=self.instance.id {return Ok(());}
+                    let lab=self.labs.resolve(&self.descriptor.lab)?;
+                    if lab.phase!=LabHandlePhase::Open || self.labs.resolve_instance(&self.descriptor.lab)?.instance_key!=self.instance.instance_key {return Ok(());}
                     let labs=Api::<proofstorm_kube::ProofstormLab>::namespaced(self.labs.runtime.client.clone(),&self.labs.runtime.control_namespace);
                     let Some(lab)=tokio::time::timeout(Duration::from_secs(5), labs.get_opt(&self.instance.resource_name)).await.map_err(|_| Error::problem("connection_health_timeout", "runtime health check timed out; connection closed"))?? else {return Ok(());};
                     if proofstorm_kube::require_open_lab(&lab).is_err() {return Ok(());}

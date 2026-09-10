@@ -356,7 +356,7 @@ mod tests {
             "id": "chain",
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
-            "config_version": "bitcoin-core/30/v1",
+            "config_version": "bitcoin-core/31/v1",
             "control": "laboratory"
         });
         let error = serde_json::from_value::<ComponentSpec>(missing)
@@ -367,7 +367,7 @@ mod tests {
             "id": "chain",
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
-            "config_version": "bitcoin-core/30/v1",
+            "config_version": "bitcoin-core/31/v1",
             "control": "laboratory",
             "config": {}
         });

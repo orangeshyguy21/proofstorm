@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/cashubtc/cdk",
+  "commit_sha": "d3dec24c784e8fec1fd65f853241c7a2261c7abd",
+  "artifact_url": "https://codeload.github.com/cashubtc/cdk/tar.gz/d3dec24c784e8fec1fd65f853241c7a2261c7abd",
+  "artifact_sha256": "95251896f5696472a5a6708637b56ce728125db321afba9f3f27118414b7b818",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+  "recipe_digest": "sha256:3f2397d3568d7b9f75ab71d35acdcc99a824f13e179cb54ca091e94b8b3b8045",
+  "build_image": "docker.io/library/rust@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce",
+  "transformations": [
+    "Build cdk-mint-cli from the exact daemon release source with its frozen Cargo.lock.",
+    "Retain the upstream daemon and add only the native management client."
+  ]
+}

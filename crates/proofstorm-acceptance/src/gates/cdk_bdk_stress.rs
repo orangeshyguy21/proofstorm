@@ -16,7 +16,7 @@ const INSTANCE: &str = "cdk-bdk-instance";
 const DRAFT: &str = "cdk-bdk";
 const DATABASE: &str = "proofstorm_bdk";
 const MARKER: &str = "bdk-persistent";
-const IMAGE: &str = "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0";
+const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
 const PUBKEY: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const QUOTES: usize = 24;
 
@@ -25,7 +25,7 @@ fn lab_document(postgres_enabled: bool) -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-bdk-stress-lab",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {
                 "id": "mint", "kind": "mint", "implementation": "cdk-bdk", "version": "0.18.0",
                 "config_version": "cdk-mintd-bdk/0.18/v1", "control": "target",
@@ -292,6 +292,11 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     context
         .kubectl
         .rollout_restart(namespace, "deployment/mint")?;
+    // kubectl binds a service forward to one pod; the old tunnel cannot follow
+    // the replacement pod after a rollout.
+    drop(forward);
+    let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
+    http::get_json_retrying(&mut forward, "/v1/info", 30)?;
 
     let mut survived = false;
     for _ in 0..30 {

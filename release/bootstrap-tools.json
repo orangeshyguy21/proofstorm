@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "target": "aarch64-apple-darwin",
+  "tools": [
+    {
+      "name": "k3d",
+      "version": "v5.9.0",
+      "url": "https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-darwin-arm64",
+      "sha256": "fe106541d5d0a3f18debcd4d432a16f8c0ce3e6ddc06f8fbb6f696a122313e00",
+      "executable_sha256": "fe106541d5d0a3f18debcd4d432a16f8c0ce3e6ddc06f8fbb6f696a122313e00",
+      "archive_member": null
+    },
+    {
+      "name": "kubectl",
+      "version": "v1.34.1",
+      "url": "https://dl.k8s.io/release/v1.34.1/bin/darwin/arm64/kubectl",
+      "sha256": "d80e5fa36f2b14005e5bb35d3a72818acb1aea9a081af05340a000e5fbdb2f76",
+      "executable_sha256": "d80e5fa36f2b14005e5bb35d3a72818acb1aea9a081af05340a000e5fbdb2f76",
+      "archive_member": null
+    },
+    {
+      "name": "helm",
+      "version": "v4.2.3",
+      "url": "https://get.helm.sh/helm-v4.2.3-darwin-arm64.tar.gz",
+      "sha256": "048ecf5ad3160f83d918f9fe945238d2132b079640f7b106175331c25f242c64",
+      "executable_sha256": "e8fe1a6caf4091026ad776eb2fe059a2d7a82fc69c22bd08cbcb3689d93e5c0d",
+      "archive_member": "darwin-arm64/helm"
+    }
+  ]
+}

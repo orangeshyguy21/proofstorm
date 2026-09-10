@@ -30,7 +30,7 @@ fn component(
         implementation: implementation.into(),
         version: (implementation == "cocod-wallet").then(|| "0.0.17-dev.44e5101c".into()),
         config_version: match implementation {
-            "bitcoin-core" => "bitcoin-core/30/v1",
+            "bitcoin-core" => "bitcoin-core/31/v1",
             "lnd" => "lnd/0.20/v1",
             "cln" => "cln/26.06/v1",
             "cdk" => "cdk-mintd/0.18/v1",
@@ -1074,6 +1074,62 @@ fn golden_path(name: &str) -> PathBuf {
         .join("tests")
         .join("golden")
         .join(format!("{name}.json"))
+}
+
+#[test]
+fn management_is_authenticated_loopback_with_separate_certificate_projections() {
+    for backend in ["cdk", "cdk-ldk", "cdk-bdk", "nutshell"] {
+        let rendered = render_backend(backend);
+        let resources = &rendered["resources"];
+        let pod = &resources["deployments"][0]["spec"]["template"]["spec"];
+        assert_ne!(pod["hostNetwork"], true);
+        for service in resources["services"].as_array().unwrap() {
+            assert!(
+                service["spec"]["ports"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|p| p["port"] != 8086 && p["targetPort"] != 8086)
+            );
+        }
+        for role in ["client", "server"] {
+            let name = format!("management-{role}");
+            let volume = pod["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["name"] == name)
+                .unwrap();
+            assert_eq!(volume["secret"]["defaultMode"], 288);
+            let keys: Vec<_> = volume["secret"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["key"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                keys,
+                ["ca.pem", &format!("{role}.pem"), &format!("{role}.key")]
+            );
+            let mount = pod["containers"][0]["volumeMounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["name"] == name)
+                .unwrap();
+            assert_eq!(mount["readOnly"], true);
+        }
+        let config = serde_json::to_string(&resources["configMaps"]).unwrap();
+        assert!(config.contains("127.0.0.1"));
+        assert!(config.contains("/management-server/tls"));
+        let probe = pod["containers"][0]["readinessProbe"].to_string();
+        assert!(probe.contains("/management-client"));
+        assert!(
+            !resources["secrets"]
+                .to_string()
+                .contains("BEGIN PRIVATE KEY")
+        );
+    }
 }
 
 fn assert_golden(name: &str, actual: &Value) {

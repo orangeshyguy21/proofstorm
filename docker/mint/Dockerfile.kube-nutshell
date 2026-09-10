@@ -1,0 +1,5 @@
+FROM docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed
+# Expose the installed upstream entrypoint under its native CLI name.
+RUN printf '%s\n' '#!/bin/sh' 'cd /app && exec python3 -c '\''from cashu.mint.management_rpc.cli.cli import cli; cli()'\'' "$@"' \
+    > /usr/local/bin/mint-cli && chmod 755 /usr/local/bin/mint-cli \
+    && mint-cli --help

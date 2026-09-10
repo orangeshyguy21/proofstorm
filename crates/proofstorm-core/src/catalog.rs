@@ -38,6 +38,7 @@ pub enum SupportLifecycle {
 #[serde(rename_all = "snake_case")]
 pub enum CatalogFeature {
     NativeCli,
+    MintManagementRpc,
     Regtest,
     PersistentState,
     Bolt11,
@@ -250,16 +251,16 @@ pub fn default_catalog() -> &'static CatalogResponse {
 fn build_default_catalog() -> CatalogResponse {
     let adapter_version = "0.1.0-alpha.1";
     let backends = default_backend_registry();
-    let entries = vec![
+    let mut entries = vec![
         catalog_entry(
             "bitcoin-core",
             backends,
             ComponentKind::Bitcoin,
             "Bitcoin Core regtest node",
             adapter_version,
-            "30.0",
+            "31.1",
             ReleaseChannel::Stable,
-            "docker.io/polarlightning/bitcoind@sha256:6b15e7efb79995a18441806f509e40316428a901f1cdc5c54cd25b03ac513cb9",
+            "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -277,15 +278,16 @@ fn build_default_catalog() -> CatalogResponse {
             ),
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
-        catalog_entry(
+        catalog_entry_with_lifecycle(
             "lnd",
             backends,
             ComponentKind::Lightning,
             "LND regtest Lightning node",
             adapter_version,
-            "0.20.0-beta",
+            "0.20.4-beta",
             ReleaseChannel::Prerelease,
-            "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+            SupportLifecycle::Supported,
+            "docker.io/lightninglabs/lnd@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -295,7 +297,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &["30.0"],
+                &["31.1"],
             )],
             support_matrix(
                 &[StorageBackend::PersistentVolume],
@@ -314,10 +316,10 @@ fn build_default_catalog() -> CatalogResponse {
             ComponentKind::Lightning,
             "LND regtest Lightning node",
             adapter_version,
-            "0.21.0-beta",
+            "0.21.3-beta",
             ReleaseChannel::Prerelease,
-            SupportLifecycle::Supported,
-            "docker.io/lightninglabs/lnd@sha256:60fca3f409cf3d500db1d15c9965678a4b5a60758ff30863d52b02529c18be8b",
+            SupportLifecycle::Preferred,
+            "docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -327,7 +329,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &["30.0"],
+                &["31.1"],
             )],
             support_matrix(
                 &[StorageBackend::PersistentVolume],
@@ -358,7 +360,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &["30.0"],
+                &["31.1"],
             )],
             support_matrix(
                 &[StorageBackend::PersistentVolume],
@@ -379,7 +381,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+            "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::PersistentState,
@@ -391,7 +393,7 @@ fn build_default_catalog() -> CatalogResponse {
                 dependency(
                     LinkKind::PaymentBackend,
                     "lnd",
-                    &["0.20.0-beta", "0.21.0-beta"],
+                    &["0.20.4-beta", "0.21.3-beta"],
                 ),
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
@@ -406,7 +408,7 @@ fn build_default_catalog() -> CatalogResponse {
                         PaymentMethod::Bolt11,
                         "sat",
                         "lnd",
-                        &["0.20.0-beta", "0.21.0-beta"],
+                        &["0.20.4-beta", "0.21.3-beta"],
                     ),
                     payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
                 ],
@@ -423,7 +425,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/mintd@sha256:2b0e9ff0430710b5c3df93cfaccdea01ffa2efc6d66c50daca4730f0c542d9be",
+            "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -434,7 +436,7 @@ fn build_default_catalog() -> CatalogResponse {
                 CatalogFeature::Postgres,
             ]),
             vec![
-                dependency(LinkKind::ChainBackend, "bitcoin-core", &["30.0"]),
+                dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
             ],
             with_embedded_payment_bindings(
@@ -462,7 +464,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/mintd@sha256:fd938da187fb9fce82627ced6d419e675dbd6db5f0d50dc6930b1f6e18c359f0",
+            "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -472,7 +474,7 @@ fn build_default_catalog() -> CatalogResponse {
                 CatalogFeature::Postgres,
             ]),
             vec![
-                dependency(LinkKind::ChainBackend, "bitcoin-core", &["30.0"]),
+                dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
             ],
             with_embedded_payment_bindings(
@@ -501,7 +503,7 @@ fn build_default_catalog() -> CatalogResponse {
             adapter_version,
             "0.20.3",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+            "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -517,7 +519,7 @@ fn build_default_catalog() -> CatalogResponse {
                 dependency(
                     LinkKind::PaymentBackend,
                     "lnd",
-                    &["0.20.0-beta", "0.21.0-beta"],
+                    &["0.20.4-beta", "0.21.3-beta"],
                 ),
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
@@ -535,7 +537,7 @@ fn build_default_catalog() -> CatalogResponse {
                         PaymentMethod::Bolt11,
                         "sat",
                         "lnd",
-                        &["0.20.0-beta", "0.21.0-beta"],
+                        &["0.20.4-beta", "0.21.3-beta"],
                     ),
                 ],
                 &[
@@ -665,6 +667,26 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Attacker],
         ),
     ];
+    for entry in &mut entries {
+        if matches!(
+            entry.id.as_str(),
+            "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
+        ) {
+            entry.features.insert(CatalogFeature::MintManagementRpc);
+        }
+        let encoded = match entry.id.as_str() {
+            "bitcoin-core" => include_str!("../../../docker/bitcoin/bitcoin-31.1-provenance.json"),
+            "cdk" | "cdk-bdk" => {
+                include_str!("../../../docker/mint/cdk-management-provenance.json")
+            }
+            "cdk-ldk" => include_str!("../../../docker/mint/cdk-ldk-management-provenance.json"),
+            _ => continue,
+        };
+        let provenance: BuildProvenance =
+            serde_json::from_str(encoded).expect("pinned mint management build provenance");
+        entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
+        entry.build_provenance = Some(provenance);
+    }
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
 }
 
@@ -1058,7 +1080,7 @@ fn catalog_entry_with_lifecycle(
         compatible_dependencies,
         support_matrix,
         runtime_endpoints: runtime_endpoints.clone(),
-        image: image.into(),
+        image: mirror_image(image),
         source_digest: crate::digest_json(&(
             id,
             version,
@@ -1072,16 +1094,32 @@ fn catalog_entry_with_lifecycle(
     }
 }
 
+/// Preserve the upstream repository and digest while serving published images
+/// from the local registry. Locally packaged images already name that registry.
+fn mirror_image(image: &str) -> String {
+    if image.starts_with("docker.io/") || image.starts_with("quay.io/") {
+        format!("proofstorm-registry.localhost:5000/upstream/{image}")
+    } else {
+        image.into()
+    }
+}
+
 fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
+    let amd64 = crate::wallet_builds::LINUX_AMD64;
+    let (image, encoded) = crate::wallet_builds::cdk(amd64);
     let mut entry = catalog_entry(
         "cdk-cli-wallet",
         backends,
         ComponentKind::Wallet,
-        "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 laboratory build",
+        if amd64 {
+            "CDK CLI 0.18.0 persistent wallet; Linux amd64 laboratory build"
+        } else {
+            "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 laboratory build"
+        },
         adapter_version,
         "0.18.0",
         ReleaseChannel::Stable,
-        "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+        image,
         BTreeSet::from([
             CatalogFeature::NativeCli,
             CatalogFeature::PersistentState,
@@ -1101,25 +1139,29 @@ fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &st
         vec![ControlClass::Laboratory, ControlClass::Attacker],
     );
     entry.protocol_action_adapter_version = Some("cdk-cli/0.18/observations/v1".into());
-    let provenance: BuildProvenance = serde_json::from_str(include_str!(
-        "../../../docker/wallet/cdk-cli-0.18.0-provenance.json"
-    ))
-    .expect("pinned wallet build provenance");
+    let provenance: BuildProvenance =
+        serde_json::from_str(encoded).expect("pinned wallet build provenance");
     entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
     entry.build_provenance = Some(provenance);
     entry
 }
 
 fn cocod_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
+    let amd64 = crate::wallet_builds::LINUX_AMD64;
+    let (image, encoded) = crate::wallet_builds::cocod(amd64);
     let mut entry = catalog_entry(
         "cocod-wallet",
         backends,
         ComponentKind::Wallet,
-        "Unreleased cocod daemon from Coco 44e5101c; experimental Linux arm64 laboratory build",
+        if amd64 {
+            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux amd64 laboratory build"
+        } else {
+            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux arm64 laboratory build"
+        },
         adapter_version,
         "0.0.17-dev.44e5101c",
         ReleaseChannel::Prerelease,
-        "proofstorm-registry.localhost:5000/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+        image,
         BTreeSet::from([
             CatalogFeature::NativeCli,
             CatalogFeature::PersistentState,
@@ -1140,10 +1182,8 @@ fn cocod_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str)
     );
     entry.support_lifecycle = SupportLifecycle::Experimental;
     entry.protocol_action_adapter_version = Some("cocod/44e5101c/observations/v1".into());
-    let provenance: BuildProvenance = serde_json::from_str(include_str!(
-        "../../../docker/wallet/cocod-44e5101c-provenance.json"
-    ))
-    .expect("pinned wallet build provenance");
+    let provenance: BuildProvenance =
+        serde_json::from_str(encoded).expect("pinned wallet build provenance");
     entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
     entry.build_provenance = Some(provenance);
     entry
@@ -1167,6 +1207,8 @@ fn runtime_endpoint(
             [
                 "component_exec_live",
                 "component_forensics",
+                "component_start",
+                "component_stop",
                 "component_restart",
             ]
             .into_iter()
@@ -1179,7 +1221,16 @@ fn runtime_endpoint(
         controls,
         limitations: limitations
             .iter()
-            .map(|limitation| (*limitation).into())
+            .map(|limitation| {
+                if crate::wallet_builds::LINUX_AMD64 {
+                    limitation.replace(
+                        "Initial image is Linux arm64 only.",
+                        "Packaged image is Linux amd64.",
+                    )
+                } else {
+                    (*limitation).into()
+                }
+            })
             .collect(),
     }
 }
@@ -1193,6 +1244,8 @@ fn runtime_endpoint(
 )]
 fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint> {
     const OBSERVE: &[&str] = &["component_logs", "reachability_oracle"];
+    const CDK_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info; use --help for native commands. Client certificates are mounted in /management-client/tls; never copy their contents into arguments or public output. Invoke through component_exec_live, not forensics. Durable RPC changes survive ordinary restarts; a changed authored lab configuration is applied on the next rollout. Mint quote payment override is disabled by the upstream server policy. CLI success is not proof of the intended state: verify the result independently. Management images support Linux amd64 and arm64.";
+    const NUTSHELL_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info; use --help for native commands. Invoke through component_exec_live, not forensics. Never copy credentials into arguments or public output. Nutshell 0.20.3 can print RPC errors while exiting zero: verify state independently. Metadata/settings mutations can be process-local and reset from authored configuration on restart; persistent keyset/quote changes follow upstream database semantics. Management images support Linux amd64 and arm64.";
     match implementation {
         "bitcoin-core" => vec![runtime_endpoint(
             "component",
@@ -1253,7 +1306,11 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                 "wallet_invoice",
                 "wallet_pay",
             ],
-            &[],
+            &[if implementation == "cdk" {
+                CDK_MANAGEMENT
+            } else {
+                NUTSHELL_MANAGEMENT
+            }],
         )],
         "cdk-ldk" => vec![
             runtime_endpoint(
@@ -1269,6 +1326,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
                     "wallet_pay",
                 ],
                 &[
+                    CDK_MANAGEMENT,
                     "wallet_fund is unavailable because the installed embedded-LDK driver cannot provision an inbound Lightning route",
                 ],
             ),
@@ -1282,7 +1340,7 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
             ),
         ],
         "cdk-bdk" => vec![
-            runtime_endpoint("component", "mint", OBSERVE, &[]),
+            runtime_endpoint("component", "mint", OBSERVE, &[CDK_MANAGEMENT]),
             runtime_endpoint(
                 "bdk",
                 "onchain",
@@ -1517,6 +1575,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bitcoin_release_provenance_and_publisher_mirrors_are_pinned() {
+        use sha2::{Digest, Sha256};
+        let catalog = default_catalog();
+        let bitcoin = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "bitcoin-core")
+            .unwrap();
+        let provenance = bitcoin
+            .build_provenance
+            .as_ref()
+            .expect("Bitcoin release provenance");
+        assert_eq!(bitcoin.version, "31.1");
+        assert_eq!(bitcoin.config_version, "bitcoin-core/31/v1");
+        assert_eq!(provenance.platform, "linux/amd64,linux/arm64");
+        assert_eq!(
+            provenance.recipe_digest,
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(include_bytes!("../../../docker/bitcoin/Dockerfile"))
+            )
+        );
+        for entry in &catalog.entries {
+            assert!(
+                entry
+                    .image
+                    .starts_with("proofstorm-registry.localhost:5000/")
+            );
+            assert!(is_sha256_image(&entry.image));
+        }
+        assert_eq!(
+            mirror_image("docker.io/project/image@sha256:exact"),
+            "proofstorm-registry.localhost:5000/upstream/docker.io/project/image@sha256:exact"
+        );
+        assert_eq!(mirror_image(&bitcoin.image), bitcoin.image);
+    }
+
+    #[test]
+    fn management_clients_have_matching_build_provenance() {
+        use sha2::{Digest, Sha256};
+        let recipe = include_bytes!("../../../docker/mint/Dockerfile.kube-cdk");
+        for id in ["cdk", "cdk-ldk", "cdk-bdk"] {
+            let entry = default_catalog()
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            let provenance = entry.build_provenance.as_ref().unwrap();
+            assert_eq!(
+                provenance.recipe_digest,
+                format!("sha256:{:x}", Sha256::digest(recipe))
+            );
+            assert!(entry.features.contains(&CatalogFeature::MintManagementRpc));
+            assert_eq!(
+                provenance.commit_sha,
+                "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
+            );
+        }
+    }
+
+    #[test]
     fn packaged_wallet_provenance_and_observation_surface_are_explicit() {
         use sha2::{Digest, Sha256};
         let entry = default_catalog()
@@ -1534,7 +1653,14 @@ mod tests {
             provenance.commit_sha,
             "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
         );
-        assert_eq!(provenance.platform, "linux/arm64");
+        assert_eq!(
+            provenance.platform,
+            if crate::wallet_builds::LINUX_AMD64 {
+                "linux/amd64"
+            } else {
+                "linux/arm64"
+            }
+        );
         let controls = &entry.runtime_endpoints[0].controls;
         assert!(controls.contains("wallet_balance"));
         assert!(controls.contains("component_exec_live"));
@@ -1597,11 +1723,11 @@ mod tests {
             .iter()
             .find(|support| support.implementation == "lnd")
             .expect("LND support summary");
-        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.0-beta"));
-        assert_eq!(lnd.preferred_version.as_deref(), Some("0.20.0-beta"));
+        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.4-beta"));
+        assert_eq!(lnd.preferred_version.as_deref(), Some("0.21.3-beta"));
         assert_eq!(
             lnd.supported_versions,
-            BTreeSet::from(["0.20.0-beta".into(), "0.21.0-beta".into()])
+            BTreeSet::from(["0.20.4-beta".into(), "0.21.3-beta".into()])
         );
         assert!(catalog.implementations.iter().all(|support| {
             support.implementation == "cocod-wallet"

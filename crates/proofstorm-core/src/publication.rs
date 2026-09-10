@@ -302,7 +302,7 @@ mod tests {
 
     fn test_config_version(implementation: &str) -> &'static str {
         match implementation {
-            "bitcoin-core" => "bitcoin-core/30/v1",
+            "bitcoin-core" => "bitcoin-core/31/v1",
             "lnd" => "lnd/0.20/v1",
             "cdk" => "cdk-mintd/0.18/v1",
             "nutshell" => "nutshell-mint/0.20/v1",
@@ -484,7 +484,7 @@ mod tests {
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),
                 version: None,
-                config_version: "bitcoin-core/30/v1".into(),
+                config_version: "bitcoin-core/31/v1".into(),
                 control: ControlClass::Laboratory,
                 config: BTreeMap::new(),
             }],
@@ -667,7 +667,7 @@ mod tests {
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
             version: None,
-            config_version: "bitcoin-core/30/v1".into(),
+            config_version: "bitcoin-core/31/v1".into(),
             control: ControlClass::Laboratory,
             config,
         };
@@ -728,7 +728,7 @@ mod tests {
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),
                 version: None,
-                config_version: "bitcoin-core/30/v1".into(),
+                config_version: "bitcoin-core/31/v1".into(),
                 control: ControlClass::Laboratory,
                 config: BTreeMap::new(),
             }],
@@ -772,7 +772,7 @@ mod tests {
         let error = resolve_lock(&lab, default_catalog()).expect_err("unsupported config");
         assert!(error.contains("configuration version"));
 
-        lab.components[0].config_version = "bitcoin-core/30/v1".into();
+        lab.components[0].config_version = "bitcoin-core/31/v1".into();
         resolve_lock(&lab, default_catalog()).expect("supported config");
     }
 
@@ -794,13 +794,13 @@ mod tests {
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
             version: None,
-            config_version: "bitcoin-core/30/v1".into(),
+            config_version: "bitcoin-core/31/v1".into(),
             control: ControlClass::Laboratory,
             config: BTreeMap::new(),
         };
 
         let selected = validate_catalog_component(&component, &catalog).expect("preferred entry");
-        assert_eq!(selected.version, "30.0");
+        assert_eq!(selected.version, "31.1");
 
         component.version = Some("29.1".into());
         component.config_version = "bitcoin-core/29/v1".into();
@@ -818,7 +818,7 @@ mod tests {
             .expect("older entry")
             .support_lifecycle = SupportLifecycle::Preferred;
         component.version = None;
-        component.config_version = "bitcoin-core/30/v1".into();
+        component.config_version = "bitcoin-core/31/v1".into();
         let error = validate_catalog_component(&component, &catalog).expect_err("ambiguous");
         assert!(error.contains("exactly one is required"));
     }
@@ -833,7 +833,7 @@ mod tests {
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),
                 version: None,
-                config_version: "bitcoin-core/30/v1".into(),
+                config_version: "bitcoin-core/31/v1".into(),
                 control: ControlClass::Laboratory,
                 config: BTreeMap::new(),
             }],
@@ -842,8 +842,8 @@ mod tests {
         };
         let lock = resolve_lock(&lab, default_catalog()).expect("lock");
         let entry = &lock.entries[0];
-        assert_eq!(entry.version, "30.0");
-        assert_eq!(entry.config_version, "bitcoin-core/30/v1");
+        assert_eq!(entry.version, "31.1");
+        assert_eq!(entry.config_version, "bitcoin-core/31/v1");
         assert!(entry.config_schema_digest.starts_with("sha256:"));
         assert!(entry.protocol_action_adapter_version.is_some());
         assert!(entry.features.contains(&CatalogFeature::Regtest));

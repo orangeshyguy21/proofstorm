@@ -7,9 +7,7 @@ use crate::ProofstormCandidateBuild;
 pub const CANDIDATE_BUILD_LABEL: &str = "proofstorm.dev/candidate-build";
 pub const CANDIDATE_CANCEL_ANNOTATION: &str = "proofstorm.dev/cancel-token";
 
-const GIT_IMAGE: &str =
-    "docker.io/alpine/git@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26";
-const BUILDKIT_IMAGE: &str = "docker.io/moby/buildkit@sha256:a02f6571999693089dc928e9bbb64836c21703b214195d8637c011f1a7025ef6";
+use crate::images::{BUILDKIT_IMAGE, GIT_IMAGE};
 
 #[derive(Debug, Error)]
 pub enum CandidateBuildRenderError {
@@ -67,9 +65,22 @@ pub fn render_candidate_build_job(
         // unused package from the resolved lock without changing candidate
         // source code or the runtime backend under test.
         "nutshell" | "nutshell-wallet" => {
-            "sed -i '/RUN poetry install --without dev --no-root/i RUN poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.17.0' /workspace/Dockerfile"
+            let mut script = "sed -i '/RUN poetry install --without dev --no-root/i RUN poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.17.0' /workspace/Dockerfile".to_owned();
+            if build.spec.implementation == "nutshell" {
+                script.push_str("\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n");
+                script.push_str(include_str!(
+                    "../drivers/candidate_nutshell_management.Dockerfile"
+                ));
+                script.push_str("\nPROOFSTORM_MANAGEMENT_EOF\n");
+            }
+            script
         }
-        _ => "true",
+        "cdk" | "cdk-ldk" | "cdk-bdk" => format!(
+            "cat > /tmp/management-prefix <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\ncat /tmp/management-prefix /workspace/{dockerfile} > /tmp/management-dockerfile\ncat >> /tmp/management-dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\nCOPY --from=proofstorm-management-client /src/target/release/cdk-mint-cli /usr/local/bin/cdk-mint-cli\nRUN cdk-mint-cli --version\nPROOFSTORM_MANAGEMENT_EOF\nmv /tmp/management-dockerfile /workspace/{dockerfile}",
+            include_str!("../drivers/candidate_cdk_management.Dockerfile"),
+            dockerfile = build.spec.dockerfile,
+        ),
+        _ => "true".to_owned(),
     };
     let fetch = format!(
         "git init /workspace && cd /workspace && git remote add origin '{}' && git fetch --depth=1 origin '{}' && git checkout --detach FETCH_HEAD && test \"$(git rev-parse HEAD)\" = '{}' && {prepare}",
@@ -208,5 +219,17 @@ mod tests {
         assert!(encoded.contains("[[:space:]]*:[[:space:]]*"));
         assert!(encoded.contains("breez-sdk-spark==0.17.0"));
         assert!(!encoded.contains(&build.spec.pull_request_url));
+        assert!(encoded.contains("mint-cli --help"));
+        for implementation in ["cdk", "cdk-ldk", "cdk-bdk"] {
+            build.spec.implementation = implementation.into();
+            let job = render_candidate_build_job(&build).expect("CDK candidate");
+            let encoded = serde_json::to_string(&job).unwrap();
+            assert!(encoded.contains("cargo build --locked --release --bin cdk-mint-cli"));
+            assert!(encoded.contains("COPY --from=proofstorm-management-client"));
+            assert!(
+                !encoded.contains("releases/download"),
+                "candidate client must use candidate source"
+            );
+        }
     }
 }

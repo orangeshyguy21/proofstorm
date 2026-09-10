@@ -1,0 +1,54 @@
+{
+  "anonymous_verified": [
+    {
+      "arm64_blobs_accessible": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "arm64_blobs_accessible": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+      "platforms": [
+        "linux/arm64"
+      ]
+    },
+    {
+      "arm64_blobs_accessible": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "arm64_blobs_accessible": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "arm64_blobs_accessible": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+      "platforms": [
+        "linux/arm64"
+      ]
+    },
+    {
+      "arm64_blobs_accessible": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    }
+  ],
+  "namespace": "ghcr.io/orangeshyguy21/proofstorm",
+  "needs_public_visibility": [],
+  "verified_at": "2026-09-08 23:00:21 UTC",
+  "verification_scope": "Digest-checked manifests/configs and anonymous HEAD access to Linux arm64 layers; not a clean-machine full pull or runtime test."
+}

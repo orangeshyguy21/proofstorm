@@ -20,10 +20,35 @@ pub fn provide_clock() {
     });
     let _timer = StoredValue::new_local(timer);
 }
+#[derive(Clone, Copy)]
+struct ObservationConnection {
+    connected: RwSignal<bool>,
+    failed: RwSignal<bool>,
+}
+pub fn provide_connection(connected: RwSignal<bool>, failed: RwSignal<bool>) {
+    provide_context(ObservationConnection { connected, failed });
+}
+pub fn observation_status(unix: i64, failed: bool, max_age: i64) -> crate::model::Freshness {
+    let connection = expect_context::<ObservationConnection>();
+    crate::model::observation_freshness(
+        unix,
+        now(),
+        failed || connection.failed.get(),
+        connection.connected.get(),
+        max_age,
+    )
+}
 #[component]
-pub fn UpdatedAgo(unix: i64, #[prop(default = "Updated")] label: &'static str) -> impl IntoView {
-    let clock = expect_context::<ObservationClock>();
-    view! {<span>{move || if unix > 0 {
-        format!("{label} {}", crate::model::elapsed_time(unix, clock.0.get()))
-    } else { "Update time unavailable".into() }}</span>}
+pub fn FreshnessStatus(
+    #[prop(into)] unix: Signal<i64>,
+    #[prop(into, default = false.into())] failed: Signal<bool>,
+    #[prop(default = crate::model::OBSERVATION_MAX_AGE)] max_age: i64,
+) -> impl IntoView {
+    // The clock still detects stalled updates, but the DOM only changes when
+    // the status changes, never once per second as a relative timestamp did.
+    let status = Memo::new(move |_| observation_status(unix.get(), failed.get(), max_age));
+    view! {<span class=move ||format!("freshness-status {}",status.get().class()) role="status"><i aria-hidden="true"></i>{move ||status.get().label()}</span>}
+}
+pub fn now() -> i64 {
+    expect_context::<ObservationClock>().0.get()
 }

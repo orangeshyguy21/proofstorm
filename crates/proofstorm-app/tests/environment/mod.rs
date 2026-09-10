@@ -561,6 +561,35 @@ async fn stale_generation_keeps_unchanged_components_ready_but_rejects_wrong_ide
         ObservationState::Stale
     ));
     assert_eq!(view.labs.items[0].components.items[0].ready, Some(true));
+    let layout_id = view.labs.items[0].layout_id.clone();
+    assert!(
+        layout_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("local:"))
+    );
+    assert!(
+        view.labs.items[0].components.items[0]
+            .details
+            .as_ref()
+            .unwrap()
+            .observed_version
+            .is_some()
+    );
+    cluster.lock().unwrap().objects.get_mut(&path).unwrap()["status"]["components"][0]["observed_rollout_digest"] =
+        json!("old-rollout");
+    let changed = labs
+        .environment(&EnvironmentQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(changed.labs.items[0].layout_id, layout_id);
+    assert_eq!(
+        changed.labs.items[0].components.items[0]
+            .details
+            .as_ref()
+            .unwrap()
+            .observed_version,
+        None
+    );
     assert_eq!(
         view.labs.items[0].runtime.phase,
         Some(proofstorm_core::InstancePhase::Pending)

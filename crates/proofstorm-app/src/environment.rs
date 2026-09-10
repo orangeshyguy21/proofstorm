@@ -93,7 +93,7 @@ impl Labs {
                 resource_usage:"not collected".into(),protocol_traffic:"not collected".into(),attached_clients:"not tracked; advertised endpoints do not imply active tunnels or clients".into(),
             },
         };
-        bound_page(&mut view)?;
+        bound_page_bytes(&mut view, 24 * 1024)?;
         Ok(view)
     }
 
@@ -176,6 +176,7 @@ impl Labs {
             })
             .collect();
         Ok(EnvironmentLab {
+            layout_id: instance.as_ref().map(layout_identity),
             desired_generation: instance.as_ref().map(|i| i.generation),
             last_converged_revision: resource
                 .as_ref()
@@ -311,6 +312,7 @@ impl Labs {
 }
 fn unreadable_lab(id: String, handle: Option<proofstorm_store::LabHandle>) -> EnvironmentLab {
     EnvironmentLab {
+        layout_id: None,
         desired_generation: None,
         last_converged_revision: None,
         id,
@@ -378,12 +380,16 @@ fn shorten<T>(page: &mut Page<T>, id: impl Fn(&T) -> &str) -> bool {
     page.next_cursor = page.items.last().map(|item| id(item).to_owned());
     true
 }
-/// Bound the common payload below MCP's envelope budget, with explicit continuation.
-fn bound_page(view: &mut EnvironmentView) -> Result<(), Error> {
+/// Bound a page with explicit continuation, preserving the shared read model.
+/// Transports that serialize the page twice can reserve a smaller payload budget.
+///
+/// # Errors
+/// Returns an error if even a single item cannot fit; never substitutes an empty page.
+pub fn bound_page_bytes(view: &mut EnvironmentView, maximum_bytes: usize) -> Result<(), Error> {
     while serde_json::to_vec(&view)
         .map_err(|_| Error::failure("environment serialization failed", None))?
         .len()
-        > 24 * 1024
+        > maximum_bytes
     {
         if shorten(&mut view.labs, |lab| &lab.id) {
             continue;
@@ -412,62 +418,67 @@ fn topology(
     current: bool,
     endpoints: &[Endpoint],
 ) -> (Vec<ComponentView>, Vec<LinkView>) {
-    let components: Vec<ComponentView> = revision
-        .map(|r| {
-            r.lab
-                .components
-                .iter()
-                .map(|c| {
-                    let status = resource
-                        .as_ref()
-                        .and_then(|r| r.status.as_ref())
-                        .and_then(|s| {
-                            s.components.iter().find(|s| {
-                                s.id == c.id
-                                    && r.lock.entries.iter().any(|e| {
-                                        e.component_id == c.id
-                                            && e.rollout_digest == s.observed_rollout_digest
+    let components: Vec<ComponentView> =
+        revision
+            .map(|r| {
+                r.lab
+                    .components
+                    .iter()
+                    .map(|c| {
+                        let status =
+                            resource
+                                .as_ref()
+                                .and_then(|r| r.status.as_ref())
+                                .and_then(|s| {
+                                    s.components.iter().find(|s| {
+                                        s.id == c.id
+                                            && r.lock.entries.iter().any(|e| {
+                                                e.component_id == c.id
+                                                    && e.rollout_digest == s.observed_rollout_digest
+                                            })
                                     })
-                            })
-                        });
-                    ComponentView {
-                        id: c.id.clone(),
-                        kind: c.kind,
-                        implementation: c.implementation.clone(),
-                        version: c.version.clone(),
-                        ready: status
-                            .filter(|s| {
-                                current
-                                    || r.lock.entries.iter().any(|e| {
-                                        e.component_id == c.id
-                                            && e.rollout_digest == s.observed_rollout_digest
-                                    })
-                            })
-                            .map(|s| s.ready),
-                        conditions: status
-                            .map(|s| {
-                                s.conditions
-                                    .iter()
-                                    .map(|c| ConditionView {
-                                        message: c.message.clone(),
-                                        condition_type: c.condition_type,
-                                        state: c.state,
-                                        reason: c.reason,
-                                        last_transition_unix: c.last_transition_unix,
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
-                        endpoints: endpoints
-                            .iter()
-                            .filter(|e| e.component == c.id)
-                            .cloned()
-                            .collect(),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+                                });
+                        ComponentView {
+                            details: r.lock.entries.iter().find(|e| e.component_id == c.id).map(
+                                |entry| component_details(entry, status.is_some_and(|s| s.ready)),
+                            ),
+                            id: c.id.clone(),
+                            kind: c.kind,
+                            implementation: c.implementation.clone(),
+                            version: c.version.clone(),
+                            ready: status
+                                .filter(|s| {
+                                    current
+                                        || r.lock.entries.iter().any(|e| {
+                                            e.component_id == c.id
+                                                && e.rollout_digest == s.observed_rollout_digest
+                                        })
+                                })
+                                .map(|s| s.ready),
+                            conditions: status
+                                .map(|s| {
+                                    s.conditions
+                                        .iter()
+                                        .map(|c| ConditionView {
+                                            message: c.message.clone(),
+                                            condition_type: c.condition_type,
+                                            state: c.state,
+                                            reason: c.reason,
+                                            last_transition_unix: c.last_transition_unix,
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            endpoints: endpoints
+                                .iter()
+                                .filter(|e| e.component == c.id)
+                                .cloned()
+                                .collect(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
     let links: Vec<LinkView> = revision
         .map(|r| {
             r.lab
@@ -498,5 +509,113 @@ fn empty_runtime(state: ObservationState, error: Option<&str>) -> RuntimeObserva
         observed_generation: None,
         phase: None,
         error: error.map(str::to_owned),
+    }
+}
+
+fn component_details(entry: &proofstorm_core::LockEntry, observed: bool) -> ComponentDetails {
+    let embedded = proofstorm_core::default_catalog()
+        .entries
+        .iter()
+        .find(|catalog| catalog.id == entry.catalog_id)
+        .map(|catalog| {
+            catalog
+                .runtime_endpoints
+                .iter()
+                .filter(|endpoint| endpoint.id != "component")
+                .map(|endpoint| {
+                    let (name, kind) = match endpoint.id.as_str() {
+                        "ldk-node" => (
+                            "LDK Node".to_owned(),
+                            proofstorm_core::ComponentKind::Lightning,
+                        ),
+                        "bdk" => (
+                            "BDK wallet".to_owned(),
+                            proofstorm_core::ComponentKind::Wallet,
+                        ),
+                        _ => (endpoint.id.clone(), proofstorm_core::ComponentKind::Proxy),
+                    };
+                    EmbeddedResourceView {
+                        id: endpoint.id.clone(),
+                        name,
+                        kind,
+                        version: None,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ComponentDetails {
+        resolved_version: entry.version.clone(),
+        observed_version: observed.then(|| entry.version.clone()),
+        image: entry.image.clone(),
+        adapter_version: entry.adapter_version.clone(),
+        source_commit: entry
+            .source
+            .as_ref()
+            .map(|s| s.commit_sha.clone())
+            .or_else(|| {
+                entry
+                    .build_provenance
+                    .as_ref()
+                    .map(|p| p.commit_sha.clone())
+            }),
+        embedded,
+    }
+}
+
+fn layout_identity(instance: &proofstorm_core::LabInstance) -> String {
+    format!("{}:{}", instance.workspace_id, instance.instance_key)
+}
+
+#[cfg(test)]
+mod canvas_tests {
+    use super::*;
+    use proofstorm_core::{ComponentKind, LockEntry};
+
+    fn lock(catalog_id: &str) -> LockEntry {
+        serde_json::from_value(serde_json::json!({
+            "component_id":"mint", "catalog_id":catalog_id,
+            "adapter_version":"adapter-1", "version":"0.18.0",
+            "config_version":"test/v1", "config_schema_digest":"schema",
+            "features":[], "compatible_dependencies":[],
+            "effective_config_digest":"config", "rollout_digest":"rollout",
+            "image":"mint@sha256:123", "source_digest":"source"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn embedded_versions_never_inherit_parent_version() {
+        for (catalog, id, kind) in [
+            ("cdk-ldk", "ldk-node", ComponentKind::Lightning),
+            ("cdk-bdk", "bdk", ComponentKind::Wallet),
+        ] {
+            let details = component_details(&lock(catalog), true);
+            assert_eq!(details.resolved_version, "0.18.0");
+            assert_eq!(details.observed_version.as_deref(), Some("0.18.0"));
+            assert_eq!(details.embedded.len(), 1);
+            assert_eq!(details.embedded[0].id, id);
+            assert_eq!(details.embedded[0].kind, kind);
+            assert_eq!(details.embedded[0].version, None);
+        }
+        assert_eq!(
+            component_details(&lock("cdk-bdk"), false).observed_version,
+            None
+        );
+        assert!(component_details(&lock("cdk"), true).embedded.is_empty());
+    }
+
+    #[test]
+    fn identity_providers_are_projected_without_runtime_observations() {
+        let revision = serde_json::from_value(serde_json::json!({
+            "workspace_id":"test", "digest":"revision",
+            "lab":{"api_version":"proofstorm/v1alpha1", "name":"test", "links":[],
+                "components":[{"id":"identity", "kind":"identity_provider", "implementation":"keycloak", "config_version":"test/v1", "control":"laboratory", "config":{}}]},
+            "lock":{"api_version":"proofstorm/lock/v2alpha1", "digest":"lock", "entries":[]}
+        })).unwrap();
+        let (components, _) = topology(Some(&revision), None, false, &[]);
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0].kind, ComponentKind::IdentityProvider);
+        assert_eq!(components[0].ready, None);
     }
 }

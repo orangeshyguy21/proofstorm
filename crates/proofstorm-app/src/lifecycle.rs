@@ -45,6 +45,24 @@ fn mismatch() -> Error {
     )
 }
 
+/// Check the cluster binding before a lifecycle write revokes authority or deletes anything.
+pub(crate) async fn validate_runtime(
+    runtime: &Runtime,
+    store: &Store,
+    instance: &LabInstance,
+) -> Result<(), Error> {
+    let current = identity(runtime).await?;
+    if store.runtime_binding(instance)?.is_some_and(|binding| {
+        binding.source != current.source || binding.cluster_uid != current.cluster_uid
+    }) {
+        return Err(Error::problem(
+            "lab_cluster_mismatch",
+            "This lab belongs to another cluster; select its context before changing it",
+        ));
+    }
+    Ok(())
+}
+
 /// Caller holds the lifecycle guard across reconciliation and subsequent creation.
 /// Returns true when an old instance was purged. A never-materialized intent is retained.
 pub async fn reconcile_name(

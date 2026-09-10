@@ -34,8 +34,8 @@ fn lab_document() -> Value {
                 "id": "chain",
                 "kind": "bitcoin",
                 "implementation": "bitcoin-core",
-                "version": "30.0",
-                "config_version": "bitcoin-core/30/v1",
+                "version": "31.1",
+                "config_version": "bitcoin-core/31/v1",
                 "control": "laboratory",
                 "config": {"txindex": true, "fallback_fee": 0.0002}
             }

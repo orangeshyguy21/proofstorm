@@ -3,12 +3,12 @@
     {
       "id": "chain",
       "implementation": "bitcoin-core",
-      "version": "30.0"
+      "version": "31.1"
     },
     {
       "id": "lightning",
       "implementation": "lnd",
-      "version": "0.20.0-beta"
+      "version": "0.21.3-beta"
     },
     {
       "id": "wallet",

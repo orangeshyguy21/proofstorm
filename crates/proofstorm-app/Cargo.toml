@@ -28,13 +28,16 @@ proofstorm-store = { path = "../proofstorm-store" }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
+rusqlite.workspace = true
+tempfile = "3.20"
+toml_edit = { version = "=0.22.27", features = ["serde"] }
+rmcp = { workspace = true, features = ["client"] }
+reqwest.workspace = true
 
 [dev-dependencies]
-rusqlite.workspace = true
-reqwest.workspace = true
-tempfile = "3.20"
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 

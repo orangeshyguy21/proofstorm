@@ -11,6 +11,25 @@
         "cancelled"
       ],
       "type": "string"
+    },
+    "CatalogFeature": {
+      "enum": [
+        "native_cli",
+        "mint_management_rpc",
+        "regtest",
+        "persistent_state",
+        "bolt11",
+        "bolt12",
+        "onchain",
+        "clear_auth",
+        "blind_auth",
+        "sqlite",
+        "postgres",
+        "redis_cache",
+        "oidc_provider",
+        "wallet_operations"
+      ],
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -25,6 +44,14 @@
     },
     "base_version": {
       "type": "string"
+    },
+    "build_features": {
+      "description": "Packaging guarantees recorded at admission; old builds inherit none.",
+      "items": {
+        "$ref": "#/$defs/CatalogFeature"
+      },
+      "type": "array",
+      "uniqueItems": true
     },
     "commit_sha": {
       "type": [

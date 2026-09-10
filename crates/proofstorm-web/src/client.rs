@@ -19,6 +19,7 @@ async fn get<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
             .as_ref()
             .and_then(|body| body["error"]["code"].as_str());
         return Err(match (status, code) {
+            (401, _) => "GUI session expired. Run proofstorm gui again to reopen it.".into(),
             (403, _) => "Access denied. Check the server's workspace permissions.".into(),
             (_, Some("store_failure")) => {
                 "The server could not read the workspace database. Check the server terminal."

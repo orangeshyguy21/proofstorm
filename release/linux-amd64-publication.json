@@ -1,0 +1,83 @@
+{
+  "controller_build": {
+    "format_version": 1,
+    "local_image_id": "sha256:37be6628b9d74a5de9299ca1879a4136221952bbda2e3790f05b09408013814a",
+    "metadata": {
+      "format_version": 1,
+      "runtime_contract_sha256": "6a4e0adb25a0b4abf42f23e21e4fef90582e0499a9d9faab8b6f0703d1993dd0",
+      "source_sha256": "b3bb962fb6253d819c12c1e778c9fc4ded25ce130e85406e7b6304a9c899069a",
+      "version": "0.1.0-alpha.1"
+    },
+    "platform": "linux/amd64",
+    "release_ready": false,
+    "source": {
+      "dirty": true,
+      "revision": "9c75d6893f891bc4636896068412a03804b28636",
+      "sha256": "b3bb962fb6253d819c12c1e778c9fc4ded25ce130e85406e7b6304a9c899069a"
+    },
+    "tag": "ghcr.io/orangeshyguy21/proofstorm/proofstormd:development-b74c65b0a93140c6b2901a696b0187b2",
+    "tested_host_bundle_sha256": "98dc313436447567350cf516f9046fbed0bcec9aecf8e2a80c2555795189160e",
+    "verification": {
+      "cluster_reconciliation": false,
+      "helper_startup": true,
+      "host_contract_match": true,
+      "non_root": true,
+      "offline_metadata": true
+    }
+  },
+  "format_version": 1,
+  "images": [
+    {
+      "anonymous_verified": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:37be6628b9d74a5de9299ca1879a4136221952bbda2e3790f05b09408013814a",
+      "local_image_id": "sha256:37be6628b9d74a5de9299ca1879a4136221952bbda2e3790f05b09408013814a",
+      "local_verification": {
+        "cluster_reconciliation": false,
+        "helper_startup": true,
+        "host_contract_match": true,
+        "non_root": true,
+        "offline_metadata": true
+      },
+      "platforms": [
+        "linux/amd64"
+      ],
+      "repository": "proofstormd",
+      "tag": "ghcr.io/orangeshyguy21/proofstorm/proofstormd:development-amd64-b80efa2bcefc4c55b8f091105deb758d",
+      "uploaded": true
+    },
+    {
+      "anonymous_verified": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:a02dfc4f849d011737a8a778aecfa8d159c1b9f4c716f8f869590dc810573136",
+      "local_image_id": "sha256:a02dfc4f849d011737a8a778aecfa8d159c1b9f4c716f8f869590dc810573136",
+      "local_verification": {
+        "non_root": true,
+        "offline_version": "cdk-cli 0.18.0"
+      },
+      "platforms": [
+        "linux/amd64"
+      ],
+      "repository": "cdk-cli-wallet",
+      "tag": "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet:development-amd64-b80efa2bcefc4c55b8f091105deb758d",
+      "uploaded": true
+    },
+    {
+      "anonymous_verified": true,
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cocod-wallet@sha256:7e313c8f020e3f8eb4989e00006516cac325eb29f64ddf2ca7d1996a68203114",
+      "local_image_id": "sha256:7e313c8f020e3f8eb4989e00006516cac325eb29f64ddf2ca7d1996a68203114",
+      "local_verification": {
+        "non_root": true,
+        "offline_version": "0.0.17"
+      },
+      "platforms": [
+        "linux/amd64"
+      ],
+      "repository": "cocod-wallet",
+      "tag": "ghcr.io/orangeshyguy21/proofstorm/cocod-wallet:development-amd64-b80efa2bcefc4c55b8f091105deb758d",
+      "uploaded": true
+    }
+  ],
+  "namespace": "ghcr.io/orangeshyguy21/proofstorm",
+  "platform": "linux/amd64",
+  "publication_id": "b80efa2bcefc4c55b8f091105deb758d",
+  "release_ready": false
+}

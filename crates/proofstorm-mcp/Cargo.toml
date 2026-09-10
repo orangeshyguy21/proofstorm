@@ -10,6 +10,7 @@ repository.workspace = true
 proofstorm-view = { path = "../proofstorm-view" }
 proofstorm-app = { path = "../proofstorm-app" }
 anyhow.workspace = true
+clap = { version = "4.5", features = ["derive", "env"] }
 futures.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true

@@ -83,7 +83,7 @@
       "environment": {
         "HOME": "/home/lnd"
       },
-      "image": "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
       "mounts": [
         {
           "mount_path": "/home/lnd/.lnd",
@@ -109,7 +109,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "30.0"
+        "version": "31.1"
       }
     },
     "operation_admission": [
@@ -189,7 +189,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:fc72b15ad6e7108211be7f7b341261e4b0a3b73603e5b0b8983b1cd119a1956a",
+    "rollout_digest": "sha256:e9ea78f3dd7c24dba1140c367921e000a9ea6558e6f268c376a623b3f2683aee",
     "storage": [
       {
         "claim_name": "data-lightning-0"
@@ -204,7 +204,7 @@
         "rest": 8080,
         "rpc": 10009
       },
-      "version": "0.20.0-beta"
+      "version": "0.21.3-beta"
     },
     "workload": {
       "desired_replicas": 1,
@@ -291,7 +291,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:fc72b15ad6e7108211be7f7b341261e4b0a3b73603e5b0b8983b1cd119a1956a"
+                "proofstorm.dev/rollout-digest": "sha256:e9ea78f3dd7c24dba1140c367921e000a9ea6558e6f268c376a623b3f2683aee"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -341,7 +341,7 @@
                   "command": [
                     "lnd"
                   ],
-                  "image": "docker.io/polarlightning/lnd@sha256:ad708a2dacccd6ae104e78577f6a724095b80bac76ddf363f4bf8d22fbe0979f",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

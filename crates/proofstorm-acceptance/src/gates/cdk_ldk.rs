@@ -16,14 +16,14 @@ const INSTANCE: &str = "cdk-ldk-instance";
 const DRAFT: &str = "cdk-ldk";
 const DATABASE: &str = "proofstorm_ldk";
 const MARKER: &str = "ldk-persistent";
-const IMAGE: &str = "docker.io/cashubtc/mintd@sha256:2b0e9ff0430710b5c3df93cfaccdea01ffa2efc6d66c50daca4730f0c542d9be";
+const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
 
 fn lab_document(postgres_enabled: bool) -> Value {
     let mut lab = json!({
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-ldk-live-lab",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "30.0", "config_version": "bitcoin-core/30/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {"id": "peer", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "laboratory", "config": {"alias": "proofstorm-ldk-introduction-peer"}},
             {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.0", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 lab"}}
         ],

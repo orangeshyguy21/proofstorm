@@ -18,6 +18,9 @@ pub fn wait_phase(
     attempts: u32,
     delay: Duration,
 ) -> Result<Value> {
+    if phase == "closed" {
+        return wait_closed(client, instance_id);
+    }
     let mut last = Value::Null;
     for attempt in 0..attempts {
         last = client.call("lab_status", json!({"instance_id": instance_id}))?;
@@ -38,7 +41,19 @@ pub fn wait_ready(client: &mut McpClient, instance_id: &str) -> Result<Value> {
 
 /// Wait for a verified close.
 pub fn wait_closed(client: &mut McpClient, instance_id: &str) -> Result<Value> {
-    wait_phase(client, instance_id, "closed", 60, Duration::from_secs(3))
+    // Verified close removes the named instance. Wait on the cached incarnation
+    // token rather than calling lab_status for a name that may already be absent.
+    let mut last = Value::Null;
+    for _ in 0..3 {
+        last = client.call(
+            "lab_wait",
+            json!({"instance_id":instance_id,"target_phase":"closed","timeout_seconds":60}),
+        )?;
+        if last["reached"] == true && last["teardown_receipt"]["verified_absent"] == true {
+            return Ok(last);
+        }
+    }
+    bail!("lab {instance_id} close was not verified: {last}");
 }
 
 /// Poll `operation_status` until the operation reaches a terminal phase.

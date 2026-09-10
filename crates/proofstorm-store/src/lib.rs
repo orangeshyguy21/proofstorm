@@ -6,6 +6,7 @@
 mod environment;
 pub use environment::{EnvironmentEntry, PendingObservationPage};
 mod delegation;
+mod onboarding;
 mod runs;
 #[cfg(test)]
 mod session_tests;
@@ -1528,8 +1529,8 @@ impl Store {
         transaction.execute("UPDATE sessions SET last_activity_at=MAX(last_activity_at,?1) WHERE workspace_id=?2 AND id=?3",params![accepted_at,workspace,session_id])?;
         let last_sequence = transaction.query_row(
             "SELECT COALESCE(MAX(sequence), 0) FROM actions
-             WHERE workspace_id = ?1 AND experiment_id = ?2",
-            params![workspace, experiment_id],
+             WHERE workspace_id = ?1 AND instance_id = ?2",
+            params![workspace, instance_id],
             |row| row.get::<_, i64>(0),
         )?;
         let sequence = u64::try_from(last_sequence + 1)

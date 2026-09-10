@@ -6,20 +6,126 @@ your app, test failures, and see what happened.
 The runtime uses Kubernetes. The developer CLI and MCP share the same Rust
 application layer. Start here; the advanced agent workflows remain below.
 
-## Developer quick start
+## Alpha onboarding work
 
-With Docker running and Rust installed:
+The upcoming GitHub alpha uses the normal installer and `proofstorm setup`—no
+alpha/development opt-in flags. Alpha build metadata records remaining test
+limitations separately from installation eligibility. The [release guide](release/README.md)
+describes the maintainer build; the updated GitHub assets still need publication.
 
-```bash
-make setup
-target/debug/proofstorm init
-target/debug/proofstorm up examples/developer-lab.json
-target/debug/proofstorm status demo
+The [alpha onboarding plan](dev/ALPHA-ONBOARDING-PLAN.md) tracks the packaged
+installer, setup, and Codex/OpenCode attachment work. Those public commands are
+not available as a published release yet. Maintainers can now build, verify, and
+install a checkout-independent [development release bundle](release/README.md).
+The installer uses prebuilt binaries, preserves unrelated executables, and does
+not change shell profiles or start a cluster. Compilation is release-side work,
+not a step for first-time users. Matching development bundles now include
+isolated `setup` and read-only `doctor`; see the release guide for the explicit
+development opt-in, test commands, and remaining alpha limitations.
+The managed GUI is now available in development bundles: run `proofstorm gui`
+from your app directory (add `--allow-development` for these bundles), then use
+**Launch Agent** and click an installed native app: Codex, OpenCode, or Claude Code.
+The folder where you launched the GUI is already selected. Opening the
+GUI alone changes no agent configuration. It uses your default browser and
+reuses one local server; existing-tab focus is best effort. `proofstorm stop`
+stops only that GUI, not your labs. See the [GUI workflow](release/README.md#managed-gui-development-preview).
+Long-running CLI commands show progress and finish with readable results.
+For automation, add `--json` (for example, `proofstorm setup --json` or
+`proofstorm gui --json`) to get the full result without a spinner. This behavior
+is shared by checkout builds and installed bundles.
+The packaged Chrome/Codex GUI gate passed on 2026-09-09, including server reuse,
+project-only confirmation, restart/session checks, and verified runtime cleanup;
+see [GUI verification](release/gui-verification.json). This is still a development
+preview, not a published or clean-Mac-certified alpha release.
+`proofstorm open codex`, `proofstorm open opencode`, and `proofstorm open claude`
+attach the project and start the agent in your terminal. Add `--gui` to open
+the installed native app on macOS; the GUI's launch buttons always use native apps.
+OpenCode 1.18.30's new layout currently ignores native project links, so select
+the folder inside OpenCode or use the default terminal launch.
+The MCP connection is always named `proofstorm`; replacing an
+old connection such as `pst` requires a separate confirmation and saves a backup.
+See [agent attachment details](release/agent-attachments.md).
+Linux x86-64 installer/packaging groundwork is in progress; the AMD64 runtime
+images and fresh-VM release gate are still pending. See [Linux bring-up](release/linux.md).
+Their packaged client-connection gate passed with private agent homes and verified
+runtime cleanup; see [OpenCode/Claude Code verification](release/agent-attachment-verification.json).
+Setup now skips the workload catalog: CLI and MCP lab creation download only
+the selected images. `setup --prefetch-all` optionally prewarms the whole catalog.
+The isolated CLI/MCP download test passed with verified cleanup and unchanged
+development state; [dated evidence](release/on-demand-images-verification.json)
+does not yet certify Codex/OpenCode attachment or a clean-Mac release download.
+The original local-only runtime foundation is
+an opt-in isolated installation:
+
+```sh
+target/debug/proofstorm --home /absolute/path/to/alpha-home init
 ```
 
-Setup restores required local catalog images from the Docker cache, and doctor
-verifies image pulls from the cluster nodes. Missing exact artifacts fail setup
-explicitly, with startup errors available through component status and logs.
+This only initializes private state and generates a k3d configuration. It does
+**not** create a cluster, deploy a controller, or modify the user's kubeconfig.
+`--home` / `PROOFSTORM_HOME` selects the same installation in CLI and MCP,
+independent of the caller's working directory. Missing private kubeconfig is
+an error; it never falls back to the development cluster. Explicit database,
+context, and kubeconfig overrides still take precedence. Do not copy an
+installation home to clone its runtime; initialize a new home instead.
+
+The normal contributor setup now uses a registered checkout installation (see
+below). Low-level controller/image targets and older acceptance gates still use
+the legacy cluster while that remaining consolidation is in progress; do not
+use those targets to manage the checkout installation.
+To build and run the opt-in two-cluster isolation test without replacing
+checkout binaries:
+
+```sh
+scratch="$(mktemp -d)"
+CARGO_TARGET_DIR="$scratch/target" cargo build --locked -p proofstorm-app --bin proofstorm
+python3 scripts/test-installation-isolation.py \
+  --binary "$scratch/target/debug/proofstorm" \
+  --k3d "$PWD/.tools/bin/k3d" \
+  --output "$scratch/isolation-report.json"
+```
+
+This test requires running Docker and the pinned k3d tool. It creates two
+temporary one-server clusters with 1 GiB memory limits, tests image-registry
+separation, then removes only its owned resources. It checks existing Docker
+containers, networks, volumes, and the default kubeconfig afterward. Add
+`--kubectl "$PWD/.tools/bin/kubectl"` when the existing `k3d-proofstorm` cluster
+is available to also check controller identity/restarts and lab definitions.
+The test is not a full installed-product or candidate-build acceptance gate.
+
+## Developer quick start
+
+With Docker running, Rust, and Python 3.9+ installed, enter the checkout development shell:
+
+```bash
+make dev
+proofstorm setup
+proofstorm up examples/developer-lab.json
+proofstorm status demo
+proofstorm gui
+```
+
+This builds directly from source—no release archive or installer—and selects
+`.proofstorm-dev/state` for CLI, GUI, MCP, and attached coding agents. The normal
+product commands own setup, image downloads, labs, permissions, and attachment.
+For a checkout, setup builds its recorded controller source, checks compatibility,
+and deploys the digest-pinned result through its private registry. Unchanged
+setup reuses the image and deployment. Releases still download their pinned
+controller. No development image is published to GHCR by setup.
+
+`make dev-build` rebuilds and registers artifacts without entering a shell or
+starting Docker resources. Rebuilds preserve installation identity, labs, and
+grants. `make web-dev` watches UI assets; refresh the managed GUI after a build.
+After rebuilding host binaries, run `proofstorm stop` then `proofstorm gui`, and
+reconnect existing agent sessions. Exit the development shell to restore your
+normal command selection; no shell profiles or global agent settings are edited.
+Outside that shell, use `.proofstorm-dev/bin/proofstorm`, or `make setup`,
+`make doctor`, and `make gui`. See [checkout workflow](scripts/DEVELOPMENT.md).
+
+The default chain is Bitcoin Core 31.1. Lightning uses Lightning Labs LND
+0.21.3-beta; 0.20.4-beta is also available explicitly. Polar images are no longer
+part of the catalog or Compose stack. See [component image sourcing](docker/README.md)
+for release verification, mirroring, and the Bitcoin packaging recipe.
 
 The example starts Bitcoin Core and a Cashu mint with an embedded BDK backend.
 It uses Bitcoin regtest and the mint's on-chain NUT-30 support. It does not
@@ -28,8 +134,8 @@ create a Lightning channel or fund a wallet automatically.
 Run a native command, then connect your application in another terminal:
 
 ```bash
-target/debug/proofstorm exec demo chain --public-output -- bitcoin-cli -regtest -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only getblockchaininfo
-target/debug/proofstorm connect demo mint http --config /tmp/proofstorm-mint.json
+proofstorm exec demo chain --public-output -- bitcoin-cli -regtest -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only getblockchaininfo
+proofstorm connect demo mint http --config /tmp/proofstorm-mint.json
 ```
 
 Keep `connect` running. Your application reads the generated JSON `url` and
@@ -37,7 +143,7 @@ uses the mint's normal HTTP API, such as `GET /v1/info`. It needs no MCP or
 Kubernetes credentials. For authenticated Bitcoin RPC, use:
 
 ```bash
-target/debug/proofstorm connect demo chain rpc --config /tmp/proofstorm-bitcoin.json
+proofstorm connect demo chain rpc --config /tmp/proofstorm-bitcoin.json
 ```
 
 The new configuration file contains the URL and authentication fields, uses
@@ -52,8 +158,8 @@ Only mint HTTP and Bitcoin Core RPC are supported in this first increment.
 Inspect, collect receipts, and finish:
 
 ```bash
-target/debug/proofstorm sync demo
-target/debug/proofstorm down demo
+proofstorm sync demo
+proofstorm down demo
 ```
 
 `status` is a pure observation of current infrastructure and cached activity;
@@ -77,14 +183,21 @@ records and attributes activity to each actor. Clean disconnects finish tracking
 a crash leaves an unfinished record with its last activity time. Finishing a
 session never cancels work or revokes access.
 
-State survives in `.proofstorm/proofstorm.sqlite3`. Cluster selection defaults
-to `k3d-proofstorm`; `--database`, `--workspace`, `--principal`, `--context`,
-and `--namespace` select another environment explicitly. `init` provisions
-CLI permissions (and is included in `make serve`). Calling `up` with changed
+Checkout state survives in `.proofstorm-dev/state/proofstorm.sqlite3`. Its
+installation selects a privately owned cluster and kubeconfig; setup initializes
+CLI permissions once, and opening the GUI does not regrant them. Calling `up` with changed
 configuration edits the live lab and preserves unchanged components. Closing
 the lab purges its local activity; reusing its name creates a fresh instance.
-`make down` deletes the entire local cluster, while `proofstorm down demo`
-closes just that lab.
+`proofstorm down demo` closes just that lab. The remaining legacy `make down`
+does not manage the checkout installation; owned runtime teardown is pending.
+
+CLI and MCP lifecycle commands resolve the same lab by name or instance ID.
+An agent-created lab can be inspected, edited, connected to, and closed from the
+CLI using its instance ID. Access follows workspace permissions in both interfaces.
+Closing verifies the specific lab incarnation before removing its records.
+For MCP `lab_finish` and `lab_close`, copy `expected_instance_key` from inspection
+or status. `lab_inspect` exposes `instance_key` even if startup has not reached
+the cluster; reusing a name produces a different key.
 
 ## Edit a running lab
 
@@ -111,12 +224,9 @@ older pod that is still serving.
 ## See the environment
 
 ```bash
-# make build includes the Rust/Wasm website
-target/debug/proofstorm environment
-make serve
-# Open http://127.0.0.1:8787 to watch agents build labs
-# From another terminal:
-curl http://127.0.0.1:8787/v1/environment
+# In the development shell (make dev):
+proofstorm environment
+proofstorm gui
 ```
 
 The same read-only view is available through MCP `environment_read`.
@@ -134,19 +244,19 @@ workspace as your agent. The checked-in
 [environment schema](schemas/v1alpha1/environment.schema.json) describes the
 response format.
 
-`make serve` builds the website and CLI, initializes the local developer
-permissions, then keeps the server running. No separate `init` is needed.
-Deleted labs are cleaned up automatically and their names become reusable. Export
-evidence before closing a lab.
-Running it again replaces this checkout's existing Proofstorm server, refreshing
-its cluster connection after a rebuild. Other applications using the port are
-left running and reported as a port conflict. Replacement uses `lsof` and `ps`.
-Use `make serve PORT=8788` to change the port. Global CLI options passed through
-`ARGS` apply to both initialization and serving. Each launch restores the
-selected identity's default developer permissions. A configured MCP server
-registers its own agent identity and grants at startup.
+`make serve` is an alias for `make gui`: both open the selected checkout's managed
+GUI in your default browser. Setup must have completed first. Repeated launches
+reuse its owned server; opening the GUI does not restore grants or attach agents.
+Use **Connect coding agent…** to intentionally attach a project. The backend
+chooses its own loopback port and authenticates API requests. `proofstorm stop`
+stops the GUI only. Export evidence before closing a lab.
 
 ## Environment selection
+
+For the normal workflow, `PROOFSTORM_HOME` selects an owned installation and its
+private database, kubeconfig, and runtime. `make dev` selects this checkout's
+installation. The overrides below describe advanced, unmanaged use, not the
+contributor quick start.
 
 CLI and MCP share database, workspace, context and namespace defaults. CLI flags
 override `PROOFSTORM_DB`, `PROOFSTORM_WORKSPACE`, `PROOFSTORM_CONTEXT` and
@@ -170,44 +280,30 @@ keys stable when resubmitting an interrupted request.
 
 ## Agent quick start
 
-Prerequisites are Docker, Rust 1.88, `make`, `curl`, and `tar`. Nothing else:
-there is no Python or shell script to install. The setup target
-downloads checksum-verified pinned k3d, Helm, and kubectl binaries into the
-gitignored `.tools/` directory, creates the local cluster, installs the Helm
-chart, builds the release MCP binary, and runs the doctor:
+Use the same development shell and product commands. The source build needs
+Rust, Python 3.9+, and the pinned web builder; release users download prebuilt
+binaries and do not need these build tools. With Docker running:
 
 ```bash
-make setup
+make dev
+proofstorm setup
+proofstorm doctor
 ```
 
-Run the doctor again at any time to verify pinned tool versions, Docker and
-cluster access, controller availability, and a real capability-filtered MCP
-stdio handshake:
+Then change to the directory whose agent should receive Proofstorm tools:
 
 ```bash
-make doctor
+cd /absolute/path/to/your/app
+proofstorm open opencode
+# Alternatives: proofstorm open codex, or proofstorm open claude
 ```
 
-The checked-in configuration follows the current stable
-[OpenCode local MCP format](https://opencode.ai/docs/mcp-servers/). With
-OpenCode installed, start a project session without changing personal config:
-
-```bash
-OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
-```
-
-OpenCode merges this profile with your personal providers, models, and subagents.
-All three profiles enable task delegation and leave other host permissions to
-your settings and OpenCode defaults. `research.json` and `contributor.json` are
-equivalent launch options; see [`examples/opencode/README.md`](examples/opencode/README.md).
-
-Use the complete agent request in
-[`examples/opencode-conversation.md`](examples/opencode-conversation.md), then
-remove the local cluster when finished:
-
-```bash
-make down
-```
+Attachment preserves other project configuration, checks the MCP server, and
+pins the checkout installation in the agent's project-specific entry. The GUI's
+**Connect coding agent…** uses the same operation. Review project trust prompts
+in your chosen agent. Doctor checks runtime health; attachment performs the MCP
+handshake. Neither proves a model has invoked a tool. Personal providers,
+models, permissions, and global agent configuration are not changed.
 
 The MCP configuration is operator-owned. Its principal and capability set are
 not agent inputs, and MCP does not return kubeconfig. Host file and shell access
@@ -343,6 +439,37 @@ make e2e-slice5
 make down
 ```
 
+The former all-in-one Slice 5 test is now four independent gates, all included
+in `make e2e`:
+
+| Gate | Coverage |
+| --- | --- |
+| `slice5` | Composer, invalid-action refusal, funding, Nutshell wallet/mint round trip, private invoice/payment, conservation |
+| `controller-recovery` | Bootstrap retry/restart, lost-job replay fencing, cancellation during downtime, node stop/start/restart |
+| `network-faults` | Real traffic isolation, overlapping partitions, reconstruction after controller restart, selective healing |
+| `channel-lifecycle` | LND/CLN peering, rebalancing, cooperative and forced channel closure |
+
+Run an individual gate with `make e2e-<gate>`. These tests require an idle local
+cluster and refuse to start if labs are present; some restart the shared
+controller. Each creates a uniquely scoped disposable lab, checks its named
+operations and deterministic evidence, verifies that stale close requests are
+rejected, and closes with an active session using the correct incarnation token.
+Controller-restoration guards and scoped fallback teardown run on returned
+errors and panic unwinding. Cleanup failures fail the gate; forced process kills
+or a lost Docker daemon can still require manual recovery.
+
+The smoke test measures conservation across `wallet_pay`, using a balance
+captured immediately beforehand and the Nutshell mint's authoritative fee row.
+A minting round trip is not a balance-invariant treatment. Conservation evaluates
+recorded receipts and must create no runtime job. The other three
+fixtures retain CDK; CDK payment interoperability remains covered separately by
+the existing wallet gates. Missing fee evidence is never treated as zero.
+
+To exercise the failure path deliberately, run
+`PROOFSTORM_ACCEPTANCE_INJECT_FAILURE=controller-stopped target/debug/proofstorm-acceptance controller-recovery`
+after building. It must exit nonzero, restore the controller, and remove its own
+lab. This is a test-only failure injection, not a normal acceptance run.
+
 Proofstorm exposes two deliberately different native shell primitives.
 `component_exec_live` (`component.exec_live`) runs inside the
 selected running container, so native CLIs see the component's real localhost,
@@ -359,9 +486,55 @@ source/database inspection, but explicitly does not promise live CLI or socket
 connectivity. Forensics retains its separate bounded-output contract. Native CLIs are the
 normal surface for operating deployed software; use typed actions where they
 provide coordination, lifecycle guarantees, or useful portable observations.
-`component_restart`
-(`component.control`) rolls any primary component workload, including mints and
-wallets, while preserving its persistent state.
+`component_start`, `component_stop`, and `component_restart` (`component.control`)
+control any primary component workload, including mints and wallets, while
+preserving persistent storage. A deliberate stop survives controller restarts and
+compatible lab edits; use start to resume it. Restarting a deliberately stopped
+component returns `component_not_running`. Poll `operation_status` or
+`operation_wait`: acceptance is not completion. Stops wait for pods to disappear;
+starts and restarts wait for the accepted rollout to become ready. Conflicting
+controls are ordered across the whole lab; an older operation reports
+`lifecycle_action_superseded` if a newer control overtakes it. Native node controls
+use the same application and controller path.
+
+Mint management uses these same native exec paths. CDK, CDK-LDK, CDK-BDK, and
+Nutshell start management RPC on `127.0.0.1:8086` with mandatory mutual TLS.
+Proofstorm provisions separate server/client identities per mint automatically;
+agents need no enablement step. No management port is published through a Service,
+ingress, or host mapping. Invoke the native CLI directly, without a new MCP tool
+or common command alias:
+
+```sh
+proofstorm exec demo mint -- cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info
+proofstorm exec demo mint -- mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info
+```
+
+The first invocation is for CDK variants, the second for Nutshell. Use native
+`--help` for commands. Client credentials are projected read-only under
+`/management-client/tls`, server credentials under `/management-server/tls`, with
+restricted file permissions. CA signing keys are discarded after issuance.
+Certificates last 365 days, survive component/controller restarts, and are removed
+when the lab closes. Missing or expired credentials fail authentication; there
+is no plaintext fallback. Full live exec remains administrative mint access.
+Never put certificate/key contents in command arguments or public output.
+
+Ordinary CDK restarts preserve durable RPC mutations. A changed authored lab
+configuration is applied on rollout; its last successfully applied digest is
+recorded on the mint volume. The upstream quote-payment override switch remains
+disabled. Nutshell 0.20.3 metadata and settings mutations are process-local and
+reset to authored values on restart; keyset/quote mutations use upstream database
+semantics. Some native methods are unimplemented, and Nutshell may print RPC errors
+while exiting zero. Verify actual state after mutations.
+
+The management images are pinned Linux amd64 and arm64 builds. Recipes are in
+`docker/mint/Dockerfile.kube-*`; `make images` restores the exact catalog images.
+CDK candidate builds include a client from their own frozen source revision.
+Older locks without the `mint_management_rpc` feature are rejected before workload
+rendering: resolve a new lab revision and rebuild old candidates under a new
+candidate ID to adopt the new images. Existing locks are not silently redirected
+to different image contents.
+Run `make e2e-mint-management` for native read/update, authentication, network
+isolation, restart, and teardown acceptance.
 
 Run the live native-protocol acceptance gate with:
 
@@ -600,8 +773,8 @@ CDK 0.18 makes the database, rather than a startup TOML, authoritative for mint
 configuration. Proofstorm therefore validates the immutable generated document
 and runs `config init --new-mint` in a dedicated init container before starting
 `cdk-mintd` without the legacy `--config` flag. On restart, the initializer
-reads the stored configuration and refuses to start if it differs from the
-resolved Proofstorm lock; it never silently reapplies changed settings. Secrets
+preserves management changes when the authored configuration is unchanged;
+a changed authored document is validated and applied before startup. Secrets
 use CDK's `env:` and `file:` references, and PostgreSQL receives only its
 bootstrap connection setting through a Secret. Locks from the 0.17 configuration
 contract are rejected rather than reinterpreted as 0.18. Retained 0.17 databases
@@ -650,8 +823,8 @@ disposable test-user credentials. The generated public client includes the
 standard subject-bearing scopes and optional offline access. Native BAT
 issuance remains blocked by an upstream Nutshell 0.20.3 auth-ledger migration
 defect: its auth `promises` table does not match the shared CRUD write path.
-Proofstorm does not rewrite that schema. Non-LND/non-CLN payment backends and management RPC are not
-advertised until matching dependency and secret contracts exist. The current
+Proofstorm does not rewrite that schema. Non-LND/non-CLN payment backends are not
+advertised until matching dependency contracts exist. The current
 live acceptance gates are:
 
 ```sh

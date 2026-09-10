@@ -59,7 +59,7 @@
         "HOME": "/wallet",
         "PROOFSTORM_WALLET": "{component_id}"
       },
-      "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
       "mounts": [
         {
           "mount_path": "/wallet",
@@ -137,7 +137,7 @@
     ],
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:ffebbe477adf9efd071bd0e9dec32f5c9ce366be0fd23608caef6a6d5f2afcf5",
+    "rollout_digest": "sha256:04473faa6aafd649143e28371924db8459d6d5c045051f882337d5b6536d131d",
     "storage": [
       {
         "claim_name": "wallet-data"
@@ -190,7 +190,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:ffebbe477adf9efd071bd0e9dec32f5c9ce366be0fd23608caef6a6d5f2afcf5"
+                "proofstorm.dev/rollout-digest": "sha256:04473faa6aafd649143e28371924db8459d6d5c045051f882337d5b6536d131d"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -232,7 +232,7 @@
                       "value": "wallet"
                     }
                   ],
-                  "image": "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "securityContext": {

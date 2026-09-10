@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "observed_date_local": "2026-09-08",
+  "platform": "macos-arm64",
+  "scope": "local-development-bundle-installed-cli-and-stdio-mcp",
+  "archive": "proofstorm-0.1.0-alpha.1-dev-debug-20a09a2869f6-aarch64-apple-darwin.tar.gz",
+  "archive_sha256": "2111e6c2f1d840623ec438827e2ff106f98a2c59833c031f985e5fa656519f12",
+  "passed": true,
+  "source_denied_metadata_smoke_passed": true,
+  "default_setup_catalog_repositories": 0,
+  "bitcoin_cli_lab_catalog_repositories": 2,
+  "bitcoin_and_cashu_mcp_lab_catalog_repositories": 3,
+  "full_catalog_and_helper_image_count": 16,
+  "cli_lab_ready": true,
+  "mcp_initialize_and_tools_list_passed": true,
+  "mcp_lab_up_succeeded": true,
+  "mcp_created_lab_readiness_verified_via_cli": true,
+  "setup_retry_preserved_controller_and_permissions": true,
+  "cleanup_errors": [],
+  "docker_inventory_restored": true,
+  "docker_networks_and_volumes_restored": true,
+  "preexisting_containers_unchanged": true,
+  "user_kubeconfig_unchanged": true,
+  "development_controller_and_labs_unchanged": true,
+  "development_binaries_and_web_assets_unchanged": true,
+  "limitations": [
+    "Not a cold host-cache or clean-Mac download test.",
+    "Not an anonymous-pull check; separate publication evidence covers public GHCR access.",
+    "No Codex or OpenCode configuration was changed or harness connection asserted.",
+    "The optional full-catalog prefetch path was not repeated in this live run.",
+    "Development bundle only; not a published release."
+  ]
+}
