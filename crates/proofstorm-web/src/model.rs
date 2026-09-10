@@ -297,7 +297,10 @@ mod tests {
             workloads: vec![proofstorm_view::WorkloadDemand {
                 name: "shared".into(),
                 component: None,
-                replicas: 1,
+                kind: "Deployment".into(),
+                replicas: Some(1),
+                replica_policy: proofstorm_view::ReplicaPolicy::Fixed,
+                observation: None,
                 containers: vec![],
             }],
             storage: vec![],

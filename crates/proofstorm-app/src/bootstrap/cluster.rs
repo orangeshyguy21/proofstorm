@@ -99,12 +99,14 @@ pub(super) fn verify_kubeconfig(installation: &Installation) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn create(installation: &Installation) -> Result<()> {
+pub(super) fn create(installation: &Installation, progress: &dyn Fn(&str)) -> Result<()> {
     let home = &installation.home;
     let receipt_path = home.join("runtime-owner.json");
     if receipt_path.exists() {
+        progress("Verifying existing Kubernetes runtime");
         owned(installation)?;
     } else {
+        progress("Checking local runtime ports and ownership");
         // Successful inventory queries are required before interpreting absence.
         let containers = docker(home, &["ps", "-a", "--format", "{{.Names}}"], 15)?;
         let networks = docker(home, &["network", "ls", "--format", "{{.Name}}"], 15)?;
@@ -122,6 +124,7 @@ pub(super) fn create(installation: &Installation) -> Result<()> {
         let registry = TcpListener::bind((Ipv4Addr::LOCALHOST, installation.registry_port))
             .context("saved registry port is occupied")?;
         drop((api, registry));
+        progress("Starting Kubernetes; waiting for nodes");
         process::run(
             home,
             &tool(home, "k3d")?,
@@ -143,6 +146,7 @@ pub(super) fn create(installation: &Installation) -> Result<()> {
         process::save(&receipt_path, &serde_json::to_vec(&receipt)?)?;
     }
     let mut receipt: Value = serde_json::from_slice(&fs::read(&receipt_path)?)?;
+    progress("Verifying private cluster connection");
     if !receipt["kubeconfig_sha256"].is_null() {
         verify_kubeconfig(installation)?;
         return Ok(());

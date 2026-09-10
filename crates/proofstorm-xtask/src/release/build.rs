@@ -438,6 +438,7 @@ fn worker_prepare(input: &Path, work: &Path, output: &Path) -> Result<Vec<String
             &source,
             &provenance,
             &stage.path().join("controller.json"),
+            "linux/amd64",
         )?;
     } else {
         ensure!(
@@ -513,6 +514,7 @@ fn linux_prepare_with_controller(
             &inputs.join("source"),
             &provenance,
             &inputs.join("controller.json"),
+            "linux/amd64",
         )?;
         let file = inputs.join("controller.json");
         options["controller_sha256"] = json!(bundle::checksum(&file, fs::metadata(&file)?.len())?);

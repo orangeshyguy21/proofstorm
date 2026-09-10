@@ -1,4 +1,5 @@
 //! A credential-free read model shared by CLI, MCP and HTTP.
+mod prober;
 mod resources;
 use crate::{Error, lab::Labs};
 use futures::{StreamExt, stream};
@@ -89,7 +90,7 @@ impl Labs {
             coverage:Coverage {
                 topology:"declared links, not measured reachability or payment flows".into(),
                 activity:"recorded managed operations; pending/running outcomes may require explicit sync; no receipts are collected by this read".into(),
-                resource_demand:"rendered desired requests/limits with namespace defaults for this component page and shared workloads; excludes transient action jobs".into(),
+                resource_demand:"rendered desired requests/limits with namespace defaults; excludes transient action jobs. replicas is desired scale, not a running pod count. The protocol prober is a controller-scheduled Deployment: its scale and observation come from a bounded live read, or are null when unavailable. Compare observation generation with observed_generation before treating status as current.".into(),
                 resource_usage:"not collected".into(),protocol_traffic:"not collected".into(),attached_clients:"not tracked; advertised endpoints do not imply active tunnels or clients".into(),
             },
         };
@@ -117,10 +118,16 @@ impl Labs {
                     .revision(&self.workspace, &self.principal, &i.revision_digest)
             })
             .transpose()?;
-        let (runtime, resource) = if let Some(instance) = &instance {
-            self.observe_environment_runtime(instance).await
+        let ((runtime, resource), prober) = if let Some(instance) = &instance {
+            tokio::join!(
+                self.observe_environment_runtime(instance),
+                prober::observe(self.runtime.client.clone(), &instance.instance_key)
+            )
         } else {
-            (empty_runtime(ObservationState::NotMaterialized, None), None)
+            (
+                (empty_runtime(ObservationState::NotMaterialized, None), None),
+                None,
+            )
         };
         let (mut resources, resource_error, endpoints) =
             if let (Some(instance), Some(revision)) = (&instance, &revision) {
@@ -131,13 +138,7 @@ impl Labs {
             } else {
                 (None, None, Vec::new())
             };
-        if let Some(resources) = resources.as_mut() {
-            resources.retained_storage = resource
-                .as_ref()
-                .and_then(|r| r.status.as_ref())
-                .map(|s| s.retained_storage.clone())
-                .unwrap_or_default();
-        }
+        resources::include_runtime(&mut resources, resource.as_ref(), prober);
         let (components, links) = topology(
             revision.as_ref(),
             resource.as_ref(),

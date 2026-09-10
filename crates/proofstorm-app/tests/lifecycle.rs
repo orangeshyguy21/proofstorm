@@ -236,7 +236,23 @@ async fn resume_observe_collect_close_and_reuse_name() {
             .phase,
         OperationPhase::Succeeded
     );
-    let closed = labs.down("demo", 1).await.unwrap();
+    let progress = Mutex::new(Vec::new());
+    let closed = labs
+        .down_with_progress("demo", 1, &|label| {
+            progress.lock().unwrap().push(label.to_owned());
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        *progress.lock().unwrap(),
+        [
+            "Checking lab identity before cleanup",
+            "Closing sessions and stopping lab actions",
+            "Requesting workload and storage cleanup",
+            "Waiting for workloads and storage to disappear",
+            "Lab cleanup verified",
+        ]
+    );
     assert_eq!(closed.lab.phase, LabHandlePhase::Closed);
     assert!(
         closed

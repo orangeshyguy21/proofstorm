@@ -24,13 +24,17 @@ digest() {
   if command -v sha256sum >/dev/null; then value=$(sha256sum "$1"); else value=$(shasum -a 256 "$1"); fi
   printf 'sha256:%s\n' "${value%% *}"
 }
-printf '{"os":"linux","architecture":"amd64"}\n' > "$scratch/registry/config"
 export CONTROLLER_TEST_CONFIG CONTROLLER_TEST_MANIFEST CONTROLLER_TEST_INDEX
-CONTROLLER_TEST_CONFIG=$(digest "$scratch/registry/config")
-printf '{"schemaVersion":2,"config":{"digest":"%s"},"layers":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}\n' "$CONTROLLER_TEST_CONFIG" > "$scratch/registry/manifest"
-CONTROLLER_TEST_MANIFEST=$(digest "$scratch/registry/manifest")
-printf '{"schemaVersion":2,"manifests":[{"digest":"%s","platform":{"os":"linux","architecture":"amd64"}}]}\n' "$CONTROLLER_TEST_MANIFEST" > "$scratch/registry/index"
-CONTROLLER_TEST_INDEX=$(digest "$scratch/registry/index")
+registry() {
+  printf '{"os":"linux","architecture":"%s"}\n' "$1" > "$scratch/registry/config"
+  CONTROLLER_TEST_CONFIG=$(digest "$scratch/registry/config")
+  printf '{"schemaVersion":2,"config":{"digest":"%s"},"layers":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}\n' "$CONTROLLER_TEST_CONFIG" > "$scratch/registry/manifest"
+  CONTROLLER_TEST_MANIFEST=$(digest "$scratch/registry/manifest")
+  printf '{"schemaVersion":2,"manifests":[{"digest":"%s","platform":{"os":"linux","architecture":"%s"}}]}\n' "$CONTROLLER_TEST_MANIFEST" "${2:-$1}" > "$scratch/registry/index"
+  CONTROLLER_TEST_INDEX=$(digest "$scratch/registry/index")
+}
+export CONTROLLER_TEST_ARCH=amd64
+registry amd64
 cat > "$scratch/bin/cargo" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -52,7 +56,7 @@ case "$1" in
   buildx)
     if [[ "$2" == build ]]; then
       [[ ${CONTROLLER_TEST_FAIL:-none} != build ]] || exit 23
-      [[ " $* " == *' --platform linux/amd64 '* && " $* " == *' --provenance=false '* && " $* " == *' --load '* ]] || exit 97
+      [[ " $* " == *" --platform linux/$CONTROLLER_TEST_ARCH "* && " $* " == *' --provenance=false '* && " $* " == *' --load '* ]] || exit 97
       for arg in "$@"; do case "$arg" in PROOFSTORM_CONTROLLER_SOURCE_SHA256=*) printf '%s\n' "${arg#*=}" > "$CONTROLLER_TEST_STATE/source-sha" ;; esac; done
     else
       [[ "$2" == imagetools && "$3" == inspect ]] || exit 97
@@ -63,9 +67,9 @@ case "$1" in
     if [[ "$3" == --format ]]; then echo "$identity"; exit 0; fi
     user=65532:65532
     [[ ${CONTROLLER_TEST_FAIL:-none} != root ]] || user=root
-    printf '[{"Id":"%s","Os":"linux","Architecture":"amd64","Config":{"User":"%s","Labels":{"dev.proofstorm.source-sha256":"%s"}}}]\n' "$identity" "$user" "$(< "$CONTROLLER_TEST_STATE/source-sha")" ;;
+    printf '[{"Id":"%s","Os":"linux","Architecture":"%s","Config":{"User":"%s","Labels":{"dev.proofstorm.source-sha256":"%s"}}}]\n' "$identity" "$CONTROLLER_TEST_ARCH" "$user" "$(< "$CONTROLLER_TEST_STATE/source-sha")" ;;
   run)
-    [[ " $* " == *' --network none '* && " $* " == *' --read-only '* && " $* " == *' --cap-drop ALL '* ]] || exit 97
+    [[ " $* " == *" --platform linux/$CONTROLLER_TEST_ARCH "* && " $* " == *' --network none '* && " $* " == *' --read-only '* && " $* " == *' --cap-drop ALL '* ]] || exit 97
     if [[ " $* " == *' --entrypoint /usr/local/lib/proofstorm-exec '* ]]; then
       if [[ ${CONTROLLER_TEST_FAIL:-none} == helper ]]; then echo 'loader failure' >&2; exit 127; fi
       printf '{"runner_error":"native_runner_failed"}\n' >&2; exit 1
@@ -147,5 +151,32 @@ printf 'changed source\n' > "$scratch/changed-source/source/Dockerfile.proofstor
 : > "$CONTROLLER_TEST_TRACE"
 if run publish --work-dir "$scratch/changed-source" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail 'Published changed source'; fi
 if grep -q '^docker push' "$CONTROLLER_TEST_TRACE"; then fail 'Source mismatch reached publication'; fi
+export CONTROLLER_TEST_ARCH=arm64
+registry arm64
+for identity in config manifest index; do
+  export CONTROLLER_TEST_ID=$identity
+  work="$scratch/arm64-$identity"
+  : > "$CONTROLLER_TEST_TRACE"
+  run build --platform linux/arm64 --work-dir "$work" || fail 'ARM64 build failed'
+  if grep -q '^docker push' "$CONTROLLER_TEST_TRACE"; then fail 'ARM64 build published'; fi
+  [[ $("$helper" release-controller platform "$work") == linux/arm64 ]] || fail 'Lost ARM64 platform'
+  run publish --work-dir "$work" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm || fail 'ARM64 publication failed'
+  "$helper" release-controller stage "$work/controller.json" "$work/source" "$scratch/linux/input/source.json" "$scratch/mac-staged.json" aarch64-apple-darwin
+  cmp "$work/controller.json" "$scratch/mac-staged.json"
+done
+# A matching source still cannot carry an ARM controller into a Linux AMD64 bundle.
+if "$helper" linux-build-prepare "$fixture" "$scratch/linux-wrong-arch" false false "$work/controller.json" > "$scratch/output" 2>&1; then fail 'Linux transport accepted ARM64'; fi
+if run publish --work-dir "$work" --platform linux/amd64 --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail 'Publication allowed a platform override'; fi
+for mismatch in index config; do
+  if [[ "$mismatch" == index ]]; then registry arm64 amd64; else registry amd64 arm64; fi
+  work="$scratch/wrong-$mismatch-platform"
+  export CONTROLLER_TEST_ID=config
+  run build --platform linux/arm64 --work-dir "$work" || fail 'Mismatch fixture build failed'
+  if run publish --work-dir "$work" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail "Accepted wrong $mismatch platform"; fi
+  [[ ! -f "$work/controller.json" ]] || fail 'Wrong platform produced a usable receipt'
+done
+: > "$CONTROLLER_TEST_TRACE"
+if run build --work-dir "$scratch/unsupported" --platform linux/s390x; then fail 'Accepted unsupported platform'; fi
+[[ ! -s "$CONTROLLER_TEST_TRACE" ]] || fail 'Unsupported platform reached Docker'
 [[ -z "$(git -C "$fixture" status --porcelain)" ]] || fail 'Controller flow modified the source checkout'
 printf 'Controller build/publication and bundle transport checks passed without network or Docker\n'

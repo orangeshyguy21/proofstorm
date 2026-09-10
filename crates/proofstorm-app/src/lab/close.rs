@@ -12,6 +12,16 @@ impl Labs {
         reference: &str,
         expected_key: &str,
     ) -> Result<LabInstanceStatus, Error> {
+        self.close_with_progress(reference, expected_key, &|_| {})
+            .await
+    }
+
+    async fn close_with_progress(
+        &self,
+        reference: &str,
+        expected_key: &str,
+        progress: &(dyn Fn(&str) + Sync),
+    ) -> Result<LabInstanceStatus, Error> {
         self.authorize(&[Capability::LabClose])?;
         let _guard = crate::lifecycle::guard(&self.store).await?;
         let instance = self.resolve_instance(reference)?;
@@ -22,11 +32,13 @@ impl Labs {
             ));
         }
         crate::lifecycle::validate_runtime(&self.runtime, &self.store, &instance).await?;
+        progress("Closing sessions and stopping lab actions");
         self.store
             .begin_instance_close(&self.workspace, &self.principal, &instance.id)?;
         self.store
             .finish_lab_sessions(&self.workspace, &self.principal, &instance.id)?;
         self.finalize_operations(&instance).await?;
+        progress("Requesting workload and storage cleanup");
         let status = self.runtime.close(instance.clone()).await?;
         if status.phase == InstancePhase::Closed {
             if !status
@@ -83,13 +95,35 @@ impl Labs {
         self.down_checked(reference, timeout_seconds, None).await
     }
 
+    pub async fn down_with_progress(
+        &self,
+        reference: &str,
+        timeout_seconds: u32,
+        progress: &(dyn Fn(&str) + Sync),
+    ) -> Result<LabView, Error> {
+        self.down_checked_with_progress(reference, timeout_seconds, None, progress)
+            .await
+    }
+
     pub async fn down_checked(
         &self,
         reference: &str,
         timeout_seconds: u32,
         expected_key: Option<&str>,
     ) -> Result<LabView, Error> {
+        self.down_checked_with_progress(reference, timeout_seconds, expected_key, &|_| {})
+            .await
+    }
+
+    async fn down_checked_with_progress(
+        &self,
+        reference: &str,
+        timeout_seconds: u32,
+        expected_key: Option<&str>,
+        progress: &(dyn Fn(&str) + Sync),
+    ) -> Result<LabView, Error> {
         self.authorize(&[Capability::LabClose])?;
+        progress("Checking lab identity before cleanup");
         let mut view = self.inspect(reference, 0).await?;
         if expected_key.is_some_and(|key| view.instance_key.as_deref() != Some(key)) {
             return Err(Error::problem(
@@ -110,6 +144,7 @@ impl Labs {
                 )
                 .await?;
                 view.lab.phase = LabHandlePhase::Closed;
+                progress("Lab cleanup verified");
                 return Ok(view);
             }
             Err(error) => return Err(error),
@@ -122,9 +157,18 @@ impl Labs {
         }
         let deadline =
             tokio::time::Instant::now() + Duration::from_secs(u64::from(timeout_seconds));
+        let mut first = true;
         loop {
-            let status = self.close(&instance.id, &instance.instance_key).await?;
+            // Announce transitions once, not the same stages on every polling cycle.
+            let status = self
+                .close_with_progress(
+                    &instance.id,
+                    &instance.instance_key,
+                    if first { progress } else { &|_| {} },
+                )
+                .await?;
             if status.phase == InstancePhase::Closed {
+                progress("Lab cleanup verified");
                 view.lab.phase = LabHandlePhase::Closed;
                 view.runtime = Some(status);
                 // Lab-owned history was purged only after exact absence was verified.
@@ -135,6 +179,10 @@ impl Labs {
                 view.next_sequence = None;
                 view.observed_at_unix = now();
                 return Ok(view);
+            }
+            if first {
+                progress("Waiting for workloads and storage to disappear");
+                first = false;
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(Error::problem(

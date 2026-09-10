@@ -52,16 +52,17 @@ fn controller_for(target: &str) -> Value {
 }
 
 fn controller_with_receipt(target: &str, explicit: &str) -> Value {
-    let encoded = match target {
+    let fallback = match target {
         crate::platform::MAC_ARM64 => include_str!("../../../release/controller.json"),
         crate::platform::LINUX_AMD64 => {
-            if explicit.trim() == "null" {
-                include_str!("../../../release/controller-linux-amd64.json")
-            } else {
-                explicit
-            }
+            include_str!("../../../release/controller-linux-amd64.json")
         }
         _ => return Value::Null,
+    };
+    let encoded = if explicit.trim() == "null" {
+        fallback
+    } else {
+        explicit
     };
     let value: Value = serde_json::from_str(encoded).expect("checked controller metadata");
     if crate::platform::container_arch_for(target)
@@ -87,22 +88,23 @@ mod tests {
 
     #[test]
     fn ci_controller_receipt_is_used_only_for_its_matching_platform() {
-        let value = json!({"platform":"linux/amd64","image":"fixture-image"});
-        assert_eq!(
-            controller_with_receipt(crate::platform::LINUX_AMD64, &value.to_string()),
-            value
-        );
-        assert_eq!(
-            controller_with_receipt(crate::platform::MAC_ARM64, &value.to_string()),
-            controller_with_receipt(crate::platform::MAC_ARM64, "null")
-        );
-        assert!(
-            controller_with_receipt(
+        for (target, other, platform) in [
+            (
                 crate::platform::LINUX_AMD64,
-                "{\"platform\":\"linux/arm64\"}"
-            )
-            .is_null()
-        );
+                crate::platform::MAC_ARM64,
+                "linux/amd64",
+            ),
+            (
+                crate::platform::MAC_ARM64,
+                crate::platform::LINUX_AMD64,
+                "linux/arm64",
+            ),
+        ] {
+            let value = json!({"platform":platform,"image":"fixture-image"});
+            assert_eq!(controller_with_receipt(target, &value.to_string()), value);
+            // An explicit incompatible receipt must not silently fall back to an old pin.
+            assert!(controller_with_receipt(other, &value.to_string()).is_null());
+        }
     }
 
     #[test]
