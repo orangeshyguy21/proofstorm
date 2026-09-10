@@ -33,6 +33,8 @@ ln -s "$scratch/stub" "$fixture/scripts/check.sh"
 ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/ci-linux-bundle.sh"
+ln -s "$scratch/stub" "$fixture/scripts/linux-build.sh"
+ln -s "$scratch/stub" "$fixture/scripts/linux-install-smoke.sh"
 ln -s "$scratch/stub" "$fixture/target/debug/proofstorm-acceptance"
 
 run() {
@@ -109,8 +111,14 @@ run release-verify "$tricky" --json
 expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- release-verify "$tricky" --json
 run release-build --work-dir "$tricky" --output output --debug
 expect release-build.sh "$fixture" unset unset --work-dir "$tricky" --output output --debug
+run release-install-linux --archive "$tricky" --installer install.sh --work-dir output --development
+expect linux-install-smoke.sh "$fixture" unset unset --archive "$tricky" --installer install.sh --work-dir output --development
+run release-smoke "$tricky" relocated --json
+expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- release-smoke "$tricky" relocated --json
 run release-ci-linux --work-dir "$tricky" --debug
 expect ci-linux-bundle.sh "$fixture" unset unset --work-dir "$tricky" --debug
+run release-build-linux --source "$tricky" --work-dir output --development --debug
+expect linux-build.sh "$fixture" unset unset --source "$tricky" --work-dir output --development --debug
 for recipe in release-package release-pack release-extract; do
   run "$recipe" "$tricky" destination --json
   expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- "$recipe" "$tricky" destination --json

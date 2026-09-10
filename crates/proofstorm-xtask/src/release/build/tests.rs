@@ -1,5 +1,131 @@
 use super::*;
 
+#[test]
+fn linux_build_plan_exports_only_verified_sources_and_a_dockerfile_context() {
+    let source = source();
+    let recipe = source
+        .path()
+        .join("docker/release/Dockerfile.linux-builder");
+    fs::create_dir_all(recipe.parent().unwrap()).unwrap();
+    fs::write(&recipe, "FROM fixture\n").unwrap();
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let work = temp.path().join("work with 'quotes'");
+    let plan = linux_prepare(source.path(), &work, false, true).unwrap();
+    assert_eq!(plan.len(), 3);
+    assert!(plan[1].starts_with("proofstorm-linux-build-"));
+    assert!(plan[2].starts_with("proofstorm-linux-builder:"));
+    assert!(
+        plan[2]
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-:".contains(&b))
+    );
+    assert_eq!(fs::read_dir(work.join("toolchain")).unwrap().count(), 1);
+    assert_eq!(
+        fs::read(work.join("toolchain/Dockerfile")).unwrap(),
+        fs::read(recipe).unwrap()
+    );
+    assert!(!work.join("input/source/.env").exists());
+    assert!(!work.join("input/source/.tools").exists());
+    assert!(!work.join("input/source/.git").exists());
+    let run = bundle::read_json(&work.join("run.json")).unwrap();
+    assert_eq!(run["host_mounts"], json!([]));
+    assert_eq!(run["privileged"], false);
+    assert_eq!(run["platform"], "linux/amd64");
+    assert_eq!(run["source"]["dirty"], true);
+    assert_eq!(
+        bundle::read_json(&work.join("input/options.json")).unwrap(),
+        json!({"development":false,"debug":true})
+    );
+    // Host transport and container worker use exactly the same fingerprint.
+    worker_prepare(
+        &work.join("input"),
+        &temp.path().join("worker"),
+        &temp.path().join("artifacts"),
+    )
+    .unwrap();
+    assert!(linux_prepare(source.path(), &work, true, true).is_err());
+    assert!(linux_prepare(source.path(), &source.path().join("forbidden"), true, true).is_err());
+}
+
+#[test]
+fn linux_build_plan_refuses_uncommitted_stable_sources_and_linked_files() {
+    let source = source();
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    fs::write(
+        source.path().join("Cargo.toml"),
+        "[workspace.package]\nversion = '0.1.0'\n",
+    )
+    .unwrap();
+    let work = temp.path().join("work");
+    assert!(linux_prepare(source.path(), &work, false, true).is_err());
+    assert!(linux_prepare(source.path(), &work, false, false).is_err());
+    assert!(!work.exists());
+    std::os::unix::fs::symlink(
+        source.path().join("Cargo.toml"),
+        source.path().join("linked"),
+    )
+    .unwrap();
+    assert!(linux_prepare(source.path(), &work, true, true).is_err());
+    assert!(!work.exists());
+}
+
+#[test]
+fn worker_owns_a_verified_copy_and_keeps_transport_pristine() {
+    let checkout = source();
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    let receipt = snapshot(checkout.path(), &input.join("source"), true, None).unwrap();
+    fs::write(input.join("source.json"), receipt.to_string()).unwrap();
+    fs::write(
+        input.join("options.json"),
+        r#"{"development":false,"debug":true}"#,
+    )
+    .unwrap();
+    let work = temp.path().join("work");
+    let output = temp.path().join("artifacts");
+    let plan = worker_prepare(&input, &work, &output).unwrap();
+    assert_eq!(&plan[2..], ["false", "true"]);
+    assert!(!output.exists());
+    fs::create_dir(work.join("source/.tools")).unwrap();
+    fs::write(work.join("source/.tools/download"), "fixture").unwrap();
+    assert!(!input.join("source/.tools").exists());
+    assert_eq!(
+        fingerprint(
+            &input.join("source"),
+            &source_names(&input.join("source"), true).unwrap()
+        )
+        .unwrap(),
+        receipt["sha256"]
+    );
+    assert!(worker_prepare(&input, &work, &output).is_err());
+    assert!(worker_prepare(&input, &input.join("bad"), &output).is_err());
+    assert!(worker_prepare(&input, &temp.path().join("other"), &input.join("bad")).is_err());
+    fs::write(input.join("source/Cargo.toml"), "tampered").unwrap();
+    assert!(worker_prepare(&input, &temp.path().join("tampered"), &output).is_err());
+    assert!(!temp.path().join("tampered").exists());
+}
+
+#[test]
+fn worker_options_are_typed_and_new_output_is_required() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    let work = temp.path().join("work");
+    let output = temp.path().join("output");
+    for options in [
+        r#"{"development":"false","debug":true}"#,
+        r#"{"development":true}"#,
+        "{}",
+    ] {
+        fs::write(input.join("options.json"), options).unwrap();
+        assert!(worker_prepare(&input, &work, &output).is_err());
+        assert!(!work.exists());
+    }
+    fs::create_dir(&output).unwrap();
+    assert!(worker_prepare(&input, &work, &output).is_err());
+}
+
 fn source() -> tempfile::TempDir {
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     fs::write(

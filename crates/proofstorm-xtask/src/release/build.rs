@@ -13,7 +13,7 @@ use std::{
     process::Command,
 };
 
-fn host_target() -> Result<&'static str> {
+pub(super) fn host_target() -> Result<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
         ("linux", "x86_64") => Ok("x86_64-unknown-linux-gnu"),
@@ -315,6 +315,38 @@ fn prepare(values: &[OsString]) -> Result<Vec<String>> {
 pub(super) fn cli(command: &str, args: impl Iterator<Item = OsString>) -> Result<()> {
     let args: Vec<_> = args.collect();
     match command {
+        "linux-build-prepare" => {
+            ensure!(
+                args.len() == 4,
+                "expected source, new work directory, development and debug booleans"
+            );
+            let development = args[2]
+                .to_str()
+                .context("invalid development flag")?
+                .parse()?;
+            let debug = args[3].to_str().context("invalid debug flag")?.parse()?;
+            for value in
+                linux_prepare(Path::new(&args[0]), Path::new(&args[1]), development, debug)?
+            {
+                std::io::stdout().write_all(value.as_bytes())?;
+                std::io::stdout().write_all(&[0])?;
+            }
+        }
+        "release-worker-prepare" => {
+            ensure!(
+                args.len() == 3,
+                "expected input, new work directory, and new output directory"
+            );
+            let plan = worker_prepare(
+                Path::new(&args[0]),
+                Path::new(&args[1]),
+                Path::new(&args[2]),
+            )?;
+            for value in plan {
+                std::io::stdout().write_all(value.as_bytes())?;
+                std::io::stdout().write_all(&[0])?;
+            }
+        }
         "release-prepare" => {
             let plan = prepare(&args)?;
             let mut stdout = std::io::stdout().lock();
@@ -335,6 +367,118 @@ pub(super) fn cli(command: &str, args: impl Iterator<Item = OsString>) -> Result
         _ => bail!("unknown release build command"),
     }
     Ok(())
+}
+
+fn worker_prepare(input: &Path, work: &Path, output: &Path) -> Result<Vec<String>> {
+    let input = input.canonicalize()?;
+    let work = output_path(work)?;
+    let output = output_path(output)?;
+    ensure!(
+        !work.starts_with(&input) && !output.starts_with(&input),
+        "worker outputs must be outside transported inputs"
+    );
+    ensure!(
+        !output.starts_with(&work) && !work.starts_with(&output),
+        "worker and artifact directories must be separate"
+    );
+    ensure!(
+        fs::symlink_metadata(&work).is_err() && fs::symlink_metadata(&output).is_err(),
+        "worker output directories must be new"
+    );
+    let options = bundle::read_json(&input.join("options.json"))?;
+    let development = options["development"]
+        .as_bool()
+        .context("invalid development option")?;
+    let debug = options["debug"].as_bool().context("invalid debug option")?;
+    let provenance = bundle::read_json(&input.join("source.json"))?;
+    let source = input.join("source");
+    let allow_dirty = development || workspace_alpha(&source)?;
+    let parent = work.parent().context("missing work parent")?;
+    directory(parent)?;
+    let stage = tempfile::Builder::new()
+        .prefix(".proofstorm-worker-")
+        .tempdir_in(parent)?;
+    // Reuse the full filename/mode/content fingerprint and owned-file copying.
+    // The separate copy may acquire downloaded tools; transport stays pristine.
+    snapshot(
+        &source,
+        &stage.path().join("source"),
+        allow_dirty,
+        Some(&provenance),
+    )?;
+    fs::create_dir(&work)?;
+    fs::rename(stage.path().join("source"), work.join("source"))?;
+    Ok(vec![
+        work.to_str().context("non-UTF-8 work path")?.into(),
+        output.to_str().context("non-UTF-8 output path")?.into(),
+        development.to_string(),
+        debug.to_string(),
+    ])
+}
+
+fn linux_prepare(
+    source: &Path,
+    work: &Path,
+    development: bool,
+    debug: bool,
+) -> Result<Vec<String>> {
+    let source = source.canonicalize()?;
+    let work = output_path(work)?;
+    ensure!(!work.starts_with(&source), "build outside the checkout");
+    ensure!(
+        fs::symlink_metadata(&work).is_err(),
+        "work directory must be new"
+    );
+    let alpha = workspace_alpha(&source)?;
+    ensure!(
+        development || alpha || !debug,
+        "debug binaries require an alpha or development build"
+    );
+    let parent = work.parent().context("missing work parent")?;
+    let stage = tempfile::Builder::new()
+        .prefix("proofstorm-linux-build-")
+        .tempdir_in(parent)?;
+    let name = stage
+        .path()
+        .file_name()
+        .context("missing container name")?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    let inputs = stage.path().join("input");
+    fs::create_dir(&inputs)?;
+    let provenance = snapshot(&source, &inputs.join("source"), development || alpha, None)?;
+    fs::write(
+        inputs.join("source.json"),
+        serde_json::to_vec_pretty(&provenance)?,
+    )?;
+    fs::write(
+        inputs.join("options.json"),
+        serde_json::to_vec_pretty(&json!({"debug":debug,"development":development}))?,
+    )?;
+    let dockerfile = inputs.join("source/docker/release/Dockerfile.linux-builder");
+    regular(&dockerfile)?;
+    let digest = bundle::checksum(&dockerfile, fs::metadata(&dockerfile)?.len())?;
+    let tag = format!("proofstorm-linux-builder:{}", &digest[..16]);
+    let context = stage.path().join("toolchain");
+    fs::create_dir(&context)?;
+    fs::copy(dockerfile, context.join("Dockerfile"))?;
+    fs::write(
+        stage.path().join("run.json"),
+        serde_json::to_vec_pretty(&json!({
+            "container":name,"toolchain_image":tag,"platform":"linux/amd64","source":provenance,
+            "privileged":false,"host_mounts":[],"cpus":2,"memory":"3g"
+        }))?,
+    )?;
+    // All checks pass before reserving the caller's output. Never overwrite it.
+    fs::create_dir(&work)?;
+    for entry in ["input", "toolchain", "run.json"] {
+        fs::rename(stage.path().join(entry), work.join(entry))?;
+    }
+    Ok(vec![
+        work.to_str().context("non-UTF-8 work path")?.into(),
+        name,
+        tag,
+    ])
 }
 
 #[cfg(test)]

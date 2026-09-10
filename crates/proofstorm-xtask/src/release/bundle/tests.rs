@@ -71,7 +71,7 @@ impl Bundle {
         fs::write(self.root().join("manifest.json"), self.manifest.to_string()).unwrap();
     }
 
-    fn refresh(&mut self, name: &str) {
+    pub(crate) fn refresh(&mut self, name: &str) {
         let path = self.root().join(name);
         let size = fs::metadata(&path).unwrap().len();
         self.manifest["files"][name]["size"] = json!(size);

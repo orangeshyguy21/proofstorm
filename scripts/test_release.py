@@ -1,7 +1,6 @@
 """Packaging failure-path tests. No Docker, Rust builds, or network access."""
 import copy
 import json
-import io
 import os
 from pathlib import Path
 import subprocess
@@ -333,29 +332,25 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "clean committed"):
                 release.snapshot(self.source, self.root / "release-snapshot", False)
 
-    def test_smoke_checks_archive_before_extracting_and_runs_relocated_binaries(self):
-        result = self.package()
-        archive = Path(result["archive"])
-        with patch.object(release, "run", return_value=json.dumps(self.info)) as runner:
-            release.smoke(archive, self.root / "smoke", [])
-            self.assertEqual(runner.call_count, 6)
-            self.assertTrue(all(str(self.root / "smoke/proofstorm/bin") in str(call.args[0][0])
-                                for call in runner.call_args_list))
-        archive.write_bytes(b"corrupt")
-        with self.assertRaisesRegex(ValueError, "archive checksum"):
-            release.smoke(archive, self.root / "corrupt-smoke", [])
-        self.assertFalse((self.root / "corrupt-smoke").exists())
+    def test_smoke_delegates_to_rust_with_literal_paths_and_isolated_target(self):
+        archive = self.root / "quoted 'archive'.tar.gz"
+        destination = self.root / "relocated directory"
+        with patch.object(release, "run") as runner:
+            release.smoke(archive, destination, [])
+        command = runner.call_args.args[0]
+        self.assertEqual(command[:3], ["cargo", "run", "--locked"])
+        self.assertEqual(command[-4:], ["release-smoke", archive, destination, "--json"])
+        cache = Path(runner.call_args.kwargs["env"]["CARGO_TARGET_DIR"])
+        self.assertEqual(cache.name, "target")
+        self.assertFalse(cache.parent.exists(), "temporary helper cache must be cleaned")
 
-    def test_smoke_refuses_archive_traversal_even_with_matching_checksum(self):
-        archive = self.root / "malicious.tar.gz"
-        with tarfile.open(archive, "w:gz") as tar:
-            member = tarfile.TarInfo("proofstorm/../../escaped")
-            member.size = 3
-            tar.addfile(member, io.BytesIO(b"bad"))
-        Path(str(archive) + ".sha256").write_text(release.digest(archive) + "  " + archive.name + "\n")
-        with self.assertRaisesRegex(ValueError, "unsafe"):
-            release.smoke(archive, self.root / "bad-smoke", [])
-        self.assertFalse((self.root / "escaped").exists())
+    def test_smoke_forwards_denied_sources_and_propagates_helper_failure(self):
+        from subprocess import CalledProcessError
+        with patch.object(release.platform, "system", return_value="Darwin"), \
+             patch.object(release, "run", side_effect=CalledProcessError(1, "cargo")) as runner:
+            with self.assertRaises(CalledProcessError):
+                release.smoke(self.root / "archive", self.root / "relocated", [self.source])
+        self.assertEqual(runner.call_args.args[0][-2:], ["--deny-source", self.source])
 
 
 if __name__ == "__main__":

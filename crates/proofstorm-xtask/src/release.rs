@@ -2,7 +2,9 @@
 mod archive;
 mod build;
 mod bundle;
+mod linux_install;
 mod package;
+mod smoke;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -19,6 +21,10 @@ pub(super) fn verify_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
     bundle::cli(args)
 }
 
+pub(super) fn smoke_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
+    smoke::cli(args)
+}
+
 pub(super) fn artifact_cli(command: &str, args: impl Iterator<Item = OsString>) -> Result<()> {
     if command == "release-package" {
         package::cli(args)
@@ -29,6 +35,10 @@ pub(super) fn artifact_cli(command: &str, args: impl Iterator<Item = OsString>) 
 
 pub(super) fn build_cli(command: &str, args: impl Iterator<Item = OsString>) -> Result<()> {
     build::cli(command, args)
+}
+
+pub(super) fn linux_install_cli(command: &str, args: impl Iterator<Item = OsString>) -> Result<()> {
+    linux_install::cli(command, args)
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
