@@ -5,6 +5,8 @@ trap 'printf "Release shortcut fixture failed at line %s\n" "$LINENO" >&2' ERR
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 helper=$1
 [[ "$helper" == /* && -x "$helper" ]] || exit 2
+# Keep URL-format coverage independent of personal Git insteadOf rewrites.
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 scratch=$(mktemp -d)
 scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf -- "$scratch"' EXIT
@@ -23,6 +25,7 @@ for manifest in "$root"/crates/*/Cargo.toml; do
 done
 printf 'target/\n' > "$fixture/.gitignore"
 git -C "$fixture" init -q -b main
+git -C "$fixture" remote add origin git@github.com:owner/proofstorm.git
 git -C "$fixture" add .
 commit() { git -C "$fixture" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -qam fixture; }
 commit
@@ -46,7 +49,17 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$SHORTCUT_TEST_TRACE"
 case "$1" in
   auth) [[ "$*" == 'auth status --hostname github.com' && ${SHORTCUT_TEST_FAIL:-none} != auth ]] || exit 23 ;;
-  repo) [[ "$*" == 'repo view --json nameWithOwner --jq .nameWithOwner' ]] || exit 97; echo owner/proofstorm ;;
+  repo)
+    # Reproduce gh selecting a fork's upstream when no repository is supplied.
+    if [[ "$*" == 'repo view --json nameWithOwner --jq .nameWithOwner' ]]; then
+      echo upstream/proofstorm
+    else
+      [[ "$2" == view && "$4 $5 $6 $7" == '--json nameWithOwner --jq .nameWithOwner' ]] || exit 97
+      case "$3" in
+        git@github.com:owner/proofstorm.git|https://github.com/owner/proofstorm.git|ssh://git@github.com/owner/proofstorm.git) echo owner/proofstorm ;;
+        *) exit 97 ;;
+      esac
+    fi ;;
   api)
     shift
     method=GET endpoint='' input='' paginated=false
@@ -121,6 +134,17 @@ run() {
 fail() { cat "$scratch/output" >&2; printf '%s\n' "$1" >&2; exit 1; }
 run draft --preview || fail 'Preview failed'
 if grep -q -- '--method POST' "$SHORTCUT_TEST_TRACE"; then fail 'Preview mutated GitHub'; fi
+for origin in https://github.com/owner/proofstorm.git ssh://git@github.com/owner/proofstorm.git; do
+  git -C "$fixture" remote set-url origin "$origin"
+  run draft --preview || fail 'Explicit origin selection failed'
+  grep -Fq "repo view $origin --json nameWithOwner" "$SHORTCUT_TEST_TRACE" || fail 'Origin was not passed explicitly'
+  if grep -q 'repos/upstream/' "$SHORTCUT_TEST_TRACE"; then fail 'Release looked up the upstream repository'; fi
+done
+git -C "$fixture" remote remove origin
+if run draft --yes; then fail 'Released without an origin remote'; fi
+grep -q 'needs an origin remote' "$scratch/output" || fail 'Missing origin guidance'
+if grep -q -- '--method POST' "$SHORTCUT_TEST_TRACE"; then fail 'Missing origin dispatched a release'; fi
+git -C "$fixture" remote add origin git@github.com:owner/proofstorm.git
 run draft --yes || fail 'Draft dispatch failed'
 grep -q -- '--method POST' "$SHORTCUT_TEST_TRACE" || fail 'Missing authenticated dispatch'
 grep -q '"create_draft":"true"' "$SHORTCUT_TEST_STATE/dispatch.json" || fail 'Request was not for a draft'
@@ -131,6 +155,11 @@ if grep -q -- '--method POST' "$SHORTCUT_TEST_TRACE"; then fail 'Unconfirmed rel
 for failure in auth stale no-build failed-build skipped-job expired api tag moved; do
   if SHORTCUT_TEST_FAIL=$failure run draft --yes; then fail "Accepted $failure"; fi
   if grep -q -- '--method POST' "$SHORTCUT_TEST_TRACE"; then fail "Dispatched after $failure"; fi
+  if [[ "$failure" == stale ]]; then
+    grep -q 'Local main differs from owner/proofstorm main' "$scratch/output" || fail 'Mismatch omitted the selected repository'
+    grep -q "Local:  $SHORTCUT_TEST_SHA" "$scratch/output" || fail 'Mismatch omitted the local commit'
+    grep -q 'GitHub: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$scratch/output" || fail 'Mismatch omitted the remote commit'
+  fi
 done
 if SHORTCUT_TEST_FAIL=dispatch run draft --yes; then fail 'Failed dispatch passed'; fi
 grep -q 'Check Actions before retrying' "$scratch/output" || fail 'Missing uncertain-dispatch guidance'

@@ -54,11 +54,21 @@ scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf -- "$scratch"' EXIT
 api() { gh api -H 'X-GitHub-Api-Version: 2022-11-28' "$@"; }
 stage='current main selection'
-repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+# gh's implicit repository may be a fork's upstream or a saved CLI default.
+# Pin every read and dispatch to this checkout's origin, without changing defaults.
+if ! origin=$(git remote get-url origin 2>/dev/null); then
+  printf 'This checkout needs an origin remote to select its release repository.\n' >&2
+  exit 1
+fi
+repo=$(gh repo view "$origin" --json nameWithOwner --jq .nameWithOwner)
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { printf 'Invalid GitHub repository.\n' >&2; exit 1; }
 api "repos/$repo/branches/main" > "$scratch/main.json"
 sha=$("$helper" release-shortcut main "$scratch/main.json")
-[[ "$(git rev-parse HEAD)" == "$sha" ]] || { printf 'Local main differs from GitHub main. Update your checkout, then rerun just release.\n' >&2; exit 1; }
+local_sha=$(git rev-parse HEAD)
+if [[ "$local_sha" != "$sha" ]]; then
+  printf 'Local main differs from %s main.\nLocal:  %s\nGitHub: %s\nUpdate your checkout, then rerun just release.\n' "$repo" "$local_sha" "$sha" >&2
+  exit 1
+fi
 tag=$("$helper" release-shortcut version "$root")
 stage='green build selection'
 printf 'Finding the tested Linux build for %s...\n' "$tag"

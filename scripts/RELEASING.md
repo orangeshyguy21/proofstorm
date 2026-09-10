@@ -35,7 +35,9 @@ just release
 ```
 
 The command uses your existing GitHub CLI login (`gh auth login` if needed) and
-the repository selected by that checkout. It finds **current main's exact build**,
+the repository explicitly selected by that checkout's `origin` remote, not a
+fork's upstream or a saved GitHub CLI default. It never changes those defaults.
+A missing origin is an error. It finds **current main's exact build**,
 checks all three jobs, its artifact, and version availability, then displays the
 repository/version/commit/build and asks `[y/N]` before dispatching **Prepare alpha
 release** on `main`. GitHub Actions performs the full bundle and uploaded-byte
