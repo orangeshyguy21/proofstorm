@@ -275,14 +275,23 @@ mod tests {
         let id = format!("sha256:{}", "a".repeat(64));
         let config = format!("sha256:{}", "b".repeat(64));
         let sha = "c".repeat(64);
-        let mut inspect = json!({"Id":id,"Os":"linux","Architecture":crate::platform::container_arch().unwrap(),
+        let host_arch = crate::platform::container_arch().unwrap();
+        let mut inspect = json!({"Id":id,"Os":"linux","Architecture":host_arch,
             "Config":{"Labels":{"dev.proofstorm.source-sha256":sha}}});
         assert_eq!(built_identity(&inspect, &id, &sha).unwrap(), id);
         assert!(built_identity(&inspect, &config, &sha).is_err());
         inspect["Descriptor"] = json!({"digest":id,"annotations":{"config.digest":config}});
         assert_eq!(built_identity(&inspect, &config, &sha).unwrap(), id);
-        inspect["Architecture"] = json!("amd64");
-        assert!(built_identity(&inspect, &config, &sha).is_err());
+        // Neither supported architecture is universally wrong: CI is AMD64,
+        // while development on Apple Silicon expects ARM64.
+        for image_arch in ["amd64", "arm64"] {
+            inspect["Architecture"] = json!(image_arch);
+            assert_eq!(
+                built_identity(&inspect, &config, &sha).is_ok(),
+                image_arch == host_arch,
+                "image architecture {image_arch}, build host {host_arch}"
+            );
+        }
     }
     fn fixture(home: &Path) -> (Installation, Value) {
         let installation = Installation {

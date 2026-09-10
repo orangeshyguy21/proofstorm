@@ -9,6 +9,9 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+flate2 = "1.1"
+tar = { version = "0.4", default-features = false }
+toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
 serde_json.workspace = true
 sha2.workspace = true
 tempfile = "3.20"

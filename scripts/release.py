@@ -313,58 +313,32 @@ def verify(root):
 
 
 def build(args):
-    expected_target = host_target()
-    source = args.source.resolve()
-    output = args.output.resolve()
-    work = args.work_dir.resolve()
-    require(not work.exists(), "work directory must not already exist")
-    require(not work.is_relative_to(source) and not output.is_relative_to(source),
-            "build and bundle outputs must be outside the development checkout")
-    work.mkdir(parents=True)
-    snapshot_root = work / "source"
-    provenance = snapshot(source, snapshot_root, args.development or alpha_source(source))
-    write_json(work / "source.json", provenance)
-    trunk = (source / ".tools/bin/trunk").resolve()
-    target = args.target_dir.resolve() if args.target_dir else work / "target"
-    require(not target.is_relative_to(source), "target directory must not be in the development checkout")
-    compile_snapshot(snapshot_root, provenance, work=work, output=output, target=target,
-                     trunk=trunk, development=args.development, debug=args.debug,
-                     expected_target=expected_target)
+    """Compatibility entry point; the only build orchestration lives in Bash."""
+    command = ["bash", Path(__file__).with_name("release-build.sh"), "--source", args.source,
+               "--work-dir", args.work_dir, "--output", args.output]
+    if args.target_dir:
+        command.extend(["--target-dir", args.target_dir])
+    if args.development:
+        command.append("--development")
+    if args.debug:
+        command.append("--debug")
+    run(command, cwd=Path.cwd())
 
 
 def compile_snapshot(snapshot_root, provenance, *, work, output, target, trunk,
                      development, debug, expected_target):
-    """Compile a caller-verified snapshot; never infer provenance from a copied .git."""
-    require(development or not debug or alpha_source(snapshot_root), "debug binaries require an alpha or development build")
+    """Compatibility bridge for the Linux worker; Rust rechecks transported bytes."""
     require(host_target() == expected_target, "build target differs from build host")
-    require(trunk.is_file(), "install the pinned Trunk tool before packaging")
-    pins = dict(line.split("=", 1) for line in (snapshot_root / "tools/versions.env").read_text().splitlines()
-                if line and not line.startswith("#"))
-    require(run([trunk, "--version"], cwd=work, capture=True).strip() == "trunk " + pins["TRUNK_VERSION"],
-            "Trunk version does not match tools/versions.env")
-    env = clean_environment()
-    # Trunk parses NO_COLOR as a bool, while many shells set it to "1".
-    if "NO_COLOR" in env:
-        env["NO_COLOR"] = "true"
-    env["CARGO_TARGET_DIR"] = str(target)
-    env["PROOFSTORM_WEB_DIST"] = str(snapshot_root / "crates/proofstorm-web/dist")
-    env["PROOFSTORM_BUILD_REVISION"] = provenance["revision"]
-    env["PROOFSTORM_BUILD_SOURCE_SHA256"] = provenance["sha256"]
-    print("Building web assets from the isolated source snapshot", flush=True)
-    run([trunk, "build", "--release", "--locked"], cwd=snapshot_root / "crates/proofstorm-web", env=env)
-    env["PROOFSTORM_REQUIRE_WEB_ASSETS"] = "1"
-    print("Building CLI and MCP with required embedded assets", flush=True)
-    command = ["cargo", "build", "--locked", "-p", "proofstorm-app", "-p", "proofstorm-mcp", "--bins"]
-    if not debug:
-        command.append("--release")
-    run(command, cwd=snapshot_root, env=env)
-    run(["cargo", "run", "--locked", "-p", "proofstorm-kube", "--example", "export_crds", "--",
-         snapshot_root / "charts/proofstorm/crds"], cwd=snapshot_root, env=env)
-    metadata = json.loads(run([target / ("debug" if debug else "release") / "proofstorm", "release-info"],
-                              cwd=work, env=env, capture=True))
-    require(metadata["target"] == expected_target, "build target differs from build host")
-    result = package(snapshot_root, target / ("debug" if debug else "release"),
-                     output, provenance, development)
+    provenance_path = work / "package-source.json"
+    write_json(provenance_path, provenance)
+    command = ["bash", Path(__file__).with_name("release-build.sh"), "--source", snapshot_root,
+               "--provenance", provenance_path, "--work-dir", work / "release-build",
+               "--output", output, "--target-dir", target, "--trunk", trunk, "--json"]
+    if development:
+        command.append("--development")
+    if debug:
+        command.append("--debug")
+    result = json.loads(run(command, cwd=work, capture=True))
     write_json(work / "result.json", result)
     print(json.dumps(result, indent=2))
 

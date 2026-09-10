@@ -1,14 +1,29 @@
 //! Maintainer-only filesystem/metadata operations; not part of installed Proofstorm.
 mod development;
+mod release;
 
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
-    let command = args
-        .next()
-        .context("expected prepare, resources, launchers, or shell")?;
+    let command = args.next().context(
+        "expected prepare, resources, launchers, shell, release-check, or release-verify",
+    )?;
+    if command == "release-check" {
+        return release::cli(args);
+    }
+    if command == "release-verify" {
+        return release::verify_cli(args);
+    }
+    if let Some(command @ ("release-prepare" | "release-host-check")) = command.to_str() {
+        return release::build_cli(command, args);
+    }
+    if let Some(command @ ("release-pack" | "release-extract" | "release-package")) =
+        command.to_str()
+    {
+        return release::artifact_cli(command, args);
+    }
     let source =
         PathBuf::from(args.next().context("expected checkout directory")?).canonicalize()?;
     let extra = args.next().map(PathBuf::from);

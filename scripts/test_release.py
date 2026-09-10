@@ -2,7 +2,9 @@
 import copy
 import json
 import io
+import os
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -12,10 +14,42 @@ import release
 
 
 class PackagingTests(unittest.TestCase):
+    def test_rust_validator_fixture_retains_existing_metadata_and_image_contracts(self):
+        fixture = Path(__file__).resolve().parents[1] / "crates/proofstorm-xtask/tests/fixtures/release-info.json"
+        info = json.loads(fixture.read_text())
+        for target, platform in release.TARGETS.items():
+            info["target"] = target
+            info["bootstrap_tools"]["target"] = target
+            info["controller"]["platform"] = platform
+            release.validate_info(info)
+            release.validate_alpha(info)
+            images = release.image_inventory(info)
+            self.assertEqual(images[0]["published_source"], "ghcr.io/orangeshyguy21/proofstorm/custom@sha256:" + "d" * 64)
+            self.assertEqual(images[1]["published_source"], "docker.io/library/busybox@sha256:" + "e" * 64)
+            self.assertEqual(images[2]["published_source"], images[2]["image"])
+            self.assertTrue(all(not image["availability_verified"] and image["verified_platforms"] == [] for image in images))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        # Optional migration parity run: use Rust for every existing verify call,
+        # including failure cases, while keeping the legacy packager as producer.
+        verifier = os.environ.get("PROOFSTORM_TEST_RELEASE_VERIFIER")
+        if verifier:
+            executable = str(Path(verifier).resolve(strict=True))
+
+            def rust_verify(root):
+                result = subprocess.run([executable, "release-verify", str(root), "--json"],
+                                        capture_output=True, text=True, timeout=15, check=False)
+                if result.returncode:
+                    raise ValueError(result.stderr)
+                self.assertTrue(json.loads(result.stdout)["integrity_verified"])
+                return json.loads((root / "manifest.json").read_text())
+
+            replacement = patch.object(release, "verify", side_effect=rust_verify)
+            replacement.start()
+            self.addCleanup(replacement.stop)
         self.source = self.root / "source"
         self.binaries = self.root / "binaries"
         self.binaries.mkdir()
@@ -241,7 +275,7 @@ class PackagingTests(unittest.TestCase):
         self.info["controller"]["metadata"]["runtime_contract_sha256"] = "1" * 64
         self.assertFalse(self.package("matching")["release_ready"])
 
-    def test_snapshot_compiler_preserves_metadata_and_uses_matching_profile(self):
+    def test_snapshot_compiler_delegates_to_bash_with_provenance_and_profile(self):
         tools = self.source / "tools/versions.env"
         tools.write_text("TRUNK_VERSION=0.21.14\n")
         trunk = self.root / "trunk"
@@ -250,24 +284,42 @@ class PackagingTests(unittest.TestCase):
         work.mkdir()
         target = work / "target"
         for debug in [False, True]:
-            def run(args, **kwargs):
-                if args[-1] == "--version":
-                    return "trunk 0.21.14\n"
-                if args[-1] == "release-info":
-                    return json.dumps({"target": release.host_target()})
-                return ""
-            with patch.object(release, "run", side_effect=run) as runner, \
-                 patch.object(release, "package", return_value={"release_ready": False}) as package:
+            with patch.object(release, "run", return_value=json.dumps({"release_ready": False})) as runner:
                 release.compile_snapshot(self.source, self.provenance, work=work, output=work / "out",
                                          target=target, trunk=trunk, development=True, debug=debug,
                                          expected_target=release.host_target())
-            calls = runner.call_args_list
-            web = next(call for call in calls if call.args[0][0] == trunk and "build" in call.args[0])
-            host = next(call for call in calls if call.args[0][:2] == ["cargo", "build"])
-            self.assertEqual("--release" in host.args[0], not debug)
-            self.assertEqual(web.kwargs["env"]["PROOFSTORM_BUILD_SOURCE_SHA256"], self.provenance["sha256"])
-            self.assertEqual(host.kwargs["env"]["PROOFSTORM_BUILD_REVISION"], self.provenance["revision"])
-            self.assertEqual(package.call_args.args[1], target / ("debug" if debug else "release"))
+            runner.assert_called_once()
+            command = runner.call_args.args[0]
+            self.assertEqual(command[:2], ["bash", Path(release.__file__).with_name("release-build.sh")])
+            self.assertEqual(command[command.index("--source") + 1], self.source)
+            self.assertEqual(command[command.index("--work-dir") + 1], work / "release-build")
+            self.assertEqual(command[command.index("--target-dir") + 1], target)
+            self.assertEqual(command[command.index("--trunk") + 1], trunk)
+            self.assertEqual(command[command.index("--provenance") + 1], work / "package-source.json")
+            self.assertEqual("--debug" in command, debug)
+            self.assertIn("--development", command)
+            self.assertIn("--json", command)
+            self.assertEqual(json.loads((work / "package-source.json").read_text()), self.provenance)
+            self.assertEqual(json.loads((work / "result.json").read_text()), {"release_ready": False})
+
+    def test_normal_alpha_source_build_delegates_without_development_override(self):
+        (self.source / "Cargo.toml").write_text('[workspace.package]\nversion = "0.1.0-alpha.1"\n')
+        (self.source / "tools/versions.env").write_text("TRUNK_VERSION=0.21.14\n")
+        trunk = self.root / "trunk"
+        trunk.write_text("fixture")
+        work = self.root / "build"
+        work.mkdir()
+        target = work / "target"
+
+        with patch.object(release, "run", return_value=json.dumps({"release_ready": False})) as runner:
+            release.compile_snapshot(self.source, self.provenance, work=work, output=work / "out",
+                                     target=target, trunk=trunk, development=False, debug=True,
+                                     expected_target=release.host_target())
+        runner.assert_called_once()
+        command = runner.call_args.args[0]
+        self.assertNotIn("--development", command)
+        self.assertIn("--debug", command)
+        self.assertIn("--json", command)
 
     def test_snapshot_is_explicit_and_excludes_unlisted_private_files(self):
         (self.source / "public.txt").write_text("public")

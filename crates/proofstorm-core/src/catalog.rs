@@ -240,19 +240,40 @@ impl CatalogResponse {
 /// programmer error caught by the catalog contract tests.
 pub fn default_catalog() -> &'static CatalogResponse {
     static CATALOG: std::sync::LazyLock<CatalogResponse> =
-        std::sync::LazyLock::new(build_default_catalog);
+        std::sync::LazyLock::new(|| build_default_catalog(crate::wallet_builds::LINUX_AMD64));
     &CATALOG
+}
+
+/// Container platform used to select published wallet images and provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogPlatform {
+    LinuxArm64,
+    LinuxAmd64,
+}
+
+/// Build a catalog for an explicit platform, independent of the build host.
+///
+/// This lets maintainers generate and test both coverage contracts on either host.
+/// Runtime callers should continue using [`default_catalog`].
+///
+/// # Panics
+///
+/// Panics if a built-in entry violates a catalog invariant.
+#[must_use]
+pub fn catalog_for_platform(platform: CatalogPlatform) -> CatalogResponse {
+    build_default_catalog(platform == CatalogPlatform::LinuxAmd64)
 }
 
 #[allow(
     clippy::too_many_lines,
     reason = "the default catalog deliberately declares every support-contract field inline"
 )]
-fn build_default_catalog() -> CatalogResponse {
+fn build_default_catalog(amd64: bool) -> CatalogResponse {
     let adapter_version = "0.1.0-alpha.1";
     let backends = default_backend_registry();
     let mut entries = vec![
         catalog_entry(
+            amd64,
             "bitcoin-core",
             backends,
             ComponentKind::Bitcoin,
@@ -279,6 +300,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
         catalog_entry_with_lifecycle(
+            amd64,
             "lnd",
             backends,
             ComponentKind::Lightning,
@@ -311,6 +333,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
         catalog_entry_with_lifecycle(
+            amd64,
             "lnd",
             backends,
             ComponentKind::Lightning,
@@ -343,6 +366,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
         catalog_entry(
+            amd64,
             "cln",
             backends,
             ComponentKind::Lightning,
@@ -374,6 +398,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
         catalog_entry(
+            amd64,
             "cdk",
             backends,
             ComponentKind::Mint,
@@ -418,6 +443,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Target],
         ),
         catalog_entry(
+            amd64,
             "cdk-ldk",
             backends,
             ComponentKind::Mint,
@@ -457,6 +483,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Target],
         ),
         catalog_entry(
+            amd64,
             "cdk-bdk",
             backends,
             ComponentKind::Mint,
@@ -496,6 +523,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Target],
         ),
         catalog_entry(
+            amd64,
             "nutshell",
             backends,
             ComponentKind::Mint,
@@ -550,6 +578,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Target],
         ),
         catalog_entry(
+            amd64,
             "keycloak",
             backends,
             ComponentKind::IdentityProvider,
@@ -568,6 +597,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Laboratory],
         ),
         catalog_entry(
+            amd64,
             "redis",
             backends,
             ComponentKind::Database,
@@ -590,6 +620,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Laboratory],
         ),
         catalog_entry(
+            amd64,
             "postgresql",
             backends,
             ComponentKind::Database,
@@ -616,6 +647,7 @@ fn build_default_catalog() -> CatalogResponse {
             vec![ControlClass::Laboratory],
         ),
         catalog_entry(
+            amd64,
             "nutshell-wallet",
             backends,
             ComponentKind::Wallet,
@@ -642,9 +674,10 @@ fn build_default_catalog() -> CatalogResponse {
             ),
             vec![ControlClass::Laboratory, ControlClass::Attacker],
         ),
-        cdk_cli_wallet_entry(backends, adapter_version),
-        cocod_wallet_entry(backends, adapter_version),
+        cdk_cli_wallet_entry(amd64, backends, adapter_version),
+        cocod_wallet_entry(amd64, backends, adapter_version),
         catalog_entry(
+            amd64,
             "attacker-workspace",
             backends,
             ComponentKind::Attacker,
@@ -1006,6 +1039,7 @@ fn is_sha256_image(image: &str) -> bool {
     reason = "catalog entries deliberately spell out the complete support contract"
 )]
 fn catalog_entry(
+    amd64: bool,
     id: &str,
     backends: &BackendContractRegistry,
     kind: ComponentKind,
@@ -1020,6 +1054,7 @@ fn catalog_entry(
     allowed_control: Vec<ControlClass>,
 ) -> CatalogEntry {
     catalog_entry_with_lifecycle(
+        amd64,
         id,
         backends,
         kind,
@@ -1041,6 +1076,7 @@ fn catalog_entry(
     reason = "catalog entries deliberately spell out the complete support contract"
 )]
 fn catalog_entry_with_lifecycle(
+    amd64: bool,
     id: &str,
     backends: &BackendContractRegistry,
     kind: ComponentKind,
@@ -1063,7 +1099,7 @@ fn catalog_entry_with_lifecycle(
         .config_schema(id)
         .expect("catalog entry backend schema is available");
     let config_schema_digest = crate::digest_json(&config_schema);
-    let runtime_endpoints = catalog_runtime_endpoints(id);
+    let runtime_endpoints = catalog_runtime_endpoints(id, amd64);
     CatalogEntry {
         id: id.into(),
         kind,
@@ -1104,10 +1140,14 @@ fn mirror_image(image: &str) -> String {
     }
 }
 
-fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
-    let amd64 = crate::wallet_builds::LINUX_AMD64;
+fn cdk_cli_wallet_entry(
+    amd64: bool,
+    backends: &BackendContractRegistry,
+    adapter_version: &str,
+) -> CatalogEntry {
     let (image, encoded) = crate::wallet_builds::cdk(amd64);
     let mut entry = catalog_entry(
+        amd64,
         "cdk-cli-wallet",
         backends,
         ComponentKind::Wallet,
@@ -1146,10 +1186,14 @@ fn cdk_cli_wallet_entry(backends: &BackendContractRegistry, adapter_version: &st
     entry
 }
 
-fn cocod_wallet_entry(backends: &BackendContractRegistry, adapter_version: &str) -> CatalogEntry {
-    let amd64 = crate::wallet_builds::LINUX_AMD64;
+fn cocod_wallet_entry(
+    amd64: bool,
+    backends: &BackendContractRegistry,
+    adapter_version: &str,
+) -> CatalogEntry {
     let (image, encoded) = crate::wallet_builds::cocod(amd64);
     let mut entry = catalog_entry(
+        amd64,
         "cocod-wallet",
         backends,
         ComponentKind::Wallet,
@@ -1221,16 +1265,7 @@ fn runtime_endpoint(
         controls,
         limitations: limitations
             .iter()
-            .map(|limitation| {
-                if crate::wallet_builds::LINUX_AMD64 {
-                    limitation.replace(
-                        "Initial image is Linux arm64 only.",
-                        "Packaged image is Linux amd64.",
-                    )
-                } else {
-                    (*limitation).into()
-                }
-            })
+            .map(|limitation| (*limitation).into())
             .collect(),
     }
 }
@@ -1242,11 +1277,11 @@ fn runtime_endpoint(
     clippy::too_many_lines,
     reason = "the runtime registry explicitly declares each installed driver's complete control surface"
 )]
-fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint> {
+fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRuntimeEndpoint> {
     const OBSERVE: &[&str] = &["component_logs", "reachability_oracle"];
     const CDK_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info; use --help for native commands. Client certificates are mounted in /management-client/tls; never copy their contents into arguments or public output. Invoke through component_exec_live, not forensics. Durable RPC changes survive ordinary restarts; a changed authored lab configuration is applied on the next rollout. Mint quote payment override is disabled by the upstream server policy. CLI success is not proof of the intended state: verify the result independently. Management images support Linux amd64 and arm64.";
     const NUTSHELL_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info; use --help for native commands. Invoke through component_exec_live, not forensics. Never copy credentials into arguments or public output. Nutshell 0.20.3 can print RPC errors while exiting zero: verify state independently. Metadata/settings mutations can be process-local and reset from authored configuration on restart; persistent keyset/quote changes follow upstream database semantics. Management images support Linux amd64 and arm64.";
-    match implementation {
+    let mut endpoints = match implementation {
         "bitcoin-core" => vec![runtime_endpoint(
             "component",
             "bitcoin",
@@ -1409,7 +1444,18 @@ fn catalog_runtime_endpoints(implementation: &str) -> Vec<CatalogRuntimeEndpoint
             OBSERVE,
             &["no specialized runtime driver controls are registered"],
         )],
+    };
+    if amd64 {
+        for endpoint in &mut endpoints {
+            for limitation in &mut endpoint.limitations {
+                *limitation = limitation.replace(
+                    "Initial image is Linux arm64 only.",
+                    "Packaged image is Linux amd64.",
+                );
+            }
+        }
     }
+    endpoints
 }
 
 fn support_matrix(
