@@ -18,8 +18,33 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 
 TARGETS = {"aarch64-apple-darwin": "linux/arm64", "x86_64-unknown-linux-gnu": "linux/amd64"}
+
+
+def alpha_version(version):
+    return isinstance(version, str) and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+", version) is not None
+
+
+def alpha_source(source):
+    return alpha_version(tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"])
+
+
+def validate_alpha(info):
+    """Alpha relaxes maturity gates, never artifact identity or compatibility."""
+    require(alpha_version(info["version"]), "alpha channel requires an alpha version")
+    controller = info.get("controller") or {}
+    require(re.fullmatch(r"ghcr\.io/[^\s@]+@sha256:[0-9a-f]{64}", controller.get("image", "")),
+            "alpha requires a published digest-pinned controller")
+    require(controller.get("platform") == TARGETS[info["target"]] and
+            controller.get("metadata", {}).get("version") == info["version"] and
+            re.fullmatch(r"[0-9a-f]{64}", info.get("runtime_contract_sha256", "")) and
+            controller.get("metadata", {}).get("runtime_contract_sha256") == info["runtime_contract_sha256"],
+            "alpha controller compatibility mismatch")
+    require(bool((info.get("bootstrap_tools") or {}).get("tools")), "alpha requires pinned bootstrap tools")
+    require(all(image["published_source"] for image in image_inventory(info)),
+            "alpha requires published workload image sources")
 
 
 def host_target():
@@ -153,6 +178,9 @@ def package(source, binaries, output, provenance, development):
         mcp = json.loads(run([root / "bin/proofstorm-mcp", "--release-info"], cwd=root, capture=True))
         require(info == mcp, "CLI and MCP were not built from the same release inputs")
         validate_info(info)
+        alpha = not development and alpha_version(info["version"])
+        if alpha:
+            validate_alpha(info)
         require(info["source_revision"] == provenance["revision"] and
                 info["source_sha256"] == provenance["sha256"], "binary/source provenance mismatch")
         shutil.copytree(source / "charts/proofstorm", root / "chart")
@@ -193,7 +221,7 @@ def package(source, binaries, output, provenance, development):
             blockers.append("Source snapshot includes uncommitted development changes.")
         if info["build_profile"] != "release":
             blockers.append("Host executables use a debug build profile.")
-        require(development or not blockers, "release blocked:\n" + "\n".join(blockers))
+        require(development or alpha or not blockers, "release blocked:\n" + "\n".join(blockers))
         files = {}
         for path in sorted(root.rglob("*")):
             require(not path.is_symlink(), f"payload symlink refused: {path}")
@@ -206,7 +234,7 @@ def package(source, binaries, output, provenance, development):
         require(REQUIRED <= files.keys(), f"missing payload: {sorted(REQUIRED - files.keys())}")
         manifest = {"format_version": 1, "version": info["version"], "target": target,
                     "build_profile": info["build_profile"],
-                    "channel": "development" if development else "release", "release_ready": not blockers,
+                    "channel": "development" if development else "alpha" if alpha else "release", "release_ready": not blockers,
                     "release_blockers": blockers, "source": provenance, "files": files,
                     "controller": controller, "workload_images": images}
         write_json(root / "manifest.json", manifest)
@@ -243,7 +271,7 @@ def verify(root):
     require(not manifest_path.is_symlink(), "manifest symlink refused")
     manifest = json.loads(manifest_path.read_text())
     require(manifest["format_version"] == 1 and manifest["target"] in TARGETS, "unsupported bundle")
-    require(manifest["channel"] in {"development", "release"}, "unsupported bundle channel")
+    require(manifest["channel"] in {"development", "alpha", "release"}, "unsupported bundle channel")
     require(manifest["release_ready"] == (not manifest["release_blockers"]), "inconsistent release readiness")
     if manifest["release_ready"]:
         require(manifest["channel"] == "release" and manifest["controller"] is not None
@@ -270,6 +298,9 @@ def verify(root):
         require(payload.stat().st_mode & 0o7777 == receipt["mode"], f"payload mode mismatch: {name}")
     info = json.loads((root / "release-info.json").read_text())
     validate_info(info)
+    if manifest["channel"] == "alpha":
+        validate_alpha(info)
+        require(manifest["controller"] == info["controller"], "alpha controller metadata mismatch")
     require(info["target"] == manifest["target"], "manifest target mismatch")
     require(info["version"] == manifest["version"], "manifest version mismatch")
     require(info["build_profile"] == manifest["build_profile"], "manifest build profile mismatch")
@@ -291,7 +322,7 @@ def build(args):
             "build and bundle outputs must be outside the development checkout")
     work.mkdir(parents=True)
     snapshot_root = work / "source"
-    provenance = snapshot(source, snapshot_root, args.development)
+    provenance = snapshot(source, snapshot_root, args.development or alpha_source(source))
     write_json(work / "source.json", provenance)
     trunk = (source / ".tools/bin/trunk").resolve()
     target = args.target_dir.resolve() if args.target_dir else work / "target"
@@ -304,7 +335,7 @@ def build(args):
 def compile_snapshot(snapshot_root, provenance, *, work, output, target, trunk,
                      development, debug, expected_target):
     """Compile a caller-verified snapshot; never infer provenance from a copied .git."""
-    require(development or not debug, "debug binaries require --development")
+    require(development or not debug or alpha_source(snapshot_root), "debug binaries require an alpha or development build")
     require(host_target() == expected_target, "build target differs from build host")
     require(trunk.is_file(), "install the pinned Trunk tool before packaging")
     pins = dict(line.split("=", 1) for line in (snapshot_root / "tools/versions.env").read_text().splitlines()
@@ -395,7 +426,7 @@ def main():
     builder.add_argument("--output", type=Path, required=True)
     builder.add_argument("--target-dir", type=Path, help="Optional external build cache; never the checkout target")
     builder.add_argument("--development", action="store_true", help="Allow explicit non-release bundles with recorded blockers")
-    builder.add_argument("--debug", action="store_true", help="Faster host build for development smoke tests only")
+    builder.add_argument("--debug", action="store_true", help="Faster host build for alpha/development bundles")
     checker = commands.add_parser("verify")
     checker.add_argument("directory", type=Path)
     smoker = commands.add_parser("smoke")
@@ -405,7 +436,6 @@ def main():
                         help="macOS-only: deny child executables read access to this directory")
     args = parser.parse_args()
     if args.command == "build":
-        require(args.development or not args.debug, "debug binaries require --development")
         build(args)
     elif args.command == "smoke":
         smoke(args.archive.resolve(), args.destination.resolve(), args.deny_source)

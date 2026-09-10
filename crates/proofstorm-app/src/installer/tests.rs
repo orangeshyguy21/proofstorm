@@ -37,6 +37,48 @@ fn fixture(root: &Path) -> PathBuf {
 }
 
 #[test]
+fn alpha_installs_reinstalls_and_permits_its_controller_without_override() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = fixture(root.path());
+    let path = bundle.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["channel"] = json!("alpha");
+    manifest["controller"] = crate::release::describe()["controller"].clone();
+    fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let prefix = root.path().join("prefix");
+    let first = install(&bundle, &prefix, false).unwrap();
+    assert_eq!(first, install(&bundle, &prefix, false).unwrap());
+    assert!(!prefix.join("lib/proofstorm/state").exists());
+    assert!(crate::artifacts::verify(&root.path().join("home"), &bundle, false).unwrap());
+    fs::write(bundle.join("LICENSE"), b"tampered").unwrap();
+    assert!(install(&bundle, &prefix, false).is_err());
+}
+
+#[test]
+fn alpha_never_waives_controller_compatibility_or_stable_release_gates() {
+    let info = crate::release::describe();
+    let manifest = json!({"release_ready":false,"controller":info["controller"]});
+    validate_alpha(&manifest, &info).unwrap();
+    for version in ["0.1.0", "0.1.0-alpha.", "0.1-alpha.1", "0.1.0-alpha.1-dev"] {
+        let mut changed = info.clone();
+        changed["version"] = json!(version);
+        assert!(validate_alpha(&manifest, &changed).is_err());
+    }
+    for key in ["image", "platform", "metadata"] {
+        let mut changed = info.clone();
+        changed["controller"][key] = json!("wrong");
+        let altered_manifest = json!({"release_ready":false,"controller":changed["controller"]});
+        assert!(validate_alpha(&altered_manifest, &changed).is_err());
+    }
+    let mut changed = manifest.clone();
+    changed["controller"] = Value::Null;
+    assert!(validate_alpha(&changed, &info).is_err());
+    changed = manifest;
+    changed["release_ready"] = json!(true);
+    assert!(validate_alpha(&changed, &info).is_err());
+}
+
+#[test]
 fn foreign_target_is_refused_even_in_development_mode() {
     let root = tempfile::tempdir().unwrap();
     let bundle = fixture(root.path());

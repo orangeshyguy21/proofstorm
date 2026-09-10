@@ -63,9 +63,53 @@ class PackagingTests(unittest.TestCase):
 
     def test_release_mode_refuses_unpublished_and_unverified_runtime(self):
         self.provenance["dirty"] = False
+        self.info["version"] = "0.1.0"
+        (self.source / "charts/proofstorm/Chart.yaml").write_text("version: 0.1.0\nappVersion: 0.1.0\n")
         with self.assertRaisesRegex(ValueError, "release blocked"):
             self.package(development=False)
         self.assertFalse(list((self.root / "output").glob("*.tar.gz")))
+
+    def alpha_inputs(self):
+        self.info["runtime_contract_sha256"] = "1" * 64
+        self.info["controller"] = {
+            "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:" + "2" * 64,
+            "platform": release.TARGETS[self.info["target"]], "release_ready": False,
+            "metadata": {"version": self.info["version"], "runtime_contract_sha256": "1" * 64}}
+        self.info["bootstrap_tools"] = {"target": self.info["target"], "tools": [{"name": "fixture"}]}
+        self.info["image_publication"] = json.dumps({"namespace": "ghcr.io/orangeshyguy21/proofstorm"})
+
+    def test_normal_alpha_has_download_name_and_retains_maturity_limitations(self):
+        self.alpha_inputs()
+        result = self.package(development=False)
+        self.assertEqual(Path(result["archive"]).name, f'proofstorm-0.1.0-alpha.1-{self.info["target"]}.tar.gz')
+        self.assertFalse(result["release_ready"])
+        self.assertTrue(result["release_blockers"])
+        with tarfile.open(result["archive"]) as archive:
+            archive.extractall(self.root / "alpha", filter="data")
+        root = self.root / "alpha/proofstorm"
+        self.assertEqual(release.verify(root)["channel"], "alpha")
+        path = root / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["controller"]["image"] = "wrong"
+        release.write_json(path, manifest)
+        with self.assertRaisesRegex(ValueError, "controller metadata"):
+            release.verify(root)
+
+    def test_alpha_still_requires_controller_tools_and_image_sources(self):
+        self.alpha_inputs()
+        for key, value in [("controller", None), ("bootstrap_tools", None), ("image_publication", "{}")]:
+            original = self.info[key]
+            self.info[key] = value
+            with self.assertRaises(ValueError):
+                self.package(output=key, development=False)
+            self.info[key] = original
+
+    def test_alpha_channel_is_selected_from_the_workspace_version(self):
+        cargo = self.source / "Cargo.toml"
+        for version, expected in [("0.1.0-alpha.1", True), ("0.1.0", False),
+                                  ("0.1.0-alpha.", False), ("0.1.0-alpha.1-dev", False)]:
+            cargo.write_text('[workspace.package]\nversion = "' + version + '"\n')
+            self.assertEqual(release.alpha_source(self.source), expected)
 
     def test_missing_frontend_or_crd_fails_without_publishing(self):
         self.info["web_assets"] = []

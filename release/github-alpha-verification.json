@@ -1,0 +1,24 @@
+{
+  "format_version": 1,
+  "channel": "alpha",
+  "version": "0.1.0-alpha.1",
+  "target": "x86_64-unknown-linux-gnu",
+  "archive": "proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz",
+  "archive_sha256": "9d81714bd782214f08b0d1860b34be4a8d12713c471e679821c6df7b93571517",
+  "installer_sha256": "9a6ed7944f350b161170c55ab3a845beb37d6cb1f22ebac42692a4970f5120a3",
+  "source": {
+    "revision": "9bdba429f3f9f4b48ba7c762981548d5f948f496",
+    "sha256": "37f9e3a0545107fd550df13531c09f10e87412f5e0d15371a975cb4e99491482",
+    "dirty": true
+  },
+  "build_profile": "debug",
+  "integrity_verified": true,
+  "relocated_binaries_verified": true,
+  "controller_contract_match_verified": true,
+  "github_published": true,
+  "publication_evidence": "User reports completing the prepared GitHub prerelease command; remote access could not be independently verified from this session",
+  "github_publication_independently_verified": false,
+  "github_download_verified": false,
+  "fresh_vm_runtime_verified": false,
+  "release_ready": false
+}

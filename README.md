@@ -8,6 +8,11 @@ application layer. Start here; the advanced agent workflows remain below.
 
 ## Alpha onboarding work
 
+The upcoming GitHub alpha uses the normal installer and `proofstorm setup`—no
+alpha/development opt-in flags. Alpha build metadata records remaining test
+limitations separately from installation eligibility. The [release guide](release/README.md)
+describes the maintainer build; the updated GitHub assets still need publication.
+
 The [alpha onboarding plan](dev/ALPHA-ONBOARDING-PLAN.md) tracks the packaged
 installer, setup, and Codex/OpenCode attachment work. Those public commands are
 not available as a published release yet. Maintainers can now build, verify, and

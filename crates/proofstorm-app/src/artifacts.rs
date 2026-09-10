@@ -214,7 +214,7 @@ impl Verified {
                 root,
                 executable,
                 executable_sha256,
-                allow_development,
+                allow_development: allow_development || manifest["channel"] == "alpha",
                 controller_sha256: None,
             })
         }
@@ -270,7 +270,8 @@ pub fn root(home: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Returns whether the explicitly registered source permits development artifacts.
+/// Returns whether verified artifacts permit a preview controller. Published
+/// alpha bundles do, without requiring a user-facing development override.
 pub(crate) fn verify(home: &Path, root: &Path, allow_development: bool) -> Result<bool> {
     if let Some(record) = read(home)? {
         record.verify(&std::env::current_exe()?.canonicalize()?)?;
@@ -280,8 +281,8 @@ pub(crate) fn verify(home: &Path, root: &Path, allow_development: bool) -> Resul
         );
         Ok(true)
     } else {
-        crate::installer::verify(root, allow_development, true)?;
-        Ok(allow_development)
+        let manifest = crate::installer::verify(root, allow_development, true)?;
+        Ok(allow_development || manifest["channel"] == "alpha")
     }
 }
 

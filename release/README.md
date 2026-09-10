@@ -5,6 +5,47 @@ CLI/MCP executables and UI; installed setup downloads prebuilt container images.
 Build and publication commands below are maintainer-only. The local installer
 test exercises the prebuilt user path without Rust or Python.
 
+## Build an alpha for GitHub
+
+Alpha is the normal installation experience, not a user opt-in mode. When the
+workspace version is `X.Y.Z-alpha.N`, a normal build produces an `alpha` bundle
+named `proofstorm-VERSION-TARGET.tar.gz`, matching `install.sh`'s GitHub download
+path. Users need no development flags for installation, setup, GUI, or attachment.
+
+```sh
+scratch="$(mktemp -d)"
+python3 scripts/release.py build --debug \
+  --work-dir "$scratch/build" --output "$scratch/artifacts"
+```
+
+On this Mac, build Linux artifacts in isolation with:
+
+```sh
+python3 scripts/linux_container.py build --debug --work-dir /absolute/new/build-directory
+```
+
+Omit `--debug` for optimized binaries. Alpha bundles can retain dirty-source and
+debug-build provenance, plus untested-runtime limitations, without pretending to
+be stable releases (`release_ready` stays false). Pinned controller identity,
+platform/version/contract compatibility, bootstrap tools, published image sources,
+and payload integrity remain required. Stable versions retain their stricter gates.
+
+Publish the resulting archive, its checksum, and `install.sh` in the versioned
+GitHub prerelease, then test the actual download and runtime flow on a fresh VM.
+Do not rename the older development archive: its binaries still require an
+override. The updated Linux host bundle has now been rebuilt; the existing matching
+controller did not need rebuilding for this installer change. GitHub publication and the
+real VM download test have not yet happened.
+
+The normal-alpha installer fixtures and packaging/download-path tests pass, as
+does strict app Clippy. Six checkout-registration regression tests could not
+proceed because this session denied loopback port binding (`Operation not
+permitted`); they are not recorded as passes. After the first automated request
+timed out in permission review, the user completed the updated Linux alpha build.
+Its archive checksum, alpha channel, controller compatibility, integrity report,
+and relocated executable report were checked. See `github-alpha-verification.json`
+and the prepared `alpha-1-notes.md`; these are not evidence of a GitHub download yet.
+
 ## Build a development bundle
 
 Linux host support is being brought up; see [Linux status and remaining gates](linux.md).
@@ -25,7 +66,7 @@ mode. An optional `--target-dir /absolute/external/cache` reuses a Cargo cache;
 the checkout's target directory is refused. Work directories must be new.
 
 The builder snapshots Git-listed files (including non-ignored untracked files
-only in an explicit development build), records the source revision and snapshot
+for alpha or explicit development builds), records the source revision and snapshot
 digest, builds the frontend from that snapshot, embeds its assets in both
 executables, and regenerates CRDs there. It never overwrites checkout binaries,
 the checkout's frontend output, or an existing bundle. Ignored local state,
@@ -99,8 +140,8 @@ The script prints an absolute command and leaves PATH unchanged.
 
 Without `--artifact-dir`, the script downloads a versioned GitHub Release archive
 and checksum over HTTPS. **No supported public release is published yet.**
-Development bundles require the explicit local-only `--allow-development` flag;
-the normal installer refuses them. Downloaded macOS quarantine/signing behavior
+Scratch development bundles require the explicit local-only `--allow-development`
+flag; normal alpha bundles do not. Downloaded macOS quarantine/signing behavior
 still needs a clean-machine test.
 
 ## Installed setup and doctor (development preview)

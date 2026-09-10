@@ -65,6 +65,8 @@ class LinuxContainerTests(unittest.TestCase):
         self.assertEqual(command[command.index("--network") + 1], "none")
         self.assertIn("--read-only", command)
         self.assertEqual(command[command.index("--user") + 1], "1000:1000")
+        self.assertEqual(command[-1], "false")
+        self.assertEqual(linux.smoke_command("test", "bundle.tar.gz", development=True)[-1], "true")
         for forbidden in ["--privileged", "--volume", "-v", "--mount", "--env-file"]:
             self.assertNotIn(forbidden, command)
         self.assertIn("for attempt in first reinstall", linux.INSTALL_CHECK)
@@ -111,7 +113,7 @@ class LinuxContainerTests(unittest.TestCase):
         with patch.object(linux.release, "snapshot", side_effect=snapshot), \
              patch.object(linux.subprocess, "run", return_value=CompletedProcess([], 0, stdout="1\n")) as run:
             with self.assertRaisesRegex(ValueError, "build failed"):
-                linux.build(source, self.root / "work")
+                linux.build(source, self.root / "work", development=True)
         receipt = json.loads((self.root / "work/run.json").read_text())
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[-2], ["docker", "stop", "--timeout", "10", receipt["container"]])

@@ -82,6 +82,52 @@ fn inventory(root: &Path, directory: &Path, files: &mut BTreeSet<String>) -> Res
     Ok(())
 }
 
+fn alpha_version(version: &str) -> bool {
+    let Some((base, number)) = version.split_once("-alpha.") else {
+        return false;
+    };
+    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let parts: Vec<_> = base.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|part| numeric(part)) && numeric(number)
+}
+
+fn validate_alpha(manifest: &Value, info: &Value) -> Result<()> {
+    let digest = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    let controller = &info["controller"];
+    ensure!(
+        info["version"].as_str().is_some_and(alpha_version) && manifest["release_ready"] == false,
+        "alpha channel requires an alpha version without stable release readiness"
+    );
+    ensure!(
+        manifest["controller"] == *controller
+            && controller["image"].as_str().is_some_and(|image| {
+                image.starts_with("ghcr.io/")
+                    && !image.chars().any(char::is_whitespace)
+                    && image
+                        .split_once("@sha256:")
+                        .is_some_and(|(_, sha)| digest(sha))
+            })
+            && controller["platform"] == crate::platform::container_platform()?
+            && controller["metadata"]["version"] == info["version"]
+            && info["runtime_contract_sha256"].as_str().is_some_and(digest)
+            && controller["metadata"]["runtime_contract_sha256"] == info["runtime_contract_sha256"],
+        "alpha controller identity or compatibility mismatch"
+    );
+    ensure!(
+        info["bootstrap_tools"]["target"] == info["target"]
+            && info["bootstrap_tools"]["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty()),
+        "alpha requires platform-matching bootstrap tools"
+    );
+    Ok(())
+}
+
 pub(crate) fn verify(root: &Path, allow_development: bool, match_binary: bool) -> Result<Value> {
     ensure!(
         fs::symlink_metadata(root)?.is_dir(),
@@ -97,10 +143,12 @@ pub(crate) fn verify(root: &Path, allow_development: bool, match_binary: bool) -
         "unsupported bundle format or platform"
     );
     ensure!(
-        manifest["channel"] == "development" || manifest["channel"] == "release",
+        manifest["channel"] == "development"
+            || manifest["channel"] == "alpha"
+            || manifest["channel"] == "release",
         "unknown release channel"
     );
-    if !allow_development {
+    if !allow_development && manifest["channel"] != "alpha" {
         ensure!(
             manifest["release_ready"] == true
                 && manifest["channel"] == "release"
@@ -156,6 +204,9 @@ pub(crate) fn verify(root: &Path, allow_development: bool, match_binary: bool) -
         }
     }
     let info: Value = serde_json::from_slice(&fs::read(root.join("release-info.json"))?)?;
+    if manifest["channel"] == "alpha" {
+        validate_alpha(&manifest, &info)?;
+    }
     ensure!(
         info["target"] == manifest["target"]
             && info["version"] == manifest["version"]

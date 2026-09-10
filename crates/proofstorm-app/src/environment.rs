@@ -93,7 +93,7 @@ impl Labs {
                 resource_usage:"not collected".into(),protocol_traffic:"not collected".into(),attached_clients:"not tracked; advertised endpoints do not imply active tunnels or clients".into(),
             },
         };
-        bound_page(&mut view)?;
+        bound_page_bytes(&mut view, 24 * 1024)?;
         Ok(view)
     }
 
@@ -380,12 +380,16 @@ fn shorten<T>(page: &mut Page<T>, id: impl Fn(&T) -> &str) -> bool {
     page.next_cursor = page.items.last().map(|item| id(item).to_owned());
     true
 }
-/// Bound the common payload below MCP's envelope budget, with explicit continuation.
-fn bound_page(view: &mut EnvironmentView) -> Result<(), Error> {
+/// Bound a page with explicit continuation, preserving the shared read model.
+/// Transports that serialize the page twice can reserve a smaller payload budget.
+///
+/// # Errors
+/// Returns an error if even a single item cannot fit; never substitutes an empty page.
+pub fn bound_page_bytes(view: &mut EnvironmentView, maximum_bytes: usize) -> Result<(), Error> {
     while serde_json::to_vec(&view)
         .map_err(|_| Error::failure("environment serialization failed", None))?
         .len()
-        > 24 * 1024
+        > maximum_bytes
     {
         if shorten(&mut view.labs, |lab| &lab.id) {
             continue;

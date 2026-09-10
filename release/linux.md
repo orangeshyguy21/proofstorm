@@ -21,7 +21,10 @@ Source-free install/reinstall also passed for this new archive in offline,
 non-root Debian. Runtime testing remains. The previous bundle still has no
 controller and must not be used.
 
-Do not publish a Linux installer command as ready until these gates pass:
+The normal GitHub alpha installer is the next test surface. Full-runtime and
+fresh-VM checks are alpha validation work, not prerequisites to letting testers
+install an alpha. Keep these limitations visible and do not claim broad or stable
+Linux readiness until these checks pass:
 
 - Build CLI and MCP with the same embedded GUI and source metadata on Linux x86-64.
 - Pin and verify an AMD64 controller with the matching runtime contract.
@@ -32,8 +35,8 @@ Do not publish a Linux installer command as ready until these gates pass:
   agent's MCP discovery, lab creation/read/teardown, interruption, and reinstall.
 - Validate a distribution/glibc baseline before claiming broad Linux support.
 
-The release builder retains explicit blockers for image availability, controller
-readiness, and fresh-VM verification. Development images have been published;
+The release builder retains these maturity limitations in alpha metadata without
+blocking normal alpha installation. Development images have been published;
 no GitHub Release or public installer-download flow has been verified.
 
 Checked-in provenance already lists AMD64/ARM64 for Bitcoin Core and the CDK
@@ -74,7 +77,9 @@ sh install.sh --artifact-dir /absolute/path/to/artifacts \
 ## Disposable Docker packaging rehearsal
 
 On a Mac, the following maintainer command builds a real Linux development
-archive using Docker's AMD64 emulation. It is not a first-user install command:
+archive using Docker's AMD64 emulation. The default channel follows the workspace
+version (currently alpha); `--development` explicitly selects a scratch bundle.
+It is not a first-user install command:
 
 ```sh
 scratch="$(mktemp -d)"
@@ -93,8 +98,8 @@ those compilation resource caps. This remains slower than a native AMD64 host.
 The worker builds the GUI, CLI, MCP, and generated CRDs from the same snapshot
 through the existing release builder. Metadata, package checksums, and relocation
 checks must pass before artifacts are exported. `--debug` is for development
-rehearsals only; omit it for an optimized development bundle. Neither mode
-bypasses publication gates or claims release readiness.
+or alpha builds; omit it for optimized host binaries. Neither mode claims stable
+release readiness. Alpha retains maturity limitations without a user opt-in flag.
 
 After building, use the emitted archive name for an offline first-install test:
 
@@ -118,6 +123,10 @@ Both commands remove only their exact UUID-named test containers, including on
 failure. Source snapshots, artifacts, logs, and run receipts remain in the chosen
 work directory; the toolchain image remains cached. Neither command publishes
 images, starts Docker-in-Docker, changes a Docker context, or touches existing labs.
+
+The smoke command now tests normal installation without a development override.
+To rerun one of the historical `-dev-...` archives below, add its maintainer-only
+`--development` option. This option is not part of the GitHub alpha user flow.
 
 Anonymous custom-image verification accepts an explicit maintainer platform:
 

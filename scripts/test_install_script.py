@@ -26,7 +26,7 @@ class InstallScriptTests(unittest.TestCase):
         path.write_text(f'#!/bin/sh\ncase "$1" in -s) echo {system};; -m) echo {machine};; esac\n')
         path.chmod(0o755)
 
-    def archive_with(self, name="proofstorm/bin/proofstorm", link=False):
+    def archive_with(self, name="proofstorm/bin/proofstorm", link=False, reject_development=False):
         with tarfile.open(self.archive, "w:gz") as tar:
             info = tarfile.TarInfo(name)
             if link:
@@ -35,6 +35,8 @@ class InstallScriptTests(unittest.TestCase):
                 tar.addfile(info)
             else:
                 body = b'#!/bin/sh\n[ -x "$0" ] || exit 19\nexit 0\n'
+                if reject_development:
+                    body = b'#!/bin/sh\ncase "$*" in *--allow-development*) exit 23;; esac\nexit 0\n'
                 info.mode = 0o755
                 info.size = len(body)
                 tar.addfile(info, io.BytesIO(body))
@@ -54,6 +56,36 @@ class InstallScriptTests(unittest.TestCase):
                                      "--prefix", self.root / "prefix", "--allow-development"],
                                     env=self.env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_github_alpha_download_uses_normal_command_without_override(self):
+        self.platform("Linux", "x86_64")
+        self.archive = self.root / "proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz"
+        self.archive_with(reject_development=True)
+        curl = self.bin / "curl"
+        curl.write_text('''#!/bin/sh
+printf '%s\\n' "$@" >> "$DOWNLOAD_LOG"
+source="$DOWNLOAD_FIXTURE"
+for arg do
+  case "$arg" in https://*.sha256) source="$DOWNLOAD_FIXTURE.sha256";; esac
+done
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --output ]; then cp "$source" "$2"; exit; fi
+  shift
+done
+exit 24
+''')
+        curl.chmod(0o755)
+        log = self.root / "downloads"
+        result = subprocess.run(["sh", SCRIPT, "--prefix", self.root / "prefix"],
+                                env=dict(self.env, DOWNLOAD_FIXTURE=str(self.archive), DOWNLOAD_LOG=str(log)),
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = log.read_text().splitlines()
+        url = "https://github.com/orangeshyguy21/proofstorm/releases/download/v0.1.0-alpha.1/" + self.archive.name
+        self.assertIn(url, args)
+        self.assertIn(url + ".sha256", args)
+        self.assertEqual(args.count("--proto-redir"), 2)
+        self.assertNotIn("--allow-development", args)
 
     def test_unsupported_hosts_fail_before_installation(self):
         for system, machine in [("Linux", "aarch64"), ("Darwin", "x86_64"), ("Windows", "x86_64")]:

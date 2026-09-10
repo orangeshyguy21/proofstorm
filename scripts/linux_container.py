@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build real Linux development bundles without mounting the checkout or host Docker socket.
+"""Build real Linux alpha/development bundles without checkout or host Docker socket mounts.
 
 The build container has its own writable filesystem, capped resources, and no
-privileges. This is a packaging rehearsal, not the privileged Docker-in-Docker
+privileges. This is host packaging, not the privileged Docker-in-Docker
 runtime test. It never publishes, creates a cluster, or configures an agent.
 """
 import argparse
@@ -31,9 +31,10 @@ done
 test ! -e /input/source
 mkdir -p /tmp/first-user
 export HOME=/tmp/first-user PROOFSTORM_HOME=/tmp/runtime-must-not-exist
+if [ "$2" = true ]; then set -- "$1" --allow-development; else set -- "$1"; fi
 for attempt in first reinstall; do
     sh /input/install.sh --artifact-dir /input --archive "$1" \
-        --prefix /tmp/first-user/.local --allow-development
+        --prefix /tmp/first-user/.local ${2:+"$2"}
     /tmp/first-user/.local/bin/proofstorm --version
     /tmp/first-user/.local/bin/proofstorm --help >/dev/null
     /tmp/first-user/.local/bin/proofstorm release-info > /tmp/cli-info.json
@@ -87,16 +88,16 @@ def cleanup(name, log_path):
         print(f"Stop it with: docker stop --timeout 10 {name}", flush=True)
 
 
-def build(source, work, debug=False):
+def build(source, work, debug=False, development=False):
     source, work = source.resolve(), work.resolve()
     release.require(not work.exists(), "work directory must be new")
     release.require(not work.is_relative_to(source), "build outside the checkout")
     work.mkdir(parents=True)
     inputs = work / "input"
     inputs.mkdir()
-    provenance = release.snapshot(source, inputs / "source", True)
+    provenance = release.snapshot(source, inputs / "source", development or release.alpha_source(source))
     release.write_json(inputs / "source.json", provenance)
-    release.write_json(inputs / "options.json", {"debug": debug})
+    release.write_json(inputs / "options.json", {"debug": debug, "development": development})
     # Only the Dockerfile is sent to the toolchain build. Source is copied later.
     context = work / "toolchain"
     context.mkdir()
@@ -122,7 +123,7 @@ def build(source, work, debug=False):
                                 check=True, capture_output=True, text=True)
         release.require(status.stdout.strip() == "0", "Linux build failed; see container output")
         subprocess.run(["docker", "cp", name + ":/artifacts", str(work / "artifacts")], check=True)
-        print(f"Linux development artifacts and verification reports: {work / 'artifacts'}", flush=True)
+        print(f"Linux artifacts and verification reports: {work / 'artifacts'}", flush=True)
     finally:
         if created:
             # Exact UUID-owned container only. Never prune Docker or touch other labs.
@@ -143,7 +144,7 @@ def worker():
     subprocess.run(["sh", str(source / "tools/install-trunk.sh")], check=True)
     release.compile_snapshot(source, provenance, work=work, output=output,
                              target=work / "target", trunk=source / ".tools/bin/trunk",
-                             development=True, debug=options["debug"], expected_target=TARGET)
+                             development=options["development"], debug=options["debug"], expected_target=TARGET)
     shutil.copyfile(work / "result.json", output / "build-report.json")
     result = json.loads((work / "result.json").read_text())
     release.smoke(Path(result["archive"]), work / "relocated", [])
@@ -151,16 +152,16 @@ def worker():
     shutil.copyfile(source / "install.sh", output / "install.sh")
 
 
-def smoke_command(name, archive_name, image=SMOKE_IMAGE):
+def smoke_command(name, archive_name, image=SMOKE_IMAGE, development=False):
     return ["docker", "create", "--name", name, "--platform", PLATFORM,
             "--user", "1000:1000",
             "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=768m",
             "--cpus", "2", "--memory", "1g", "--pids-limit", "128",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-            image, "sh", "-c", INSTALL_CHECK, "install-check", archive_name]
+            image, "sh", "-c", INSTALL_CHECK, "install-check", archive_name, str(development).lower()]
 
 
-def install_smoke(archive, installer, work):
+def install_smoke(archive, installer, work, development=False):
     release.require(not archive.is_symlink() and not installer.is_symlink(), "smoke input symlink refused")
     archive, installer, work = archive.resolve(), installer.resolve(), work.resolve()
     release.require(archive.is_file() and installer.is_file(), "smoke inputs must exist")
@@ -194,7 +195,7 @@ def install_smoke(archive, installer, work):
     try:
         subprocess.run(["docker", "buildx", "build", "--platform", PLATFORM, "--load",
                         "--tag", tag, str(work)], check=True, timeout=180)
-        subprocess.run(smoke_command(name, archive.name, tag), check=True)
+        subprocess.run(smoke_command(name, archive.name, tag, development), check=True)
         created = True
         print("Testing install and reinstall in source-free Debian, with networking disabled", flush=True)
         subprocess.run(["docker", "start", "--attach", name], check=True, timeout=180)
@@ -206,6 +207,7 @@ def install_smoke(archive, installer, work):
             "source_checkout_present": False, "build_tools_present": False,
             "network_enabled": False, "runtime_tested": False, "github_download_tested": False,
             "archive_sha256": receipt[0], "installer_sha256": release.digest(installer),
+            "development_override": development,
         })
         print(f"Source-free installer test passed: {work / 'install-smoke-report.json'}", flush=True)
     finally:
@@ -218,19 +220,21 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     builder = sub.add_parser("build")
     builder.add_argument("--work-dir", type=Path, required=True)
-    builder.add_argument("--debug", action="store_true", help="Faster development-only host build")
+    builder.add_argument("--debug", action="store_true", help="Faster alpha/development host build")
+    builder.add_argument("--development", action="store_true", help="Build an unpublished local bundle instead of the version's normal channel")
     smoker = sub.add_parser("smoke", help="Offline, source-free install/reinstall test; no runtime setup")
     smoker.add_argument("--archive", type=Path, required=True)
     smoker.add_argument("--installer", type=Path, required=True)
     smoker.add_argument("--work-dir", type=Path, required=True)
+    smoker.add_argument("--development", action="store_true", help="Explicitly test an unpublished development bundle")
     sub.add_parser("worker", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.command == "worker":
         worker()
     elif args.command == "smoke":
-        install_smoke(args.archive, args.installer, args.work_dir)
+        install_smoke(args.archive, args.installer, args.work_dir, args.development)
     else:
-        build(Path(__file__).resolve().parents[1], args.work_dir, args.debug)
+        build(Path(__file__).resolve().parents[1], args.work_dir, args.debug, args.development)
 
 
 if __name__ == "__main__":

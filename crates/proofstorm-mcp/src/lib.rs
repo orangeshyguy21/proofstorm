@@ -2877,12 +2877,7 @@ impl ProofstormMcp {
             .environment(&request)
             .await
             .map_err(app_error)
-            .and_then(|view| {
-                let value=serde_json::to_value(view).map_err(|e|ErrorData::internal_error(e.to_string(),None))?;
-                let mut result=CallToolResult::structured(value);
-                result.content=vec![rmcp::model::ContentBlock::text("Environment page is in structuredContent. Follow next_cursor fields for remaining labs and sections.")];
-                bounded_agent_response(result)
-            })
+            .and_then(environment_result)
     }
 
     #[tool(
@@ -9579,6 +9574,16 @@ pub struct DeveloperLabView {
     pub observed_at_unix: i64,
 }
 
+fn environment_result(
+    mut view: proofstorm_app::environment::EnvironmentView,
+) -> Result<CallToolResult, ErrorData> {
+    // Text-only clients need the actual page, not a pointer to structuredContent.
+    // Reserve room for both copies, JSON string escaping, and the MCP envelope.
+    proofstorm_app::environment::bound_page_bytes(&mut view, MAX_AGENT_RESPONSE_BYTES / 4)
+        .map_err(app_error)?;
+    developer_result(view)
+}
+
 // Discovery publishes each response contract once (inspect/operation_status),
 // instead of duplicating it on every mutating lifecycle route.
 fn developer_result(value: impl Serialize) -> Result<CallToolResult, ErrorData> {
@@ -11736,6 +11741,7 @@ mod tests {
             result.structured_content.as_ref().unwrap()["labs"]["items"],
             serde_json::json!([])
         );
+        assert_environment_text_matches_structured(&result);
         assert!(serde_json::to_vec(&result).unwrap().len() < MAX_AGENT_RESPONSE_BYTES);
         store
             .replace_grants("alpha", "designer", [Capability::LabRead])
@@ -11748,6 +11754,94 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    fn assert_environment_text_matches_structured(result: &CallToolResult) -> serde_json::Value {
+        // OpenCode 1.18.30 does not synthesize text from structuredContent when
+        // content already exists. Check exactly what a text-only consumer sees.
+        let wire = serde_json::to_value(result).unwrap();
+        let text = wire["content"][0]["text"].as_str().unwrap();
+        let visible: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(Some(&visible), result.structured_content.as_ref());
+        assert!(serde_json::to_vec(result).unwrap().len() <= MAX_AGENT_RESPONSE_BYTES);
+        visible
+    }
+
+    fn environment_response_fixture() -> proofstorm_app::environment::EnvironmentView {
+        serde_json::from_value(serde_json::json!({
+            "api_version":"proofstorm/environment/v1alpha1", "workspace_id":"alpha",
+            "scope":"test workspace", "observation_started_at_unix":1,"observation_finished_at_unix":2,
+            "coverage":{"topology":"declared", "activity":"cached", "resource_demand":"desired",
+                "resource_usage":"not collected", "protocol_traffic":"not collected", "attached_clients":"not tracked"},
+            "labs":{"next_cursor":null,"items":[{
+                "id":"vm-alpha-smoke", "handle":null, "revision_digest":null,
+                "journal_read_at_unix":1,"last_recorded_activity_at_unix":null,
+                "runtime":{"state":"available","fetched_at_unix":1,"source_updated_at_unix":null,
+                    "resource_version":null,"generation":1,"observed_generation":1,"phase":"ready","error":null},
+                "components":{"items":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core",
+                    "version":"31.1","ready":true,"conditions":[],"endpoints":[]}],"next_cursor":null},
+                "links":{"items":[],"next_cursor":null},"resources":null,"resource_error":null,
+                "sessions":{"items":[],"next_cursor":null},"activity":{"items":[],"next_cursor":null}
+            }]}
+        })).unwrap()
+    }
+
+    #[test]
+    fn environment_text_only_clients_receive_ready_lab_facts() {
+        let result = environment_result(environment_response_fixture()).unwrap();
+        let visible = assert_environment_text_matches_structured(&result);
+        assert_eq!(visible["labs"]["items"][0]["id"], "vm-alpha-smoke");
+        assert_eq!(visible["labs"]["items"][0]["runtime"]["phase"], "ready");
+        assert_eq!(
+            visible["labs"]["items"][0]["components"]["items"][0]["version"],
+            "31.1"
+        );
+        assert_eq!(
+            visible["labs"]["items"][0]["components"]["items"][0]["ready"],
+            true
+        );
+    }
+
+    #[test]
+    fn environment_dual_content_pages_keep_cursors_and_fit_with_escaped_text() {
+        let mut view = environment_response_fixture();
+        let mut lab = view.labs.items[0].clone();
+        lab.runtime.message = Some("\"\\\n".repeat(250));
+        view.labs.items = (0..24)
+            .map(|n| {
+                let mut item = lab.clone();
+                item.id = format!("lab-{n:02}");
+                item
+            })
+            .collect();
+        let result = environment_result(view).unwrap();
+        let visible = assert_environment_text_matches_structured(&result);
+        let items = visible["labs"]["items"].as_array().unwrap();
+        assert!(!items.is_empty() && items.len() < 24);
+        assert_eq!(visible["labs"]["next_cursor"], items.last().unwrap()["id"]);
+        assert_eq!(items[0]["runtime"]["message"], lab.runtime.message.unwrap());
+    }
+
+    #[test]
+    fn environment_dual_content_keeps_component_continuation_and_rejects_oversized_items() {
+        let mut view = environment_response_fixture();
+        let component = view.labs.items[0].components.items[0].clone();
+        view.labs.items[0].components.items = (0..64)
+            .map(|n| {
+                let mut item = component.clone();
+                item.id = format!("chain-{n:02}");
+                item
+            })
+            .collect();
+        let result = environment_result(view).unwrap();
+        let visible = assert_environment_text_matches_structured(&result);
+        let components = &visible["labs"]["items"][0]["components"];
+        let items = components["items"].as_array().unwrap();
+        assert!(!items.is_empty() && items.len() < 64);
+        assert_eq!(components["next_cursor"], items.last().unwrap()["id"]);
+        let mut oversized = environment_response_fixture();
+        oversized.labs.items[0].runtime.message = Some("x".repeat(MAX_AGENT_RESPONSE_BYTES));
+        assert!(environment_result(oversized).is_err());
     }
 
     #[test]
