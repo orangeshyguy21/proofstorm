@@ -11,6 +11,34 @@ fn linux_build_plan_exports_only_verified_sources_and_a_dockerfile_context() {
     let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let work = temp.path().join("work with 'quotes'");
     let plan = linux_prepare(source.path(), &work, false, true).unwrap();
+    assert_eq!(
+        fs::metadata(&work).unwrap().permissions().mode() & 0o777,
+        0o700,
+        "transport stays private behind the host work directory"
+    );
+    for path in [
+        "input",
+        "input/source",
+        "input/source/docker",
+        "input/source/docker/release",
+    ] {
+        assert_eq!(
+            fs::metadata(work.join(path)).unwrap().permissions().mode() & 0o777,
+            0o755,
+            "container must be able to traverse {path} without owner privileges"
+        );
+    }
+    for path in [
+        "input/source.json",
+        "input/options.json",
+        "input/source/Cargo.toml",
+    ] {
+        assert_eq!(
+            fs::metadata(work.join(path)).unwrap().permissions().mode() & 0o777,
+            0o644,
+            "container must be able to read {path} without owner privileges"
+        );
+    }
     assert_eq!(plan.len(), 3);
     assert!(plan[1].starts_with("proofstorm-linux-build-"));
     assert!(plan[2].starts_with("proofstorm-linux-builder:"));
@@ -67,6 +95,40 @@ fn linux_build_plan_refuses_uncommitted_stable_sources_and_linked_files() {
     .unwrap();
     assert!(linux_prepare(source.path(), &work, true, true).is_err());
     assert!(!work.exists());
+}
+
+#[test]
+fn transport_permissions_preserve_fingerprints_and_do_not_follow_links() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let transport = temp.path().join("input");
+    directory(&transport.join("source/scripts")).unwrap();
+    let script = transport.join("source/scripts/worker.sh");
+    let receipt = transport.join("source.json");
+    fs::write(&script, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&receipt, "{}").unwrap();
+    fs::set_permissions(&receipt, fs::Permissions::from_mode(0o600)).unwrap();
+    let names = source_names(&transport, true).unwrap();
+    let before = fingerprint(&transport, &names).unwrap();
+    transport_permissions(&transport).unwrap();
+    assert_eq!(fingerprint(&transport, &names).unwrap(), before);
+    assert_eq!(
+        fs::metadata(&script).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::metadata(&receipt).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    let outside = temp.path().join("private");
+    fs::write(&outside, "private").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink(&outside, transport.join("linked")).unwrap();
+    assert!(transport_permissions(&transport).is_err());
+    assert_eq!(
+        fs::metadata(outside).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }
 
 #[test]

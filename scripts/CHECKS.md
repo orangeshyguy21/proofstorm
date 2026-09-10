@@ -242,7 +242,11 @@ The selected work directory must be new, outside the source checkout, with an
 existing parent. Host helper compilation uses a disposable external cache.
 
 Only the Dockerfile enters the toolchain build context. Verified source is
-copied into the uniquely named container afterward. The worker still has no host
+copied into the uniquely named container afterward. To avoid depending on host
+ownership, transport directories are `0755`, regular files `0644`, and executable
+files `0755`, including with a private host umask. The host work directory stays
+`0700`; the checkout and private development state are unchanged.
+The worker still has no host
 mounts or Docker socket, all capabilities dropped, no privilege escalation,
 2 CPUs, 3 GiB of memory, and a 512-process limit. The driver keeps the 15-minute
 toolchain and 60-minute worker deadlines, checks the worker exit code after
