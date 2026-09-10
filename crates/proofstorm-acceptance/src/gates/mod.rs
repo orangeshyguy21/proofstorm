@@ -62,7 +62,7 @@ pub const NAMES: &[&str] = &[
     "nutshell-oidc",
 ];
 
-/// Dispatch a gate by the name its Makefile target uses.
+/// Dispatch a gate by the name passed to `just e2e`.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
         "mint-management" => mint_management::run(context),

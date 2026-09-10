@@ -95,10 +95,15 @@ The test is not a full installed-product or candidate-build acceptance gate.
 
 ## Developer quick start
 
-With Docker running, Rust, and Python 3.9+ installed, enter the checkout development shell:
+For code checks without a running runtime, use `just check`. This runs the same
+formatting, shell checks, strict Clippy, and hermetic Rust tests as GitHub Actions.
+See [CI prerequisites and scope](scripts/CHECKS.md). Build/release automation is separate.
+
+With just, Docker, Rust, and Python 3.9+ installed, enter the checkout development shell
+(`brew install just` on macOS; [Linux packages](https://just.systems/man/en/packages.html)):
 
 ```bash
-make dev
+just dev
 proofstorm setup
 proofstorm up examples/developer-lab.json
 proofstorm status demo
@@ -113,14 +118,14 @@ and deploys the digest-pinned result through its private registry. Unchanged
 setup reuses the image and deployment. Releases still download their pinned
 controller. No development image is published to GHCR by setup.
 
-`make dev-build` rebuilds and registers artifacts without entering a shell or
+`just dev-build` rebuilds and registers artifacts without entering a shell or
 starting Docker resources. Rebuilds preserve installation identity, labs, and
-grants. `make web-dev` watches UI assets; refresh the managed GUI after a build.
+grants. `just web-dev` watches UI assets; refresh the managed GUI after a build.
 After rebuilding host binaries, run `proofstorm stop` then `proofstorm gui`, and
 reconnect existing agent sessions. Exit the development shell to restore your
 normal command selection; no shell profiles or global agent settings are edited.
-Outside that shell, use `.proofstorm-dev/bin/proofstorm`, or `make setup`,
-`make doctor`, and `make gui`. See [checkout workflow](scripts/DEVELOPMENT.md).
+Outside that shell, use `.proofstorm-dev/bin/proofstorm`, or `just setup`,
+`just doctor`, and `just gui`. See [checkout workflow](scripts/DEVELOPMENT.md).
 
 The default chain is Bitcoin Core 31.1. Lightning uses Lightning Labs LND
 0.21.3-beta; 0.20.4-beta is also available explicitly. Polar images are no longer
@@ -188,7 +193,7 @@ installation selects a privately owned cluster and kubeconfig; setup initializes
 CLI permissions once, and opening the GUI does not regrant them. Calling `up` with changed
 configuration edits the live lab and preserves unchanged components. Closing
 the lab purges its local activity; reusing its name creates a fresh instance.
-`proofstorm down demo` closes just that lab. The remaining legacy `make down`
+`proofstorm down demo` closes just that lab. The remaining legacy `just down`
 does not manage the checkout installation; owned runtime teardown is pending.
 
 CLI and MCP lifecycle commands resolve the same lab by name or instance ID.
@@ -224,7 +229,7 @@ older pod that is still serving.
 ## See the environment
 
 ```bash
-# In the development shell (make dev):
+# In the development shell (just dev):
 proofstorm environment
 proofstorm gui
 ```
@@ -244,7 +249,7 @@ workspace as your agent. The checked-in
 [environment schema](schemas/v1alpha1/environment.schema.json) describes the
 response format.
 
-`make serve` is an alias for `make gui`: both open the selected checkout's managed
+`just serve` is an alias for `just gui`: both open the selected checkout's managed
 GUI in your default browser. Setup must have completed first. Repeated launches
 reuse its owned server; opening the GUI does not restore grants or attach agents.
 Use **Connect coding agent…** to intentionally attach a project. The backend
@@ -254,7 +259,7 @@ stops the GUI only. Export evidence before closing a lab.
 ## Environment selection
 
 For the normal workflow, `PROOFSTORM_HOME` selects an owned installation and its
-private database, kubeconfig, and runtime. `make dev` selects this checkout's
+private database, kubeconfig, and runtime. `just dev` selects this checkout's
 installation. The overrides below describe advanced, unmanaged use, not the
 contributor quick start.
 
@@ -285,7 +290,7 @@ Rust, Python 3.9+, and the pinned web builder; release users download prebuilt
 binaries and do not need these build tools. With Docker running:
 
 ```bash
-make dev
+just dev
 proofstorm setup
 proofstorm doctor
 ```
@@ -319,7 +324,7 @@ inside the lab, while MCP returns only its typed, secret-free result.
 Run the hermetic Slice 1 suite:
 
 ```bash
-make test
+just test
 ```
 
 Start the stdio MCP server:
@@ -406,9 +411,9 @@ Slice 2 introduces the Kubernetes security spine. Its pinned tool versions are
 in `tools/versions.env`; the local lifecycle is:
 
 ```bash
-make setup
-make doctor
-make down
+just setup
+just doctor
+just down
 ```
 
 The controller reconciles content-locked Bitcoin Core, LND, Core Lightning,
@@ -417,9 +422,9 @@ instance namespaces. The live Slice
 4 acceptance path is:
 
 ```bash
-make setup
-make e2e-slice4
-make down
+just setup
+just e2e slice4
+just down
 ```
 
 That test drives create, publish, materialize, readiness, sanitized status, and
@@ -434,13 +439,13 @@ account token, no service-link environment injection, zero retries, a ten-
 minute TTL, and a 32 KiB persisted artifact ceiling. Run the live path with:
 
 ```bash
-make setup
-make e2e-slice5
-make down
+just setup
+just e2e slice5
+just down
 ```
 
 The former all-in-one Slice 5 test is now four independent gates, all included
-in `make e2e`:
+in `just e2e`:
 
 | Gate | Coverage |
 | --- | --- |
@@ -449,7 +454,7 @@ in `make e2e`:
 | `network-faults` | Real traffic isolation, overlapping partitions, reconstruction after controller restart, selective healing |
 | `channel-lifecycle` | LND/CLN peering, rebalancing, cooperative and forced channel closure |
 
-Run an individual gate with `make e2e-<gate>`. These tests require an idle local
+Run an individual gate with `just e2e <gate>`. These tests require an idle local
 cluster and refuse to start if labs are present; some restart the shared
 controller. Each creates a uniquely scoped disposable lab, checks its named
 operations and deterministic evidence, verifies that stale close requests are
@@ -527,21 +532,21 @@ semantics. Some native methods are unimplemented, and Nutshell may print RPC err
 while exiting zero. Verify actual state after mutations.
 
 The management images are pinned Linux amd64 and arm64 builds. Recipes are in
-`docker/mint/Dockerfile.kube-*`; `make images` restores the exact catalog images.
+`docker/mint/Dockerfile.kube-*`; `just images` restores the exact catalog images.
 CDK candidate builds include a client from their own frozen source revision.
 Older locks without the `mint_management_rpc` feature are rejected before workload
 rendering: resolve a new lab revision and rebuild old candidates under a new
 candidate ID to adopt the new images. Existing locks are not silently redirected
 to different image contents.
-Run `make e2e-mint-management` for native read/update, authentication, network
+Run `just e2e mint-management` for native read/update, authentication, network
 isolation, restart, and teardown acceptance.
 
 Run the live native-protocol acceptance gate with:
 
 ```bash
-make setup
-make e2e-native-exec
-make down
+just setup
+just e2e native-exec
+just down
 ```
 
 The gate uses a unique workspace and instance identity per invocation. It runs
@@ -549,7 +554,7 @@ native Bitcoin help, RPC against two independently selectable Bitcoin nodes,
 LND help, Nutshell help, and an in-workload
 service-account-token absence check; verifies action idempotency, locked images,
 network identity, bounded artifacts, canonical evidence, and verified teardown.
-The focused supervisor gate, `make e2e-reliable-exec`, additionally checks CDK and
+The focused supervisor gate, `just e2e reliable-exec`, additionally checks CDK and
 LND compatibility, private output, cancellation, deadlines and controller restart.
 It requires the locally provisioned CDK wallet image.
 
@@ -742,7 +747,7 @@ has its own LDK-backed contract. Exercise the complete MCP materialization and
 live binary/configuration check with:
 
 ```sh
-make e2e-cdk-cln
+just e2e cdk-cln
 ```
 
 CDK 0.18.0 also has a distinct embedded-LDK runtime. It links the mint directly
@@ -753,7 +758,7 @@ a real CLN peer, connects it to embedded LDK, requests an actual 100-sat `lno`
 offer through the mint API, and verifies teardown:
 
 ```sh
-make e2e-cdk-ldk
+just e2e cdk-ldk
 ```
 
 The distinct CDK-BDK runtime uses CDK 0.18.0's standard image, where BDK is a
@@ -766,7 +771,7 @@ selected quotes, checks the authored minimum-deposit boundary, restarts the mint
 to prove persistence, and verifies teardown:
 
 ```sh
-make e2e-cdk-bdk-stress
+just e2e cdk-bdk-stress
 ```
 
 CDK 0.18 makes the database, rather than a startup TOML, authoritative for mint
@@ -828,11 +833,11 @@ advertised until matching dependency contracts exist. The current
 live acceptance gates are:
 
 ```sh
-make e2e-nutshell-mint
-make e2e-nutshell-cln
-make e2e-nutshell-postgres
-make e2e-cross-implementation-wallet
-make e2e-nutshell-oidc
+just e2e nutshell-mint
+just e2e nutshell-cln
+just e2e nutshell-postgres
+just e2e cross-implementation-wallet
+just e2e nutshell-oidc
 ```
 
 The OIDC conformance gate now drives authentication through three typed
@@ -885,9 +890,9 @@ catalog and resolved lock.
 In this CDK release, resume a paid mint quote with `mint <url> --quote-id <id>`;
 `mint-pending` checks pending proofs despite its quote-claiming help text.
 
-Run `make e2e-cdk-wallet` for the deterministic CDK wallet checkpoint, after
+Run `just e2e cdk-wallet` for the deterministic CDK wallet checkpoint, after
 provisioning its pinned image in the local registry. It is an explicit local
-gate, excluded from `make e2e` until the image is distributed. It uses
+gate, excluded from `just e2e` until the image is distributed. It uses
 native BOLT11 operations, separate wallet volumes, passive observations and
 verified teardown, retaining results under `dev/wallet-integration-runs/`.
 The `cdk-wallet-native-smoke` agent scenario is the subsequent usability gate;
@@ -902,7 +907,7 @@ explicit unlock after restart. Its passive `wallet_balance` SQLite projection
 distinguishes spendable, reserved and inflight proofs; native `/balance` reports
 the combined ready total. Typed wallet mutations remain unavailable.
 
-Run `make e2e-cocod-wallet` after provisioning its pinned local arm64 image.
+Run `just e2e cocod-wallet` after provisioning its pinned local arm64 image.
 The deterministic checkpoint passed real funding, two payments, restart,
 two-wallet isolation, session lifecycle and verified teardown.
 Agent execution hardening adds validated native lifecycle projections and more efficient teardown waits;
@@ -934,4 +939,5 @@ bounded, idempotent recovery path and also supports externally paid invoices.
 
 The original Docker Compose wallet-population runner and the regtest
 adversarial harness use [Makefile.compose](Makefile.compose).
-Their targets run through `make compose-<target>`.
+Their targets run through `just compose <target>`. This legacy harness alone still
+requires Make. The normal developer commands and CI use the root `justfile`.

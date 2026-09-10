@@ -48,7 +48,7 @@ pub async fn stop_previous(port: u16) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    bail!("The previous server has not released port {port} after 5 seconds; retry make serve.")
+    bail!("The previous server has not released port {port} after 5 seconds; retry just serve.")
 }
 
 fn owns_server(checkout: &Path, cwd: &str, args: &str) -> bool {

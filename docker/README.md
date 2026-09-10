@@ -2,7 +2,7 @@
 
 The Rust component catalog is the authority for supported versions and immutable
 runtime image digests. Every built-in catalog image is served by the local
-Proofstorm registry. `make images` copies publisher images without rebuilding
+Proofstorm registry. `just images` copies publisher images without rebuilding
 them, preserving their complete multi-architecture manifest and exact digest.
 The `upstream/<registry>/<repository>` path records their original source.
 
@@ -18,7 +18,7 @@ The `upstream/<registry>/<repository>` path records their original source.
 
 The catalog no longer contains Bitcoin Core 30.0 or the old Polar LND builds.
 The Compose regtest defaults use the same Bitcoin and preferred LND digests via
-the host registry address `localhost:5111`. Run `make images` before bringing up
+the host registry address `localhost:5111`. Run `just images` before bringing up
 that stack. Historical experiment reports retain the versions they actually ran.
 
 ## Bitcoin packaging
@@ -46,7 +46,7 @@ make bitcoin-image-build
 The resulting manifest digest is recorded in
 `.tools/downloads/bitcoin-31.1-build.json`. Review it before changing
 `catalog.rs`, the Compose defaults, and `regtest/versions.env`. A source rebuild
-can produce a different image digest; `make images` deliberately never replaces
+can produce a different image digest; `just images` deliberately never replaces
 a reviewed local artifact with a fresh build. Preserve the exact approved image
 in the registry or export it with Docker for restoration on other machines.
 

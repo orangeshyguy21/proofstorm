@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(db.owner, "db");
         assert!(!db.is_embedded());
         assert_eq!(selected_owner(&lab, "db").unwrap().id, "db");
-        assert_eq!(group_height(mint), 600.0);
+        assert!((group_height(mint) - 600.0).abs() < f64::EPSILON);
         assert!(
             items.iter().position(|n| n.id == "mint") < items.iter().position(|n| n.id == "db")
         );

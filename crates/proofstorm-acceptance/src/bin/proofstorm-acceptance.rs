@@ -2,7 +2,7 @@
 //! Live acceptance gate runner.
 //!
 //! Replaces the per-gate shell wrapper plus Python client pair. Each gate is a
-//! subcommand so the Makefile can invoke one directly and read its exit code.
+//! subcommand so the justfile can invoke one directly and read its exit code.
 
 use std::path::PathBuf;
 
@@ -19,7 +19,7 @@ struct Arguments {
     /// Isolated installation for images, images-check, or cluster-schema only.
     #[arg(long, env = "PROOFSTORM_HOME")]
     home: Option<PathBuf>,
-    /// Gate to run, matching its `make e2e-<gate>` target.
+    /// Gate to run, matching its `just e2e <gate>` target.
     #[arg(required_unless_present = "list")]
     gate: Option<String>,
     /// Repository root. Defaults to the current directory.

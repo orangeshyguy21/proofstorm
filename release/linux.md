@@ -52,7 +52,7 @@ repository's Rust toolchain, the WASM target, and pinned Trunk. Installed users
 do not need these build tools.
 
 ```sh
-make web-tools
+just web-tools
 scratch="$(mktemp -d)"
 python3 scripts/release.py build --development \
   --work-dir "$scratch/build" --output "$scratch/artifacts"

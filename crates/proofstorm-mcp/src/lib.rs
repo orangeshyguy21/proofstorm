@@ -13223,7 +13223,7 @@ mod tests {
             conditions: vec![ComponentCondition {
                 condition_type: ComponentConditionType::WorkloadReady, state: ComponentConditionState::False,
                 reason: Reason::ImagePullBackoff,
-                message: "Image pull is failing, not building. Operator: run make images and make doctor.".into(),
+                message: "Image pull is failing, not building. Operator: run just images and just doctor.".into(),
                 last_transition_unix: 1,
             }],
         };
@@ -13273,7 +13273,7 @@ mod tests {
         assert!(!result.timed_out);
         assert_eq!(result.blockers[0].component_id, "wallet-cdk");
         assert_eq!(result.blockers[0].reason, Reason::ImagePullBackoff);
-        assert!(result.blockers[0].message.contains("make images"));
+        assert!(result.blockers[0].message.contains("just images"));
         let message = result.message.as_deref().unwrap();
         assert!(message.contains("startup is blocked"));
         let summary = service
