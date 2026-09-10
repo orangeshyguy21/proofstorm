@@ -11,6 +11,7 @@ members = [
     "crates/proofstorm-store",
     "crates/proofstorm-transfer",
     "crates/proofstormd",
+    "crates/proofstorm-xtask",
 ]
 resolver = "2"
 

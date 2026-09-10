@@ -41,13 +41,20 @@ not launch apps, update agent configurations, or change running labs.
 
 Shell syntax is checked for tracked and non-ignored new `.sh` files. Strict
 ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
-`tools/install-host-tools.sh`, `scripts/check.sh`, and `scripts/test-just.sh`;
+`tools/install-host-tools.sh`, `scripts/check.sh`, `scripts/test-just.sh`,
+`scripts/develop.sh`, and `scripts/test-develop.sh`;
 legacy scenario/lab scripts are syntax-only until formalized.
-No existing Python helper tests are replaced or removed by this first slice.
+Development-wrapper tests now live in the Rust `proofstorm-xtask` package and
+its Bash integration fixture. Other Python packaging/helper tests remain separate.
 
 Just dispatch tests use fake commands in a temporary checkout. They verify
 argument quoting, dependency order, aliases, runtime-selection isolation, and
 failure propagation without rebuilding anything or touching a live runtime.
+
+For a focused development-tooling run: `cargo test --locked -p proofstorm-xtask`.
+This is also included in the normal workspace test suite. Its Bash integration
+test uses the real Rust helper and fake Cargo, Trunk, CRD exporter, and CLI
+commands in a temporary checkout; it never builds or starts a runtime.
 
 ## Boundaries and next slices
 
@@ -65,7 +72,7 @@ After the workflow has run successfully, maintainers can require both
 `Formatting and shell` and `Rust lints and tests` in the GitHub ruleset for `main`.
 Adding the workflow does not configure branch protection automatically.
 
-Next: migrate thin development orchestration to Bash and structured release
-validation to a Rust maintainer command, preserving the existing tests. Then add
+Next: move structured release validation into the Rust maintainer tooling,
+preserving the existing tests. Then add
 Linux image/bundle builds on `main` and explicit alpha publication of tested
 artifacts. This workflow never publishes or changes the public installer.

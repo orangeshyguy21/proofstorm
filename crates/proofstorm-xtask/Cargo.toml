@@ -1,0 +1,17 @@
+[package]
+name = "proofstorm-xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile = "3.20"
+
+[lints]
+workspace = true

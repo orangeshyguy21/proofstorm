@@ -57,7 +57,7 @@ check_shell() {
   printf '\nLinting installer and check tooling\n'
   # Legacy lab/scenario scripts get syntax checks above. Expand strict lint as
   # those workflows are formalized; do not globally suppress their diagnostics.
-  shellcheck --external-sources install.sh tools/install-trunk.sh tools/install-host-tools.sh scripts/check.sh scripts/test-just.sh
+  shellcheck --external-sources install.sh tools/install-trunk.sh tools/install-host-tools.sh scripts/check.sh scripts/test-just.sh scripts/develop.sh scripts/test-develop.sh
 }
 
 check_clippy() {

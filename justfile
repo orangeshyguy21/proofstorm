@@ -20,11 +20,11 @@ alias serve := gui
 
 # Build and enter a shell selecting the checkout installation.
 dev *args: web-tools
-    python3 scripts/develop.py --shell "$@"
+    bash scripts/develop.sh --shell "$@"
 
 # Rebuild/register checkout artifacts; preserve labs and permissions.
 dev-build *args: web-tools
-    python3 scripts/develop.py "$@"
+    bash scripts/develop.sh "$@"
 
 # Build, then set up the checkout runtime.
 setup *args: dev-build
@@ -74,11 +74,11 @@ web-tools:
 
 # Rebuild managed GUI assets once.
 web *args: web-tools
-    python3 scripts/develop.py --web-only "$@"
+    bash scripts/develop.sh --web-only "$@"
 
 # Watch GUI assets; refresh the managed browser tab after builds.
 web-dev *args: web-tools
-    python3 scripts/develop.py --watch-web "$@"
+    bash scripts/develop.sh --watch-web "$@"
 
 # Install pinned maintainer tools (not required by code checks).
 tools:

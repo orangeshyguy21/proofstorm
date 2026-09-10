@@ -4,6 +4,21 @@ Install just (`brew install just` on macOS; see [Linux packages](https://just.sy
 Run `just` or `just --list` to discover commands. Just is a contributor tool, not
 a dependency for people installing Proofstorm.
 
+Normal development no longer requires Python. `scripts/develop.sh` orchestrates
+Trunk, Cargo, and checkout registration. The small Rust `proofstorm-xtask` helper
+owns ownership checks, persisted build settings, resource snapshots, and atomic
+launcher writes. It is built separately under `target/maintainer`; it is not
+shipped to installed users. The first development run compiles this helper.
+
+Existing `.proofstorm-dev/owner.json`, `build.json`, state, launchers, and selected
+binary paths are retained. Resource snapshots may get a new content-addressed
+directory; older snapshots are not deleted or overwritten. Controller source
+hashing keeps the existing contract and excludes host/web source.
+
+The development shell uses Bash or Zsh from `SHELL`, with startup files disabled;
+otherwise it defaults to Zsh on macOS and Bash on Linux. Normal exit/EOF succeeds
+even after an interrupted command; shell launch errors and signals still fail.
+
 Run `just dev` from the Proofstorm checkout. It builds matching CLI/MCP binaries,
 web assets, chart/CRD resources, and controller source snapshot, then enters a shell selecting this checkout's
 private installation. Docker is not touched by the build. Inside that shell:

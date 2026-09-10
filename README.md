@@ -99,7 +99,7 @@ For code checks without a running runtime, use `just check`. This runs the same
 formatting, shell checks, strict Clippy, and hermetic Rust tests as GitHub Actions.
 See [CI prerequisites and scope](scripts/CHECKS.md). Build/release automation is separate.
 
-With just, Docker, Rust, and Python 3.9+ installed, enter the checkout development shell
+With just, Docker, and Rust installed, enter the checkout development shell
 (`brew install just` on macOS; [Linux packages](https://just.systems/man/en/packages.html)):
 
 ```bash
@@ -286,7 +286,7 @@ keys stable when resubmitting an interrupted request.
 ## Agent quick start
 
 Use the same development shell and product commands. The source build needs
-Rust, Python 3.9+, and the pinned web builder; release users download prebuilt
+Rust and the pinned web builder; release users download prebuilt
 binaries and do not need these build tools. With Docker running:
 
 ```bash
