@@ -22,7 +22,7 @@ const RUNTIME: &[&str] = &[
 ];
 const LAUNCHER_HEADER: &str = "#!/bin/sh\n# Proofstorm checkout launcher v1\n";
 
-fn directory(path: &Path) -> Result<()> {
+pub(super) fn directory(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         directory(parent)?;
     }
@@ -40,7 +40,7 @@ fn directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn regular(path: &Path) -> Result<()> {
+pub(super) fn regular(path: &Path) -> Result<()> {
     ensure!(
         fs::symlink_metadata(path)?.is_file(),
         "linked/non-file input refused: {}",
@@ -76,7 +76,7 @@ fn write_owned(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     Ok(())
 }
 
-fn future_canonical(path: &Path) -> Result<PathBuf> {
+pub(super) fn future_canonical(path: &Path) -> Result<PathBuf> {
     if path.try_exists()? {
         return Ok(path.canonicalize()?);
     }
@@ -154,7 +154,7 @@ pub(super) fn prepare(source: &Path, selected: Option<&Path>) -> Result<PathBuf>
     Ok(selected)
 }
 
-fn inventory(root: &Path) -> Result<BTreeMap<String, String>> {
+pub(super) fn inventory(root: &Path) -> Result<BTreeMap<String, String>> {
     fn visit(root: &Path, path: &Path, files: &mut BTreeMap<String, String>) -> Result<()> {
         ensure!(
             fs::symlink_metadata(path)?.is_dir(),
@@ -256,7 +256,7 @@ fn controller_snapshot(source: &Path, destination: &Path, names: &[&str]) -> Res
     Ok(tree_sha(&inventory(destination)?))
 }
 
-fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
+pub(super) fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     // Validate the whole tree before copying; never follow chart links to secrets.
     let files = inventory(source)?;
     directory(destination)?;

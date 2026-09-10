@@ -142,7 +142,9 @@ def worker():
     source = work / "source"
     shutil.copytree(transported, source)
     subprocess.run(["sh", str(source / "tools/install-trunk.sh")], check=True)
-    release.compile_snapshot(source, provenance, work=work, output=output,
+    # Keep the transported input pristine for Rust's fingerprint recheck. The
+    # separate tool-install copy above may now contain downloaded .tools files.
+    release.compile_snapshot(transported, provenance, work=work, output=output,
                              target=work / "target", trunk=source / ".tools/bin/trunk",
                              development=options["development"], debug=options["debug"], expected_target=TARGET)
     shutil.copyfile(work / "result.json", output / "build-report.json")

@@ -1,0 +1,29 @@
+{
+  "format_version": 1,
+  "version": "0.1.0-alpha.1",
+  "target": "x86_64-unknown-linux-gnu",
+  "build_profile": "debug",
+  "runtime_contract_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "web_assets": [
+    {"path": "index.html", "size": 1, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"path": "app.js", "size": 1, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"path": "app.wasm", "size": 1, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"path": "style.css", "size": 1, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+  ],
+  "workload_images": [
+    "proofstorm-registry.localhost:5000/custom@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "ghcr.io/example/direct@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  ],
+  "image_publication": "{\"namespace\":\"ghcr.io/orangeshyguy21/proofstorm\"}",
+  "bootstrap_tools": {"target": "x86_64-unknown-linux-gnu", "tools": [{"name": "fixture"}]},
+  "controller": {
+    "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "platform": "linux/amd64",
+    "release_ready": false,
+    "metadata": {
+      "version": "0.1.0-alpha.1",
+      "runtime_contract_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  }
+}

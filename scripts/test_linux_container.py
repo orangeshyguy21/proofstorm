@@ -51,6 +51,45 @@ class LinuxContainerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "symlink"):
             linux.verify_snapshot(self.root, provenance)
 
+    def test_worker_builds_pristine_transport_and_installs_tools_in_separate_copy(self):
+        inputs, work, output = [self.root / name for name in ["input", "build", "artifacts"]]
+        source = inputs / "source"
+        source.mkdir(parents=True)
+        work.mkdir()
+        output.mkdir()
+        (source / "install.sh").write_text("fixture")
+        provenance = {"sha256": "a" * 64, "revision": "b" * 40, "dirty": True}
+        (inputs / "source.json").write_text(json.dumps(provenance))
+        (inputs / "options.json").write_text(json.dumps({"development": True, "debug": True}))
+        (work / "result.json").write_text(json.dumps({"archive": str(output / "fixture.tar.gz")}))
+        (work / "relocated").mkdir()
+        (work / "relocated/smoke-report.json").write_text("{}")
+
+        def install(args, **kwargs):
+            self.assertEqual(args, ["sh", str(work / "source/tools/install-trunk.sh")])
+            (work / "source/.tools").mkdir()
+            (work / "source/.tools/fixture").write_text("downloaded")
+
+        def build(snapshot, receipt, **kwargs):
+            self.assertEqual(snapshot, source)
+            self.assertEqual(receipt, provenance)
+            self.assertFalse((source / ".tools").exists())
+            self.assertTrue((work / "source/.tools/fixture").exists())
+            self.assertEqual(kwargs["trunk"], work / "source/.tools/bin/trunk")
+            self.assertEqual(kwargs["expected_target"], linux.TARGET)
+            self.assertTrue(kwargs["debug"] and kwargs["development"])
+
+        with patch.object(linux, "Path", side_effect=lambda path: self.root / str(path).lstrip("/")), \
+             patch.object(linux.release, "host_target", return_value=linux.TARGET), \
+             patch.object(linux, "verify_snapshot") as verify, \
+             patch.object(linux.subprocess, "run", side_effect=install), \
+             patch.object(linux.release, "compile_snapshot", side_effect=build) as compiler, \
+             patch.object(linux.release, "smoke"):
+            linux.worker()
+        verify.assert_called_once_with(source, provenance)
+        compiler.assert_called_once()
+        self.assertTrue((output / "build-report.json").is_file())
+
     def test_existing_or_checkout_work_directory_refused_before_docker(self):
         with patch.object(linux.subprocess, "run") as run:
             with self.assertRaisesRegex(ValueError, "must be new"):

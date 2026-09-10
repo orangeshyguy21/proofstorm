@@ -28,6 +28,12 @@ Docker, Kubernetes, Helm, Python, Node, and Trunk are not needed by these checks
 | `just test` | Workspace unit and integration tests only |
 | `just lint` | Formatting, shell checks, and strict Clippy |
 | `just lint-helm` | Separate chart validation using the pinned Helm tool |
+| `just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--development] [--debug] [--json]` | Build and package an isolated source snapshot using Bash and Rust |
+| `just release-check FILE [--alpha] [--json]` | Offline release metadata validation; no builds of product binaries or runtime access |
+| `just release-verify DIRECTORY [--json]` | Verify an unpacked bundle's files and metadata without executing its binaries |
+| `just release-package SOURCE BINARIES PROVENANCE_JSON OUTPUT [--development] [--json]` | Assemble and verify a bundle from trusted local build outputs |
+| `just release-pack DIRECTORY OUTPUT [--json]` | Create an archive from an already verified unpacked bundle |
+| `just release-extract ARCHIVE NEW_DESTINATION [--json]` | Check the adjacent checksum, safely extract, and verify the bundle |
 
 Rust tests and Clippy use `--locked`. They include MCP response compatibility,
 CLI/installer behavior, and controller/rendering contracts without a live cluster.
@@ -42,7 +48,8 @@ not launch apps, update agent configurations, or change running labs.
 Shell syntax is checked for tracked and non-ignored new `.sh` files. Strict
 ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
 `tools/install-host-tools.sh`, `scripts/check.sh`, `scripts/test-just.sh`,
-`scripts/develop.sh`, and `scripts/test-develop.sh`;
+`scripts/develop.sh`, `scripts/test-develop.sh`, `scripts/release-build.sh`, and
+`scripts/test-release-build.sh`;
 legacy scenario/lab scripts are syntax-only until formalized.
 Development-wrapper tests now live in the Rust `proofstorm-xtask` package and
 its Bash integration fixture. Other Python packaging/helper tests remain separate.
@@ -55,6 +62,121 @@ For a focused development-tooling run: `cargo test --locked -p proofstorm-xtask`
 This is also included in the normal workspace test suite. Its Bash integration
 test uses the real Rust helper and fake Cargo, Trunk, CRD exporter, and CLI
 commands in a temporary checkout; it never builds or starts a runtime.
+
+## Release metadata validation
+
+`just release-check path/to/release-info.json --alpha` builds the small Rust
+maintainer helper in `target/check`, then reads the supplied metadata without
+executing any bundled binaries. Omit `--alpha` for development metadata, or add
+`--json` for a machine-readable result; the default is a short human summary.
+This command is separate from the installed `proofstorm` CLI.
+
+The validator checks the supported host target, build profile, version, embedded
+GUI asset receipts, pinned workload image references, publication mappings, and
+controller version/platform/runtime-contract compatibility. Alpha additionally
+requires an alpha version, a GHCR digest-pinned controller, bootstrap-tool
+metadata, and published workload image sources. Malformed field types and input
+larger than 4 MiB are rejected. These are metadata checks, not verification that
+the listed assets or downloads actually exist or have the claimed checksums.
+
+Successful validation never claims release readiness or verified remote images.
+Payload integrity, binary provenance, image availability/platforms, and a fresh
+installation still require separate evidence. Nothing is downloaded by the
+validator, uploaded, installed, or changed in an existing Proofstorm environment.
+Cargo may download helper dependencies on its first build.
+
+Rust unit and CLI tests are included in the normal workspace checks. The existing
+Python packaging tests remain intact and also validate the shared metadata
+fixture, including digest-preserving image mappings for both supported targets:
+`python3 -m unittest discover -s scripts -p test_release.py`.
+
+## Unpacked bundle verification
+
+`just release-verify path/to/unpacked/proofstorm` checks required files, the exact
+file inventory, streamed SHA-256 checksums, sizes, and the expected `0755` binary /
+`0644` resource permissions. It cross-checks target, version, profile, recorded
+source identity, controller metadata, catalog, tool pins, and image mappings.
+It reuses the Rust metadata validator, including alpha requirements.
+
+The verifier rejects symlinks, non-regular files, unsafe manifest paths, altered
+permissions (even if relabelled in the manifest), and inconsistent or unsupported
+readiness claims. Limits are 10,000 files including the manifest, 1 GiB of listed
+payload, 64 directory levels, and 4 MiB per metadata document. It reads an already
+unpacked directory; use `release-extract` for archive checksum verification and
+safe extraction.
+
+Passing proves internal bundle integrity, not authenticity or release acceptance:
+it neither executes bundled binaries nor independently checks their embedded
+metadata, source identity, registry availability, or a running installation.
+Current manifests cannot supply independent release-acceptance evidence, so
+`release_ready: true` is rejected, not trusted. `--json` produces a verification
+receipt; without it the command prints a short human summary.
+
+For a migration parity run, build the helper and run the existing Python
+packaging suite with every verification call routed through Rust, including the
+existing failure cases:
+
+```bash
+CARGO_TARGET_DIR=target/check cargo build --locked -p proofstorm-xtask
+PROOFSTORM_TEST_RELEASE_VERIFIER="$PWD/target/check/debug/proofstorm-xtask" \
+  python3 -m unittest discover -s scripts -p test_release.py
+```
+
+Without that test-only variable the Python suite uses the original verifier.
+
+## Source-build orchestration
+
+`just release-build` runs Bash orchestration for web compilation, host binaries,
+CRD generation, and packaging. Rust owns source snapshots, provenance fingerprints,
+path validation, Trunk pin checks, host target checks, and bundle verification.
+No Python is needed by this build path. Existing `release.py build` calls and
+the Linux container worker delegate to the same Bash driver.
+
+Builds use a new external work directory; the checkout's target and web output
+are never used. An explicit external `--target-dir` can reuse compilation caches.
+The maintainer helper bootstraps in disposable storage under the repo's pinned
+toolchain. Runtime and ambient target/web settings are cleared before building.
+Transported snapshots are copied and rechecked against the existing NUL-delimited
+file-name/mode/digest fingerprint before any compilation modifies source files.
+
+The Bash integration test uses fake compilers with the real Rust snapshot and
+packaging helpers. It covers alpha/release-profile and development/debug builds,
+quoted paths, external caches, environment isolation, readable and JSON output,
+failure propagation, and Git-free transported inputs (including tampering).
+It creates and verifies fixture archives, not working product binaries. These
+tests run in the existing Rust CI job without Trunk, Docker, or Python.
+
+## Archive creation, extraction, and packaging
+
+The Bash source-build path calls Rust's `release-package` command. Rust copies the selected local
+binaries, compares their emitted metadata, checks provenance/chart/tool pins,
+constructs the manifest, verifies the payload, and creates the archive/checksum
+pair. Unlike verification/extraction, **packaging executes the selected local
+binaries** to read their metadata: only use trusted build outputs.
+
+Alpha/development archive names, directory layout, checksum receipt syntax, and
+manifest fields remain compatible with the existing installer and verifier.
+Archives use sorted regular-file USTAR entries, normalized ownership/timestamps,
+and a deterministic gzip header. Repeated packaging of the same inputs is tested;
+byte-identical archives across different compressor versions or the old Python
+implementation are not promised. The packer extracts and verifies its own archive
+before publishing the local files, and refuses an existing archive or checksum.
+
+The extractor requires the adjacent `ARCHIVE.sha256` receipt. It copies the
+checked input into private staging, checks it again, rejects traversal, duplicate
+members, links, devices, sparse/PAX/GNU extension entries, unsafe modes, oversized
+contents, truncated gzip streams, and trailing compressed data. Only a verified
+`proofstorm/` tree is moved into a newly reserved destination. Existing output
+directories are never replaced; failures clean up private staging. Payload names
+must match the installer's ASCII path rules and fit USTAR headers. Extraction
+does not execute downloaded binaries or install anything.
+
+Linux container orchestration and executable relocation smoke tests still use
+Python. The legacy packaging implementation remains as a
+compatibility oracle for tests, not the normal build's packaging backend. No new
+Python dependency is introduced for end users. The Rust archive tests also use
+system `tar` with the installer's extraction flags; a fresh-VM install remains a
+separate release gate.
 
 ## Boundaries and next slices
 
@@ -72,7 +194,5 @@ After the workflow has run successfully, maintainers can require both
 `Formatting and shell` and `Rust lints and tests` in the GitHub ruleset for `main`.
 Adding the workflow does not configure branch protection automatically.
 
-Next: move structured release validation into the Rust maintainer tooling,
-preserving the existing tests. Then add
-Linux image/bundle builds on `main` and explicit alpha publication of tested
+Next: add Linux image/bundle builds on `main`, followed by explicit alpha publication of tested
 artifacts. This workflow never publishes or changes the public installer.

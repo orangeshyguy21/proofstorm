@@ -67,6 +67,30 @@ lint:
 lint-helm:
     .tools/bin/helm lint charts/proofstorm
 
+# Validate release metadata offline; this does not publish or prove release readiness.
+release-check +args:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-check "$@"
+
+# Verify an unpacked bundle without executing its binaries or starting a runtime.
+release-verify +args:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-verify "$@"
+
+# Assemble/archive trusted local binaries: SOURCE BINARIES PROVENANCE_JSON OUTPUT.
+release-package +args:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-package "$@"
+
+# Build an isolated release snapshot with Bash/Rust; no runtime or publication.
+release-build +args:
+    bash scripts/release-build.sh "$@"
+
+# Archive a verified unpacked bundle: DIRECTORY OUTPUT.
+release-pack +args:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-pack "$@"
+
+# Safely extract and verify a checksummed archive: ARCHIVE NEW_DESTINATION.
+release-extract +args:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-extract "$@"
+
 # Install the pinned web builder and Rust browser target.
 web-tools:
     sh tools/install-trunk.sh

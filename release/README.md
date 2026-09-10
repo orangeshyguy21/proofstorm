@@ -14,7 +14,7 @@ path. Users need no development flags for installation, setup, GUI, or attachmen
 
 ```sh
 scratch="$(mktemp -d)"
-python3 scripts/release.py build --debug \
+just release-build --debug \
   --work-dir "$scratch/build" --output "$scratch/artifacts"
 ```
 
@@ -51,19 +51,24 @@ and the prepared `alpha-1-notes.md`; these are not evidence of a GitHub download
 Linux host support is being brought up; see [Linux status and remaining gates](linux.md).
 An accepted host target does not yet mean full Linux installed setup is ready.
 
-Requirements: macOS Apple Silicon or Linux x86-64, Python 3.12+, the Rust toolchain with
+Requirements: macOS Apple Silicon or Linux x86-64, Bash, Git, just, the Rust toolchain with
 `wasm32-unknown-unknown`, and the pinned `.tools/bin/trunk`. The build does not
-run Make, start Docker, install tools, edit shell profiles, or modify harnesses.
+start Docker, install tools, edit shell profiles, or modify harnesses. No Python
+is needed for this native build path.
 
 ```sh
 scratch="$(mktemp -d)"
-python3 scripts/release.py build --development --debug \
+just release-build --development --debug \
   --work-dir "$scratch/build" --output "$scratch/artifacts"
 ```
 
 Omit `--debug` for optimized host binaries. Web assets are always built in release
 mode. An optional `--target-dir /absolute/external/cache` reuses a Cargo cache;
 the checkout's target directory is refused. Work directories must be new.
+Use `--source /absolute/checkout` to select another checkout and `--trunk FILE`
+for an external pinned Trunk executable. Progress and failures identify the current
+build stage. The default output is a short summary; `--json` emits only the result
+JSON on stdout, with progress on stderr. The full report is always `WORK/result.json`.
 
 The builder snapshots Git-listed files (including non-ignored untracked files
 for alpha or explicit development builds), records the source revision and snapshot
@@ -86,6 +91,31 @@ proofstorm/
   LICENSE
 ```
 
+`scripts/release-build.sh` orchestrates Trunk, Cargo, CRD generation, and packaging.
+The Rust `proofstorm-xtask` helper validates paths and tool pins, snapshots source,
+records provenance, checks metadata, assembles bundles, and generates archives and
+checksums. The helper bootstraps in a disposable external cache; host compilation
+uses the selected external target directory. Its packaging commands can
+also be used directly with already built, trusted local binaries:
+
+```sh
+just release-package /absolute/source-snapshot /absolute/build/target/debug \
+  /absolute/source.json /absolute/artifacts --development
+just release-pack /absolute/unpacked/proofstorm /absolute/artifacts
+just release-extract /absolute/artifacts/ARCHIVE.tar.gz /absolute/new-directory
+```
+
+`source.json` must be the provenance recorded for those build inputs, not a
+handwritten replacement. Omit `--development` for alpha builds; alpha filenames
+are selected from the binaries' version. Packaging reads metadata by executing
+the selected local binaries. Extraction never executes them. Add `--json` for
+machine-readable results. See [maintainer checks](../scripts/CHECKS.md) for scope
+and safety limits. The old `python3 scripts/release.py build` command is a thin
+compatibility entry point to the Bash driver. Linux container orchestration and
+relocation smoke tests still use Python; end-user installation remains prebuilt
+and source-free. The Linux worker uses this same Bash build driver with
+`--provenance SOURCE_JSON`, which verifies the transported snapshot before building.
+
 `proofstorm release-info`, `proofstorm --version`, and
 `proofstorm-mcp --release-info` work without an installation, principal, cluster,
 or source tree. Normal MCP startup remains stdio-only.
@@ -106,7 +136,9 @@ members, checks every packaged file's digest and permissions, and exercises the
 relocated binaries' help/version/metadata paths. On macOS, `--deny-source` denies
 those child processes read access to the specified source directories. A smoke
 report is written outside the unpacked bundle. No runtime state is initialized.
-For a passive recheck: `python3 scripts/release.py verify PATH/proofstorm`.
+For a passive recheck: `just release-verify PATH/proofstorm`.
+For checksum verification and extraction without running bundled binaries, use
+`just release-extract ARCHIVE.tar.gz NEW_DESTINATION` instead of the smoke test.
 
 Checksums detect damage or changed files; they are **not publisher signatures**.
 This smoke test does not validate Gatekeeper/quarantine, a working lab, or a

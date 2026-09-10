@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Exercise dispatch with fake tools in a disposable checkout, never the real runtime.
-set -euo pipefail
+set -Eeuo pipefail
+last_recipe=initialization
+report_failure() {
+  local status=$1 line=$2
+  printf 'Just dispatch check failed at scripts/test-just.sh:%s (recipe: %s, status: %s)\n' "$line" "$last_recipe" "$status" >&2
+}
+trap 'report_failure "$?" "$LINENO"' ERR
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 scratch=$(mktemp -d)
 scratch=$(cd "$scratch" && pwd -P)
@@ -24,17 +30,22 @@ done
 ln -s "$scratch/stub" "$fixture/.proofstorm-dev/bin/proofstorm"
 ln -s "$scratch/stub" "$fixture/scripts/check.sh"
 ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
+ln -s "$scratch/stub" "$fixture/scripts/release-build.sh"
 ln -s "$scratch/stub" "$fixture/target/debug/proofstorm-acceptance"
 
 run() {
+  last_recipe=${1:-default}
   : > "$TRACE"
   local result
-  if just --quiet --justfile "$fixture/justfile" "$@" >/dev/null 2> "$scratch/just.stderr"; then
+  # Capture output ourselves: --quiet also discards child-command errors.
+  if just --justfile "$fixture/justfile" "$@" > "$scratch/just.stdout" 2> "$scratch/just.stderr"; then
     return 0
   else
     result=$?
     # Expected failure cases should not look like a broken check to contributors.
-    [[ ${STUB_EXIT:-0} != 0 ]] || cat "$scratch/just.stderr" >&2
+    if [[ ${STUB_EXIT:-0} == 0 ]]; then
+      cat "$scratch/just.stdout" "$scratch/just.stderr" >&2
+    fi
     return "$result"
   fi
 }
@@ -64,6 +75,16 @@ run check-quick
 expect check.sh "$fixture" unset unset quick
 run check-rust
 expect check.sh "$fixture" unset unset rust
+run release-check "$tricky" --alpha --json
+expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- release-check "$tricky" --alpha --json
+run release-verify "$tricky" --json
+expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- release-verify "$tricky" --json
+run release-build --work-dir "$tricky" --output output --debug
+expect release-build.sh "$fixture" unset unset --work-dir "$tricky" --output output --debug
+for recipe in release-package release-pack release-extract; do
+  run "$recipe" "$tricky" destination --json
+  expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- "$recipe" "$tricky" destination --json
+done
 
 # Dependencies run in order; aliases preserve build flags as individual arguments.
 for recipe in dev-build build; do
