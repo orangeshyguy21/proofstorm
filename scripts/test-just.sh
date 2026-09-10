@@ -18,11 +18,12 @@ printf '<%s>\n' "${0##*/}" "$PWD" "${PROOFSTORM_HOME-unset}" "${PROOFSTORM_KUBEC
 exit "${STUB_EXIT:-0}"
 STUB
 chmod +x "$scratch/stub"
-for tool in python3 rustup sh make cargo; do
+for tool in rustup sh make cargo; do
   ln -s "$scratch/stub" "$fixture/.tools/bin/$tool"
 done
 ln -s "$scratch/stub" "$fixture/.proofstorm-dev/bin/proofstorm"
 ln -s "$scratch/stub" "$fixture/scripts/check.sh"
+ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
 ln -s "$scratch/stub" "$fixture/target/debug/proofstorm-acceptance"
 
 run() {
@@ -69,33 +70,33 @@ for recipe in dev-build build; do
   run "$recipe" --target-dir "$tricky"
   expect sh "$fixture" unset unset tools/install-trunk.sh \
     rustup "$fixture" unset unset target add wasm32-unknown-unknown \
-    python3 "$fixture" unset unset scripts/develop.py --target-dir "$tricky"
+    develop.sh "$fixture" unset unset --target-dir "$tricky"
 done
 run dev --target-dir "$tricky"
 expect sh "$fixture" unset unset tools/install-trunk.sh \
   rustup "$fixture" unset unset target add wasm32-unknown-unknown \
-  python3 "$fixture" unset unset scripts/develop.py --shell --target-dir "$tricky"
+  develop.sh "$fixture" unset unset --shell --target-dir "$tricky"
 for recipe in setup deploy; do
   run "$recipe" --json
   expect sh "$fixture" unset unset tools/install-trunk.sh \
     rustup "$fixture" unset unset target add wasm32-unknown-unknown \
-    python3 "$fixture" unset unset scripts/develop.py \
+    develop.sh "$fixture" unset unset \
     proofstorm "$fixture" unset unset setup --json
 done
 run web --target-dir "$tricky"
 expect sh "$fixture" unset unset tools/install-trunk.sh \
   rustup "$fixture" unset unset target add wasm32-unknown-unknown \
-  python3 "$fixture" unset unset scripts/develop.py --web-only --target-dir "$tricky"
+  develop.sh "$fixture" unset unset --web-only --target-dir "$tricky"
 run web-dev
 expect sh "$fixture" unset unset tools/install-trunk.sh \
   rustup "$fixture" unset unset target add wasm32-unknown-unknown \
-  python3 "$fixture" unset unset scripts/develop.py --watch-web
+  develop.sh "$fixture" unset unset --watch-web
 run compose ps
 expect make "$fixture" unset unset -f Makefile.compose ps
 run e2e slice4 controller-recovery
 expect sh "$fixture" unset unset tools/install-trunk.sh \
   rustup "$fixture" unset unset target add wasm32-unknown-unknown \
-  python3 "$fixture" unset unset scripts/develop.py --web-only \
+  develop.sh "$fixture" unset unset --web-only \
   cargo "$fixture" unset unset build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance \
   proofstorm-acceptance "$fixture" unset unset slice4 \
   proofstorm-acceptance "$fixture" unset unset controller-recovery

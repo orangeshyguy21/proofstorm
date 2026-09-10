@@ -2474,6 +2474,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "proofstorm-xtask"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "proofstormd"
 version = "0.1.0-alpha.1"
 dependencies = [
