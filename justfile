@@ -83,6 +83,10 @@ release-package +args:
 release-build +args:
     bash scripts/release-build.sh "$@"
 
+# Build Linux and test source-free install/reinstall; requires Docker and Python.
+release-ci-linux +args:
+    bash scripts/ci-linux-bundle.sh "$@"
+
 # Archive a verified unpacked bundle: DIRECTORY OUTPUT.
 release-pack +args:
     CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-pack "$@"

@@ -31,6 +31,7 @@ check_fmt() {
   printf '\nChecking just recipes\n'
   just --summary >/dev/null
   bash scripts/test-just.sh
+  bash scripts/test-ci-linux-bundle.sh
   printf '\nChecking Rust formatting\n'
   cargo fmt --all -- --check
 }
@@ -57,7 +58,7 @@ check_shell() {
   printf '\nLinting installer and check tooling\n'
   # Legacy lab/scenario scripts get syntax checks above. Expand strict lint as
   # those workflows are formalized; do not globally suppress their diagnostics.
-  shellcheck --external-sources install.sh tools/install-trunk.sh tools/install-host-tools.sh scripts/check.sh scripts/test-just.sh scripts/develop.sh scripts/test-develop.sh scripts/release-build.sh scripts/test-release-build.sh
+  shellcheck --external-sources install.sh tools/install-trunk.sh tools/install-host-tools.sh scripts/check.sh scripts/test-just.sh scripts/develop.sh scripts/test-develop.sh scripts/release-build.sh scripts/test-release-build.sh scripts/ci-linux-bundle.sh scripts/test-ci-linux-bundle.sh
 }
 
 check_clippy() {

@@ -6,6 +6,9 @@ Quick checks finish before Rust compilation starts, so formatting mistakes do
 not spend a full build. There are no path filters that leave required checks
 pending on documentation-only changes.
 
+Pushes to `main` and manual runs also build a Linux bundle and test its installer
+after both code-check jobs pass. PRs skip this heavier job.
+
 ## Prerequisites
 
 - Rust through rustup; `rust-toolchain.toml` pins Rust, rustfmt, and Clippy.
@@ -23,12 +26,13 @@ Docker, Kubernetes, Helm, Python, Node, and Trunk are not needed by these checks
 | Command | Checks |
 | --- | --- |
 | `just check` | Everything below, quick checks first |
-| `just check-quick` | Just parsing/dispatch tests, Rust formatting, shell syntax, scoped ShellCheck |
+| `just check-quick` | Just dispatch and Linux CI orchestration fixtures, Rust formatting, shell syntax, scoped ShellCheck |
 | `just check-rust` | Strict workspace Clippy, then workspace tests |
 | `just test` | Workspace unit and integration tests only |
 | `just lint` | Formatting, shell checks, and strict Clippy |
 | `just lint-helm` | Separate chart validation using the pinned Helm tool |
 | `just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--development] [--debug] [--json]` | Build and package an isolated source snapshot using Bash and Rust |
+| `just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--debug]` | Build in isolated Debian, test source-free install/reinstall, collect checked artifacts; requires Docker and Python 3.12+ |
 | `just release-check FILE [--alpha] [--json]` | Offline release metadata validation; no builds of product binaries or runtime access |
 | `just release-verify DIRECTORY [--json]` | Verify an unpacked bundle's files and metadata without executing its binaries |
 | `just release-package SOURCE BINARIES PROVENANCE_JSON OUTPUT [--development] [--json]` | Assemble and verify a bundle from trusted local build outputs |
@@ -49,7 +53,8 @@ Shell syntax is checked for tracked and non-ignored new `.sh` files. Strict
 ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
 `tools/install-host-tools.sh`, `scripts/check.sh`, `scripts/test-just.sh`,
 `scripts/develop.sh`, `scripts/test-develop.sh`, `scripts/release-build.sh`, and
-`scripts/test-release-build.sh`;
+`scripts/test-release-build.sh`, `scripts/ci-linux-bundle.sh`, and
+`scripts/test-ci-linux-bundle.sh`;
 legacy scenario/lab scripts are syntax-only until formalized.
 Development-wrapper tests now live in the Rust `proofstorm-xtask` package and
 its Bash integration fixture. Other Python packaging/helper tests remain separate.
@@ -178,9 +183,53 @@ Python dependency is introduced for end users. The Rust archive tests also use
 system `tar` with the installer's extraction flags; a fresh-VM install remains a
 separate release gate.
 
+## Linux artifact builds on main
+
+The `Linux bundle and installer` job in **Checks** depends on the Rust job (which
+depends on quick checks). It runs on every push to `main` and on manual dispatch,
+including a branch explicitly selected by a maintainer. It does not run for PRs.
+No separate workflow, checkout of a moving branch, or privileged workflow trigger
+is used: the job builds the same event commit that passed the code checks.
+
+The shared `just release-ci-linux` command:
+
+1. Uses the pinned Debian toolchain image and existing isolated Linux builder.
+   The container worker invokes the same Bash/Rust release-build path. The default
+   is optimized binaries in the version's normal channel, not a development override.
+2. Verifies the packaged and relocated CLI/MCP executables.
+3. Tests the bundle's installer twice in source-free, non-root Debian with network
+   access disabled and no build tools, host mounts, or Docker socket.
+4. Collects only the archive, checksum, installer, build report, relocation report,
+   and install/reinstall report, and only after all stages succeed.
+
+To reproduce locally (the work directory's parent must already exist):
+
+```sh
+scratch="$(mktemp -d)"
+just release-ci-linux --work-dir "$scratch/linux"
+```
+
+Add `--debug` for a faster local alpha build. CI uses the optimized default. This
+is a real Docker build, unlike the fast orchestration fixture in `check-quick`.
+The fixture uses fake transport/build commands and checks stage ordering, literal
+paths, argument forwarding, failure propagation through logging, output selection,
+and refusal to collect artifacts after missing reports or a failed install.
+
+In GitHub, open **Actions → Checks → the run → Artifacts**. A passing Linux job
+saves `proofstorm-linux-amd64-COMMIT-ATTEMPT` for 14 days. Build/install diagnostics
+are saved separately for 7 days, including on failure when logs exist. Uploads
+use explicit output paths; source snapshots, caches, and credentials are excluded.
+The tar archive preserves executable modes independently of the Actions download.
+
+The job has a 90-minute limit; the builder retains its existing 60-minute worker
+and 15-minute toolchain-build limits. There is no cross-run container compilation
+cache in this first slice. Measure the first native AMD64 run before adding cache
+complexity or adjusting resource limits. Nothing is pushed to GHCR or GitHub
+Releases, and the public installer is unchanged.
+
 ## Boundaries and next slices
 
-These are host-code checks, not release acceptance. They do not build the
+The quick/Rust jobs are host-code checks, not release acceptance. They do not build the
 Wasm-only GUI, exercise a browser, validate container availability, or prove that
 an installed bundle starts successfully. Existing Python packaging/helper tests,
 Helm checks, and live acceptance gates remain separate for now.
@@ -194,5 +243,11 @@ After the workflow has run successfully, maintainers can require both
 `Formatting and shell` and `Rust lints and tests` in the GitHub ruleset for `main`.
 Adding the workflow does not configure branch protection automatically.
 
-Next: add Linux image/bundle builds on `main`, followed by explicit alpha publication of tested
-artifacts. This workflow never publishes or changes the public installer.
+The Linux artifact job does build the embedded GUI and exercise offline installed
+binaries, but does not test GitHub downloads, runtime setup, live MCP attachment,
+or the availability of every referenced image. Its reports retain those limits;
+a green artifact build is not a `release_ready` claim.
+
+Next: verify the first hosted Linux run, then automate controller/image builds and
+explicit alpha publication of tested artifacts. This workflow never publishes or
+changes the public installer.

@@ -5,6 +5,27 @@ CLI/MCP executables and UI; installed setup downloads prebuilt container images.
 Build and publication commands below are maintainer-only. The local installer
 test exercises the prebuilt user path without Rust or Python.
 
+## Automated Linux artifacts
+
+After a merge to `main`, **Actions → Checks** runs quick checks, Rust checks, then
+an optimized Linux bundle build and offline install/reinstall test. Maintainers
+can also use **Run workflow** to test a selected branch. PRs skip the bundle job.
+
+Passing runs retain a `proofstorm-linux-amd64-COMMIT-ATTEMPT` download for 14 days,
+containing the bundle, checksum, installer, and verification reports. Diagnostics
+are retained separately for 7 days, including failed runs when logs are available.
+These are CI artifacts, not published releases; runtime setup and GitHub download
+acceptance remain separate gates.
+
+To run the same sequence locally with Docker and Python 3.12+ installed:
+
+```sh
+scratch="$(mktemp -d)"
+just release-ci-linux --work-dir "$scratch/linux"
+```
+
+See [Linux CI details and boundaries](../scripts/CHECKS.md#linux-artifact-builds-on-main).
+
 ## Build an alpha for GitHub
 
 Alpha is the normal installation experience, not a user opt-in mode. When the

@@ -57,3 +57,45 @@ jobs:
           workspaces: ". -> target/check"
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: just check-rust
+
+  linux-bundle:
+    name: Linux bundle and installer
+    needs: rust
+    # PRs get fast code checks. A maintainer can also test a branch manually.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      BUNDLE_WORK_NAME: proofstorm-linux-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: ${{ env.JUST_VERSION }}
+      - name: Build optimized Linux bundle and test installation
+        run: just release-ci-linux --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME"
+      - name: Upload checked bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proofstorm-linux-amd64-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/bundle/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Save build and installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proofstorm-linux-diagnostics-${{ github.sha }}-${{ github.run_attempt }}
+          # Explicit files only: never upload the work tree, source, or caches.
+          path: |
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/build.log
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install.log
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/build/run.json
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/build/build.log
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install/run.json
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install/install.log
+          if-no-files-found: warn
+          retention-days: 7
