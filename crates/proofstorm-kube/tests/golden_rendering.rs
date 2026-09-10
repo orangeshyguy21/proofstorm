@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use proofstorm_core::{
-    API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, ComponentKind, ComponentSpec,
-    ControlClass, DatabaseRole, DependencyBinding, LabPolicy, LabSpec, LinkKind, LinkSpec,
-    PaymentMethod, default_backend_registry, default_catalog, resolve_lock,
+    API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, CatalogPlatform,
+    CatalogResponse, ComponentKind, ComponentSpec, ControlClass, DatabaseRole, DependencyBinding,
+    LabPolicy, LabSpec, LinkKind, LinkSpec, PaymentMethod, catalog_for_platform,
+    default_backend_registry, default_catalog, resolve_lock,
 };
 use proofstorm_kube::{
     ComponentForensicsAction, LabAction, ProofstormLab, ProofstormLabAction,
@@ -336,8 +337,12 @@ fn cdk_bdk_backend_lab() -> (LabSpec, &'static str) {
 }
 
 fn render_backend(backend_id: &str) -> Value {
+    render_backend_with_catalog(backend_id, default_catalog())
+}
+
+fn render_backend_with_catalog(backend_id: &str, catalog: &CatalogResponse) -> Value {
     let (lab, component_id) = backend_lab(backend_id);
-    let lock = resolve_lock(&lab, default_catalog()).expect("backend lock");
+    let lock = resolve_lock(&lab, catalog).expect("backend lock");
     let plans =
         compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &lab, &lock).expect("backend plans");
     let plan = plans
@@ -1153,6 +1158,12 @@ fn assert_golden(name: &str, actual: &Value) {
 
 #[test]
 fn every_registered_backend_matches_its_golden_contract() {
+    // Keep shared snapshot updates sequential when UPDATE_GOLDENS is enabled.
+    assert_backend_goldens(CatalogPlatform::LinuxArm64);
+    assert_backend_goldens(CatalogPlatform::LinuxAmd64);
+}
+
+fn assert_backend_goldens(platform: CatalogPlatform) {
     let characterized = [
         "attacker-workspace",
         "bitcoin-core",
@@ -1173,8 +1184,20 @@ fn every_registered_backend_matches_its_golden_contract() {
         default_backend_registry().ids().collect::<Vec<_>>(),
         characterized
     );
+    let catalog = catalog_for_platform(platform);
     for backend_id in characterized {
-        assert_golden(backend_id, &render_backend(backend_id));
+        // Only these wallets have architecture-specific images. Every other
+        // backend must match the same full contract on both platforms.
+        let golden_name = match (platform, backend_id) {
+            (CatalogPlatform::LinuxAmd64, "cdk-cli-wallet" | "cocod-wallet") => {
+                format!("linux-amd64/{backend_id}")
+            }
+            _ => backend_id.to_owned(),
+        };
+        assert_golden(
+            &golden_name,
+            &render_backend_with_catalog(backend_id, &catalog),
+        );
     }
 }
 

@@ -45,6 +45,13 @@ Workspace tests use `--no-fail-fast` so one failing test binary does not hide
 failures in later suites. Coverage-contract tests generate both ARM64 and AMD64
 catalogs on either host and compare their full digests and entries with the
 checked-in [platform snapshots](../coverage/README.md).
+Kubernetes backend golden tests also render both architectures on every host.
+The existing wallet goldens describe ARM64; `tests/golden/linux-amd64/` in
+`proofstorm-kube` holds the two AMD64 wallet contracts. All other backends share
+the same goldens. Comparisons retain image pins and rollout digests. To regenerate
+after an intentional contract change, run
+`UPDATE_GOLDENS=1 cargo test --locked -p proofstorm-kube --test golden_rendering`
+and review the fixture diff; this works on either architecture.
 Some tests use temporary directories, child processes, and loopback servers;
 an execution sandbox that forbids localhost listeners cannot run the entire suite.
 
