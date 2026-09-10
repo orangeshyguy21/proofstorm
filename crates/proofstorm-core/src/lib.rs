@@ -38,10 +38,10 @@ pub use candidate::{
 };
 pub use catalog::{
     AuthenticationMode, BuildProvenance, CatalogDependencySupport, CatalogEntry, CatalogFeature,
-    CatalogImplementationSupport, CatalogPaymentBindingSupport, CatalogResponse,
+    CatalogImplementationSupport, CatalogPaymentBindingSupport, CatalogPlatform, CatalogResponse,
     CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
-    StorageBackend, SupportLifecycle, default_catalog, validate_catalog_component,
-    validate_component_config,
+    StorageBackend, SupportLifecycle, catalog_for_platform, default_catalog,
+    validate_catalog_component, validate_component_config,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

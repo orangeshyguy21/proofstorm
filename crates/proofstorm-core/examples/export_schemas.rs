@@ -1,7 +1,8 @@
 use std::{fs, path::PathBuf};
 
 use proofstorm_core::{
-    configuration_coverage_manifest, default_backend_registry, default_catalog, schema_documents,
+    CatalogPlatform, catalog_for_platform, configuration_coverage_manifest,
+    default_backend_registry, schema_documents,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,16 +13,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bytes.push(b'\n');
         fs::write(output.join(name), bytes)?;
     }
-    let coverage_output = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../coverage/v1alpha1/configuration-coverage.json");
-    fs::create_dir_all(
-        coverage_output
-            .parent()
-            .expect("coverage output has a parent"),
-    )?;
-    let manifest = configuration_coverage_manifest(default_catalog(), default_backend_registry())?;
-    let mut bytes = serde_json::to_vec_pretty(&manifest)?;
-    bytes.push(b'\n');
-    fs::write(coverage_output, bytes)?;
+    let coverage_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../coverage/v1alpha1");
+    fs::create_dir_all(&coverage_dir)?;
+    for (platform, name) in [
+        // Preserve the existing ARM64 document's path for its consumers.
+        (CatalogPlatform::LinuxArm64, "configuration-coverage.json"),
+        (
+            CatalogPlatform::LinuxAmd64,
+            "configuration-coverage-linux-amd64.json",
+        ),
+    ] {
+        let catalog = catalog_for_platform(platform);
+        let manifest = configuration_coverage_manifest(&catalog, default_backend_registry())?;
+        let mut bytes = serde_json::to_vec_pretty(&manifest)?;
+        bytes.push(b'\n');
+        fs::write(coverage_dir.join(name), bytes)?;
+    }
     Ok(())
 }

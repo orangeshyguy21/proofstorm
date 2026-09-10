@@ -70,7 +70,8 @@ check_clippy() {
 check_test() {
   require cargo
   printf '\nRunning hermetic workspace tests\n'
-  cargo test --locked --workspace --all-targets
+  # Finish the other test binaries after a failure so CI reports all broken suites.
+  cargo test --locked --workspace --all-targets --no-fail-fast
 }
 
 case "$mode" in
