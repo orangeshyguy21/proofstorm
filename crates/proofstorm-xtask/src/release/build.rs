@@ -455,6 +455,10 @@ fn linux_prepare(
         inputs.join("options.json"),
         serde_json::to_vec_pretty(&json!({"debug":debug,"development":development}))?,
     )?;
+    // Private snapshot directories are normally 0700. Across docker cp the
+    // capability-dropped worker must not depend on matching the host owner UID.
+    // Normalize only the transport copy, not the checkout or other state.
+    transport_permissions(&inputs)?;
     let dockerfile = inputs.join("source/docker/release/Dockerfile.linux-builder");
     regular(&dockerfile)?;
     let digest = bundle::checksum(&dockerfile, fs::metadata(&dockerfile)?.len())?;
@@ -471,6 +475,8 @@ fn linux_prepare(
     )?;
     // All checks pass before reserving the caller's output. Never overwrite it.
     fs::create_dir(&work)?;
+    // Keep the readable transport tree private to its owner on the host.
+    fs::set_permissions(&work, fs::Permissions::from_mode(0o700))?;
     for entry in ["input", "toolchain", "run.json"] {
         fs::rename(stage.path().join(entry), work.join(entry))?;
     }
@@ -479,6 +485,28 @@ fn linux_prepare(
         name,
         tag,
     ])
+}
+
+fn transport_permissions(root: &Path) -> Result<()> {
+    let mut pending = vec![root.to_owned()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path)?;
+        let mode = if metadata.is_dir() {
+            for entry in fs::read_dir(&path)? {
+                pending.push(entry?.path());
+            }
+            0o755
+        } else {
+            ensure!(metadata.is_file(), "transport symlink/non-file refused");
+            if metadata.permissions().mode() & 0o111 == 0 {
+                0o644
+            } else {
+                0o755
+            }
+        };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

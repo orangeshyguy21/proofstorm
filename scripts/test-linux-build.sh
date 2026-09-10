@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Complete host build/install orchestration: real Rust safeguards, fake Docker.
 set -Eeuo pipefail
+# Exercise hosts with private default permissions, not only CI's usual umask.
+umask 077
 trap 'printf "Linux build fixture failed at line %s\n" "$LINENO" >&2' ERR
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 export LINUX_TEST_HELPER=${1:?pass the compiled proofstorm-xtask executable}
@@ -85,6 +87,9 @@ case "$mode" in
     name=$(< "$LINUX_TEST_STATE/build-name")
     if [[ "$event" == build:transport ]]; then
       [[ "$2" == "$name:/input" && -f "$1/source.json" && ! -e "$1/source/.env" && ! -e "$1/source/.git" ]] || exit 97
+      # Model a different container UID with no DAC override capabilities.
+      [[ -z $(find "$1" -type d ! -perm -005 -print -quit) ]] || exit 97
+      [[ -z $(find "$1" -type f ! -perm -004 -print -quit) ]] || exit 97
       grep -q "\"debug\": ${LINUX_TEST_DEBUG:-false}" "$1/options.json"
       grep -q "\"development\": ${LINUX_TEST_DEVELOPMENT:-false}" "$1/options.json"
     else
