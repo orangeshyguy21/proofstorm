@@ -4,6 +4,7 @@ mod build;
 mod bundle;
 mod linux_install;
 mod package;
+mod promotion;
 mod smoke;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
@@ -23,6 +24,10 @@ pub(super) fn verify_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
 
 pub(super) fn smoke_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
     smoke::cli(args)
+}
+
+pub(super) fn promotion_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
+    promotion::cli(args)
 }
 
 pub(super) fn artifact_cli(command: &str, args: impl Iterator<Item = OsString>) -> Result<()> {

@@ -1,0 +1,74 @@
+name: Prepare alpha release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Checks run ID from main
+        required: true
+        type: string
+      tag:
+        description: Exact new alpha tag, matching the tested bundle (vX.Y.Z-alpha.N)
+        required: true
+        type: string
+      create_draft:
+        description: Create a draft prerelease after verification (otherwise preview only)
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alpha-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require main for draft creation
+        if: inputs.create_draft && github.ref != 'refs/heads/main'
+        run: |
+          echo 'Select main in Run workflow to create a draft release.' >&2
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify exact tested artifact (no publishing)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_REPO: ${{ github.repository }}
+          PROMOTION_RUN: ${{ inputs.run_id }}
+          PROMOTION_TAG: ${{ inputs.tag }}
+        run: |
+          bash scripts/release-promote-linux.sh --repo "$PROMOTION_REPO" --run-id "$PROMOTION_RUN" --tag "$PROMOTION_TAG" --work-dir "$RUNNER_TEMP/alpha-preview"
+          cat "$RUNNER_TEMP/alpha-preview/metadata/notes.md" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Verification only: this job did not modify GitHub releases.' >> "$GITHUB_STEP_SUMMARY"
+
+  draft:
+    name: Create verified draft prerelease
+    needs: verify
+    if: inputs.create_draft && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Reverify, create draft, and check uploaded bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_REPO: ${{ github.repository }}
+          PROMOTION_RUN: ${{ inputs.run_id }}
+          PROMOTION_TAG: ${{ inputs.tag }}
+        run: |
+          bash scripts/release-promote-linux.sh --repo "$PROMOTION_REPO" --run-id "$PROMOTION_RUN" --tag "$PROMOTION_TAG" --work-dir "$RUNNER_TEMP/alpha-draft" --draft
+          cat "$RUNNER_TEMP/alpha-draft/metadata/notes.md" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Draft created; uploaded bytes verified. Review in Releases and publish manually when approved.' >> "$GITHUB_STEP_SUMMARY"

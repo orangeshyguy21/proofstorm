@@ -33,6 +33,7 @@ ln -s "$scratch/stub" "$fixture/scripts/check.sh"
 ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/ci-linux-bundle.sh"
+ln -s "$scratch/stub" "$fixture/scripts/release-promote-linux.sh"
 ln -s "$scratch/stub" "$fixture/scripts/linux-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/linux-install-smoke.sh"
 ln -s "$scratch/stub" "$fixture/target/debug/proofstorm-acceptance"
@@ -117,6 +118,8 @@ run release-smoke "$tricky" relocated --json
 expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- release-smoke "$tricky" relocated --json
 run release-ci-linux --work-dir "$tricky" --debug
 expect ci-linux-bundle.sh "$fixture" unset unset --work-dir "$tricky" --debug
+run release-promote-linux --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
+expect release-promote-linux.sh "$fixture" unset unset --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
 run release-build-linux --source "$tricky" --work-dir output --development --debug
 expect linux-build.sh "$fixture" unset unset --source "$tricky" --work-dir output --development --debug
 for recipe in release-package release-pack release-extract; do
