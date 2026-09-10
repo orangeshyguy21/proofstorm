@@ -33,6 +33,7 @@ Docker, Kubernetes, Helm, Python, Node, and Trunk are not needed by these checks
 | `just lint-helm` | Separate chart validation using the pinned Helm tool |
 | `just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--development] [--debug] [--json]` | Build and package an isolated source snapshot using Bash and Rust |
 | `just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--debug]` | Build in isolated Debian, test source-free install/reinstall, collect checked artifacts; requires Docker and Rust, no Python |
+| `just release-promote-linux --repo OWNER/REPO --run-id ID --tag vVERSION --work-dir NEW_EXTERNAL_DIRECTORY [--draft]` | Verify an existing successful main artifact; optionally create an unpublished draft prerelease without rebuilding |
 | `just release-build-linux --work-dir NEW_EXTERNAL_DIRECTORY [--source DIRECTORY] [--development] [--debug]` | Build and relocate Linux binaries in isolated Debian using Bash/Rust; no host mounts or publication |
 | `just release-install-linux --archive FILE --installer FILE --work-dir NEW_EXTERNAL_DIRECTORY [--development]` | Test an existing Linux bundle's installer offline using Bash/Rust and Docker; no Python |
 | `just release-smoke ARCHIVE NEW_DESTINATION [--deny-source DIRECTORY] [--json]` | Verify, extract, and execute trusted local CLI/MCP build outputs from a relocated directory |
@@ -71,7 +72,8 @@ ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
 `scripts/test-ci-linux-bundle.sh`, `scripts/linux-install-smoke.sh`,
 `scripts/linux-install-check.sh`, `scripts/test-linux-install-smoke.sh`,
 `scripts/linux-build-worker.sh`, `scripts/test-linux-build-worker.sh`,
-`scripts/linux-build.sh`, and `scripts/test-linux-build.sh`;
+`scripts/linux-build.sh`, `scripts/test-linux-build.sh`,
+`scripts/release-promote-linux.sh`, and `scripts/test-release-promote-linux.sh`;
 legacy scenario/lab scripts are syntax-only until formalized.
 Development-wrapper tests now live in the Rust `proofstorm-xtask` package and
 its Bash integration fixture. Other Python packaging/helper tests remain separate.
@@ -84,6 +86,12 @@ For a focused development-tooling run: `cargo test --locked -p proofstorm-xtask`
 This is also included in the normal workspace test suite. Its Bash integration
 test uses the real Rust helper and fake Cargo, Trunk, CRD exporter, and CLI
 commands in a temporary checkout; it never builds or starts a runtime.
+
+Alpha promotion includes quick Bash sequencing tests with fake GitHub commands
+and Rust tests using real archives and API-shaped fixtures. They cover preview
+without writes, draft-only creation, failure propagation, changed run/artifact
+identity, existing versions, reports, checksums, and uploaded-byte verification.
+See [RELEASING.md](RELEASING.md) for the manual GitHub release flow.
 
 ## Release metadata validation
 

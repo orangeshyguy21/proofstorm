@@ -33,6 +33,9 @@ fn main() -> Result<()> {
     if command == "release-smoke" {
         return release::smoke_cli(args);
     }
+    if command == "release-promotion" {
+        return release::promotion_cli(args);
+    }
     if let Some(command @ ("release-pack" | "release-extract" | "release-package")) =
         command.to_str()
     {

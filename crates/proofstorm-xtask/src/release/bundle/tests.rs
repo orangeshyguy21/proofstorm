@@ -67,6 +67,14 @@ impl Bundle {
         self.directory.path()
     }
 
+    pub(crate) fn optimized_clean(&mut self) {
+        self.info["build_profile"] = json!("release");
+        self.manifest["build_profile"] = json!("release");
+        self.manifest["source"]["dirty"] = json!(false);
+        fs::write(self.root().join("release-info.json"), self.info.to_string()).unwrap();
+        self.refresh("release-info.json");
+    }
+
     fn save(&self) {
         fs::write(self.root().join("manifest.json"), self.manifest.to_string()).unwrap();
     }

@@ -99,6 +99,10 @@ release-install-linux +args:
 release-smoke +args:
     CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-smoke "$@"
 
+# Verify a successful main artifact; --draft explicitly creates an unpublished prerelease.
+release-promote-linux +args:
+    bash scripts/release-promote-linux.sh "$@"
+
 # Archive a verified unpacked bundle: DIRECTORY OUTPUT.
 release-pack +args:
     CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-pack "$@"
