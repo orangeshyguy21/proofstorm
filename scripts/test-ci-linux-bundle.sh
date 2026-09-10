@@ -25,6 +25,7 @@ while [[ $# -gt 0 ]]; do
     --work-dir) work=$2; shift 2 ;;
     --archive) archive=$2; shift 2 ;;
     --installer) installer=$2; shift 2 ;;
+    --controller-receipt) [[ "$mode" == build && "$2" == "$TEST_CI_CONTROLLER" ]] || exit 97; shift 2 ;;
     --debug) shift ;;
     *) exit 97 ;;
   esac
@@ -79,6 +80,11 @@ run() {
 }
 run --help
 [[ ! -s "$TEST_CI_TRACE" ]]
+export TEST_CI_CONTROLLER="$scratch/controller with 'quotes'.json"
+printf '{}\n' > "$TEST_CI_CONTROLLER"
+run --work-dir "$scratch/controller-build" --controller-receipt "$TEST_CI_CONTROLLER"
+grep -Fq "<--controller-receipt><$TEST_CI_CONTROLLER>" "$TEST_CI_TRACE"
+: > "$TEST_CI_TRACE"
 if run --work-dir; then exit 1; fi
 if run --work-dir "$fixture/forbidden"; then exit 1; fi
 mkdir "$scratch/existing"

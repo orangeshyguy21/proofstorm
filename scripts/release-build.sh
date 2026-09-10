@@ -5,19 +5,20 @@ stage=arguments
 trap 'printf "Release build failed during %s (line %s, status %s)\n" "$stage" "$LINENO" "$?" >&2' ERR
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 source_dir=$root
-work='' output='' target='' trunk='' provenance=''
+work='' output='' target='' trunk='' provenance='' controller=''
 development=false debug=false json_output=false
 usage() {
-  printf '%s\n' 'Usage: just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--source DIRECTORY] [--target-dir DIRECTORY] [--trunk FILE] [--development] [--debug] [--json]' \
+  printf '%s\n' 'Usage: just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--source DIRECTORY] [--target-dir DIRECTORY] [--trunk FILE] [--controller-receipt FILE] [--development] [--debug] [--json]' \
     'Transported snapshots: add --provenance SOURCE_JSON; the full source fingerprint is verified before use.'
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --source|--work-dir|--output|--target-dir|--trunk|--provenance)
+    --source|--work-dir|--output|--target-dir|--trunk|--provenance|--controller-receipt)
       [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }
       case "$1" in
         --source) source_dir=$2 ;; --work-dir) work=$2 ;; --output) output=$2 ;;
         --target-dir) target=$2 ;; --trunk) trunk=$2 ;; --provenance) provenance=$2 ;;
+        --controller-receipt) controller=$2 ;;
       esac
       shift 2 ;;
     --development) development=true; shift ;;
@@ -52,6 +53,11 @@ snapshot=${plan[0]} work=${plan[1]} output=${plan[2]} target=${plan[3]} trunk=${
 export CARGO_TARGET_DIR="$target" PROOFSTORM_WEB_DIST="$snapshot/crates/proofstorm-web/dist" \
   PROOFSTORM_BUILD_REVISION="${plan[5]}" PROOFSTORM_BUILD_SOURCE_SHA256="${plan[6]}"
 expected_target=${plan[7]}
+if [[ -n "$controller" ]]; then
+  stage='matching controller build input'
+  "$helper" release-controller stage "$controller" "$snapshot" "$work/source.json" "$work/controller.json"
+  export PROOFSTORM_CONTROLLER_RECEIPT="$work/controller.json"
+fi
 stage='web assets'
 printf 'Building web assets from the isolated source snapshot\n' >&2
 (cd "$snapshot/crates/proofstorm-web"; "$trunk" build --release --locked) >&2
@@ -67,6 +73,7 @@ stage='CRD generation'
 stage='host metadata'
 "$target/$profile/proofstorm" release-info > "$scratch/host-info.json"
 "$helper" release-host-check "$scratch/host-info.json" "$expected_target"
+if [[ -n "$controller" ]]; then "$helper" release-controller host "$scratch/host-info.json" "$work/controller.json"; fi
 stage='bundle packaging'
 printf 'Packaging and verifying the release bundle\n' >&2
 package_args=(release-package "$snapshot" "$target/$profile" "$work/source.json" "$output" --json)

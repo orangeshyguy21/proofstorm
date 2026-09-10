@@ -20,6 +20,16 @@ fn bash_linux_build_and_install_use_real_snapshots_without_docker() {
     check_wrapper("test-linux-build.sh");
 }
 
+#[test]
+fn release_shortcuts_use_real_version_and_ci_checks_without_github() {
+    check_wrapper("test-release-shortcuts.sh");
+}
+
+#[test]
+fn controller_build_publication_and_transport_use_real_checks_without_docker() {
+    check_wrapper("test-controller-build.sh");
+}
+
 fn check_wrapper(script: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

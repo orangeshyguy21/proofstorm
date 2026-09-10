@@ -47,10 +47,19 @@ pub(crate) fn controller() -> Value {
 }
 
 fn controller_for(target: &str) -> Value {
+    let explicit = include_str!(concat!(env!("OUT_DIR"), "/controller_receipt.json"));
+    controller_with_receipt(target, explicit)
+}
+
+fn controller_with_receipt(target: &str, explicit: &str) -> Value {
     let encoded = match target {
         crate::platform::MAC_ARM64 => include_str!("../../../release/controller.json"),
         crate::platform::LINUX_AMD64 => {
-            include_str!("../../../release/controller-linux-amd64.json")
+            if explicit.trim() == "null" {
+                include_str!("../../../release/controller-linux-amd64.json")
+            } else {
+                explicit
+            }
         }
         _ => return Value::Null,
     };
@@ -75,6 +84,26 @@ pub fn runtime_contract_sha256() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ci_controller_receipt_is_used_only_for_its_matching_platform() {
+        let value = json!({"platform":"linux/amd64","image":"fixture-image"});
+        assert_eq!(
+            controller_with_receipt(crate::platform::LINUX_AMD64, &value.to_string()),
+            value
+        );
+        assert_eq!(
+            controller_with_receipt(crate::platform::MAC_ARM64, &value.to_string()),
+            controller_with_receipt(crate::platform::MAC_ARM64, "null")
+        );
+        assert!(
+            controller_with_receipt(
+                crate::platform::LINUX_AMD64,
+                "{\"platform\":\"linux/arm64\"}"
+            )
+            .is_null()
+        );
+    }
 
     #[test]
     fn controller_pins_are_platform_specific_and_preserve_the_mac_pin() {

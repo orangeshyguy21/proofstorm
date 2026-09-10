@@ -41,6 +41,7 @@ args=(--source "$input/source" --provenance "$input/source.json" --work-dir "$wo
   --output "$output" --target-dir "$work/target" --trunk "$work/source/.tools/bin/trunk" --json)
 [[ "$development" == false ]] || args+=(--development)
 [[ "$debug" == false ]] || args+=(--debug)
+[[ ! -f "$work/controller.json" ]] || args+=(--controller-receipt "$work/controller.json")
 # Rust checks the pristine transported snapshot again; downloads never modify it.
 bash "$root/scripts/release-build.sh" "${args[@]}" > "$work/result.json"
 stage='relocated CLI and MCP'

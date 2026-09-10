@@ -201,6 +201,7 @@ fn verify(metadata: &Path, candidate: &Path, repo: &str, id: &str, tag: &str) ->
             && manifest["source"]["revision"] == plan[0],
         "candidate must be an optimized, clean alpha build of the selected commit"
     );
+    super::controller::validate(&manifest["controller"], &manifest["source"], version)?;
     let build = bundle::read_json(&candidate.join("build-report.json"))?;
     ensure!(
         Path::new(text(&build, "archive")?)
@@ -248,7 +249,7 @@ fn verify(metadata: &Path, candidate: &Path, repo: &str, id: &str, tag: &str) ->
     );
     verify_installer_default(&candidate.join("install.sh"), version)?;
     let notes = format!(
-        "Linux AMD64 alpha candidate {tag}\n\nPromoted without rebuilding from https://github.com/{repo}/actions/runs/{id} (attempt {}).\nSource commit: {}\n\nIncludes the tested installer, archive, checksum, and test reports. macOS assets are not included. Runtime setup, public image availability, and fresh-VM/public-download acceptance remain separate checks. This is not a stable or release-ready build.\n",
+        "Linux AMD64 alpha candidate {tag}\n\nPromoted without rebuilding from https://github.com/{repo}/actions/runs/{id} (attempt {}).\nSource commit: {}\n\nIncludes the tested installer, archive, checksum, and test reports, with a matching controller verified for startup and anonymous registry access. macOS assets are not included. Runtime setup, workload image availability, and fresh-VM/public-download acceptance remain separate checks. This is not a stable or release-ready build.\n",
         plan[1], plan[0]
     );
     fs::write(metadata.join("notes.md"), &notes)?;

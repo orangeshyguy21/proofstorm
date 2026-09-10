@@ -34,6 +34,8 @@ ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/ci-linux-bundle.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release-promote-linux.sh"
+ln -s "$scratch/stub" "$fixture/scripts/release.sh"
+ln -s "$scratch/stub" "$fixture/scripts/controller-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/linux-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/linux-install-smoke.sh"
 ln -s "$scratch/stub" "$fixture/target/debug/proofstorm-acceptance"
@@ -120,6 +122,14 @@ run release-ci-linux --work-dir "$tricky" --debug
 expect ci-linux-bundle.sh "$fixture" unset unset --work-dir "$tricky" --debug
 run release-promote-linux --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
 expect release-promote-linux.sh "$fixture" unset unset --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
+run release --preview
+expect release.sh "$fixture" unset unset draft --preview
+run release-prepare "$tricky"
+expect release.sh "$fixture" unset unset prepare "$tricky"
+run release-controller-build --work-dir "$tricky"
+expect controller-build.sh "$fixture" unset unset build --work-dir "$tricky"
+run release-controller-publish --work-dir "$tricky" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+expect controller-build.sh "$fixture" unset unset publish --work-dir "$tricky" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
 run release-build-linux --source "$tricky" --work-dir output --development --debug
 expect linux-build.sh "$fixture" unset unset --source "$tricky" --work-dir output --development --debug
 for recipe in release-package release-pack release-extract; do

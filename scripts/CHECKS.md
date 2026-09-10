@@ -6,8 +6,9 @@ Quick checks finish before Rust compilation starts, so formatting mistakes do
 not spend a full build. There are no path filters that leave required checks
 pending on documentation-only changes.
 
-Pushes to `main` and manual runs also build a Linux bundle and test its installer
-after both code-check jobs pass. PRs skip this heavier job.
+Pushes and manual runs on the canonical repository's `main` also build and publish
+a matching Linux controller, then build a bundle and test its installer after
+both code-check jobs pass. PRs and manual branch runs skip this heavier job.
 
 ## Prerequisites
 
@@ -19,7 +20,8 @@ after both code-check jobs pass. PRs skip this heavier job.
 
 The check script never installs tools. GitHub installs just 1.42.4 and ShellCheck
 on its disposable Ubuntu runner. Rust dependencies may need downloading on the first run.
-Docker, Kubernetes, Helm, Python, Node, and Trunk are not needed by these checks.
+Docker, Kubernetes, Helm, Python, Node, and Trunk are not needed by quick/Rust
+checks. The main-only Linux image/bundle job does use Docker and curl.
 
 ## Commands
 
@@ -31,10 +33,14 @@ Docker, Kubernetes, Helm, Python, Node, and Trunk are not needed by these checks
 | `just test` | Workspace unit and integration tests only |
 | `just lint` | Formatting, shell checks, and strict Clippy |
 | `just lint-helm` | Separate chart validation using the pinned Helm tool |
-| `just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--development] [--debug] [--json]` | Build and package an isolated source snapshot using Bash and Rust |
-| `just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--debug]` | Build in isolated Debian, test source-free install/reinstall, collect checked artifacts; requires Docker and Rust, no Python |
+| `just release-build --work-dir NEW_DIRECTORY --output DIRECTORY [--controller-receipt FILE] [--development] [--debug] [--json]` | Build and package an isolated source snapshot using Bash and Rust |
+| `just release-controller-build --work-dir NEW_EXTERNAL_DIRECTORY` | Build and verify the Linux AMD64 controller from clean source without publishing |
+| `just release-controller-publish --work-dir DIRECTORY --confirm-namespace ghcr.io/orangeshyguy21/proofstorm` | Recheck and publish that controller; verify anonymous access and emit its immutable receipt |
+| `just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--controller-receipt FILE] [--debug]` | Build in isolated Debian, test source-free install/reinstall, collect checked artifacts; requires Docker and Rust, no Python |
 | `just release-promote-linux --repo OWNER/REPO --run-id ID --tag vVERSION --work-dir NEW_EXTERNAL_DIRECTORY [--draft]` | Verify an existing successful main artifact; optionally create an unpublished draft prerelease without rebuilding |
-| `just release-build-linux --work-dir NEW_EXTERNAL_DIRECTORY [--source DIRECTORY] [--development] [--debug]` | Build and relocate Linux binaries in isolated Debian using Bash/Rust; no host mounts or publication |
+| `just release-prepare VERSION` | Update source version fields and workspace lock entries for review; preserves published image evidence |
+| `just release [--preview \| --yes]` | Select current main's tested Linux build and authorize draft preparation through your GitHub login |
+| `just release-build-linux --work-dir NEW_EXTERNAL_DIRECTORY [--source DIRECTORY] [--controller-receipt FILE] [--development] [--debug]` | Build and relocate Linux binaries in isolated Debian using Bash/Rust; no host mounts or publication |
 | `just release-install-linux --archive FILE --installer FILE --work-dir NEW_EXTERNAL_DIRECTORY [--development]` | Test an existing Linux bundle's installer offline using Bash/Rust and Docker; no Python |
 | `just release-smoke ARCHIVE NEW_DESTINATION [--deny-source DIRECTORY] [--json]` | Verify, extract, and execute trusted local CLI/MCP build outputs from a relocated directory |
 | `just release-check FILE [--alpha] [--json]` | Offline release metadata validation; no builds of product binaries or runtime access |
@@ -73,7 +79,9 @@ ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
 `scripts/linux-install-check.sh`, `scripts/test-linux-install-smoke.sh`,
 `scripts/linux-build-worker.sh`, `scripts/test-linux-build-worker.sh`,
 `scripts/linux-build.sh`, `scripts/test-linux-build.sh`,
-`scripts/release-promote-linux.sh`, and `scripts/test-release-promote-linux.sh`;
+`scripts/release-promote-linux.sh`, `scripts/test-release-promote-linux.sh`,
+`scripts/release.sh`, `scripts/test-release-shortcuts.sh`,
+`scripts/controller-build.sh`, and `scripts/test-controller-build.sh`;
 legacy scenario/lab scripts are syntax-only until formalized.
 Development-wrapper tests now live in the Rust `proofstorm-xtask` package and
 its Bash integration fixture. Other Python packaging/helper tests remain separate.
@@ -92,6 +100,20 @@ and Rust tests using real archives and API-shaped fixtures. They cover preview
 without writes, draft-only creation, failure propagation, changed run/artifact
 identity, existing versions, reports, checksums, and uploaded-byte verification.
 See [RELEASING.md](RELEASING.md) for the manual GitHub release flow.
+The shortcut integration test uses the real Rust helper with a disposable Git
+checkout and fake GitHub/Cargo-build commands. It tests authenticated dispatch,
+preview without writes, missing confirmation, stale/dirty/non-main checkouts,
+failed/skipped builds, expired artifacts, existing tags, changed main, and uncertain
+dispatch responses. Version edits are checked with real offline Cargo metadata;
+the tests never use credentials, publish images, or dispatch a real workflow.
+
+Controller tests use the real Rust verifier with fake Docker/curl and disposable
+Git snapshots. They cover non-root startup, exact helper output/status, registry
+config/manifest/index identities, checksum and anonymous-read failures, and
+receipt transport into the Linux build without source edits. Installer/bootstrap
+unit tests use explicit version/contract fixtures so a version bump does not
+require an already published image before code checks can run. Production
+compatibility checks and release metadata verification remain strict.
 
 ## Release metadata validation
 
@@ -306,12 +328,21 @@ Docker install remains in the post-merge Linux bundle job.
 ## Linux artifact builds on main
 
 The `Linux bundle and installer` job in **Checks** depends on the Rust job (which
-depends on quick checks). It runs on every push to `main` and on manual dispatch,
-including a branch explicitly selected by a maintainer. It does not run for PRs.
+depends on quick checks). It runs on pushes or manual dispatches on the canonical
+repository's `main`. It does not run for PRs, forks, or manually selected branches.
 No separate workflow, checkout of a moving branch, or privileged workflow trigger
 is used: the job builds the same event commit that passed the code checks.
 
-The shared `just release-ci-linux` command:
+First the job builds the Linux controller and execution helper, tests isolated
+non-root startup, publishes a unique CI image to GHCR, and verifies anonymous
+registry access and identity. Its exact digest and source-bound receipt are
+passed to `just release-ci-linux --controller-receipt FILE`. This external input
+is checksum-verified across container transport and embedded by the host build;
+the checkout stays unchanged and its source fingerprint remains clean. A receipt
+from a different commit, source snapshot, or version is rejected. No checked-in
+receipt updates or manual controller rebuild are needed for the next alpha.
+
+The shared `just release-ci-linux` command then:
 
 1. Uses the pinned Debian toolchain image and existing isolated Linux builder.
    The container worker invokes the same Bash/Rust release-build path. The default
@@ -326,9 +357,12 @@ To reproduce locally (the work directory's parent must already exist):
 
 ```sh
 scratch="$(mktemp -d)"
-just release-ci-linux --work-dir "$scratch/linux"
+just release-ci-linux --work-dir "$scratch/linux" --controller-receipt /path/to/controller.json
 ```
 
+Use the verified controller receipt from the exact same clean source; see
+[RELEASING.md](RELEASING.md) for optional local controller commands. Omitting the
+receipt uses legacy checked-in image metadata, which may not match a new version.
 Add `--debug` for a faster local alpha build. CI uses the optimized default. This
 is a real Docker build, unlike the fast orchestration fixture in `check-quick`.
 The fixture uses fake transport/build commands and checks stage ordering, literal
@@ -341,11 +375,12 @@ are saved separately for 7 days, including on failure when logs exist. Uploads
 use explicit output paths; source snapshots, caches, and credentials are excluded.
 The tar archive preserves executable modes independently of the Actions download.
 
-The job has a 90-minute limit; the builder retains its existing 60-minute worker
+The job has a 150-minute limit; the builder retains its existing 60-minute worker
 and 15-minute toolchain-build limits. There is no cross-run container compilation
 cache in this first slice. Measure the first native AMD64 run before adding cache
-complexity or adjusting resource limits. Nothing is pushed to GHCR or GitHub
-Releases, and the public installer is unchanged.
+complexity or adjusting resource limits. Only the controller CI image is pushed
+to GHCR. No GitHub release is created or published by Checks, and no hosted
+installer is changed. The separate authenticated release command prepares drafts.
 
 ## Boundaries and next slices
 
@@ -354,7 +389,8 @@ Wasm-only GUI, exercise a browser, validate container availability, or prove tha
 an installed bundle starts successfully. Existing Python packaging/helper tests,
 Helm checks, and live acceptance gates remain separate for now.
 
-The workflow uses read-only repository permissions, commit-pinned actions,
+The code-check jobs use read-only repository permissions; only the trusted main
+Linux job receives package-write permission. The workflow uses commit-pinned actions,
 cancellation of superseded runs, and Rust caching. Only pushes to `main` save
 caches; PRs may restore them. Initial builds are slower than warm runs; use the
 first hosted runs to establish timings before adding more jobs.
@@ -368,6 +404,6 @@ binaries, but does not test GitHub downloads, runtime setup, live MCP attachment
 or the availability of every referenced image. Its reports retain those limits;
 a green artifact build is not a `release_ready` claim.
 
-Next: verify the first hosted Linux run, then automate controller/image builds and
-explicit alpha publication of tested artifacts. This workflow never publishes or
-changes the public installer.
+Next: verify the first hosted automated controller/bundle run, prepare a new
+alpha version, and use the authenticated release flow. Fresh-VM installation and
+runtime acceptance remain required before announcing the alpha.

@@ -63,9 +63,9 @@ fn blockers(info: &Value, provenance: &Value, images: &[Value]) -> Result<Vec<St
     if info["controller"].is_null() {
         result.push("Published digest-pinned controller image is not configured.".into());
     } else if info["controller"]["release_ready"] != true {
-        result.push(
-            "Configured controller is a development preview, not a coherent release build.".into(),
-        );
+        result.push(if info["controller"]["verification"]["registry_identity"] == true {
+            "Controller image/startup are verified; live cluster reconciliation remains untested."
+        } else { "Configured controller is a development preview, not a coherent release build." }.into());
     }
     if info["bootstrap_tools"].is_null() {
         result.push("Pinned bootstrap-tool downloads/checksums are not yet packaged.".into());

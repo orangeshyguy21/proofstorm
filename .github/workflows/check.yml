@@ -61,12 +61,16 @@ jobs:
   linux-bundle:
     name: Linux bundle and installer
     needs: rust
-    # PRs get fast code checks. A maintainer can also test a branch manually.
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # Only trusted main may publish controller images. PR/branch checks stay read-only.
+    if: github.repository == 'orangeshyguy21/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
     env:
       BUNDLE_WORK_NAME: proofstorm-linux-${{ github.run_id }}-${{ github.run_attempt }}
+      DOCKER_CONFIG: ${{ runner.temp }}/proofstorm-ghcr-auth
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,8 +80,23 @@ jobs:
           just-version: ${{ env.JUST_VERSION }}
       - name: Select repository Rust toolchain for installer verification
         run: rustup show active-toolchain
+      - name: Build and verify matching Linux controller
+        run: bash scripts/controller-build.sh build --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME-controller"
+      - name: Authenticate controller publication
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$DOCKER_CONFIG"
+          chmod 700 "$DOCKER_CONFIG"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+      - name: Publish and anonymously verify exact controller image
+        run: bash scripts/controller-build.sh publish --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME-controller" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+      - name: Remove publication credentials before building host binaries
+        if: always()
+        run: docker logout ghcr.io
       - name: Build optimized Linux bundle and test installation
-        run: just release-ci-linux --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME"
+        run: just release-ci-linux --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME" --controller-receipt "$RUNNER_TEMP/$BUNDLE_WORK_NAME-controller/controller.json"
       - name: Upload checked bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -99,5 +118,7 @@ jobs:
             ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/build/build.log
             ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install/run.json
             ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install/install.log
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}-controller/build.json
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}-controller/controller.json
           if-no-files-found: warn
           retention-days: 7

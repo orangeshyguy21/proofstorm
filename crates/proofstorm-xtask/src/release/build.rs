@@ -100,7 +100,15 @@ fn source_names(source: &Path, imported: bool) -> Result<BTreeSet<String>> {
         .collect())
 }
 
-fn snapshot(
+pub(super) fn verify_snapshot(source: &Path, provenance: &Value) -> Result<()> {
+    ensure!(
+        fingerprint(source, &source_names(source, true)?)? == text(provenance, "sha256")?,
+        "source snapshot checksum mismatch"
+    );
+    Ok(())
+}
+
+pub(super) fn snapshot(
     source: &Path,
     destination: &Path,
     allow_dirty: bool,
@@ -317,17 +325,26 @@ pub(super) fn cli(command: &str, args: impl Iterator<Item = OsString>) -> Result
     match command {
         "linux-build-prepare" => {
             ensure!(
-                args.len() == 4,
-                "expected source, new work directory, development and debug booleans"
+                matches!(args.len(), 4 | 5),
+                "expected source, new work directory, development/debug booleans, optional controller receipt"
             );
             let development = args[2]
                 .to_str()
                 .context("invalid development flag")?
                 .parse()?;
             let debug = args[3].to_str().context("invalid debug flag")?.parse()?;
-            for value in
+            let plan = if let Some(receipt) = args.get(4) {
+                linux_prepare_with_controller(
+                    Path::new(&args[0]),
+                    Path::new(&args[1]),
+                    development,
+                    debug,
+                    Some(Path::new(receipt)),
+                )?
+            } else {
                 linux_prepare(Path::new(&args[0]), Path::new(&args[1]), development, debug)?
-            {
+            };
+            for value in plan {
                 std::io::stdout().write_all(value.as_bytes())?;
                 std::io::stdout().write_all(&[0])?;
             }
@@ -406,8 +423,36 @@ fn worker_prepare(input: &Path, work: &Path, output: &Path) -> Result<Vec<String
         allow_dirty,
         Some(&provenance),
     )?;
+    let controller = input.join("controller.json");
+    if let Some(expected) = options.get("controller_sha256") {
+        ensure!(
+            expected
+                == &json!(bundle::checksum(
+                    &controller,
+                    fs::metadata(&controller)?.len()
+                )?),
+            "transported controller receipt checksum mismatch"
+        );
+        super::controller::stage(
+            &controller,
+            &source,
+            &provenance,
+            &stage.path().join("controller.json"),
+        )?;
+    } else {
+        ensure!(
+            !controller.exists(),
+            "unexpected controller receipt in transport"
+        );
+    }
     fs::create_dir(&work)?;
     fs::rename(stage.path().join("source"), work.join("source"))?;
+    if options.get("controller_sha256").is_some() {
+        fs::rename(
+            stage.path().join("controller.json"),
+            work.join("controller.json"),
+        )?;
+    }
     Ok(vec![
         work.to_str().context("non-UTF-8 work path")?.into(),
         output.to_str().context("non-UTF-8 output path")?.into(),
@@ -421,6 +466,16 @@ fn linux_prepare(
     work: &Path,
     development: bool,
     debug: bool,
+) -> Result<Vec<String>> {
+    linux_prepare_with_controller(source, work, development, debug, None)
+}
+
+fn linux_prepare_with_controller(
+    source: &Path,
+    work: &Path,
+    development: bool,
+    debug: bool,
+    controller: Option<&Path>,
 ) -> Result<Vec<String>> {
     let source = source.canonicalize()?;
     let work = output_path(work)?;
@@ -451,9 +506,20 @@ fn linux_prepare(
         inputs.join("source.json"),
         serde_json::to_vec_pretty(&provenance)?,
     )?;
+    let mut options = json!({"debug":debug,"development":development});
+    if let Some(controller) = controller {
+        super::controller::stage(
+            controller,
+            &inputs.join("source"),
+            &provenance,
+            &inputs.join("controller.json"),
+        )?;
+        let file = inputs.join("controller.json");
+        options["controller_sha256"] = json!(bundle::checksum(&file, fs::metadata(&file)?.len())?);
+    }
     fs::write(
         inputs.join("options.json"),
-        serde_json::to_vec_pretty(&json!({"debug":debug,"development":development}))?,
+        serde_json::to_vec_pretty(&options)?,
     )?;
     // Private snapshot directories are normally 0700. Across docker cp the
     // capability-dropped worker must not depend on matching the host owner UID.

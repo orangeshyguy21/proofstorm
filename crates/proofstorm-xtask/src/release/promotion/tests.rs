@@ -54,6 +54,7 @@ impl Candidate {
         if clean {
             bundle.optimized_clean();
         }
+        bundle.matching_controller();
         let report = archive::pack(bundle.root(), &files).unwrap();
         save(&files, "build-report.json", &report);
         save(

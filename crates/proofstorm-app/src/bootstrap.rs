@@ -21,6 +21,11 @@ fn digest(value: &str) -> bool {
 
 fn controller() -> Result<Value> {
     let value = crate::release::controller();
+    validate_controller(&value)?;
+    Ok(value)
+}
+
+fn validate_controller(value: &Value) -> Result<()> {
     let image = value["image"].as_str().with_context(|| {
         format!(
             "this build has no published controller for {}; install a matching bundle",
@@ -38,7 +43,7 @@ fn controller() -> Result<Value> {
             && value["metadata"]["version"] == env!("CARGO_PKG_VERSION"),
         "controller/client compatibility mismatch; install a matching bundle"
     );
-    Ok(value)
+    Ok(())
 }
 
 fn selected_controller(home: &Path) -> Result<Value> {

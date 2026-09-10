@@ -80,13 +80,16 @@ fn bootstrap_pins_are_complete_and_immutable() {
 }
 
 #[test]
-fn published_controller_matches_compiled_contract() {
-    let info = controller().unwrap();
-    assert_eq!(
-        info["metadata"]["runtime_contract_sha256"],
-        crate::release::runtime_contract_sha256()
-    );
-    assert_eq!(info["release_ready"], false);
+fn published_controller_requires_the_compiled_version_and_contract() {
+    let mut info = serde_json::json!({"image":format!("ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:{}","a".repeat(64)),"metadata":{"version":env!("CARGO_PKG_VERSION"),"runtime_contract_sha256":crate::release::runtime_contract_sha256()}});
+    validate_controller(&info).unwrap();
+    info["metadata"]["version"] = serde_json::json!("stale");
+    assert!(validate_controller(&info).is_err());
+    info["metadata"]["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+    info["metadata"]["runtime_contract_sha256"] = serde_json::json!("stale");
+    assert!(validate_controller(&info).is_err());
+    let embedded = crate::release::controller();
+    assert_eq!(controller().is_ok(), validate_controller(&embedded).is_ok());
 }
 
 #[test]
