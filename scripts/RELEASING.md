@@ -11,7 +11,7 @@ No Python, Docker, or Proofstorm runtime is needed for promotion.
 Prepare a new alpha from a clean checkout, normally on your release branch:
 
 ```bash
-just release-prepare 0.1.0-alpha.2
+just release-prepare 0.1.0-alpha.3
 ```
 
 This updates the workspace version, workspace packages in `Cargo.lock`, installer
@@ -95,9 +95,12 @@ Both use Bash/Rust and Docker; registry verification also needs curl.
 The resulting `controller.json` can be passed as `--controller-receipt FILE` to
 the Linux bundle command, but only with exactly the same clean source snapshot.
 
-This automation covers **Linux AMD64**, not macOS/ARM64 or workload image rebuilds.
-Legacy checked-in controller records remain for other build paths. Runtime/lab
-acceptance is still separate from image startup and anonymous availability.
+Main CI and promotion cover **Linux AMD64**, not workload image rebuilds or Mac
+assets yet. The controller command also supports `--platform linux/arm64` for a
+native Mac bundle's matching controller; publication uses the recorded platform.
+See [macOS build and acceptance work](../release/macos.md). Legacy checked-in
+controller records remain as fallbacks when no explicit receipt is supplied.
+Runtime/lab acceptance is separate from image startup and anonymous availability.
 
 ## In GitHub
 

@@ -1,5 +1,6 @@
 use super::*;
 use proofstorm_app::environment::{EnvironmentQuery, ObservationState};
+mod prober;
 
 fn observer(labs: &Labs) -> Labs {
     labs.store.put_principal("viewer").unwrap();

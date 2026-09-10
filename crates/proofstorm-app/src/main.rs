@@ -706,7 +706,11 @@ async fn main() -> Result<()> {
                 bail!("operation did not report success; inspect its receipt before any retry");
             }
         }
-        Command::Down { name, wait } => output.show(&labs.down(&name, wait).await?)?,
+        Command::Down { name, wait } => output.show(
+            &labs
+                .down_with_progress(&name, wait, &|label| output.update(label))
+                .await?,
+        )?,
         Command::Connect {
             name,
             component,

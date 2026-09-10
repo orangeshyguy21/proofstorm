@@ -305,6 +305,7 @@ pub fn setup_with_progress(
     };
     stage("tools", &mut || {
         for pin in tools::pins()? {
+            progress(&format!("Checking {}", pin.name));
             tools::install(home, &pin)?;
         }
         Ok(())
@@ -314,7 +315,7 @@ pub fn setup_with_progress(
             json!({"prepared":true,"runtime_started":false,"home":home,"capacity":capacity}),
         );
     }
-    stage("cluster", &mut || cluster::create(&installation))?;
+    stage("cluster", &mut || cluster::create(&installation, progress))?;
     stage("controller", &mut || {
         if let Some((source, sha)) = &checkout_source {
             controller = local_controller::prepare(&installation, source, sha, progress)?;
@@ -322,6 +323,7 @@ pub fn setup_with_progress(
             let image = controller["image"]
                 .as_str()
                 .context("controller image missing")?;
+            progress("Downloading controller image");
             docker(
                 home,
                 &[
@@ -332,6 +334,7 @@ pub fn setup_with_progress(
                 ],
                 300,
             )?;
+            progress("Verifying controller image");
             ensure!(
                 controller_metadata(home, image)? == controller["metadata"],
                 "downloaded controller metadata mismatch"
@@ -345,7 +348,7 @@ pub fn setup_with_progress(
         })?;
     }
     stage("deployment", &mut || {
-        deploy(&installation, bundle, &controller)
+        deploy(&installation, bundle, &controller, progress)
     })?;
     stage("health", &mut || healthy(&installation, &controller))?;
     stage("permissions", &mut || initialize_permissions(&installation))?;
@@ -510,7 +513,13 @@ fn mirror_with_progress(
     Ok(())
 }
 
-fn deploy(installation: &Installation, bundle: &Path, controller: &Value) -> Result<()> {
+fn deploy(
+    installation: &Installation,
+    bundle: &Path,
+    controller: &Value,
+    progress: &dyn Fn(&str),
+) -> Result<()> {
+    progress("Checking existing runtime configuration");
     cluster::owned(installation)?;
     // Check existing objects before applying schemas or touching the controller.
     let crds: Value = serde_json::from_str(&kube(installation, &["get", "crds", "-o", "json"])?)?;
@@ -531,6 +540,7 @@ fn deploy(installation: &Installation, bundle: &Path, controller: &Value) -> Res
                 )?;
         }
     }
+    progress("Applying lab resource schemas");
     kube(
         installation,
         &[
@@ -555,8 +565,10 @@ fn deploy(installation: &Installation, bundle: &Path, controller: &Value) -> Res
             == Some(&inputs);
     // Skip Helm entirely on a healthy, identical deployment: no restarts/revisions.
     if same_inputs && healthy(installation, controller).is_ok() {
+        progress("Reusing healthy controller");
         return Ok(());
     }
+    progress("Waiting for controller to become ready");
     process::run(
         &installation.home,
         &tool(&installation.home, "helm")?,

@@ -53,7 +53,7 @@ fn clean_controller_snapshot_and_external_receipt_leave_checkout_unchanged() {
     let output = tempfile::tempdir().unwrap();
     let work = output.path().canonicalize().unwrap().join("controller");
     let before = fs::read(source.path().join("Cargo.toml")).unwrap();
-    let plan = prepare(source.path(), &work).unwrap();
+    let plan = prepare(source.path(), &work, "linux/amd64").unwrap();
     assert_eq!(plan.len(), 3);
     let record = bundle::read_json(&work.join("build.json")).unwrap();
     assert_eq!(record["source"]["dirty"], false);
@@ -65,18 +65,19 @@ fn clean_controller_snapshot_and_external_receipt_leave_checkout_unchanged() {
         &work.join("source"),
         &record["source"],
         &work.join("copy.json"),
+        "linux/amd64",
     )
     .unwrap();
     assert_eq!(fs::read(source.path().join("Cargo.toml")).unwrap(), before);
     fs::write(source.path().join("uncommitted"), "user work").unwrap();
-    assert!(prepare(source.path(), &output.path().join("dirty")).is_err());
+    assert!(prepare(source.path(), &output.path().join("dirty"), "linux/amd64").is_err());
 }
 
 #[test]
 fn stale_dirty_wrong_platform_and_unverified_controller_records_fail_closed() {
     let provenance = json!({"revision":"a".repeat(40),"sha256":"b".repeat(64),"dirty":false});
     let valid = receipt(&provenance);
-    validate(&valid, &provenance, "0.1.0-alpha.2").unwrap();
+    validate(&valid, &provenance, "0.1.0-alpha.2", "linux/amd64").unwrap();
     for (path, value) in [
         ("/source/revision", json!("b".repeat(40))),
         ("/source/sha256", json!("a".repeat(64))),
@@ -91,7 +92,7 @@ fn stale_dirty_wrong_platform_and_unverified_controller_records_fail_closed() {
         let mut invalid = valid.clone();
         *invalid.pointer_mut(path).unwrap() = value;
         assert!(
-            validate(&invalid, &provenance, "0.1.0-alpha.2").is_err(),
+            validate(&invalid, &provenance, "0.1.0-alpha.2", "linux/amd64").is_err(),
             "accepted {path}"
         );
     }
@@ -112,7 +113,7 @@ fn local_image_and_exact_helper_probe_are_bound_to_source_and_previous_build() {
     save_file(
         &root,
         "build.json",
-        &json!({"version":"0.1.0-alpha.2","source":source}),
+        &json!({"version":"0.1.0-alpha.2","source":source,"platform":"linux/amd64"}),
     );
     save_file(
         &root,
@@ -181,7 +182,8 @@ fn staged_receipt_requires_the_exact_unmodified_source_fingerprint() {
             &root.join("receipt.json"),
             &root.join("source"),
             &other,
-            &root.join("staged.json")
+            &root.join("staged.json"),
+            "linux/amd64"
         )
         .is_err()
     );
@@ -197,8 +199,45 @@ fn staged_receipt_requires_the_exact_unmodified_source_fingerprint() {
             &root.join("receipt.json"),
             &root.join("source"),
             &provenance,
-            &root.join("staged.json")
+            &root.join("staged.json"),
+            "linux/amd64"
         )
         .is_err()
     );
+}
+
+#[test]
+fn arm_controller_stages_only_for_the_matching_host_and_source() {
+    let source = source();
+    let output = tempfile::tempdir().unwrap();
+    let work = output.path().canonicalize().unwrap().join("arm-controller");
+    prepare(source.path(), &work, "linux/arm64").unwrap();
+    let record = bundle::read_json(&work.join("build.json")).unwrap();
+    assert_eq!(record["platform"], "linux/arm64");
+    let mut arm = receipt(&record["source"]);
+    arm["platform"] = json!("linux/arm64");
+    save_file(&work, "controller.json", &arm);
+    stage(
+        &work.join("controller.json"),
+        &work.join("source"),
+        &record["source"],
+        &work.join("mac.json"),
+        platform_for_target("aarch64-apple-darwin").unwrap(),
+    )
+    .unwrap();
+    assert!(
+        stage(
+            &work.join("controller.json"),
+            &work.join("source"),
+            &record["source"],
+            &work.join("linux.json"),
+            platform_for_target("x86_64-unknown-linux-gnu").unwrap()
+        )
+        .is_err()
+    );
+    assert!(!work.join("linux.json").exists());
+    assert!(platform_for_target("x86_64-apple-darwin").is_err());
+    let unsupported = output.path().join("unsupported");
+    assert!(prepare(source.path(), &unsupported, "linux/s390x").is_err());
+    assert!(!unsupported.exists());
 }

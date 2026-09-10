@@ -7,6 +7,22 @@ use std::{ffi::OsString, fs, io::Write, path::Path};
 
 const REPOSITORY: &str = "ghcr.io/orangeshyguy21/proofstorm/proofstormd";
 
+fn architecture(platform: &str) -> Result<&str> {
+    match platform {
+        "linux/amd64" => Ok("amd64"),
+        "linux/arm64" => Ok("arm64"),
+        _ => bail!("controller platform must be linux/amd64 or linux/arm64"),
+    }
+}
+
+fn platform_for_target(target: &str) -> Result<&str> {
+    match target {
+        "x86_64-unknown-linux-gnu" => Ok("linux/amd64"),
+        "aarch64-apple-darwin" => Ok("linux/arm64"),
+        _ => bail!("unsupported controller host target"),
+    }
+}
+
 fn version(source: &Path) -> Result<String> {
     let manifest: toml::Value = toml::from_str(&fs::read_to_string(source.join("Cargo.toml"))?)?;
     let version = manifest
@@ -27,7 +43,8 @@ fn save(path: &Path, value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn prepare(source: &Path, work: &Path) -> Result<Vec<String>> {
+fn prepare(source: &Path, work: &Path, platform: &str) -> Result<Vec<String>> {
+    architecture(platform)?;
     let source = source.canonicalize()?;
     let work = output_path(work)?;
     ensure!(
@@ -50,7 +67,7 @@ fn prepare(source: &Path, work: &Path) -> Result<Vec<String>> {
         "{REPOSITORY}:ci-{}-{suffix}",
         text(&provenance, "revision")?
     );
-    let receipt = json!({"format_version":1,"release_ready":false,"platform":"linux/amd64","source":provenance,"version":version,"tag":tag});
+    let receipt = json!({"format_version":1,"release_ready":false,"platform":platform,"source":provenance,"version":version,"tag":tag});
     save(&staging.path().join("build.json"), &receipt)?;
     fs::create_dir(&work)?;
     for name in ["source", "build.json"] {
@@ -70,6 +87,7 @@ fn local(work: &Path) -> Result<()> {
     let images = inspect.as_array().context("invalid image inspection")?;
     ensure!(images.len() == 1, "expected one controller image");
     let image = &images[0];
+    let arch = architecture(text(&receipt, "platform")?)?;
     let id = text(image, "Id")?;
     ensure!(
         id.strip_prefix("sha256:").is_some_and(sha256),
@@ -77,9 +95,9 @@ fn local(work: &Path) -> Result<()> {
     );
     ensure!(
         image["Os"] == "linux"
-            && image["Architecture"] == "amd64"
+            && image["Architecture"] == arch
             && image["Config"]["User"] == "65532:65532",
-        "controller must be Linux AMD64 and non-root"
+        "controller must match the recorded Linux platform and run as non-root"
     );
     ensure!(
         image["Config"]["Labels"]["dev.proofstorm.source-sha256"] == receipt["source"]["sha256"],
@@ -122,12 +140,15 @@ fn helper_probe(work: &Path, id: &str) -> Result<()> {
         id.strip_prefix("sha256:").is_some_and(sha256),
         "invalid probe image identity"
     );
+    let receipt = bundle::read_json(&work.join("build.json"))?;
+    let platform = text(&receipt, "platform")?;
+    architecture(platform)?;
     let mut child = Command::new("docker")
         .args([
             "run",
             "--rm",
             "--platform",
-            "linux/amd64",
+            platform,
             "--network",
             "none",
             "--read-only",
@@ -166,10 +187,16 @@ fn helper_probe(work: &Path, id: &str) -> Result<()> {
     }
 }
 
-pub(super) fn validate(receipt: &Value, provenance: &Value, expected_version: &str) -> Result<()> {
+pub(super) fn validate(
+    receipt: &Value,
+    provenance: &Value,
+    expected_version: &str,
+    platform: &str,
+) -> Result<()> {
+    architecture(platform)?;
     ensure!(
         receipt["format_version"] == 1
-            && receipt["platform"] == "linux/amd64"
+            && receipt["platform"] == platform
             && receipt["release_ready"] == false
             && receipt["source"] == *provenance
             && provenance["dirty"] == false,
@@ -204,10 +231,11 @@ pub(super) fn stage(
     source: &Path,
     provenance: &Value,
     destination: &Path,
+    platform: &str,
 ) -> Result<()> {
     build::verify_snapshot(source, provenance)?;
     let receipt = bundle::read_json(receipt)?;
-    validate(&receipt, provenance, &version(source)?)?;
+    validate(&receipt, provenance, &version(source)?, platform)?;
     save(destination, &receipt)
 }
 
@@ -219,7 +247,8 @@ fn published(work: &Path) -> Result<()> {
         digest.strip_prefix("sha256:").is_some_and(sha256),
         "invalid published digest"
     );
-    registry::verify(digest, text(&receipt, "local_image_id")?)?;
+    let platform = text(&receipt, "platform")?.to_owned();
+    registry::verify(digest, text(&receipt, "local_image_id")?, &platform)?;
     receipt["image"] = json!(format!("{REPOSITORY}@{digest}"));
     receipt["anonymous_verified"] = json!(true);
     receipt["verification"]["registry_identity"] = json!(true);
@@ -227,6 +256,7 @@ fn published(work: &Path) -> Result<()> {
         &receipt,
         &receipt["source"],
         text(&receipt["metadata"], "version")?,
+        &platform,
     )?;
     save(&work.join("controller.json"), &receipt)
 }
@@ -238,8 +268,12 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
         .map(|s| s.to_str().context("UTF-8 arguments required"))
         .collect::<Result<_>>()?;
     match args.as_slice() {
-        ["prepare", source, work] => {
-            for field in prepare(Path::new(source), Path::new(work))? {
+        ["prepare", source, work, rest @ ..] if rest.len() <= 1 => {
+            for field in prepare(
+                Path::new(source),
+                Path::new(work),
+                rest.first().copied().unwrap_or("linux/amd64"),
+            )? {
                 std::io::stdout().write_all(field.as_bytes())?;
                 std::io::stdout().write_all(&[0])?;
             }
@@ -247,6 +281,12 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
         ["local", work] => local(Path::new(work))?,
         ["helper", work, id] => helper_probe(Path::new(work), id)?,
         ["published", work] => published(Path::new(work))?,
+        ["platform", work] => {
+            let receipt = bundle::read_json(&Path::new(work).join("build.json"))?;
+            let platform = text(&receipt, "platform")?;
+            architecture(platform)?;
+            println!("{platform}");
+        }
         ["host", info, receipt] => ensure!(
             bundle::read_json(Path::new(info))?["controller"]
                 == bundle::read_json(Path::new(receipt))?,
@@ -264,11 +304,16 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
             );
             println!("{tag}");
         }
-        ["stage", receipt, source, provenance, destination] => stage(
+        ["stage", receipt, source, provenance, destination, rest @ ..] if rest.len() <= 1 => stage(
             Path::new(receipt),
             Path::new(source),
             &bundle::read_json(Path::new(provenance))?,
             Path::new(destination),
+            if let Some(target) = rest.first() {
+                platform_for_target(target)?
+            } else {
+                "linux/amd64"
+            },
         )?,
         _ => bail!("invalid controller command"),
     }

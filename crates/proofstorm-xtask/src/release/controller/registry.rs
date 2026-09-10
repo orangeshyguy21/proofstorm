@@ -67,7 +67,7 @@ fn metadata(kind: &str, digest: &str, token: &str) -> Result<Value> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-fn manifest(digest: &str, identity: &str, token: &str, depth: usize) -> Result<bool> {
+fn manifest(digest: &str, identity: &str, token: &str, depth: usize, arch: &str) -> Result<bool> {
     ensure!(depth <= 3, "registry index nesting exceeds limit");
     let value = metadata("manifests", digest, token)?;
     if let Some(children) = value.get("manifests") {
@@ -82,16 +82,23 @@ fn manifest(digest: &str, identity: &str, token: &str, depth: usize) -> Result<b
             if child["platform"]["os"] == "unknown" {
                 continue;
             }
-            matches |= manifest(text(child, "digest")?, identity, token, depth + 1)?;
+            ensure!(
+                child["platform"]["os"] == "linux" && child["platform"]["architecture"] == arch,
+                "published controller index platform mismatch"
+            );
+            matches |= manifest(text(child, "digest")?, identity, token, depth + 1, arch)?;
             runnable += 1;
         }
-        ensure!(runnable == 1, "expected exactly one runnable AMD64 image");
+        ensure!(
+            runnable == 1,
+            "expected exactly one runnable controller image"
+        );
         return Ok(matches);
     }
     let config_digest = text(&value["config"], "digest")?;
     let config = metadata("blobs", config_digest, token)?;
     ensure!(
-        config["os"] == "linux" && config["architecture"] == "amd64",
+        config["os"] == "linux" && config["architecture"] == arch,
         "published controller platform mismatch"
     );
     let layers = value["layers"].as_array().context("missing image layers")?;
@@ -105,7 +112,8 @@ fn manifest(digest: &str, identity: &str, token: &str, depth: usize) -> Result<b
     Ok(digest == identity || config_digest == identity)
 }
 
-pub(super) fn verify(digest: &str, identity: &str) -> Result<()> {
+pub(super) fn verify(digest: &str, identity: &str, platform: &str) -> Result<()> {
+    let arch = super::architecture(platform)?;
     let repository = REPOSITORY.trim_start_matches("ghcr.io/");
     let response = request(
         &format!("https://ghcr.io/token?service=ghcr.io&scope=repository:{repository}:pull"),
@@ -119,7 +127,7 @@ pub(super) fn verify(digest: &str, identity: &str) -> Result<()> {
         "invalid anonymous pull token"
     );
     ensure!(
-        manifest(digest, identity, token, 0)?,
+        manifest(digest, identity, token, 0, arch)?,
         "published image differs from the verified local image"
     );
     Ok(())

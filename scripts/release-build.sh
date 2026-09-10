@@ -55,7 +55,7 @@ export CARGO_TARGET_DIR="$target" PROOFSTORM_WEB_DIST="$snapshot/crates/proofsto
 expected_target=${plan[7]}
 if [[ -n "$controller" ]]; then
   stage='matching controller build input'
-  "$helper" release-controller stage "$controller" "$snapshot" "$work/source.json" "$work/controller.json"
+  "$helper" release-controller stage "$controller" "$snapshot" "$work/source.json" "$work/controller.json" "$expected_target"
   export PROOFSTORM_CONTROLLER_RECEIPT="$work/controller.json"
 fi
 stage='web assets'

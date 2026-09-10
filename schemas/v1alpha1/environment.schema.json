@@ -806,6 +806,13 @@
         "items"
       ]
     },
+    "ReplicaPolicy": {
+      "type": "string",
+      "enum": [
+        "fixed",
+        "controller_scheduled"
+      ]
+    },
     "ResourceDemand": {
       "type": "object",
       "properties": {
@@ -1032,19 +1039,74 @@
             "$ref": "#/$defs/ContainerDemand"
           }
         },
+        "kind": {
+          "type": "string",
+          "default": ""
+        },
         "name": {
           "type": "string"
         },
+        "observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkloadObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "replica_policy": {
+          "$ref": "#/$defs/ReplicaPolicy",
+          "default": "fixed"
+        },
         "replicas": {
-          "type": "integer",
+          "description": "Desired scale, not a running pod count. Unknown for an unobserved scheduled workload.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "int32"
         }
       },
       "required": [
         "name",
-        "replicas",
         "containers"
       ]
+    },
+    "WorkloadObservation": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "observed_generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "ready_replicas": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "replicas": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      }
     }
   }
 }

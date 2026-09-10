@@ -5,12 +5,35 @@ use k8s_openapi::{
     apimachinery::pkg::api::resource::Quantity,
 };
 use proofstorm_core::{LabInstance, PublishedRevision};
-use proofstorm_kube::{COMPONENT_LABEL, render_lab, render_security_spine};
+use proofstorm_kube::{COMPONENT_LABEL, PROTOCOL_PROBER_NAME, render_lab, render_security_spine};
+use proofstorm_view::ReplicaPolicy;
 use std::collections::BTreeMap;
 
 pub use proofstorm_view::{
     ContainerDemand, Endpoint, Quantities, ResourceDemand, StorageDemand, WorkloadDemand,
 };
+
+pub(super) fn include_runtime(
+    resources: &mut Option<ResourceDemand>,
+    resource: Option<&proofstorm_kube::ProofstormLab>,
+    prober: Option<(i32, proofstorm_view::WorkloadObservation)>,
+) {
+    let Some(resources) = resources else {
+        return;
+    };
+    if let Some((replicas, observation)) = prober {
+        if let Some(workload) = resources.workloads.iter_mut().find(|w| {
+            w.name == PROTOCOL_PROBER_NAME && w.replica_policy == ReplicaPolicy::ControllerScheduled
+        }) {
+            workload.replicas = Some(replicas);
+            workload.observation = Some(observation);
+        }
+    }
+    resources.retained_storage = resource
+        .and_then(|r| r.status.as_ref())
+        .map(|s| s.retained_storage.clone())
+        .unwrap_or_default();
+}
 
 #[allow(
     clippy::too_many_lines,
@@ -40,6 +63,7 @@ pub(super) fn project(
     for deployment in &rendered.deployments {
         if let Some(spec) = &deployment.spec {
             workloads.push(workload(
+                "Deployment",
                 &deployment.metadata,
                 spec.replicas,
                 spec.template.spec.as_ref(),
@@ -51,6 +75,7 @@ pub(super) fn project(
     for set in &rendered.stateful_sets {
         if let Some(spec) = &set.spec {
             workloads.push(workload(
+                "StatefulSet",
                 &set.metadata,
                 spec.replicas,
                 spec.template.spec.as_ref(),
@@ -154,6 +179,7 @@ fn demands(
     values
 }
 fn workload(
+    kind: &str,
     meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta,
     replicas: Option<i32>,
     pod: Option<&PodSpec>,
@@ -179,7 +205,15 @@ fn workload(
     WorkloadDemand {
         name: meta.name.clone().unwrap_or_default(),
         component: component(meta),
-        replicas: replicas.unwrap_or(1),
+        kind: kind.into(),
+        replicas: (meta.name.as_deref() != Some(PROTOCOL_PROBER_NAME))
+            .then_some(replicas.unwrap_or(1)),
+        replica_policy: if meta.name.as_deref() == Some(PROTOCOL_PROBER_NAME) {
+            ReplicaPolicy::ControllerScheduled
+        } else {
+            ReplicaPolicy::Fixed
+        },
+        observation: None,
         containers,
     }
 }

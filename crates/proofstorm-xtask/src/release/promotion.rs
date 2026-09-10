@@ -192,16 +192,7 @@ fn verify(metadata: &Path, candidate: &Path, repo: &str, id: &str, tag: &str) ->
     let extracted = scratch.path().join("verified");
     archive::extract(&archive_path, &extracted)?;
     let manifest = bundle::read_json(&extracted.join("proofstorm/manifest.json"))?;
-    ensure!(
-        manifest["version"] == version
-            && manifest["target"] == "x86_64-unknown-linux-gnu"
-            && manifest["channel"] == "alpha"
-            && manifest["build_profile"] == "release"
-            && manifest["source"]["dirty"] == false
-            && manifest["source"]["revision"] == plan[0],
-        "candidate must be an optimized, clean alpha build of the selected commit"
-    );
-    super::controller::validate(&manifest["controller"], &manifest["source"], version)?;
+    verify_manifest(&manifest, version, &plan[0])?;
     let build = bundle::read_json(&candidate.join("build-report.json"))?;
     ensure!(
         Path::new(text(&build, "archive")?)
@@ -264,6 +255,24 @@ fn verify(metadata: &Path, candidate: &Path, repo: &str, id: &str, tag: &str) ->
         serde_json::to_vec_pretty(&json!({"tag":tag,"sha":plan[0],"files":files}))?,
     )?;
     Ok(())
+}
+
+fn verify_manifest(manifest: &Value, version: &str, revision: &str) -> Result<()> {
+    ensure!(
+        manifest["version"] == version
+            && manifest["target"] == "x86_64-unknown-linux-gnu"
+            && manifest["channel"] == "alpha"
+            && manifest["build_profile"] == "release"
+            && manifest["source"]["dirty"] == false
+            && manifest["source"]["revision"] == revision,
+        "candidate must be an optimized, clean alpha build of the selected commit"
+    );
+    super::controller::validate(
+        &manifest["controller"],
+        &manifest["source"],
+        version,
+        "linux/amd64",
+    )
 }
 
 fn draft(metadata: &Value, tag: &str, sha: &str) -> Result<u64> {

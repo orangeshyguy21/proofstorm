@@ -223,8 +223,29 @@ pub struct ResourceDemand {
 pub struct WorkloadDemand {
     pub name: String,
     pub component: Option<String>,
-    pub replicas: i32,
+    #[serde(default)]
+    pub kind: String,
+    /// Desired scale, not a running pod count. Unknown for an unobserved scheduled workload.
+    pub replicas: Option<i32>,
+    #[serde(default)]
+    pub replica_policy: ReplicaPolicy,
+    #[serde(default)]
+    pub observation: Option<WorkloadObservation>,
     pub containers: Vec<ContainerDemand>,
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicaPolicy {
+    #[default]
+    Fixed,
+    ControllerScheduled,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkloadObservation {
+    pub generation: Option<i64>,
+    pub observed_generation: Option<i64>,
+    pub replicas: Option<i32>,
+    pub ready_replicas: Option<i32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContainerDemand {
