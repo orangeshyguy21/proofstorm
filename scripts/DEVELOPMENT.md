@@ -1,6 +1,10 @@
 # Checkout workflow
 
-Run `make dev` from the Proofstorm checkout. It builds matching CLI/MCP binaries,
+Install just (`brew install just` on macOS; see [Linux packages](https://just.systems/man/en/packages.html)).
+Run `just` or `just --list` to discover commands. Just is a contributor tool, not
+a dependency for people installing Proofstorm.
+
+Run `just dev` from the Proofstorm checkout. It builds matching CLI/MCP binaries,
 web assets, chart/CRD resources, and controller source snapshot, then enters a shell selecting this checkout's
 private installation. Docker is not touched by the build. Inside that shell:
 
@@ -13,7 +17,7 @@ proofstorm gui
 
 Leaving the development shell with `exit` or Ctrl-D is a successful session end,
 even after an interrupted or failed command. Command failures still appear in
-the shell; build/registration failures before it opens still fail `make dev`.
+the shell; build/registration failures before it opens still fail `just dev`.
 
 Commands show an ASCII spinner and status text in an interactive terminal,
 starting before installation checks. Setup reports its current stage. Ordinary
@@ -39,22 +43,22 @@ For agent attachment, change to the application's directory and run
 The connection is project-specific and keeps this installation selected even
 after leaving the development shell. No global agent configuration is changed.
 
-`make dev-build` rebuilds without entering a shell. `.proofstorm-dev/bin/proofstorm`
-is the same command launcher outside that shell. `make setup`, `make doctor`,
-and `make gui` are conveniences for that launcher. No release archive, installer,
+`just dev-build` rebuilds without entering a shell. `.proofstorm-dev/bin/proofstorm`
+is the same command launcher outside that shell. `just setup`, `just doctor`,
+and `just gui` are conveniences for that launcher. No release archive, installer,
 global PATH mutation, or legacy lab migration is involved.
 
 ## Rebuilding
 
-- Web: run `make web-dev` in another terminal, then refresh the managed GUI after
+- Web: run `just web-dev` in another terminal, then refresh the managed GUI after
   each build. Assets use the same authenticated backend/origin; there is no
   separate API proxy. Automatic browser reload is not implemented yet.
-  `make web` performs a single asset rebuild through the same path.
-- Host code: run `make dev-build`; stop/reopen the GUI and reconnect agent
+  `just web` performs a single asset rebuild through the same path.
+- Host code: run `just dev-build`; stop/reopen the GUI and reconnect agent
   sessions afterward. Existing labs, installation identity, and grants survive.
 - Chart/CRDs: rebuild, then run `proofstorm setup` to apply the new snapshot.
-- Controller/runtime-contract changes: run `make dev-build`, then `proofstorm
-  setup` (or simply `make deploy`). Setup builds the recorded linux/arm64 source,
+- Controller/runtime-contract changes: run `just dev-build`, then `proofstorm
+  setup` (or simply `just deploy`). Setup builds the recorded linux/arm64 source,
   verifies source identity, platform, and client compatibility, publishes only
   to this installation's loopback registry, and deploys by immutable digest.
   The first build can take several minutes. Subsequent changed-source builds
@@ -64,7 +68,7 @@ global PATH mutation, or legacy lab migration is involved.
   Failed build diagnostics stay in private `state/controller-build.log`.
 
 The old `make docker-build`, `docker-push`, `install`, and `cluster-schema`
-controller workflow has been removed. `make deploy` now uses the same setup
+controller workflow has been removed. `just deploy` now uses the same setup
 path as the CLI, including chart/CRD updates and ownership checks. No global
 kubeconfig, fixed legacy registry, or manually selected deployment context is used.
 
@@ -73,9 +77,9 @@ under ignored `.proofstorm-dev/`. Do not delete it casually: it also identifies
 the installation that owns Docker resources. Ordinary builds reuse it. The
 old checkout `target/`, web `dist/`, and legacy cluster are not adopted.
 
-An explicit `DEV_ARGS='--target-dir /absolute/dedicated/cargo-cache'` can select
+An explicit `just dev-build --target-dir /absolute/dedicated/cargo-cache` can select
 a different build cache on first registration. Keep it dedicated: replacing
-either binary outside `make dev-build` makes registration stale and commands
+either binary outside `just dev-build` makes registration stale and commands
 fail closed until a coherent build is registered. Switching binary paths after
 registration is intentionally refused rather than silently retargeting agents.
 
@@ -83,9 +87,18 @@ registration is intentionally refused rather than silently retargeting agents.
 
 Owned runtime teardown and older acceptance gates still need to move behind
 the installation-aware path. The remaining low-level
-legacy Makefile targets are not part of this new workflow. Release packaging and
+legacy recipes (listed under `legacy` by `just --list`) are not part of this new workflow. Release packaging and
 installer tests remain separate because they test distribution, not a second
 product runtime.
+
+## Moving from Make
+
+The root Makefile has been replaced by `justfile`; use `just dev`, `just check`,
+and `just gui`. Arguments are ordinary quoted CLI arguments, not Make assignments:
+`just dev-build --target-dir '/absolute/path with spaces'` or `just gui --no-open`.
+Legacy gates use `just e2e slice4` instead of `make e2e-slice4`.
+The old Compose harness remains available through `just compose <target>` and
+is the only recipe that still invokes Make. No runtime is migrated by this change.
 
 ## Live verification
 

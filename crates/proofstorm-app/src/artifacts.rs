@@ -162,7 +162,7 @@ impl Verified {
             };
             ensure!(
                 fs::symlink_metadata(record.resources.join("controller-source"))?.is_dir(),
-                "controller source snapshot missing or linked; run make dev-build"
+                "controller source snapshot missing or linked; run just dev-build"
             );
             // The inventory was just hashed and verified. Derive the controller
             // snapshot digest from those receipts, without rereading every file.
@@ -180,11 +180,11 @@ impl Verified {
             let controller_sha256 = format!("{:x}", digest.finalize());
             let manifest: Value = serde_json::from_slice(
                 &fs::read(record.resources.join("controller-source.json"))
-                    .context("checkout controller snapshot missing; run make dev-build")?,
+                    .context("checkout controller snapshot missing; run just dev-build")?,
             )?;
             ensure!(
                 manifest["format_version"] == 1 && manifest["sha256"] == controller_sha256,
-                "controller source snapshot changed; run make dev-build"
+                "controller source snapshot changed; run just dev-build"
             );
             Ok(Self {
                 installation,
@@ -229,7 +229,7 @@ impl Checkout {
         );
         ensure!(
             hash(&self.cli)? == self.cli_sha256 && hash(&self.mcp)? == self.mcp_sha256,
-            "checkout binaries changed; run make dev-build to register a coherent build"
+            "checkout binaries changed; run just dev-build to register a coherent build"
         );
         ensure!(
             self.metadata == crate::release::describe(),
@@ -239,7 +239,7 @@ impl Checkout {
         inventory(&self.resources, &self.resources, &mut files)?;
         ensure!(
             files == self.files,
-            "checkout resources changed; run make dev-build"
+            "checkout resources changed; run just dev-build"
         );
         Ok(())
     }
@@ -317,12 +317,12 @@ pub(crate) fn controller_source(home: &Path) -> Result<Option<(PathBuf, String)>
     let root = record.resources.join("controller-source");
     let manifest: Value = serde_json::from_slice(
         &fs::read(record.resources.join("controller-source.json"))
-            .context("checkout controller snapshot missing; run make dev-build")?,
+            .context("checkout controller snapshot missing; run just dev-build")?,
     )?;
     let sha = tree_sha256(&root)?;
     ensure!(
         manifest["format_version"] == 1 && manifest["sha256"] == sha,
-        "controller source snapshot changed; run make dev-build"
+        "controller source snapshot changed; run just dev-build"
     );
     Ok(Some((root, sha)))
 }

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Install the pinned, checksum-verified Trunk release into this checkout.
 set -eu
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+# shellcheck source=tools/versions.env
 . "$root/tools/versions.env"
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) target=aarch64-apple-darwin ;;

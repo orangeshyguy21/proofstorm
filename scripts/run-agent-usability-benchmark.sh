@@ -218,7 +218,7 @@ if [[ ! -x "$KUBECTL" ]]; then
   exit 1
 fi
 if [[ ! -x "$ROOT/target/release/proofstorm-mcp" ]]; then
-  printf '%s\n' "release MCP binary is missing; run make build first" >&2
+  printf '%s\n' "release MCP binary is missing; run just build first" >&2
   exit 1
 fi
 

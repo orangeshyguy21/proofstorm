@@ -134,7 +134,7 @@ pub fn provision_for(target: &RegistryTarget) -> Result<()> {
             )?;
         } else {
             let cached = cached_reference(&rows, digest)?.with_context(|| format!(
-                "required catalog image is missing from both the local registry and Docker cache: {image}\nRestore the exact pinned image with docker load/pull, then run make images. A source rebuild may produce a different digest and must be reviewed as a catalog update; setup cannot silently substitute it."
+                "required catalog image is missing from both the local registry and Docker cache: {image}\nRestore the exact pinned image with docker load/pull, then run just images. A source rebuild may produce a different digest and must be reviewed as a catalog update; setup cannot silently substitute it."
             ))?;
             println!("Restoring catalog image: {image}");
             run("docker", &["tag", &cached, &tag])?;
@@ -172,7 +172,7 @@ pub fn verify_for(kubectl: &Kubectl, target: &RegistryTarget) -> Result<()> {
         if let Some((repository, digest)) = local_reference(&image) {
             if !registry_has(target, repository, digest)? {
                 bail!(
-                    "catalog image missing: {image}\nRun make images to restore required local images, then rerun make doctor."
+                    "catalog image missing: {image}\nRun just images to restore required local images, then rerun just doctor."
                 );
             }
         }
@@ -182,7 +182,7 @@ pub fn verify_for(kubectl: &Kubectl, target: &RegistryTarget) -> Result<()> {
             }
             println!("Checking image on {node}: {image}");
             run("docker", &["exec", node, "crictl", "--timeout=120s", "pull", &image])
-                .with_context(|| format!("cluster cannot pull catalog image {image}; inspect registry access, platform support, and the pinned image; local images can be restored with make images"))?;
+                .with_context(|| format!("cluster cannot pull catalog image {image}; inspect registry access, platform support, and the pinned image; local images can be restored with just images"))?;
         }
     }
     Ok(())

@@ -126,7 +126,7 @@ impl Environment {
         } else {
             kube::Config::from_kubeconfig(&options).await
         }
-        .with_context(|| format!("read Kubernetes context {:?}; run make setup or select PROOFSTORM_CONTEXT explicitly", self.context))?;
+        .with_context(|| format!("read Kubernetes context {:?}; run just setup or select PROOFSTORM_CONTEXT explicitly", self.context))?;
         Ok(config)
     }
 

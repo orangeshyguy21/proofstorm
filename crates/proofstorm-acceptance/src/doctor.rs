@@ -170,8 +170,8 @@ pub fn cluster_schema(kubectl: &Kubectl) -> Result<()> {
             bail!(
                 "existing Proofstorm lab {name} uses an incompatible alpha schema: {error}\n\
                  labs are not migrated or deleted automatically; reset the disposable developer cluster:\n\
-                 \x20 make down\n\
-                 \x20 make setup"
+                 \x20 just down\n\
+                 \x20 just setup"
             );
         }
     }

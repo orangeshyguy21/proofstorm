@@ -2,7 +2,7 @@
 """Build/register a checkout installation; product operations stay in the CLI.
 
 No release archive, global PATH changes, legacy cluster selection, or Docker
-mutation. `make dev` enters an isolated-selection shell; `make dev-build` just
+mutation. `just dev` enters an isolated-selection shell; `just dev-build` just
 refreshes artifacts. Web watch publishes assets to the same managed GUI origin.
 """
 import argparse
@@ -128,7 +128,7 @@ def main():
     parser.add_argument("--target-dir", type=Path)
     args = parser.parse_args()
     if args.shell and not sys.stdin.isatty():
-        parser.error("make dev needs an interactive terminal; use make dev-build in automation")
+        parser.error("just dev needs an interactive terminal; use just dev-build in automation")
     work = ROOT / ".proofstorm-dev"
     marker = work / "owner.json"
     if work.exists() and not marker.is_file():
@@ -156,12 +156,12 @@ def main():
     env.update(CARGO_TARGET_DIR=str(target), PROOFSTORM_WEB_DIST=str(work / "web"), NO_COLOR="true")
     trunk = ROOT / ".tools/bin/trunk"
     if not trunk.is_file():
-        raise ValueError("run make web-tools to install the pinned web builder")
+        raise ValueError("run just web-tools to install the pinned web builder")
     web_command = [trunk, "watch" if args.watch_web else "build", "--release", "--locked",
                    "--config", ROOT / "crates/proofstorm-web/Trunk.toml", "--dist", work / "web"]
     if args.watch_web:
         if not (work / "state/checkout-artifacts.json").is_file():
-            raise ValueError("run make dev-build first")
+            raise ValueError("run just dev-build first")
         print("Watching web assets for the managed GUI. Refresh its browser tab after a build.", flush=True)
         run(web_command, env)
         return
