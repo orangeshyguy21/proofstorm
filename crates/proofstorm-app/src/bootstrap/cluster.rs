@@ -24,6 +24,33 @@ fn names(installation: &Installation) -> Vec<String> {
     names
 }
 
+fn ensure_names_available(
+    installation: &Installation,
+    containers: &str,
+    networks: &str,
+    volumes: &str,
+) -> Result<()> {
+    // Include k3d's auxiliary resources: it can reuse an existing tools node
+    // or image volume. A short-name collision must never imply ownership.
+    let mut containers_needed = names(installation);
+    containers_needed.push(format!("{}-tools", installation.context()));
+    let network = installation.network_name();
+    let volume = format!("{}-images", installation.context());
+    for (kind, existing, needed) in [
+        ("container", containers, containers_needed),
+        ("network", networks, vec![network]),
+        ("volume", volumes, vec![volume]),
+    ] {
+        for name in needed {
+            ensure!(
+                !existing.lines().any(|line| line == name),
+                "unrecorded runtime {kind} {name} already exists (name collision or interrupted creation); refusing adoption or deletion; inspect before retrying"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn inventory(installation: &Installation) -> Result<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
     for name in names(installation) {
@@ -110,15 +137,8 @@ pub(super) fn create(installation: &Installation, progress: &dyn Fn(&str)) -> Re
         // Successful inventory queries are required before interpreting absence.
         let containers = docker(home, &["ps", "-a", "--format", "{{.Names}}"], 15)?;
         let networks = docker(home, &["network", "ls", "--format", "{{.Name}}"], 15)?;
-        ensure!(
-            !names(installation)
-                .iter()
-                .any(|name| containers.lines().any(|line| line == name))
-                && !networks
-                    .lines()
-                    .any(|line| line == installation.network_name()),
-            "unrecorded runtime resources already exist (possibly interrupted creation); refusing adoption or deletion; inspect before retrying"
-        );
+        let volumes = docker(home, &["volume", "ls", "--format", "{{.Name}}"], 15)?;
+        ensure_names_available(installation, &containers, &networks, &volumes)?;
         let api = TcpListener::bind((Ipv4Addr::LOCALHOST, installation.api_port))
             .context("saved API port is occupied")?;
         let registry = TcpListener::bind((Ipv4Addr::LOCALHOST, installation.registry_port))
@@ -165,4 +185,44 @@ pub(super) fn create(installation: &Installation, progress: &dyn Fn(&str)) -> Re
     receipt["kubeconfig_sha256"] = json!(tools::hash(&installation.kubeconfig())?);
     process::save(&receipt_path, &serde_json::to_vec(&receipt)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn short_name_collisions_fail_closed_for_every_named_resource() {
+        let first = Installation {
+            format_version: 2,
+            id: "aa959e2b000000000000000000000000".into(),
+            home: PathBuf::from("/unused/first"),
+            api_port: 42101,
+            registry_port: 42102,
+        };
+        let second = Installation {
+            id: "aa959e2b111111111111111111111111".into(),
+            home: PathBuf::from("/unused/second"),
+            ..first.clone()
+        };
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.cluster_name(), second.cluster_name());
+        let mut containers = names(&first);
+        containers.push(format!("{}-tools", first.context()));
+        for container in containers {
+            let error = ensure_names_available(&second, &format!("{container}\n"), "", "")
+                .unwrap_err();
+            assert!(error.to_string().contains(&container));
+        }
+        assert!(ensure_names_available(&second, "", &first.network_name(), "").is_err());
+        assert!(
+            ensure_names_available(&second, "", "", &format!("{}-images", first.context()))
+                .is_err()
+        );
+        ensure_names_available(&second, "", "", "").unwrap();
+        // Similar names are not collisions; unrelated installations coexist.
+        let similar = format!("{}-registry-other\n", first.context());
+        ensure_names_available(&second, &similar, &similar, &similar).unwrap();
+    }
 }

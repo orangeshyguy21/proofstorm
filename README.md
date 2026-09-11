@@ -1,8 +1,12 @@
 <p align="center">
-  <img src="crates/proofstorm-web/assets/proofstorm-logo.svg" width="88" height="88" alt="Proofstorm logo">
+  <img src="crates/proofstorm-web/assets/proofstorm-logo.svg" width="44" height="51" alt="">
+  &nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="crates/proofstorm-web/assets/proofstorm-word-mark-on-dark.svg">
+    <img src="crates/proofstorm-web/assets/proofstorm-word-mark.svg" width="240" height="44" alt="Proofstorm">
+  </picture>
 </p>
-<h1 align="center">Proofstorm</h1>
-<p align="center">Local test labs for Bitcoin, Lightning, and Cashu.</p>
+<p align="center">Local test cells for Bitcoin, Lightning &amp; Cashu.</p>
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#supported-environments">Environments</a> ·
