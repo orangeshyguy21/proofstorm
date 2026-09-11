@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-acceptance"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-app"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-core"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "lightning-invoice",
  "schemars",
@@ -2412,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-exec"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "nix",
  "proofstorm-core",
@@ -2422,7 +2422,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-kube"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "anyhow",
  "k8s-openapi",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-mcp"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-store"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "proofstorm-core",
  "proofstorm-view",
@@ -2480,7 +2480,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-transfer"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "getrandom 0.3.4",
  "rusqlite",
@@ -2493,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-view"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "proofstorm-core",
  "schemars",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-web"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "console_error_panic_hook",
  "gloo-net",
@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-xtask"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2534,7 +2534,7 @@ dependencies = [
 
 [[package]]
 name = "proofstormd"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "futures",
  "getrandom 0.3.4",

@@ -1,6 +1,6 @@
 image:
   repository: proofstorm-registry.localhost:5000/proofstormd
-  tag: 0.1.0-alpha.2
+  tag: 0.1.0-alpha.3
   # Release bundles set an immutable digest; empty preserves contributor tags.
   digest: ""
   pullPolicy: Always

@@ -10,7 +10,7 @@ usage() {
 }
 
 install_prefix="${HOME:?HOME is required}/.local"
-install_version="0.1.0-alpha.2"
+install_version="0.1.0-alpha.3"
 artifact_dir=""
 archive_name=""
 allow_development=false
