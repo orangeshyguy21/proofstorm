@@ -207,10 +207,10 @@ fn prepare(root: &Path, new: &str) -> Result<()> {
         "Prepared source version {old} -> {new}. Review the six-file diff; nothing committed, pushed, tagged, or published."
     );
     println!(
-        "Main CI will build, verify, and publish the matching Linux controller automatically. Existing image records were not relabelled."
+        "Main CI will build, verify, and publish matching AMD64 and ARM64 controllers automatically. Existing image records were not relabelled."
     );
     println!(
-        "Run just check, then review and merge. Wait for main's Linux bundle check before running just release."
+        "Run just check, then review and merge. Wait for main's Linux and Mac bundle checks before running just release."
     );
     Ok(())
 }
@@ -241,7 +241,7 @@ fn select_run(path: &Path, repo: &str, sha: &str) -> Result<u64> {
             }
         }
     }
-    let run = selected.context("No Checks run for current main yet. Wait for its Linux bundle build; older commits are not selected.")?;
+    let run = selected.context("No Checks run for current main yet. Wait for its Linux and Mac bundle builds; older commits are not selected.")?;
     ensure!(
         run["status"] == "completed" && run["conclusion"] == "success",
         "Latest Checks run for current main is not green yet. Finish/fix it before releasing."

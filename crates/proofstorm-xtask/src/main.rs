@@ -42,6 +42,9 @@ fn main() -> Result<()> {
     if command == "release-controller" {
         return release::controller_cli(args);
     }
+    if command == "macos-install" {
+        return release::macos_install_cli(args);
+    }
     if let Some(command @ ("release-pack" | "release-extract" | "release-package")) =
         command.to_str()
     {

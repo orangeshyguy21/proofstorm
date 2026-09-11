@@ -87,6 +87,12 @@ impl Bundle {
         self.refresh("release-info.json");
     }
 
+    pub(crate) fn source_hash(&mut self, hash: &str) {
+        self.info["source_sha256"] = json!(hash);
+        self.manifest["source"]["sha256"] = json!(hash);
+        self.matching_controller();
+    }
+
     fn save(&self) {
         fs::write(self.root().join("manifest.json"), self.manifest.to_string()).unwrap();
     }

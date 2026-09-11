@@ -6,7 +6,7 @@ trap 'printf "Alpha promotion failed during %s (line %s, status %s). Any created
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 repo='' run_id='' tag='' work='' create_draft=false
 usage() {
-  printf 'Usage: just release-promote-linux --repo OWNER/REPO --run-id ID --tag vVERSION --work-dir NEW_DIRECTORY [--draft]\nWithout --draft this is a read-only preview.\n'
+  printf 'Usage: just release-promote --repo OWNER/REPO --run-id ID --tag vVERSION --work-dir NEW_DIRECTORY [--draft]\nRequires matching Linux and Mac artifacts. Without --draft this is a read-only preview.\n'
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,16 +59,38 @@ stage='successful main build selection'
 fetch_run
 plan=()
 while IFS= read -r -d '' field; do plan+=("$field"); done < "$scratch/plan"
-[[ ${#plan[@]} == 3 ]] || exit 1
-sha=${plan[0]} attempt=${plan[1]} artifact=${plan[2]}
+[[ ${#plan[@]} == 4 ]] || exit 1
+sha=${plan[0]} attempt=${plan[1]} linux_artifact=${plan[2]} mac_artifact=${plan[3]}
 cp "$scratch/plan" "$scratch/original-plan"
 fetch_evidence
 cp "$scratch/artifact-id" "$scratch/original-artifact-id"
 fetch_unused
 stage='candidate download and verification'
-gh run download "$run_id" --repo "$repo" --name "$artifact" --dir "$work/candidate"
+mkdir "$work/candidate"
+gh run download "$run_id" --repo "$repo" --name "$linux_artifact" --dir "$work/candidate/linux-amd64"
+gh run download "$run_id" --repo "$repo" --name "$mac_artifact" --dir "$work/candidate/macos-arm64"
 api -H 'Accept: application/vnd.github.raw+json' "repos/$repo/contents/install.sh?ref=$sha" > "$metadata/source-install.sh"
 "$helper" release-promotion verify "$metadata" "$work/candidate" "$repo" "$run_id" "$tag"
+stage='verified multi-platform asset collection'
+mkdir "$work/assets"
+assets=()
+for platform in linux-amd64 macos-arm64; do
+  case "$platform" in linux-amd64) target=x86_64-unknown-linux-gnu ;; macos-arm64) target=aarch64-apple-darwin ;; esac
+  archive="proofstorm-${tag#v}-$target.tar.gz"
+  for name in "$archive" "$archive.sha256"; do
+    cp "$work/candidate/$platform/$name" "$work/assets/$name"
+    assets+=("$work/assets/$name")
+  done
+  for report in build-report smoke-report install-smoke-report; do
+    name="$report-$platform.json"
+    cp "$work/candidate/$platform/$report.json" "$work/assets/$name"
+    assets+=("$work/assets/$name")
+  done
+done
+cmp "$work/candidate/linux-amd64/install.sh" "$work/candidate/macos-arm64/install.sh"
+cp "$work/candidate/linux-amd64/install.sh" "$work/assets/install.sh"
+assets+=("$work/assets/install.sh")
+"$helper" release-promotion assets "$metadata" "$work/assets"
 printf 'Verified %s from commit %s (Checks run %s, attempt %s). No payload binaries were executed or rebuilt.\n' "$tag" "$sha" "$run_id" "$attempt"
 if [[ "$create_draft" == false ]]; then
   printf 'Preview only. No GitHub changes made. Review %s/notes.md\n' "$metadata"
@@ -81,13 +103,11 @@ fetch_evidence
 cmp "$scratch/original-artifact-id" "$scratch/artifact-id"
 fetch_unused
 "$helper" release-promotion verify "$metadata" "$work/candidate" "$repo" "$run_id" "$tag"
+"$helper" release-promotion assets "$metadata" "$work/assets"
 stage='draft creation'
 api --method POST "repos/$repo/releases" --input "$metadata/create-release.json" > "$metadata/created.json"
 release_id=$("$helper" release-promotion created "$metadata/created.json" "$tag" "$sha")
 stage='draft asset upload'
-archive="proofstorm-${tag#v}-x86_64-unknown-linux-gnu.tar.gz"
-assets=("$work/candidate/$archive" "$work/candidate/$archive.sha256" "$work/candidate/install.sh"
-  "$work/candidate/build-report.json" "$work/candidate/smoke-report.json" "$work/candidate/install-smoke-report.json")
 # No --clobber: partial/existing drafts require explicit human recovery.
 gh release upload "$tag" "${assets[@]}" --repo "$repo"
 stage='uploaded-byte verification'

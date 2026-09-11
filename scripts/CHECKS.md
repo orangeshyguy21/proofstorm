@@ -6,9 +6,10 @@ Quick checks finish before Rust compilation starts, so formatting mistakes do
 not spend a full build. There are no path filters that leave required checks
 pending on documentation-only changes.
 
-Pushes and manual runs on the canonical repository's `main` also build and publish
-a matching Linux controller, then build a bundle and test its installer after
-both code-check jobs pass. PRs and manual branch runs skip this heavier job.
+PRs also run a small native Mac sandbox contract test after quick checks. Pushes
+and manual runs on the canonical repository's `main` build matching AMD64/ARM64
+controllers and Linux/Mac bundles after code checks. PRs and manual branch runs
+skip those heavier build/publication jobs.
 
 ## Prerequisites
 
@@ -28,7 +29,7 @@ checks. The main-only Linux image/bundle job does use Docker and curl.
 | Command | Checks |
 | --- | --- |
 | `just check` | Everything below, quick checks first |
-| `just check-quick` | Just dispatch, Linux CI/worker orchestration fixtures, Rust formatting, shell syntax, scoped ShellCheck |
+| `just check-quick` | Just dispatch, Linux/Mac CI and promotion orchestration fixtures, Rust formatting, shell syntax, scoped ShellCheck |
 | `just check-rust` | Strict workspace Clippy, then workspace tests |
 | `just test` | Workspace unit and integration tests only |
 | `just lint` | Formatting, shell checks, and strict Clippy |
@@ -37,9 +38,11 @@ checks. The main-only Linux image/bundle job does use Docker and curl.
 | `just release-controller-build --work-dir NEW_EXTERNAL_DIRECTORY` | Build and verify the Linux AMD64 controller from clean source without publishing |
 | `just release-controller-publish --work-dir DIRECTORY --confirm-namespace ghcr.io/orangeshyguy21/proofstorm` | Recheck and publish that controller; verify anonymous access and emit its immutable receipt |
 | `just release-ci-linux --work-dir NEW_EXTERNAL_DIRECTORY [--controller-receipt FILE] [--debug]` | Build in isolated Debian, test source-free install/reinstall, collect checked artifacts; requires Docker and Rust, no Python |
-| `just release-promote-linux --repo OWNER/REPO --run-id ID --tag vVERSION --work-dir NEW_EXTERNAL_DIRECTORY [--draft]` | Verify an existing successful main artifact; optionally create an unpublished draft prerelease without rebuilding |
+| `just release-promote --repo OWNER/REPO --run-id ID --tag vVERSION --work-dir NEW_EXTERNAL_DIRECTORY [--draft]` | Verify an existing successful main artifact; optionally create an unpublished draft prerelease without rebuilding |
 | `just release-prepare VERSION` | Update source version fields and workspace lock entries for review; preserves published image evidence |
-| `just release [--preview \| --yes]` | Select current main's tested Linux build and authorize draft preparation through your GitHub login |
+| `just release [--preview \| --yes]` | Select current main's tested Linux and Mac builds and authorize one draft through your GitHub login |
+| `just release-ci-macos --work-dir NEW_EXTERNAL_DIRECTORY --controller-receipt FILE` | Build native Apple Silicon bundle; verify relocation and sandboxed install/reinstall |
+| `just release-install-macos --archive FILE --installer FILE --snapshot SOURCE_DIRECTORY --work-dir NEW_EXTERNAL_DIRECTORY` | Test an existing Mac archive with verified source/network/compiler/write restrictions |
 | `just release-build-linux --work-dir NEW_EXTERNAL_DIRECTORY [--source DIRECTORY] [--controller-receipt FILE] [--development] [--debug]` | Build and relocate Linux binaries in isolated Debian using Bash/Rust; no host mounts or publication |
 | `just release-install-linux --archive FILE --installer FILE --work-dir NEW_EXTERNAL_DIRECTORY [--development]` | Test an existing Linux bundle's installer offline using Bash/Rust and Docker; no Python |
 | `just release-smoke ARCHIVE NEW_DESTINATION [--deny-source DIRECTORY] [--json]` | Verify, extract, and execute trusted local CLI/MCP build outputs from a relocated directory |
@@ -79,7 +82,7 @@ ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
 `scripts/linux-install-check.sh`, `scripts/test-linux-install-smoke.sh`,
 `scripts/linux-build-worker.sh`, `scripts/test-linux-build-worker.sh`,
 `scripts/linux-build.sh`, `scripts/test-linux-build.sh`,
-`scripts/release-promote-linux.sh`, `scripts/test-release-promote-linux.sh`,
+`scripts/release-promote.sh`, `scripts/test-release-promote.sh`,
 `scripts/release.sh`, `scripts/test-release-shortcuts.sh`,
 `scripts/controller-build.sh`, and `scripts/test-controller-build.sh`;
 legacy scenario/lab scripts are syntax-only until formalized.
@@ -382,6 +385,33 @@ complexity or adjusting resource limits. Only the controller CI image is pushed
 to GHCR. No GitHub release is created or published by Checks, and no hosted
 installer is changed. The separate authenticated release command prepares drafts.
 
+## Native Mac checks and artifacts
+
+`Mac installer isolation` runs real sandbox contract tests on `macos-15` for PRs
+and main. It does not build product binaries. It proves source reads, networking,
+compiler execution, and writes outside the test directory are blocked, and checks
+that a permissive/tampered policy or failed worker cannot emit a success receipt.
+The same native tests run under `just check-rust` on Apple Silicon; Linux skips them.
+
+On trusted main, `ARM64 controller` uses `ubuntu-24.04-arm` to build, publish, and
+anonymously verify the matching Linux ARM64 controller. `Mac bundle and installer`
+then uses that exact receipt on `macos-15`, with a macOS 15 deployment target and
+the repository's pinned Rust/Trunk tools. The Mac runner needs no Docker or registry
+credentials. It uses the shared build driver and collects exactly six files after
+relocation and isolated installation succeed.
+
+Mac installer checks use a disposable home and a restricted PATH, prove sandbox
+enforcement before installing, then install/reinstall without development overrides.
+CLI/MCP metadata must match, and no runtime or agent configuration may appear.
+The receipt records that source/build tools exist on the host but access/execution
+is denied; this is not a physically source-free VM. Missing sandbox support fails.
+
+The artifact is `proofstorm-macos-arm64-COMMIT-ATTEMPT`, retained for 14 days.
+Selected diagnostics are retained for 7 days. The quick fixture tests sequencing,
+quoted paths, output selection, and failure propagation with stub tools. It is not
+a substitute for the hosted product build or clean-Mac runtime/desktop acceptance.
+See [release flow](RELEASING.md) for promotion of both platforms into one draft.
+
 ## Boundaries and next slices
 
 The quick/Rust jobs are host-code checks, not release acceptance. They do not build the
@@ -390,13 +420,13 @@ an installed bundle starts successfully. Existing Python packaging/helper tests,
 Helm checks, and live acceptance gates remain separate for now.
 
 The code-check jobs use read-only repository permissions; only the trusted main
-Linux job receives package-write permission. The workflow uses commit-pinned actions,
+AMD64 and ARM64 controller-building jobs receive package-write permission. The workflow uses commit-pinned actions,
 cancellation of superseded runs, and Rust caching. Only pushes to `main` save
 caches; PRs may restore them. Initial builds are slower than warm runs; use the
 first hosted runs to establish timings before adding more jobs.
 
-After the workflow has run successfully, maintainers can require both
-`Formatting and shell` and `Rust lints and tests` in the GitHub ruleset for `main`.
+After the workflow has run successfully, maintainers can require
+`Formatting and shell`, `Rust lints and tests`, and `Mac installer isolation` in the GitHub ruleset for `main`.
 Adding the workflow does not configure branch protection automatically.
 
 The Linux artifact job does build the embedded GUI and exercise offline installed
@@ -404,6 +434,6 @@ binaries, but does not test GitHub downloads, runtime setup, live MCP attachment
 or the availability of every referenced image. Its reports retain those limits;
 a green artifact build is not a `release_ready` claim.
 
-Next: verify the first hosted automated controller/bundle run, prepare a new
-alpha version, and use the authenticated release flow. Fresh-VM installation and
-runtime acceptance remain required before announcing the alpha.
+Next: verify the first hosted Mac controller/bundle run, prepare a new alpha
+version, and use the shared authenticated release flow. Fresh-host installation,
+runtime and desktop acceptance remain required before announcing Mac support.

@@ -4,6 +4,7 @@ mod build;
 mod bundle;
 mod controller;
 mod linux_install;
+mod macos_install;
 mod package;
 mod promotion;
 mod shortcuts;
@@ -38,6 +39,10 @@ pub(super) fn shortcuts_cli(args: impl Iterator<Item = OsString>) -> Result<()> 
 
 pub(super) fn controller_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
     controller::cli(args)
+}
+
+pub(super) fn macos_install_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
+    macos_install::cli(args)
 }
 
 pub(super) fn artifact_cli(command: &str, args: impl Iterator<Item = OsString>) -> Result<()> {
