@@ -2,7 +2,7 @@ use super::*;
 use std::os::unix::fs::symlink;
 
 fn inputs(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    let archive = root.join("proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz");
+    let archive = root.join("proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz");
     fs::write(&archive, b"fixture archive").unwrap();
     let digest = checksum(&archive, 1024).unwrap();
     fs::write(
@@ -19,6 +19,38 @@ fn inputs(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let installer = root.join("install.sh");
     fs::write(&installer, "#!/bin/sh\nexit 0\n").unwrap();
     (archive, installer)
+}
+
+#[test]
+fn friendly_and_legacy_input_names_keep_strict_platform_and_checksum_checks() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (_, installer) = inputs(&root);
+    for (target, platform, other) in [
+        (
+            "x86_64-unknown-linux-gnu",
+            "linux-amd64",
+            "aarch64-apple-darwin",
+        ),
+        (
+            "aarch64-apple-darwin",
+            "macos-arm64",
+            "x86_64-unknown-linux-gnu",
+        ),
+    ] {
+        for suffix in [target, platform] {
+            let name = format!("proofstorm-0.1.0-alpha.1-{suffix}.tar.gz");
+            let archive = root.join(&name);
+            fs::write(&archive, "fixture").unwrap();
+            let digest = checksum(&archive, 1024).unwrap();
+            let receipt = root.join(format!("{name}.sha256"));
+            fs::write(&receipt, format!("{digest}  {name}\n")).unwrap();
+            input_digests_for(&archive, &installer, target).unwrap();
+            assert!(input_digests_for(&archive, &installer, other).is_err());
+            fs::write(&receipt, format!("{digest}  different-name.tar.gz\n")).unwrap();
+            assert!(input_digests_for(&archive, &installer, target).is_err());
+        }
+    }
 }
 
 #[test]

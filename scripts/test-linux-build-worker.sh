@@ -87,8 +87,8 @@ else
   [[ -z "$controller" ]] || exit 97
 fi
 mkdir -p "$output" "$work"
-[[ ${WORKER_TEST_FAIL:-none} == missing ]] || touch "$output/proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz"
-if [[ ${WORKER_TEST_FAIL:-none} == duplicate ]]; then touch "$output/proofstorm-extra-x86_64-unknown-linux-gnu.tar.gz"; fi
+[[ ${WORKER_TEST_FAIL:-none} == missing ]] || touch "$output/proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz"
+if [[ ${WORKER_TEST_FAIL:-none} == duplicate ]]; then touch "$output/proofstorm-extra-linux-amd64.tar.gz"; fi
 printf '{"fixture":true}\n'
 STUB
 chmod +x "$scratch/helper" "$scratch/bin/"*

@@ -45,7 +45,7 @@ case "$mode" in
       --cap-drop ALL --security-opt no-new-privileges "$name:inputs" sh -c)
     for arg in "${expected[@]}"; do [[ "$1" == "$arg" ]] || exit 97; shift; done
     [[ "$1" == "$(< "$INSTALL_TEST_ROOT/scripts/linux-install-check.sh")" ]] || exit 97
-    [[ "$2" == install-check && "$3" == proofstorm-*-x86_64-unknown-linux-gnu.tar.gz && "$4" == "${INSTALL_TEST_DEVELOPMENT:-false}" && $# == 4 ]] || exit 97 ;;
+    [[ "$2" == install-check && "$3" == proofstorm-*-linux-amd64.tar.gz && "$4" == "${INSTALL_TEST_DEVELOPMENT:-false}" && $# == 4 ]] || exit 97 ;;
   start) [[ "$1" == --attach && "$2" == "$(< "$INSTALL_TEST_NAME")" && $# == 2 ]] || exit 97 ;;
   inspect)
     [[ "$1" == --format && "$2" == '{{.State.ExitCode}}' && "$3" == "$(< "$INSTALL_TEST_NAME")" && $# == 3 ]] || exit 97
@@ -62,7 +62,7 @@ echo 'Python must not be used by the installer smoke path' >&2
 exit 97
 STUB
 chmod +x "$scratch/bin/"*
-archive="$scratch/artifacts/proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz"
+archive="$scratch/artifacts/proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz"
 printf 'fixture archive' > "$archive"
 if command -v sha256sum >/dev/null; then digest=$(sha256sum "$archive"); else digest=$(shasum -a 256 "$archive"); fi
 printf '%s  %s\n' "${digest%% *}" "${archive##*/}" > "$archive.sha256"

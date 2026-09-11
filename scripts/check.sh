@@ -36,6 +36,7 @@ check_fmt() {
   bash scripts/test-ci-macos-bundle.sh
   bash scripts/test-linux-build-worker.sh
   bash scripts/test-release-promote.sh
+  bash scripts/test-install.sh
   printf '\nChecking Rust formatting\n'
   cargo fmt --all -- --check
 }
@@ -64,6 +65,7 @@ check_shell() {
   # those workflows are formalized; do not globally suppress their diagnostics.
   shellcheck --external-sources install.sh tools/install-trunk.sh tools/install-host-tools.sh scripts/check.sh scripts/test-just.sh scripts/develop.sh scripts/test-develop.sh scripts/release-build.sh scripts/test-release-build.sh scripts/ci-linux-bundle.sh scripts/test-ci-linux-bundle.sh scripts/linux-install-smoke.sh scripts/linux-install-check.sh scripts/test-linux-install-smoke.sh scripts/linux-build-worker.sh scripts/test-linux-build-worker.sh scripts/linux-build.sh scripts/test-linux-build.sh
   shellcheck --external-sources scripts/release-promote.sh scripts/test-release-promote.sh
+  shellcheck --external-sources scripts/test-install.sh
   shellcheck --external-sources scripts/release.sh scripts/test-release-shortcuts.sh
   shellcheck --external-sources scripts/controller-build.sh scripts/test-controller-build.sh
   shellcheck --external-sources scripts/ci-macos-bundle.sh scripts/test-ci-macos-bundle.sh scripts/macos-install-smoke.sh scripts/macos-install-check.sh

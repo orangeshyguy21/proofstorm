@@ -30,7 +30,7 @@ bash scripts/release-build.sh --work-dir "$work/build" --output "$work/artifacts
 stage='build outputs'
 [[ -s "$work/build/result.json" && ! -L "$work/build/result.json" ]] || exit 1
 cp "$work/build/result.json" "$work/artifacts/build-report.json"
-set -- "$work/artifacts/"proofstorm-*-aarch64-apple-darwin.tar.gz
+set -- "$work/artifacts/"proofstorm-*-macos-arm64.tar.gz
 [[ $# == 1 && -f "$1" && ! -L "$1" ]] || { printf 'Expected exactly one Mac bundle\n' >&2; exit 1; }
 archive=$1
 for file in "$archive.sha256" "$work/artifacts/build-report.json" "$work/build/source/install.sh"; do

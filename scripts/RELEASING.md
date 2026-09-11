@@ -82,14 +82,37 @@ build/relocation/install evidence. Both installers must exactly match the select
 commit's installer and default to the release version. API errors are not treated
 as evidence that a tag or draft is absent.
 
-The draft has **11 assets**: two archives, their two checksums, one `install.sh`,
-and three reports for each platform:
+The draft has **seven assets**, with platform names intended for people downloading
+the release. The complete compiler targets remain in bundle metadata:
 
 ```text
-build-report-{linux-amd64,macos-arm64}.json
-smoke-report-{linux-amd64,macos-arm64}.json
-install-smoke-report-{linux-amd64,macos-arm64}.json
+install.sh
+release.json
+proofstorm-VERSION-linux-amd64.tar.gz
+proofstorm-VERSION-linux-amd64.tar.gz.sha256
+proofstorm-VERSION-macos-arm64.tar.gz
+proofstorm-VERSION-macos-arm64.tar.gz.sha256
+verification-reports.tar.gz
 ```
+
+`release.json` is generated automatically from the verified candidates. It records
+the schema version, release version/tag, source commit, channel, platforms, and
+every other asset's filename, byte size, and SHA-256, including the installer.
+It is also verified before and after upload. The site consumes this
+[download contract](../release/release-manifest.md), not release-note prose.
+
+The reports archive retains all six original build, relocation, and installer
+JSON reports, named by platform. It is deterministic and verified byte-for-byte
+before and after upload. These checks are unchanged; the installer does not need
+the reports archive.
+
+Existing releases are not renamed or overwritten. The installer prefers friendly
+filenames and supports old target-triple filenames when the automatically selected
+archive is absent (HTTP 404 for downloads). Explicit `--archive` selections,
+authentication/network failures, missing checksums, and integrity failures never
+trigger a second-name download. Old archives remain usable for local installation
+and verification. New promotion requires newly built, friendly-named candidates;
+use a new release version if the previous version was already published.
 
 Run and artifact identities are rechecked immediately before draft creation.
 Uploaded assets must retain their names, exact bytes, and unpublished draft status.

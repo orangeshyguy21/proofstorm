@@ -114,7 +114,7 @@ class PackagingTests(unittest.TestCase):
     def test_normal_alpha_has_download_name_and_retains_maturity_limitations(self):
         self.alpha_inputs()
         result = self.package(development=False)
-        self.assertEqual(Path(result["archive"]).name, f'proofstorm-0.1.0-alpha.1-{self.info["target"]}.tar.gz')
+        self.assertEqual(Path(result["archive"]).name, f'proofstorm-0.1.0-alpha.1-{release.ARTIFACT_PLATFORMS[self.info["target"]]}.tar.gz')
         self.assertFalse(result["release_ready"])
         self.assertTrue(result["release_blockers"])
         with tarfile.open(result["archive"]) as archive:
@@ -231,7 +231,7 @@ class PackagingTests(unittest.TestCase):
         for target in release.TARGETS:
             self.info["target"] = target
             result = self.package(target)
-            self.assertTrue(result["archive"].endswith(target + ".tar.gz"))
+            self.assertTrue(result["archive"].endswith(release.ARTIFACT_PLATFORMS[target] + ".tar.gz"))
             blockers = "\n".join(result["release_blockers"])
             self.assertIn(release.TARGETS[target], blockers)
             self.assertEqual("macOS signing" in blockers, target == "aarch64-apple-darwin")

@@ -47,19 +47,19 @@ class InstallScriptTests(unittest.TestCase):
                                "--prefix", self.root / "new prefix", *extra], env=self.env, capture_output=True, text=True)
 
     def test_supported_platforms_select_the_correct_archive(self):
-        for system, machine, target in [("Darwin", "arm64", "aarch64-apple-darwin"),
-                                        ("Linux", "x86_64", "x86_64-unknown-linux-gnu")]:
+        for system, machine, target in [("Darwin", "arm64", "macos-arm64"),
+                                        ("Linux", "x86_64", "linux-amd64")]:
             self.platform(system, machine)
             self.archive = self.root / f"proofstorm-0.1.0-alpha.1-{target}.tar.gz"
             self.archive_with()
             result = subprocess.run(["sh", SCRIPT, "--artifact-dir", self.root,
-                                     "--prefix", self.root / "prefix", "--allow-development"],
+                                     "--prefix", self.root / "prefix", "--version", "0.1.0-alpha.1", "--allow-development"],
                                     env=self.env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_github_alpha_download_uses_normal_command_without_override(self):
         self.platform("Linux", "x86_64")
-        self.archive = self.root / "proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz"
+        self.archive = self.root / "proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz"
         self.archive_with(reject_development=True)
         curl = self.bin / "curl"
         curl.write_text('''#!/bin/sh
@@ -69,14 +69,14 @@ for arg do
   case "$arg" in https://*.sha256) source="$DOWNLOAD_FIXTURE.sha256";; esac
 done
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = --output ]; then cp "$source" "$2"; exit; fi
+  if [ "$1" = --output ]; then cp "$source" "$2"; printf 200; exit; fi
   shift
 done
 exit 24
 ''')
         curl.chmod(0o755)
         log = self.root / "downloads"
-        result = subprocess.run(["sh", SCRIPT, "--prefix", self.root / "prefix"],
+        result = subprocess.run(["sh", SCRIPT, "--prefix", self.root / "prefix", "--version", "0.1.0-alpha.1"],
                                 env=dict(self.env, DOWNLOAD_FIXTURE=str(self.archive), DOWNLOAD_LOG=str(log)),
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

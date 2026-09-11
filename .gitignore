@@ -2,7 +2,8 @@
 .proofstorm-active
 *.log
 .DS_Store
-/dev/
+/dev/*
+!/dev/legacy-consolidation-plan.md
 /output/
 /target/
 /.tools/

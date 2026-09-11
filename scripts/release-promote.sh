@@ -75,21 +75,19 @@ stage='verified multi-platform asset collection'
 mkdir "$work/assets"
 assets=()
 for platform in linux-amd64 macos-arm64; do
-  case "$platform" in linux-amd64) target=x86_64-unknown-linux-gnu ;; macos-arm64) target=aarch64-apple-darwin ;; esac
-  archive="proofstorm-${tag#v}-$target.tar.gz"
+  archive="proofstorm-${tag#v}-$platform.tar.gz"
   for name in "$archive" "$archive.sha256"; do
     cp "$work/candidate/$platform/$name" "$work/assets/$name"
-    assets+=("$work/assets/$name")
-  done
-  for report in build-report smoke-report install-smoke-report; do
-    name="$report-$platform.json"
-    cp "$work/candidate/$platform/$report.json" "$work/assets/$name"
     assets+=("$work/assets/$name")
   done
 done
 cmp "$work/candidate/linux-amd64/install.sh" "$work/candidate/macos-arm64/install.sh"
 cp "$work/candidate/linux-amd64/install.sh" "$work/assets/install.sh"
 assets+=("$work/assets/install.sh")
+"$helper" release-promotion reports "$work/candidate" "$work/assets/verification-reports.tar.gz"
+assets+=("$work/assets/verification-reports.tar.gz")
+cp "$metadata/release.json" "$work/assets/release.json"
+assets+=("$work/assets/release.json")
 "$helper" release-promotion assets "$metadata" "$work/assets"
 printf 'Verified %s from commit %s (Checks run %s, attempt %s). No payload binaries were executed or rebuilt.\n' "$tag" "$sha" "$run_id" "$attempt"
 if [[ "$create_draft" == false ]]; then

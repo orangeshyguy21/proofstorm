@@ -23,7 +23,7 @@ git -C "$fixture" -c user.name=Fixture -c user.email=fixture@example.invalid \
   -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm fixture
 export LINUX_TEST_ROOT="$fixture" LINUX_TEST_TRACE="$scratch/trace" LINUX_TEST_STATE="$scratch"
 export LINUX_TEST_ARTIFACTS="$scratch/artifacts"
-archive="$scratch/artifacts/proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz"
+archive="$scratch/artifacts/proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz"
 printf 'fake worker archive' > "$archive"
 if command -v sha256sum >/dev/null; then digest=$(sha256sum "$archive"); else digest=$(shasum -a 256 "$archive"); fi
 printf '%s  %s\n' "${digest%% *}" "${archive##*/}" > "$archive.sha256"

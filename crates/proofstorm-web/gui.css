@@ -21,14 +21,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-.gui-trigger{border:1px solid var(--line);border-radius:6px;padding:7px 11px;font-size:11px;white-space:nowrap;color:var(--text)}
-.gui-dialog{box-sizing:border-box;width:min(550px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;margin:auto;padding:28px;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text);box-shadow:0 24px 100px #0006;font:13px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}
-.gui-dialog::backdrop{background:#080d1788;backdrop-filter:blur(4px)}
+.gui-trigger{border:1px solid var(--line);border-radius:var(--radius);padding:7px 11px;font-size:11px;white-space:nowrap;color:var(--text)}
+.gui-dialog{box-sizing:border-box;width:min(550px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;margin:auto;padding:32px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);color:var(--text);box-shadow:0 24px 100px #0006;font:13px var(--font-sans);line-height:1.6}
+.gui-dialog::backdrop{background:#0a0e13bb;backdrop-filter:blur(4px)}
 .gui-dialog-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:20px}.gui-dialog h2{font-size:24px;letter-spacing:-.7px;font-weight:600}
-.gui-project{display:flex;gap:10px;align-items:baseline;padding:11px 13px;background:var(--bg);border:1px solid var(--line);border-radius:8px;font:11px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace}.gui-project span:last-child{overflow-wrap:anywhere;min-width:0}.gui-project span:first-child{color:var(--muted)}
+.gui-project{display:flex;gap:8px;align-items:baseline;padding:11px 13px;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);font:11px/1.7 var(--font-mono)}.gui-project span:last-child{overflow-wrap:anywhere;min-width:0}.gui-project span:first-child{color:var(--muted)}
 
-.gui-agents{display:grid;grid-template-columns:1fr;gap:10px;margin:18px 0 14px}.gui-agent{position:relative;display:flex;flex-direction:row;align-items:center;gap:12px;min-height:66px;padding:13px 16px;border-radius:11px;border:1px solid #ffffff18;font-size:13px;font-weight:600;text-align:left;transition:filter .15s}.gui-agent-codex{--agent-bg:#202123;background:var(--agent-bg);color:#fff}.gui-agent-opencode{--agent-bg:#eeeae4;background:var(--agent-bg);color:#25211e;border-color:#25211e15}.gui-agent-claude{--agent-bg:#c96442;background:var(--agent-bg);color:#1c100c}.gui-agent-mark{height:35px;width:35px;display:block}.gui-agent-opencode .gui-agent-mark{padding:4px;box-sizing:border-box}.gui-agent-arrow{position:absolute;right:16px;top:18px;opacity:.6;font-size:17px;font-weight:400}.gui-agent:not(:disabled):hover{background:var(--agent-bg);filter:brightness(1.08)}.gui-agent:focus-visible,.gui-dialog summary:focus-visible,.gui-dialog input:focus-visible,.gui-dialog button:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
-.gui-muted{color:var(--muted);font-size:11px}.gui-check p{margin:9px 0}.gui-check code{display:block;font-size:10px;overflow-wrap:anywhere;margin:8px 0}.gui-error{color:var(--danger);overflow-wrap:anywhere}.gui-success{color:var(--ready);font-weight:500}.gui-conflict{margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}.gui-primary,.gui-secondary{padding:8px 12px;border-radius:6px;font-weight:600;font-size:11px;margin:7px 7px 0 0}.gui-primary{background:var(--accent);color:var(--bg)}.gui-secondary{border:1px solid var(--line)}.gui-dialog button:disabled,.gui-launcher button:disabled{cursor:default;opacity:.45}
+.gui-agents{display:grid;grid-template-columns:1fr;gap:8px;margin:18px 0 14px}.gui-agent{position:relative;display:flex;flex-direction:row;align-items:center;gap:12px;min-height:66px;padding:13px 16px;border-radius:var(--radius);border:1px solid #ffffff18;font-size:13px;font-weight:600;text-align:left;transition:filter .15s}.gui-agent-codex{--agent-bg:#202123;background:var(--agent-bg);color:#fff}.gui-agent-opencode{--agent-bg:#eeeae4;background:var(--agent-bg);color:#25211e;border-color:#25211e15}.gui-agent-claude{--agent-bg:#c96442;background:var(--agent-bg);color:#1c100c}.gui-agent-mark{height:35px;width:35px;display:block}.gui-agent-opencode .gui-agent-mark{padding:4px;box-sizing:border-box}.gui-agent-arrow{position:absolute;right:16px;top:18px;opacity:.6;font-size:17px;font-weight:400}.gui-agent:not(:disabled):hover{background:var(--agent-bg);filter:brightness(1.08)}.gui-agent:focus-visible,.gui-dialog summary:focus-visible,.gui-dialog input:focus-visible,.gui-dialog button:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.gui-muted{color:var(--muted);font-size:11px}.gui-check p{margin:9px 0}.gui-check code{display:block;font-size:10px;overflow-wrap:anywhere;margin:8px 0}.gui-error{color:var(--danger);overflow-wrap:anywhere}.gui-success{color:var(--ready);font-weight:500}.gui-conflict{margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg)}.gui-primary,.gui-secondary{padding:8px 12px;border-radius:var(--radius);font-weight:600;font-size:11px;margin:7px 7px 0 0}.gui-primary{background:var(--brand-red);color:var(--on-accent)}.gui-secondary{border:1px solid var(--line)}.gui-dialog button:disabled,.gui-launcher button:disabled{cursor:default;opacity:.45}
 .gui-connecting{display:inline-block;width:10px;height:10px;border:1.5px solid var(--line);border-top-color:var(--text);border-radius:50%;margin-right:8px;animation:gui-spin .8s linear infinite}@keyframes gui-spin{to{transform:rotate(360deg)}}
 @media(max-width:600px){.header-right{gap:8px}.app-header:has(.gui-trigger) .brand-wordmark{display:none}.gui-trigger{padding:7px 8px;font-size:10px}.gui-dialog{padding:20px}.gui-agents{grid-template-columns:1fr}.gui-agent{flex-direction:row;align-items:center;gap:12px;min-height:64px;padding:13px 16px}.gui-agent-arrow{top:18px}}
 @media(prefers-reduced-motion:reduce){.gui-dialog::backdrop{backdrop-filter:none}.gui-agent{transition:none}.gui-connecting{animation:none}}
@@ -38,3 +38,35 @@ SOFTWARE.
 .empty-state:has(.empty-agent-launcher)>*{flex-shrink:0}
 .empty-agent-intro{color:var(--muted);font-size:13px;text-align:center;margin-bottom:20px}
 .gui-folder-picker{width:100%;align-items:center;text-align:left;color:var(--muted);cursor:pointer;margin-top:16px;min-height:44px}.gui-folder-picker:hover{background:var(--raised);border-color:var(--faint)}.gui-folder-picker svg{width:17px;height:17px;flex-shrink:0}.gui-folder-picker>span:not(.gui-folder-chevron){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gui-folder-chevron{margin-left:auto;padding-left:8px;color:var(--muted)}.gui-folder-picker:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.empty-state:has(.empty-agent-launcher){justify-content:safe center;padding-top:32px}
+
+/* Agent actions share the product palette; provider marks remain recognizable. */
+.gui-trigger { padding: 8px 12px; border-color: var(--brand-red); background: var(--brand-red); color: var(--on-accent); font-weight: 600; }
+.gui-trigger:not(:disabled):hover { border-color: var(--accent-hover); background: var(--accent-hover); color: #fff; }
+.gui-trigger:not(:disabled):active { border-color: var(--accent-pressed); background: var(--accent-pressed); color: #fff; }
+.gui-dialog { border-top: 2px solid var(--brand-red); }
+.gui-dialog-heading { gap: 16px; margin-bottom: 24px; }
+.gui-dialog h2 { font-size: 22px; letter-spacing: -.5px; }
+.gui-project { padding: 12px 16px; }
+.gui-agents { gap: 8px; margin: 24px 0 16px; }
+.gui-agent-codex,.gui-agent-opencode,.gui-agent-claude { --agent-bg: var(--raised); background: var(--agent-bg); color: var(--text); border-color: var(--input-line); }
+.gui-agent { min-height: 64px; padding: 16px; font-size: 13px; transition: background .15s,border-color .15s; }
+.gui-agent:not(:disabled):hover { background: var(--selected); border-color: var(--accent); filter: none; }
+.gui-agent-mark { width: 28px; height: 28px; }
+.gui-agent-arrow { top: 20px; color: var(--muted); }
+.gui-agent:hover .gui-agent-arrow { color: var(--accent); opacity: 1; }
+.gui-primary { min-height: 36px; padding: 8px 16px; }
+.gui-primary:not(:disabled):hover { background: var(--accent-hover); color: #fff; }
+.gui-primary:not(:disabled):active { background: var(--accent-pressed); color: #fff; }
+.gui-secondary { min-height: 36px; border-color: var(--input-line); padding: 8px 16px; }
+.gui-folder-picker { border-color: var(--input-line); }
+.gui-folder-picker:not(:disabled):hover { border-color: var(--accent); }
+.empty-state:has(.empty-agent-launcher) .empty-mark { width: 72px; height: 84px; }
+.empty-agent-intro { font-size: 13px; line-height: 1.6; margin-bottom: 24px; }
+@media (max-width: 600px) {
+  .gui-dialog { padding: 24px; }
+  .empty-state:has(.empty-agent-launcher) { padding: 24px 16px; }
+  .empty-state:has(.empty-agent-launcher) .empty-mark { width: 56px; height: 64px; }
+  .gui-agent { min-height: 56px; padding: 12px 16px; }
+  .gui-agent-arrow { top: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .gui-agent { transition: none; } }

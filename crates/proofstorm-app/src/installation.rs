@@ -20,6 +20,7 @@ const MANIFEST: &str = "installation.json";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Installation {
+    /// Pins the naming scheme: v1 uses `pst-<28 hex>`, v2 `proofstorm-<8 hex>`.
     pub format_version: u32,
     pub id: String,
     pub home: PathBuf,
@@ -79,7 +80,7 @@ impl Installation {
         let api = available_port(api_port)?;
         let registry = available_port(registry_port)?;
         let installation = Self {
-            format_version: 1,
+            format_version: 2,
             id,
             home,
             api_port: api.local_addr()?.port(),
@@ -111,7 +112,7 @@ impl Installation {
         let installation: Self = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid installation manifest {}", path.display()))?;
         ensure!(
-            installation.format_version == 1,
+            matches!(installation.format_version, 1 | 2),
             "unsupported installation format"
         );
         ensure!(
@@ -137,9 +138,14 @@ impl Installation {
 
     #[must_use]
     pub fn cluster_name(&self) -> String {
-        // k3d limits cluster names to 32 characters. Keep 112 bits of the ID;
-        // the full 128-bit identity remains in the manifest and ownership label.
-        format!("pst-{}", self.id.chars().take(28).collect::<String>())
+        // Never rename a saved runtime on upgrade. Both schemes fit k3d's
+        // 32-character limit; the full ID remains the ownership identity.
+        // Setup rejects occupied names before creating any Docker resources.
+        if self.format_version == 1 {
+            format!("pst-{}", self.id.chars().take(28).collect::<String>())
+        } else {
+            format!("proofstorm-{}", self.id.chars().take(8).collect::<String>())
+        }
     }
 
     #[must_use]

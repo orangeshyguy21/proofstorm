@@ -50,7 +50,8 @@ pub(super) fn input_digests_for(
         .context("invalid archive name")?;
     ensure!(
         name.starts_with("proofstorm-")
-            && name.ends_with(&format!("-{target}.tar.gz"))
+            && (name.ends_with(&format!("-{}.tar.gz", super::artifact_platform(target)?))
+                || name.ends_with(&format!("-{target}.tar.gz")))
             && name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b)),

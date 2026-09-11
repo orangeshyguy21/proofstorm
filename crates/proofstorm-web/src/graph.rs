@@ -242,8 +242,8 @@ fn CanvasTile(
                 let delta=match event.key().as_str(){"ArrowLeft"=>(-step,0.0),"ArrowRight"=>(step,0.0),"ArrowUp"=>(0.0,-step),"ArrowDown"=>(0.0,step),_=>return};
                 event.prevent_default();selected.set(node.id.clone());positions.update(|p|canvas_model::move_node(&node,&nodes.get_untracked(),p,delta));on_save();
             }>
-            {move ||data.get().filter(|n|n.children_height>0.0).map(|n|view!{<rect class="component-group" x="-12" y="-12" width="284" height={canvas_model::group_height(&n)+24.0} rx="16" />})}
-            <rect class="node-body" width=move ||data.get().map_or(260.0,|n|n.width()) height=move ||data.get().map_or(144.0,|n|n.height()) rx="10" />
+            {move ||data.get().filter(|n|n.children_height>0.0).map(|n|view!{<rect class="component-group" x="-12" y="-12" width="284" height={canvas_model::group_height(&n)+24.0} rx="0" />})}
+            <rect class="node-body" width=move ||data.get().map_or(260.0,|n|n.width()) height=move ||data.get().map_or(144.0,|n|n.height()) rx="0" />
             <path class="type-icon" transform="translate(16 12) scale(.65)" d=move ||data.get().map(|n|canvas_model::appearance(n.kind).2) />
             <text class="node-kind" x="39" y="25">{move ||data.get().map(|n|canvas_model::appearance(n.kind).1)}</text>
             <text class="node-name" x="17" y="52">{move ||data.get().map(|n|short(&n.name,26))}</text>

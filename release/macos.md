@@ -63,8 +63,10 @@ exist on the host; the report explicitly records that access is restricted.
 Unavailable or ineffective sandbox enforcement fails rather than falling back.
 
 `just release` requires matching Linux and Mac artifacts from the same main commit
-and run attempt. It prepares one draft, with one installer and platform-named
-reports, and still asks for approval. See [release flow](../scripts/RELEASING.md).
+and run attempt. It prepares one draft with friendly `linux-amd64`/`macos-arm64`
+download names, one installer, and the six platform reports inside a single
+`verification-reports.tar.gz`, plus a generated `release.json` download inventory.
+It still asks for approval. See [release flow](../scripts/RELEASING.md).
 A build/startup receipt is not fresh-host acceptance evidence.
 
 ## AWS test host

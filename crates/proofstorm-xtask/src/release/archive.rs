@@ -40,7 +40,7 @@ fn archive_name(manifest: &Value) -> Result<String> {
     Ok(format!(
         "proofstorm-{}{suffix}-{}.tar.gz",
         text(manifest, "version")?,
-        text(manifest, "target")?
+        super::artifact_platform(text(manifest, "target")?)?
     ))
 }
 

@@ -27,7 +27,7 @@ fn prepare(root: &Path, work: &Path, installer: &str) {
         fs::write(root.join(source).join("Cargo.toml"), "source sentinel").unwrap();
     }
     // Input staging checks checksums; product archive validation runs in the full bundle job.
-    let name = "proofstorm-0.1.0-alpha.1-aarch64-apple-darwin.tar.gz";
+    let name = "proofstorm-0.1.0-alpha.1-macos-arm64.tar.gz";
     fs::write(root.join(name), b"policy fixture").unwrap();
     fs::write(
         root.join(format!("{name}.sha256")),
@@ -141,7 +141,7 @@ esac
         .arg("/bin/bash")
         .arg(work.join("worker.sh"))
         .arg(&work)
-        .arg("proofstorm-0.1.0-alpha.1-aarch64-apple-darwin.tar.gz")
+        .arg("proofstorm-0.1.0-alpha.1-macos-arm64.tar.gz")
         .output()
         .unwrap();
     assert!(

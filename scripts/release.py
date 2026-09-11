@@ -21,6 +21,7 @@ import tempfile
 import tomllib
 
 TARGETS = {"aarch64-apple-darwin": "linux/arm64", "x86_64-unknown-linux-gnu": "linux/amd64"}
+ARTIFACT_PLATFORMS = {"aarch64-apple-darwin": "macos-arm64", "x86_64-unknown-linux-gnu": "linux-amd64"}
 
 
 def alpha_version(version):
@@ -240,7 +241,7 @@ def package(source, binaries, output, provenance, development):
         write_json(root / "manifest.json", manifest)
         verify(root)
         suffix = "-dev-" + info["build_profile"] + "-" + provenance["sha256"][:12] if development else ""
-        name = f"proofstorm-{info['version']}{suffix}-{target}.tar.gz"
+        name = f"proofstorm-{info['version']}{suffix}-{ARTIFACT_PLATFORMS[target]}.tar.gz"
         archive = Path(temporary) / name
         # Stable ordering, ownership, modes, and gzip metadata for identical inputs.
         with archive.open("wb") as stream, gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as compressed:

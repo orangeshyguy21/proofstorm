@@ -2,6 +2,60 @@ use super::*;
 use crate::config::Environment;
 
 #[test]
+fn new_names_are_short_branded_and_keep_full_ownership_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = Installation::initialize(root.path(), None, None).unwrap();
+    assert_eq!(installation.format_version, 2);
+    assert_eq!(installation.id.len(), 32);
+    let cluster = format!("proofstorm-{}", &installation.id[..8]);
+    assert_eq!(installation.cluster_name(), cluster);
+    assert_eq!(installation.context(), format!("k3d-{cluster}"));
+    assert_eq!(installation.network_name(), installation.context());
+    assert_eq!(installation.registry_name(), format!("k3d-{cluster}-registry"));
+    let config = installation.cluster_config();
+    assert_eq!(config["metadata"]["name"], cluster);
+    assert_eq!(
+        config["registries"]["create"]["name"],
+        installation.registry_name()
+    );
+    assert_eq!(
+        config["options"]["runtime"]["labels"][0]["label"],
+        format!("{OWNER_LABEL}={}", installation.id)
+    );
+    assert_eq!(Installation::load(root.path()).unwrap(), installation);
+}
+
+#[test]
+fn legacy_installations_keep_their_names_and_saved_configuration_on_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = Installation {
+        format_version: 1,
+        id: "aa959e2b95e04417eebe518605779e72ab".into(),
+        home: root.path().canonicalize().unwrap(),
+        api_port: 42101,
+        registry_port: 42102,
+    };
+    let cluster = "pst-aa959e2b95e04417eebe51860577";
+    assert_eq!(installation.cluster_name(), cluster);
+    assert_eq!(installation.context(), format!("k3d-{cluster}"));
+    assert_eq!(installation.network_name(), installation.context());
+    assert_eq!(installation.registry_name(), format!("k3d-{cluster}-registry"));
+    let manifest = serde_json::to_vec_pretty(&installation).unwrap();
+    let config = serde_json::to_vec_pretty(&installation.cluster_config()).unwrap();
+    fs::write(installation.home.join(MANIFEST), &manifest).unwrap();
+    fs::write(installation.cluster_config_path(), &config).unwrap();
+    for _ in 0..2 {
+        assert_eq!(Installation::load(root.path()).unwrap(), installation);
+        assert_eq!(
+            Installation::initialize(root.path(), None, None).unwrap(),
+            installation
+        );
+        assert_eq!(fs::read(installation.home.join(MANIFEST)).unwrap(), manifest);
+        assert_eq!(fs::read(installation.cluster_config_path()).unwrap(), config);
+    }
+}
+
+#[test]
 fn installations_have_distinct_identity_ports_and_registry_routes() {
     let root = tempfile::tempdir().unwrap();
     let first = Installation::initialize(&root.path().join("first"), None, None).unwrap();
