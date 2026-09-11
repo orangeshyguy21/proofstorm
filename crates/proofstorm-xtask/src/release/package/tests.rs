@@ -90,7 +90,7 @@ fn alpha_and_development_bundles_use_existing_names_and_roundtrip() {
         };
         assert_eq!(
             archive.file_name().unwrap(),
-            format!("proofstorm-0.1.0-alpha.1{suffix}-x86_64-unknown-linux-gnu.tar.gz").as_str()
+            format!("proofstorm-0.1.0-alpha.1{suffix}-linux-amd64.tar.gz").as_str()
         );
         let receipt = archive::extract(
             archive,

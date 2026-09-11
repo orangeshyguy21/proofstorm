@@ -39,7 +39,7 @@ args=(--work-dir "$work/build")
 bash scripts/linux-build.sh "${args[@]}" 2>&1 | tee "$work/build.log"
 stage='build outputs'
 # Exactly one normal-channel archive; do not guess or silently select a stale one.
-set -- "$work/build/artifacts/"proofstorm-*-x86_64-unknown-linux-gnu.tar.gz
+set -- "$work/build/artifacts/"proofstorm-*-linux-amd64.tar.gz
 [[ $# == 1 && -f "$1" && ! -L "$1" ]] || { printf 'Expected exactly one Linux bundle\n' >&2; exit 1; }
 archive=$1
 for file in "$archive.sha256" "$work/build/artifacts/install.sh" \

@@ -33,11 +33,15 @@ done
 case "$install_prefix" in /*) ;; *) fail '--prefix must be an absolute path' ;; esac
 case "$install_version" in ''|*[!A-Za-z0-9.+-]*) fail 'invalid version' ;; esac
 case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) install_target=aarch64-apple-darwin ;;
-  Linux-x86_64|Linux-amd64) install_target=x86_64-unknown-linux-gnu ;;
+  Darwin-arm64) install_platform=macos-arm64; install_target=aarch64-apple-darwin ;;
+  Linux-x86_64|Linux-amd64) install_platform=linux-amd64; install_target=x86_64-unknown-linux-gnu ;;
   *) fail 'this alpha supports macOS Apple Silicon and Linux x86-64' ;;
 esac
-if [ -z "$archive_name" ]; then archive_name="proofstorm-$install_version-$install_target.tar.gz"; fi
+legacy_archive=""
+if [ -z "$archive_name" ]; then
+  archive_name="proofstorm-$install_version-$install_platform.tar.gz"
+  legacy_archive="proofstorm-$install_version-$install_target.tar.gz"
+fi
 case "$archive_name" in *[!A-Za-z0-9._+-]*|'') fail 'invalid archive name' ;; esac
 case "$archive_name" in proofstorm-*.tar.gz) ;; *) fail 'expected a Proofstorm .tar.gz archive' ;; esac
 if [ "$allow_development" = true ]; then
@@ -50,17 +54,36 @@ trap 'rm -rf -- "$install_scratch"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 if [ -n "$artifact_dir" ]; then
+  if [ -n "$legacy_archive" ] && [ ! -e "$artifact_dir/$archive_name" ] && [ ! -L "$artifact_dir/$archive_name" ]; then
+    archive_name=$legacy_archive
+  fi
   [ -f "$artifact_dir/$archive_name" ] || fail 'local archive is missing'
   cp "$artifact_dir/$archive_name" "$install_scratch/archive.tar.gz"
   cp "$artifact_dir/$archive_name.sha256" "$install_scratch/checksum"
 else
   release_url="https://github.com/orangeshyguy21/proofstorm/releases/download/v$install_version"
   printf 'Downloading Proofstorm %s…\n' "$install_version"
-  for suffix in '' .sha256; do
-    if [ -z "$suffix" ]; then output_name=archive.tar.gz; else output_name=checksum; fi
-    curl --fail --location --retry 3 --silent --show-error --proto '=https' --proto-redir '=https' \
-      "$release_url/$archive_name$suffix" --output "$install_scratch/$output_name" || fail 'release download failed; nothing was installed'
-  done
+  download() {
+    download_status=0
+    download_http=$(curl --fail --location --retry 3 --silent --show-error --proto '=https' --proto-redir '=https' \
+      "$release_url/$1" --output "$install_scratch/$2" --write-out '%{http_code}' 2> "$install_scratch/download-error") || download_status=$?
+    [ "$download_status" -eq 0 ] && [ "$download_http" = 200 ]
+  }
+  download_failed() {
+    cat "$install_scratch/download-error" >&2
+    fail 'release download failed; nothing was installed'
+  }
+  if ! download "$archive_name" archive.tar.gz; then
+    # Old public releases retain their original assets. Only a missing automatic
+    # archive selection may fall back; auth/network/checksum failures never do.
+    if [ -n "$legacy_archive" ] && [ "$download_status" -eq 22 ] && [ "$download_http" = 404 ]; then
+      archive_name=$legacy_archive
+      download "$archive_name" archive.tar.gz || download_failed
+    else
+      download_failed
+    fi
+  fi
+  download "$archive_name.sha256" checksum || download_failed
 fi
 expected=$(awk -v name="$archive_name" 'NF == 2 && $2 == name { if (++count == 1) digest=$1 } END { if (NR == 1 && count == 1) print digest; else exit 1 }' "$install_scratch/checksum") || fail 'invalid checksum receipt'
 [ "${#expected}" = 64 ] || fail 'invalid checksum length'

@@ -45,7 +45,7 @@ args=(--source "$input/source" --provenance "$input/source.json" --work-dir "$wo
 # Rust checks the pristine transported snapshot again; downloads never modify it.
 bash "$root/scripts/release-build.sh" "${args[@]}" > "$work/result.json"
 stage='relocated CLI and MCP'
-set -- "$output/"proofstorm-*-x86_64-unknown-linux-gnu.tar.gz
+set -- "$output/"proofstorm-*-linux-amd64.tar.gz
 [[ $# == 1 && -f "$1" && ! -L "$1" ]] || { printf 'Expected exactly one Linux bundle\n' >&2; exit 1; }
 "$helper" release-smoke "$1" "$work/relocated"
 stage='verified artifact reports'

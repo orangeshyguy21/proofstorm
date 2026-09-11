@@ -1,7 +1,8 @@
-use super::{PLATFORMS, REPORTS, file_digest, verify_installer_default, verify_manifest};
+use super::manifest::Asset;
+use super::{PLATFORMS, file_digest, reports, verify_installer_default, verify_manifest};
 use crate::{
     development::inventory,
-    release::{archive, bundle, text},
+    release::{archive, artifact_platform, bundle, text},
 };
 use anyhow::{Result, ensure};
 use serde_json::Value;
@@ -15,10 +16,10 @@ pub(super) fn verify(
     candidate: &Path,
     version: &str,
     revision: &str,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, Asset>> {
     let mut expected = BTreeSet::new();
-    for (slug, target) in PLATFORMS {
-        let archive = format!("proofstorm-{version}-{target}.tar.gz");
+    for (slug, _) in PLATFORMS {
+        let archive = format!("proofstorm-{version}-{slug}.tar.gz");
         for name in [
             archive.clone(),
             format!("{archive}.sha256"),
@@ -48,21 +49,19 @@ pub(super) fn verify(
         } else {
             source = Some(manifest["source"].clone());
         }
-        let archive = format!("proofstorm-{version}-{target}.tar.gz");
+        let archive = format!("proofstorm-{version}-{slug}.tar.gz");
         for name in [
             archive.clone(),
             format!("{archive}.sha256"),
             "install.sh".into(),
         ] {
-            assets.insert(name.clone(), files[&format!("{slug}/{name}")].clone());
-        }
-        for report in REPORTS {
             assets.insert(
-                format!("{report}-{slug}.json"),
-                files[&format!("{slug}/{report}.json")].clone(),
+                name.clone(),
+                Asset::read_verified(&directory.join(&name), &files[&format!("{slug}/{name}")])?,
             );
         }
     }
+    assets.insert(reports::NAME.into(), reports::asset(candidate, &files)?);
     Ok(assets)
 }
 
@@ -73,7 +72,7 @@ fn verify_platform(
     revision: &str,
     target: &str,
 ) -> Result<Value> {
-    let archive_name = format!("proofstorm-{version}-{target}.tar.gz");
+    let archive_name = format!("proofstorm-{version}-{}.tar.gz", artifact_platform(target)?);
     let scratch = tempfile::tempdir()?;
     let extracted = scratch.path().join("verified");
     archive::extract(&directory.join(&archive_name), &extracted)?;

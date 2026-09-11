@@ -1,5 +1,7 @@
 //! Promote trusted CI artifacts without executing or rebuilding their payloads.
 mod candidate;
+mod manifest;
+mod reports;
 use super::{alpha_version, bundle, text};
 use crate::development::{inventory, regular};
 use anyhow::{Context, Result, bail, ensure};
@@ -188,9 +190,19 @@ fn file_digest(path: &Path) -> Result<String> {
 fn verify(metadata: &Path, candidate: &Path, repo: &str, id: &str, tag: &str) -> Result<()> {
     let plan = evidence(metadata, repo, id, tag)?;
     unused(metadata, tag)?;
-    let files = candidate::verify(metadata, candidate, version(tag)?, &plan[0])?;
+    let assets = candidate::verify(metadata, candidate, version(tag)?, &plan[0])?;
+    let manifest = manifest::contents(repo, tag, &plan[0], &assets)?;
+    let mut files: std::collections::BTreeMap<_, _> = assets
+        .into_iter()
+        .map(|(name, asset)| (name, asset.sha256))
+        .collect();
+    files.insert(
+        manifest::NAME.into(),
+        manifest::Asset::from_bytes(&manifest).sha256,
+    );
+    fs::write(metadata.join(manifest::NAME), manifest)?;
     let notes = format!(
-        "Linux AMD64 and macOS Apple Silicon alpha candidate {tag}\n\nPromoted without rebuilding from https://github.com/{repo}/actions/runs/{id} (attempt {}).\nSource commit: {}\n\nIncludes one installer, both native archives/checksums, and platform-specific build, relocation, and installer reports. Each bundle has its matching controller, verified for startup and anonymous registry access. Linux installation was tested in source-free Debian; Mac installation was sandboxed against source reads, compiler execution, networking, and writes outside its test directory.\n\nFresh-host public downloads, runtime setup, workload availability, signing/Gatekeeper, and native GUI acceptance remain separate checks. This is not a stable or release-ready build.\n",
+        "Linux AMD64 and macOS Apple Silicon alpha candidate {tag}\n\nPromoted without rebuilding from https://github.com/{repo}/actions/runs/{id} (attempt {}).\nSource commit: {}\n\nIncludes one installer, friendly-named Linux/Mac archives and checksums, release.json describing the downloads and their hashes, and verification-reports.tar.gz containing all six platform-specific build, relocation, and installer reports. Each bundle has its matching controller, verified for startup and anonymous registry access. Linux installation was tested in source-free Debian; Mac installation was sandboxed against source reads, compiler execution, networking, and writes outside its test directory.\n\nFresh-host public downloads, runtime setup, workload availability, signing/Gatekeeper, and native GUI acceptance remain separate checks. This is not a stable or release-ready build.\n",
         plan[1], plan[0]
     );
     fs::write(metadata.join("notes.md"), &notes)?;
@@ -320,6 +332,9 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
         ["uploaded", metadata, downloaded] => uploaded(Path::new(metadata), Path::new(downloaded))?,
         ["assets", metadata, directory] => {
             verify_assets(Path::new(metadata), Path::new(directory))?;
+        }
+        ["reports", candidate, destination] => {
+            reports::pack(Path::new(candidate), Path::new(destination))?;
         }
         _ => bail!("invalid release-promotion arguments"),
     }

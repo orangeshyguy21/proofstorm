@@ -91,6 +91,14 @@ fn platform(target: &str) -> Result<&'static str> {
     }
 }
 
+fn artifact_platform(target: &str) -> Result<&'static str> {
+    match target {
+        "aarch64-apple-darwin" => Ok("macos-arm64"),
+        "x86_64-unknown-linux-gnu" => Ok("linux-amd64"),
+        _ => bail!("unsupported bundle target: {target}"),
+    }
+}
+
 fn alpha_version(version: &str) -> bool {
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
     version.split_once("-alpha.").is_some_and(|(base, alpha)| {

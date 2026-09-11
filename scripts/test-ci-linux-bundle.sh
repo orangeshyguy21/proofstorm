@@ -35,8 +35,8 @@ if [[ "$mode" == build ]]; then
   printf 'fixture build log\n'
   [[ ${TEST_CI_FAILURE:-none} != build ]] || exit 23
   mkdir -p "$work/artifacts"
-  for file in proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz \
-    proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz.sha256 \
+  for file in proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz \
+    proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz.sha256 \
     install.sh build-report.json smoke-report.json .env unexpected.txt; do
     [[ ${TEST_CI_FAILURE:-none} != missing || "$file" != *.tar.gz ]] || continue
     [[ ${TEST_CI_FAILURE:-none} != report || "$file" != build-report.json ]] || continue
@@ -47,7 +47,7 @@ if [[ "$mode" == build ]]; then
     fi
   done
   if [[ ${TEST_CI_FAILURE:-none} == duplicate ]]; then
-    printf 'second\n' > "$work/artifacts/proofstorm-0.1.0-alpha.2-x86_64-unknown-linux-gnu.tar.gz"
+    printf 'second\n' > "$work/artifacts/proofstorm-0.1.0-alpha.2-linux-amd64.tar.gz"
   fi
 else
   [[ "$mode" == smoke && -f "$archive" && -f "$installer" ]] || exit 97

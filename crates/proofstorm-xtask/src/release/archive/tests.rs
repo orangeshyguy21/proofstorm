@@ -5,6 +5,41 @@ fn fixture() -> Bundle {
     Bundle::new("x86_64-unknown-linux-gnu", "development")
 }
 
+#[test]
+fn friendly_download_names_preserve_compiler_targets_and_checksum_identity() {
+    for (target, platform) in [
+        ("x86_64-unknown-linux-gnu", "linux-amd64"),
+        ("aarch64-apple-darwin", "macos-arm64"),
+    ] {
+        for channel in ["alpha", "development"] {
+            let bundle = Bundle::new(target, channel);
+            let output = tempfile::tempdir().unwrap();
+            let result = pack(bundle.root(), output.path()).unwrap();
+            let path = Path::new(result["archive"].as_str().unwrap());
+            let suffix = if channel == "development" {
+                "-dev-debug-bbbbbbbbbbbb"
+            } else {
+                ""
+            };
+            let expected = format!("proofstorm-0.1.0-alpha.1{suffix}-{platform}.tar.gz");
+            assert_eq!(path.file_name().unwrap().to_str().unwrap(), expected);
+            assert_eq!(
+                fs::read_to_string(sidecar(path)).unwrap(),
+                format!("{}  {expected}\n", result["sha256"].as_str().unwrap())
+            );
+            let extracted = output.path().join("extracted");
+            extract(path, &extracted).unwrap();
+            for name in ["manifest.json", "release-info.json"] {
+                assert_eq!(
+                    bundle::read_json(&extracted.join("proofstorm").join(name)).unwrap()["target"],
+                    target
+                );
+            }
+        }
+    }
+    assert!(crate::release::artifact_platform("unknown-linux").is_err());
+}
+
 fn checksum_receipt(path: &Path) {
     let sha = bundle::checksum(path, fs::metadata(path).unwrap().len()).unwrap();
     fs::write(

@@ -74,7 +74,7 @@ development GUI asset selection and runtime home/kubeconfig overrides. It does
 not launch apps, update agent configurations, or change running labs.
 
 Shell syntax is checked for tracked and non-ignored new `.sh` files. Strict
-ShellCheck initially covers `install.sh`, `tools/install-trunk.sh`,
+ShellCheck covers `install.sh`, `scripts/test-install.sh`, `tools/install-trunk.sh`,
 `tools/install-host-tools.sh`, `scripts/check.sh`, `scripts/test-just.sh`,
 `scripts/develop.sh`, `scripts/test-develop.sh`, `scripts/release-build.sh`, and
 `scripts/test-release-build.sh`, `scripts/ci-linux-bundle.sh`, and
@@ -102,6 +102,13 @@ Alpha promotion includes quick Bash sequencing tests with fake GitHub commands
 and Rust tests using real archives and API-shaped fixtures. They cover preview
 without writes, draft-only creation, failure propagation, changed run/artifact
 identity, existing versions, reports, checksums, and uploaded-byte verification.
+The six JSON reports are still individually validated, then collected into one
+deterministic `verification-reports.tar.gz`. Tests compare each archived report's
+exact bytes and reject altered evidence or an altered uploaded archive.
+The generated `release.json` contract is checked against every download's actual
+size and hash, including the selected commit's installer. Tests cover platform
+references, deterministic generation, and missing or changed manifests before
+and after upload. No website or network access is needed for these checks.
 See [RELEASING.md](RELEASING.md) for the manual GitHub release flow.
 The shortcut integration test uses the real Rust helper with a disposable Git
 checkout and fake GitHub/Cargo-build commands. It tests authenticated dispatch,
@@ -209,8 +216,12 @@ constructs the manifest, verifies the payload, and creates the archive/checksum
 pair. Unlike verification/extraction, **packaging executes the selected local
 binaries** to read their metadata: only use trusted build outputs.
 
-Alpha/development archive names, directory layout, checksum receipt syntax, and
-manifest fields remain compatible with the existing installer and verifier.
+Alpha/development downloads use `linux-amd64` and `macos-arm64` suffixes. Internal
+compiler targets, directory layout, checksum receipt syntax, and manifest fields
+are unchanged. Development names retain their profile and source-hash suffix.
+The installer accepts older target-triple filenames as well. Quick checks exercise
+both naming schemes on both platforms with fake HTTP transport and real archives,
+including refusal to fall back after auth/network/checksum errors.
 Archives use sorted regular-file USTAR entries, normalized ownership/timestamps,
 and a deterministic gzip header. Repeated packaging of the same inputs is tested;
 byte-identical archives across different compressor versions or the old Python

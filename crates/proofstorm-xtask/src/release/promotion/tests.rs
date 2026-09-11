@@ -103,17 +103,21 @@ impl Candidate {
             for entry in fs::read_dir(self.files.join(slug)).unwrap() {
                 let entry = entry.unwrap();
                 let name = entry.file_name().into_string().unwrap();
-                let name = if REPORTS
+                if REPORTS
                     .iter()
                     .any(|report| name == format!("{report}.json"))
                 {
-                    format!("{}-{slug}.json", name.trim_end_matches(".json"))
-                } else {
-                    name
-                };
+                    continue;
+                }
                 fs::copy(entry.path(), output.join(name)).unwrap();
             }
         }
+        reports::pack(&self.files, &output.join(reports::NAME)).unwrap();
+        fs::copy(
+            self.metadata.join(manifest::NAME),
+            output.join(manifest::NAME),
+        )
+        .unwrap();
         output
     }
 
@@ -153,6 +157,81 @@ fn verified_promotion_is_draft_only_and_never_executes_payloads() {
         &evidence(&fixture.metadata, REPO, ID, TAG).unwrap()[4..],
         &["123", "124"]
     );
+}
+
+#[test]
+fn public_manifest_describes_exact_download_bytes_and_is_deterministic() {
+    let fixture = Candidate::new(true);
+    fixture.verify().unwrap();
+    let bytes = fs::read(fixture.metadata.join(manifest::NAME)).unwrap();
+    let document: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(document["schema_version"], 1);
+    assert_eq!(document["version"], "0.1.0-alpha.1");
+    assert_eq!(document["tag"], TAG);
+    assert_eq!(document["source_commit"], "a".repeat(40));
+    assert_eq!(document["channel"], "alpha");
+    assert_eq!(document["repository"], REPO);
+    assert_eq!(document["installer"], "install.sh");
+    assert_eq!(document["verification_reports"], reports::NAME);
+    assert_eq!(
+        document["platforms"],
+        json!({
+            "linux-amd64": {
+                "os":"linux", "arch":"amd64", "target":"x86_64-unknown-linux-gnu",
+                "archive":"proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz",
+                "checksum":"proofstorm-0.1.0-alpha.1-linux-amd64.tar.gz.sha256"
+            },
+            "macos-arm64": {
+                "os":"macos", "arch":"arm64", "target":"aarch64-apple-darwin",
+                "archive":"proofstorm-0.1.0-alpha.1-macos-arm64.tar.gz",
+                "checksum":"proofstorm-0.1.0-alpha.1-macos-arm64.tar.gz.sha256"
+            }
+        })
+    );
+    let directory = fixture.assets();
+    let mut files = inventory(&directory).unwrap();
+    files.remove(manifest::NAME).unwrap();
+    let assets = document["assets"].as_object().unwrap();
+    assert_eq!(assets.len(), 6);
+    assert_eq!(
+        assets.keys().collect::<BTreeSet<_>>(),
+        files.keys().collect::<BTreeSet<_>>()
+    );
+    for (name, sha256) in files {
+        assert_eq!(
+            assets[&name],
+            json!({"size_bytes":fs::metadata(directory.join(&name)).unwrap().len(),"sha256":sha256})
+        );
+    }
+    assert_eq!(
+        assets["install.sh"]["sha256"],
+        file_digest(&fixture.metadata.join("source-install.sh")).unwrap()
+    );
+    assert!(!String::from_utf8_lossy(&bytes).contains(fixture.metadata.to_str().unwrap()));
+    fixture.verify().unwrap();
+    assert_eq!(
+        bytes,
+        fs::read(fixture.metadata.join(manifest::NAME)).unwrap()
+    );
+    verify_assets(&fixture.metadata, &directory).unwrap();
+}
+
+#[test]
+fn manifest_asset_measurements_reject_changed_or_linked_inputs() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let path = root.join("install.sh");
+    let bytes = b"fixture installer";
+    fs::write(&path, bytes).unwrap();
+    let expected = manifest::Asset::from_bytes(bytes);
+    let measured = manifest::Asset::read_verified(&path, &expected.sha256).unwrap();
+    assert_eq!(measured.size_bytes, bytes.len() as u64);
+    assert_eq!(measured.sha256, expected.sha256);
+    fs::write(&path, b"changed installer").unwrap();
+    assert!(manifest::Asset::read_verified(&path, &expected.sha256).is_err());
+    let link = root.join("linked.sh");
+    symlink(&path, &link).unwrap();
+    assert!(manifest::Asset::read_verified(&link, &file_digest(&path).unwrap()).is_err());
 }
 
 #[test]
@@ -359,7 +438,7 @@ fn uploaded_assets_must_remain_identical_and_unpublished() {
     let assets = fixture.assets();
     verify_assets(&fixture.metadata, &assets).unwrap();
     let files = inventory(&assets).unwrap();
-    assert_eq!(files.len(), 11);
+    assert_eq!(files.len(), 7);
     let response = json!({"id":9,"tag_name":TAG,"target_commitish":"a".repeat(40),"draft":true,"prerelease":true,"assets":files.keys().map(|name| json!({"name":name,"state":"uploaded"})).collect::<Vec<_>>()});
     save(&fixture.metadata, "created.json", &response);
     save(&fixture.metadata, "uploaded.json", &response);
@@ -376,9 +455,80 @@ fn uploaded_assets_must_remain_identical_and_unpublished() {
         assert!(uploaded(&fixture.metadata, &assets).is_err());
         save(&fixture.metadata, "uploaded.json", &response);
     }
-    fs::write(assets.join("install.sh"), "tampered after upload").unwrap();
-    assert!(uploaded(&fixture.metadata, &assets).is_err());
+    for name in ["install.sh", manifest::NAME, reports::NAME] {
+        let path = assets.join(name);
+        let original = fs::read(&path).unwrap();
+        fs::write(&path, "tampered after upload").unwrap();
+        assert!(
+            uploaded(&fixture.metadata, &assets).is_err(),
+            "accepted changed {name}"
+        );
+        assert!(verify_assets(&fixture.metadata, &assets).is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(
+            uploaded(&fixture.metadata, &assets).is_err(),
+            "accepted missing {name}"
+        );
+        assert!(verify_assets(&fixture.metadata, &assets).is_err());
+        fs::write(&path, original).unwrap();
+    }
+    uploaded(&fixture.metadata, &assets).unwrap();
+}
+
+#[test]
+fn report_archive_retains_exact_evidence_and_is_verified_as_one_asset() {
+    use std::{collections::BTreeMap, io::Read};
+    let fixture = Candidate::new(true);
+    fixture.verify().unwrap();
+    let assets = fixture.assets();
+    let first = assets.join(reports::NAME);
+    let second = assets.join("repeat.tar.gz");
+    reports::pack(&fixture.files, &second).unwrap();
+    assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap());
+    assert!(
+        reports::pack(&fixture.files, &first).is_err(),
+        "overwrote report archive"
+    );
+    fs::remove_file(second).unwrap();
+    let mut expected = BTreeMap::new();
+    for (platform, _) in PLATFORMS {
+        for report in REPORTS {
+            expected.insert(
+                format!("{report}-{platform}.json"),
+                fs::read(fixture.files.join(platform).join(format!("{report}.json"))).unwrap(),
+            );
+        }
+    }
+    let reader = flate2::read::GzDecoder::new(fs::File::open(&first).unwrap());
+    let mut archive = tar::Archive::new(reader);
+    let mut actual = BTreeMap::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        assert!(entry.header().entry_type().is_file());
+        assert_eq!(entry.header().mode().unwrap(), 0o644);
+        assert_eq!(entry.header().mtime().unwrap(), 0);
+        let name = entry.path().unwrap().to_str().unwrap().to_owned();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        assert!(actual.insert(name, bytes).is_none());
+    }
+    assert_eq!(actual, expected);
+    verify_assets(&fixture.metadata, &assets).unwrap();
+    fs::write(&first, "tampered reports").unwrap();
     assert!(verify_assets(&fixture.metadata, &assets).is_err());
+    let files = inventory(&fixture.files).unwrap();
+    fs::write(fixture.linux().join("build-report.json"), "{}").unwrap();
+    assert!(
+        reports::asset(&fixture.files, &files).is_err(),
+        "accepted changed source evidence"
+    );
+    fs::remove_file(fixture.linux().join("build-report.json")).unwrap();
+    symlink(
+        fixture.metadata.join("run.json"),
+        fixture.linux().join("build-report.json"),
+    )
+    .unwrap();
+    assert!(reports::pack(&fixture.files, &assets.join("linked.tar.gz")).is_err());
 }
 
 #[test]

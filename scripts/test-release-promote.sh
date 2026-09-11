@@ -39,13 +39,20 @@ case "$2" in
   verify)
     [[ -f "$4/linux-amd64/install.sh" && -f "$4/macos-arm64/install.sh" && -f "$3/source-install.sh" ]] || exit 97
     printf 'fixture notes\n' > "$3/notes.md"
-    printf '{"draft":true}\n' > "$3/create-release.json" ;;
+    printf '{"draft":true}\n' > "$3/create-release.json"
+    if [[ ${PROMOTE_TEST_FAIL:-none} != missing-manifest ]]; then
+      printf '{"schema_version":1}\n' > "$3/release.json"
+    fi ;;
   created) echo 9 ;;
+  reports)
+    [[ -f "$3/linux-amd64/build-report.json" && -f "$3/macos-arm64/install-smoke-report.json" ]] || exit 97
+    echo fixture > "$4" ;;
   assets)
-    [[ -f "$4/build-report-linux-amd64.json" && -f "$4/build-report-macos-arm64.json" ]] || exit 97
+    [[ -f "$4/verification-reports.tar.gz" && -f "$4/release.json" ]] || exit 97
+    cmp "$3/release.json" "$4/release.json"
     files=("$4"/*)
-    [[ ${#files[@]} == 11 ]] || exit 97 ;;
-  uploaded) [[ -f "$4/install.sh" ]] || exit 97 ;;
+    [[ ${#files[@]} == 7 ]] || exit 97 ;;
+  uploaded) [[ -f "$4/install.sh" && -f "$4/release.json" ]] || exit 97 ;;
   *) exit 97 ;;
 esac
 STUB
@@ -90,8 +97,8 @@ case "$action" in
   run)
     [[ "$1" == download && "$2" == 42 && "$3" == --repo && "$4" == owner/proofstorm && "$5" == --name && "$7" == --dir ]] || exit 97
     case "$6" in
-      proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=x86_64-unknown-linux-gnu ;;
-      proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=aarch64-apple-darwin; [[ ${PROMOTE_TEST_FAIL:-none} != mac-download ]] || exit 26 ;;
+      proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=linux-amd64 ;;
+      proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=macos-arm64; [[ ${PROMOTE_TEST_FAIL:-none} != mac-download ]] || exit 26 ;;
       *) exit 97 ;;
     esac
     printf 'download-candidate\n' >> "$PROMOTE_TEST_TRACE"
@@ -103,15 +110,16 @@ case "$action" in
     case "$1" in
       upload)
         printf 'upload\n' >> "$PROMOTE_TEST_TRACE"
-        [[ $# == 15 && "${14}" == --repo && "${15}" == owner/proofstorm ]] || exit 97
-        for file in "${@:3:11}"; do [[ -f "$file" ]] || exit 97; done
+        [[ $# == 11 && "${10}" == --repo && "${11}" == owner/proofstorm ]] || exit 97
+        for file in "${@:3:7}"; do [[ -f "$file" ]] || exit 97; done
         [[ ${PROMOTE_TEST_FAIL:-none} != upload ]] || exit 27 ;;
       download)
         printf 'download-uploaded\n' >> "$PROMOTE_TEST_TRACE"
         [[ $# == 8 && "$3" == --repo && "$4" == owner/proofstorm && "$5" == --dir && "$7" == --pattern && "$8" == '*' ]] || exit 97
         [[ ${PROMOTE_TEST_FAIL:-none} != redownload ]] || exit 28
         mkdir "$6"
-        echo fixture > "$6/install.sh" ;;
+        echo fixture > "$6/install.sh"
+        printf '{"schema_version":1}\n' > "$6/release.json" ;;
       *) exit 97 ;;
     esac ;;
   *) exit 97 ;;
@@ -135,7 +143,7 @@ for action in 'POST repos/owner/proofstorm/releases' upload download-uploaded up
 done
 [[ $(grep -c '^verify$' "$PROMOTE_TEST_TRACE") == 2 ]] || fail 'Draft must reverify before writing'
 [[ $(grep -c '^GET repos/owner/proofstorm/actions/runs/42$' "$PROMOTE_TEST_TRACE") == 2 ]] || fail 'Draft must recheck source run'
-for failure in run evidence unused verify assets refs-api download mac-download changed-run changed-artifact; do
+for failure in run evidence unused verify reports assets missing-manifest refs-api download mac-download changed-run changed-artifact; do
   if PROMOTE_TEST_FAIL=$failure run --draft; then fail "Accepted $failure"; fi
   if grep -Eq '^(POST |upload)' "$PROMOTE_TEST_TRACE"; then fail "Mutated after $failure"; fi
 done

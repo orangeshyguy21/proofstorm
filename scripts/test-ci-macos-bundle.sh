@@ -24,12 +24,12 @@ echo build >> "$MAC_CI_TRACE"
 mkdir -p "$2/source" "$4"
 echo fixture > "$2/source/install.sh"
 [[ ${MAC_CI_FAIL:-none} == report ]] || echo '{}' > "$2/result.json"
-name=proofstorm-0.1.0-alpha.2-aarch64-apple-darwin.tar.gz
+name=proofstorm-0.1.0-alpha.2-macos-arm64.tar.gz
 [[ ${MAC_CI_FAIL:-none} == missing ]] || echo fixture > "$4/$name"
 echo fixture > "$4/$name.sha256"
 echo private > "$4/.env"
 echo unexpected > "$4/foreign.txt"
-if [[ ${MAC_CI_FAIL:-none} == duplicate ]]; then echo fixture > "$4/proofstorm-0.1.0-alpha.3-aarch64-apple-darwin.tar.gz"; fi
+if [[ ${MAC_CI_FAIL:-none} == duplicate ]]; then echo fixture > "$4/proofstorm-0.1.0-alpha.3-macos-arm64.tar.gz"; fi
 if [[ ${MAC_CI_FAIL:-none} == symlink ]]; then
   rm "$2/source/install.sh"
   ln -s "$MAC_CI_TRACE" "$2/source/install.sh"
