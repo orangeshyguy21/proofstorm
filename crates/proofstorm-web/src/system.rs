@@ -137,13 +137,13 @@ pub fn BlockHeight(
     telemetry: RwSignal<Option<SystemView>>,
     lab: RwSignal<Option<EnvironmentLab>>,
 ) -> impl IntoView {
-    view! {<span class="block-height" title="Highest current block height observed across this lab’s Bitcoin nodes">{move ||{
+    view! {<span class="block-height" title="Highest current block height observed across this lab’s Bitcoin nodes"><span class="block-height-label">"Block height"</span>{move ||{
         let lab=lab.get();let id=lab.as_ref().map(|l|l.id.as_str()).unwrap_or_default();
         let expected=lab.as_ref().map_or(0,|l|l.components.items.iter().filter(|c|c.kind==ComponentKind::Bitcoin).count());
         let usage=telemetry.get().and_then(|s|s.labs.into_iter().find(|l|l.id==id));
         let value=usage.as_ref().and_then(block_height);
         let sampled=usage.as_ref().map_or(0,|l|l.balances.iter().filter(|b|b.block_height.is_some()&&b.error.is_none()).count());
-        format!("Block {}{}",value.map_or_else(||"—".into(),sat),if sampled>0&&sampled<expected{" · partial"}else{""})
+        view! {<span class="block-height-reading"><strong>{value.map_or_else(||"—".into(),sat)}</strong>{(sampled>0&&sampled<expected).then(||view!{<small>"partial"</small>})}</span>}
     }}</span>}
 }
 #[component]

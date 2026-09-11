@@ -83,6 +83,7 @@ fn main() {
             Some("js") => "text/javascript",
             Some("wasm") => "application/wasm",
             Some("css") => "text/css",
+            Some("woff2") => "font/woff2",
             _ => continue,
         };
         let path = path.to_str().expect("UTF-8 asset path");

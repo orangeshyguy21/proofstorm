@@ -249,6 +249,7 @@ async fn checkout_asset(root: &std::path::Path, path: &str) -> Response<Body> {
         Some("js") => "text/javascript",
         Some("wasm") => "application/wasm",
         Some("css") => "text/css",
+        Some("woff2") => "font/woff2",
         _ => return error(StatusCode::NOT_FOUND, "not_found"),
     };
     let root = root.to_owned();
@@ -393,6 +394,21 @@ fn event_stream(
 #[cfg(test)]
 mod checkout_asset_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn serves_bundled_brand_font_with_font_content_type() {
+        let root = tempfile::tempdir().unwrap();
+        let font = include_bytes!("../../proofstorm-web/assets/inter-variable.woff2");
+        std::fs::write(root.path().join("inter-variable.woff2"), font).unwrap();
+        let response = checkout_asset(root.path(), "/inter-variable.woff2").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "font/woff2");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            font.as_slice()
+        );
+    }
 
     #[tokio::test]
     async fn serves_rebuilt_assets_without_restarting_and_without_caching() {

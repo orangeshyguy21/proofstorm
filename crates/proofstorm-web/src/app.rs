@@ -209,7 +209,7 @@ pub fn App() -> impl IntoView {
     let _retry = StoredValue::new_local(retry);
     view! {
         <header class="app-header">
-            <button class="icon-button" aria-label="Toggle lab navigation" aria-expanded=move || navigation.get() on:click=move |_| navigation.update(|open| *open = !*open)>"☰"</button>
+            <button class="icon-button" aria-label="Toggle lab navigation" aria-expanded=move || navigation.get() on:click=move |_| navigation.update(|open| *open = !*open)><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
             <a class="brand" href="/" aria-label="Proofstorm home"><span class="brand-mark" aria-hidden="true" inner_html=LOGO_SVG></span><span class="brand-wordmark" aria-hidden="true" inner_html=WORDMARK_SVG></span></a>
             <span class="header-context">{move || environment.get().map(|v| v.workspace_id)}</span>
             <div class="header-right"><crate::freshness::FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||error.get().is_some()||telemetry.get().is_some_and(|s|s.error.is_some()||s.labs.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /><crate::gui::GuiControls /></div>
@@ -227,7 +227,7 @@ pub fn App() -> impl IntoView {
                         view! { <button class=move || if !system_open.get() && selected.get() == active_id { "lab-item selected" } else { "lab-item" } on:click=move |_| {
                             system_open.set(false);
                             if selected.get_untracked() != id { selected.set(id.clone()); detail.set(None); zoom.set(1.0); pan.set((0.0,0.0)); component.set(String::new()); history_pages.set(1); }
-                        }><span class="lab-icon">"⬡"</span><span><strong>{name}</strong><small>{status}</small></span></button> }
+                        }><span class="lab-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-6 10a1.3 1.3 0 0 0 1.2 2h13.6a1.3 1.3 0 0 0 1.2-2L14 9V3M8 14h8" /></svg></span><span><strong>{name}</strong><small>{status}</small></span></button> }
                     }).collect_view())
                 }}</nav>
                 <footer class="sidebar-footer"><span class="sidebar-footer-label">"Theme"</span><ThemePicker /></footer>
