@@ -33,7 +33,9 @@ ln -s "$scratch/stub" "$fixture/scripts/check.sh"
 ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/ci-linux-bundle.sh"
-ln -s "$scratch/stub" "$fixture/scripts/release-promote-linux.sh"
+ln -s "$scratch/stub" "$fixture/scripts/ci-macos-bundle.sh"
+ln -s "$scratch/stub" "$fixture/scripts/macos-install-smoke.sh"
+ln -s "$scratch/stub" "$fixture/scripts/release-promote.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release.sh"
 ln -s "$scratch/stub" "$fixture/scripts/controller-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/linux-build.sh"
@@ -120,8 +122,12 @@ run release-smoke "$tricky" relocated --json
 expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- release-smoke "$tricky" relocated --json
 run release-ci-linux --work-dir "$tricky" --debug
 expect ci-linux-bundle.sh "$fixture" unset unset --work-dir "$tricky" --debug
-run release-promote-linux --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
-expect release-promote-linux.sh "$fixture" unset unset --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
+run release-promote --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
+expect release-promote.sh "$fixture" unset unset --work-dir "$tricky" --run-id 42 --tag v0.1.0-alpha.1
+run release-ci-macos --work-dir "$tricky" --controller-receipt controller.json
+expect ci-macos-bundle.sh "$fixture" unset unset --work-dir "$tricky" --controller-receipt controller.json
+run release-install-macos --archive "$tricky" --installer install.sh --snapshot source --work-dir output
+expect macos-install-smoke.sh "$fixture" unset unset --archive "$tricky" --installer install.sh --snapshot source --work-dir output
 run release --preview
 expect release.sh "$fixture" unset unset draft --preview
 run release-prepare "$tricky"

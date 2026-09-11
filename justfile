@@ -87,6 +87,14 @@ release-build +args:
 release-ci-linux +args:
     bash scripts/ci-linux-bundle.sh "$@"
 
+# Build a native Mac bundle and test isolated install/reinstall; no Docker on the Mac.
+release-ci-macos +args:
+    bash scripts/ci-macos-bundle.sh "$@"
+
+# Test a trusted Mac bundle under enforced source/network/compiler isolation.
+release-install-macos +args:
+    bash scripts/macos-install-smoke.sh "$@"
+
 # Build and relocate Linux binaries in isolated Debian; no Python or host mounts.
 release-build-linux +args:
     bash scripts/linux-build.sh "$@"
@@ -100,14 +108,14 @@ release-smoke +args:
     CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-smoke "$@"
 
 # Verify a successful main artifact; --draft explicitly creates an unpublished prerelease.
-release-promote-linux +args:
-    bash scripts/release-promote-linux.sh "$@"
+release-promote +args:
+    bash scripts/release-promote.sh "$@"
 
 # Prepare source version fields for review; never commits or publishes.
 release-prepare version:
     bash scripts/release.sh prepare "$@"
 
-# Select current main's tested Linux build and confirm draft preparation using GitHub login.
+# Select current main's tested Linux and Mac builds and confirm draft preparation using GitHub login.
 release *args:
     bash scripts/release.sh draft "$@"
 

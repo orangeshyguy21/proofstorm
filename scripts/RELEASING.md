@@ -1,191 +1,132 @@
-# Preparing a Linux alpha release
+# Preparing an alpha release
 
-The **Prepare alpha release** workflow promotes an existing, tested Linux CI
-artifact into a **draft prerelease**. It never rebuilds Proofstorm, executes the
-downloaded binaries, replaces a version, or publishes automatically. A small
-Rust verifier is built from the workflow checkout; Bash handles GitHub calls.
-No Python, Docker, or Proofstorm runtime is needed for promotion.
+One release flow produces Linux AMD64 and macOS Apple Silicon downloads from the
+same source commit. CI builds and publishes matching controllers; your GitHub login
+authorizes a draft. Publishing the downloadable release remains a manual decision.
 
-## Everyday commands
+## Everyday flow
 
-Prepare a new alpha from a clean checkout, normally on your release branch:
-
-```bash
+```sh
 just release-prepare 0.1.0-alpha.3
-```
-
-This updates the workspace version, workspace packages in `Cargo.lock`, installer
-default, tool version pin, chart version/appVersion, and default controller image
-tag. It preserves dependency versions, file permissions, and all existing image
-digests/verification receipts. It does not commit, push, tag, or contact GitHub.
-Invalid, unchanged, older, or inconsistent versions are rejected before editing.
-
-**Main CI builds the matching Linux controller automatically.** After code checks
-pass, it builds from that same clean commit, verifies the controller and execution
-helper, publishes a uniquely tagged image to GHCR, and checks anonymous access.
-It embeds that image's exact digest and verification record in the Linux bundle.
-No receipt copying or generated-file commit is needed; old checked-in image
-records are neither relabelled nor used by this automated lane.
-
-Review the source version changes, run checks, and merge normally. Once the
-**Checks** run for current `main` is green, update your local main checkout and run:
-
-```bash
+# Review the version changes, run just check, and merge.
+# Once main's Checks run is green, update your local main:
 just release
 ```
 
-The command uses your existing GitHub CLI login (`gh auth login` if needed) and
-the repository explicitly selected by that checkout's `origin` remote, not a
-fork's upstream or a saved GitHub CLI default. It never changes those defaults.
-A missing origin is an error. It finds **current main's exact build**,
-checks all three jobs, its artifact, and version availability, then displays the
-repository/version/commit/build and asks `[y/N]` before dispatching **Prepare alpha
-release** on `main`. GitHub Actions performs the full bundle and uploaded-byte
-verification. Follow the printed workflow link, then review and publish the draft
-in Releases. Dispatch success is not reported as release completion.
+`release-prepare` updates workspace/lockfile versions, the installer default, tool
+pin, chart version, and controller tag. It preserves dependency versions and image
+digests. It does not commit, push, publish, or contact GitHub.
 
-No run IDs, repository arguments, tags, or temporary directories need copying.
-The helper reuses `target/check`; no Proofstorm payload is built locally. The
-authenticated user needs permission to dispatch repository Actions workflows;
-write access to Releases belongs to the existing workflow's draft job.
+`just release` uses your existing `gh auth login` and the checkout's `origin`.
+It requires a clean checkout and local main matching GitHub main. It selects that
+exact commit's successful Checks run, verifies both platform artifacts and version
+availability, then asks `[y/N]` before dispatching **Prepare alpha release**.
 
-- `just release --preview`: select and show the candidate without dispatching or
-  downloading it. This is a selection preview, not full payload verification.
-- `just release --yes`: explicitly authorize draft preparation without a prompt,
-  using the same authentication and checks. It still never publishes.
+- `just release --preview`: show the selection without downloading or dispatching.
+- `just release --yes`: authorize draft preparation without the prompt.
+- Follow the printed workflow link. Dispatch success is not release completion.
 
-These shortcuts require a clean checkout. `just release` additionally requires
-local `main` to match GitHub `main`; it does not pull, switch branches, select an
-older green commit, or overwrite an existing version. If main changes while you
-confirm, it stops so you can review the new selection. A failed/uncertain dispatch
-asks you to inspect Actions before retrying; it does not retry automatically.
+The workflow downloads and verifies both bundles without executing or rebuilding
+them, creates one draft prerelease, uploads the checked files, downloads them again,
+and compares every byte. Review the draft in **Releases**, then publish explicitly.
+No command marks it latest/stable or replaces an existing version.
 
-The full loop is **just release-prepare VERSION → review/merge → green CI →
-just release → review/publish**. Controller publication is automatic; publishing
-the downloadable alpha remains your explicit approval.
+## What CI builds
 
-## Automatic controller builds
+| Job | Runner | Output |
+| --- | --- | --- |
+| Formatting and shell | Ubuntu AMD64 | Fast tooling checks |
+| Rust lints and tests | Ubuntu AMD64 | Workspace checks |
+| Mac installer isolation | Apple Silicon macOS 15 | Native sandbox contract tests |
+| Linux bundle and installer | Ubuntu AMD64 | AMD64 controller + Linux bundle + offline install/reinstall |
+| ARM64 controller | Ubuntu ARM64 | ARM64 controller and verified receipt |
+| Mac bundle and installer | Apple Silicon macOS 15 | Native Mac bundle + sandboxed install/reinstall |
 
-Only pushes or manual Checks runs on the canonical repository's `main` publish
-images. PRs and manual branch runs have read-only code checks. The main Linux job
-has `packages: write`; it uses the job's GitHub token, then logs out of GHCR before
-building host binaries. No personal token needs to be saved in repository secrets.
+Code checks run on PRs. Controller publication and full bundle builds run only for
+pushes or manual Checks runs on the canonical repository's main. Both Linux
+controller jobs receive `packages: write`; the Mac jobs have read-only repository
+permissions and do not need Docker or registry credentials.
 
-The existing `proofstorm/proofstormd` package must be Public and allow this
-repository's Actions to write. If the first CI push reports a permission error,
-open the package's **Settings → Manage Actions access**, add the `proofstorm`
-repository if absent, and grant **Write**. See GitHub's
-[package access documentation](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility).
-Anonymous verification uses no Docker or GitHub credentials and fails if the
-image is private or any referenced layer is unavailable.
+Each controller is built from the same clean source as its host bundle. CI tests
+non-root startup and the execution helper, publishes a unique `ci-COMMIT-SUFFIX`
+tag, then verifies anonymous registry identity and layer access. Bundles embed the
+immutable digest and source-bound receipt. No generated-file commit is needed.
 
-CI tags use `ci-COMMIT-UNIQUE_SUFFIX`; bundles pin the immutable registry digest,
-not that tag. Registry manifest/config hashes must match the locally tested image.
-Source fingerprints and versions must agree across controller, host binaries,
-and bundle. A changed source snapshot, failed startup check, push, or anonymous
-read stops the job before a usable release artifact is uploaded. Rerunning Checks
-uses a fresh tag. Images already pushed remain available for diagnosis; this
-workflow does not delete images or move version tags.
+The existing `proofstorm/proofstormd` package must be **Public**, with this
+repository granted **Write** under **Settings → Manage Actions access**.
+See [GitHub package access](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility).
+No personal access token is required in repository secrets.
 
-For explicit local diagnosis, `just release-controller-build --work-dir NEW_DIR`
-builds and tests without publishing. Publication is a separate
-`just release-controller-publish --work-dir DIRECTORY --confirm-namespace
-ghcr.io/orangeshyguy21/proofstorm` command requiring Docker authentication.
-Both use Bash/Rust and Docker; registry verification also needs curl.
-The resulting `controller.json` can be passed as `--controller-receipt FILE` to
-the Linux bundle command, but only with exactly the same clean source snapshot.
+Both bundles use the shared Bash/Rust build driver. Linux installation runs in
+source-free Debian without networking or build tools. Mac installation runs
+with a disposable home, source reads/network/compiler execution denied, and writes
+restricted to its test directory. Mac tests prove those restrictions before
+running the installer; unavailable or ineffective isolation fails the check.
+This is not a claim that the Mac runner physically lacks source or build tools.
 
-Main CI and promotion cover **Linux AMD64**, not workload image rebuilds or Mac
-assets yet. The controller command also supports `--platform linux/arm64` for a
-native Mac bundle's matching controller; publication uses the recorded platform.
-See [macOS build and acceptance work](../release/macos.md). Legacy checked-in
-controller records remain as fallbacks when no explicit receipt is supplied.
-Runtime/lab acceptance is separate from image startup and anonymous availability.
+## Promotion checks and assets
 
-## In GitHub
+All six jobs must succeed in the selected run attempt. Exactly one unexpired
+artifact per platform must match its source SHA and attempt:
 
-1. Merge the release tooling into `main`. Prepare a new source version with
-   `just release-prepare VERSION`, review, and merge it. CI builds its matching
-   controller automatically. Do not relabel an old bundle with a new tag.
-2. Wait for a **Checks** run on `main` to finish green, including **Linux bundle
-   and installer**. Copy the numeric run ID from its URL (`actions/runs/ID`).
-   Only optimized, clean alpha bundles qualify. PR, branch, failed, skipped,
-   debug, and development builds do not.
-3. Open **Actions → Prepare alpha release → Run workflow**, select `main`, and
-   enter that run ID and its exact tag, such as `v0.1.0-alpha.2`. The tag must
-   match the bundle and installer, and must not already exist. Leave **Create a
-   draft prerelease** unchecked for a preview with no release changes.
-4. Review the workflow summary. Run again with the same inputs and **Create a
-   draft prerelease** checked. It independently repeats verification, creates a
-   draft, uploads the six tested files, downloads them again, and checks every
-   byte against the candidate.
-5. Open **Releases**, inspect the draft and alpha limitations, then use GitHub's
-   **Publish release** button when ready to make the candidate available for
-   public-download testing. Keep it a prerelease; do not mark it latest/stable.
+- `proofstorm-linux-amd64-COMMIT-ATTEMPT`
+- `proofstorm-macos-arm64-COMMIT-ATTEMPT`
 
-This lane contains **Linux AMD64 only**, not matching macOS assets. The current
-installer default is `0.1.0-alpha.1`; if that version already exists, promotion
-will refuse to overwrite it. A new version needs a new coherent build, not just
-a different workflow input. Artifacts expire after 14 days; if the selected
-artifact has expired or was deleted, run Checks again and use the new run ID.
-The latest selected run attempt must contain all three successful jobs and its
-matching artifact; when needed, rerun all jobs rather than only failed jobs.
+Artifacts expire after 14 days; diagnostics after 7. When rerunning, rerun all
+required jobs so both artifacts belong to the same attempt. A missing Mac result
+never silently becomes a Linux-only release.
 
-## What gets checked
+Promotion checks safe archive extraction, payload checksums, optimized profiles,
+clean source fingerprints, version/target/controller agreement, and successful
+build/relocation/install evidence. Both installers must exactly match the selected
+commit's installer and default to the release version. API errors are not treated
+as evidence that a tag or draft is absent.
 
-- The selected run belongs to this repository's Checks workflow, ran on `main`
-  from a push or manual dispatch, and completed successfully. Its source commit
-  must still be an ancestor of current `main`.
-- All three required jobs passed in the selected attempt. Exactly one unexpired
-  Linux artifact matches its source SHA and attempt. Run and artifact identity
-  are rechecked immediately before creating a draft.
-- The six-file inventory, archive checksum, safe extraction, payload checksums,
-  Linux target, optimized profile, alpha channel, clean source revision, and
-  build/relocation/offline-install reports agree.
-- The embedded controller record proves matching clean source/version, an
-  immutable GHCR digest, startup checks, and anonymous registry identity and
-  availability checks. Older CI artifacts without this evidence cannot be promoted.
-- The installer matches the file from the selected source commit and defaults
-  to the exact release version. Existing tags and releases (including drafts)
-  are refused; API/authentication failures are never treated as absence.
-- Uploaded assets remain on the expected draft and match the candidate byte
-  for byte. There is no overwrite, automatic cleanup, or publish operation.
+The draft has **11 assets**: two archives, their two checksums, one `install.sh`,
+and three reports for each platform:
 
-These are artifact-promotion checks, **not full alpha acceptance**. The reports
-retain `release_ready: false`. CI verifies anonymous controller availability;
-before announcing the alpha, verify workload image downloads and test the public installer on a fresh
-Linux VM: install, setup, agent attachment, create/read/delete a lab, and cleanup.
-Do not treat an offline install/reinstall pass as proof of GitHub download or
-live runtime success.
+```text
+build-report-{linux-amd64,macos-arm64}.json
+smoke-report-{linux-amd64,macos-arm64}.json
+install-smoke-report-{linux-amd64,macos-arm64}.json
+```
 
-## Local equivalent
+Run and artifact identities are rechecked immediately before draft creation.
+Uploaded assets must retain their names, exact bytes, and unpublished draft status.
 
-Prerequisites: Bash, Rust/Cargo, just, and an authenticated GitHub CLI. Preview
-needs Actions/Contents read access; creating a draft also needs Contents write.
-GitHub-hosted workflow jobs provide these permissions automatically, with write
-access confined to the draft job on `main`.
+These checks are **not full acceptance**; reports retain `release_ready: false`.
+Before announcing a version, test public downloads and install → setup/doctor →
+agent attachment → lab creation/read → reinstall → cleanup on fresh Linux and Mac
+hosts. Test native apps and browser behavior separately. See
+[Mac acceptance](../release/macos.md), including signing/Gatekeeper limitations.
 
-```bash
-just release-promote-linux \
+## Manual alternatives and recovery
+
+The GUI equivalent is **Actions → Prepare alpha release → Run workflow** on main.
+Enter the successful Checks run ID and exact unused alpha tag. Leave **Create a
+draft prerelease** unchecked for full payload verification without release changes;
+check it to authorize a draft.
+
+For local diagnosis, the lower-level equivalent is:
+
+```sh
+just release-promote \
   --repo orangeshyguy21/proofstorm \
   --run-id YOUR_SUCCESSFUL_MAIN_RUN_ID \
-  --tag v0.1.0-alpha.2 \
+  --tag v0.1.0-alpha.3 \
   --work-dir /tmp/proofstorm-alpha-preview
 ```
 
-Choose a new work directory outside the checkout. Add `--draft` only when you
-want GitHub changes, using another new work directory. The local command uses
-the verifier in your current checkout; use a reviewed, up-to-date checkout.
-The work directory retains downloaded evidence and generated notes for review.
-Only the temporary verifier build is removed automatically.
+It requires Bash, Rust, just, and an authenticated GitHub CLI, but no Docker or
+Proofstorm runtime. Use a new external work directory and a reviewed checkout.
+Add `--draft` only to authorize remote writes; verification evidence is retained.
 
-If upload or verification fails after creation, the draft is **retained and
-unpublished**. Inspect it in Releases; rerunning intentionally refuses the
-existing draft. Decide explicitly whether to repair it manually or delete the
-incomplete draft and any associated tag before retrying. Never publish a
-partial or unverified draft. An uncertain API response also requires inspection
-before retrying, since the draft may have been created.
+If creation/upload fails, any draft remains **unpublished and retained**. Inspect
+it before retrying: an uncertain API response may already have created it.
+Existing tags and drafts are never overwritten. Repair or remove an incomplete
+draft only by an explicit decision; never publish a partial or unverified draft.
 
-GitHub references: [artifact downloads](https://cli.github.com/manual/gh_run_download),
-[release uploads](https://cli.github.com/manual/gh_release_upload), and
-[attempt-specific jobs](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt).
+Controller diagnosis remains available through `just release-controller-build
+--platform linux/amd64` (or `linux/arm64`) and `just release-controller-publish`.
+See the commands' help and [Mac build instructions](../release/macos.md).
+CI does not rebuild workload images or delete older controller images.

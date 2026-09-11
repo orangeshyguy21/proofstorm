@@ -1,9 +1,16 @@
 //! Promote trusted CI artifacts without executing or rebuilding their payloads.
-use super::{alpha_version, archive, bundle, text};
+mod candidate;
+use super::{alpha_version, bundle, text};
 use crate::development::{inventory, regular};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, ffi::OsString, fs, io::Write, path::Path};
+
+const PLATFORMS: [(&str, &str); 2] = [
+    ("linux-amd64", "x86_64-unknown-linux-gnu"),
+    ("macos-arm64", "aarch64-apple-darwin"),
+];
+const REPORTS: [&str; 3] = ["build-report", "smoke-report", "install-smoke-report"];
 
 fn positive(value: &Value, key: &str) -> Result<u64> {
     value[key]
@@ -70,6 +77,7 @@ fn run_plan(metadata: &Path, repo: &str, id: &str, tag: &str) -> Result<Vec<Stri
         sha.into(),
         attempt.to_string(),
         format!("proofstorm-linux-amd64-{sha}-{attempt}"),
+        format!("proofstorm-macos-arm64-{sha}-{attempt}"),
     ])
 }
 
@@ -131,6 +139,9 @@ fn evidence(metadata: &Path, repo: &str, id: &str, tag: &str) -> Result<Vec<Stri
         "Formatting and shell",
         "Rust lints and tests",
         "Linux bundle and installer",
+        "ARM64 controller",
+        "Mac bundle and installer",
+        "Mac installer isolation",
     ] {
         let matches: Vec<_> = jobs.iter().filter(|j| j["name"] == name).collect();
         // The caller fetches the attempt-specific endpoint; GitHub job objects
@@ -145,20 +156,27 @@ fn evidence(metadata: &Path, repo: &str, id: &str, tag: &str) -> Result<Vec<Stri
         );
     }
     let artifacts = pages(&metadata.join("artifacts.json"), "artifacts")?;
-    let matches: Vec<_> = artifacts.iter().filter(|a| a["name"] == plan[2]).collect();
+    let mut ids = Vec::new();
+    for name in &plan[2..] {
+        let matches: Vec<_> = artifacts.iter().filter(|a| a["name"] == *name).collect();
+        ensure!(
+            matches.len() == 1,
+            "expected exactly one matching artifact: {name}"
+        );
+        let artifact = matches[0];
+        ensure!(
+            artifact["expired"] == false
+                && artifact["workflow_run"]["id"].as_u64() == Some(id.parse()?)
+                && artifact["workflow_run"]["head_sha"] == *sha,
+            "artifact expired or belongs to another run: {name}"
+        );
+        ids.push(positive(artifact, "id")?.to_string());
+    }
     ensure!(
-        matches.len() == 1,
-        "expected exactly one matching Linux artifact"
+        ids[0] != ids[1],
+        "platform artifacts must have distinct identities"
     );
-    let artifact = matches[0];
-    positive(artifact, "id")?;
-    ensure!(
-        artifact["expired"] == false
-            && artifact["workflow_run"]["id"].as_u64() == Some(id.parse()?)
-            && artifact["workflow_run"]["head_sha"] == *sha,
-        "artifact expired or belongs to another run"
-    );
-    plan.push(positive(artifact, "id")?.to_string());
+    plan.extend(ids);
     Ok(plan)
 }
 
@@ -170,84 +188,16 @@ fn file_digest(path: &Path) -> Result<String> {
 fn verify(metadata: &Path, candidate: &Path, repo: &str, id: &str, tag: &str) -> Result<()> {
     let plan = evidence(metadata, repo, id, tag)?;
     unused(metadata, tag)?;
-    let version = version(tag)?;
-    let archive_name = format!("proofstorm-{version}-x86_64-unknown-linux-gnu.tar.gz");
-    let expected: BTreeSet<_> = [
-        archive_name.clone(),
-        format!("{archive_name}.sha256"),
-        "install.sh".into(),
-        "build-report.json".into(),
-        "smoke-report.json".into(),
-        "install-smoke-report.json".into(),
-    ]
-    .into_iter()
-    .collect();
-    let files = inventory(candidate)?;
-    ensure!(
-        files.keys().cloned().collect::<BTreeSet<_>>() == expected,
-        "unexpected or missing artifact files"
-    );
-    let archive_path = candidate.join(&archive_name);
-    let scratch = tempfile::tempdir()?;
-    let extracted = scratch.path().join("verified");
-    archive::extract(&archive_path, &extracted)?;
-    let manifest = bundle::read_json(&extracted.join("proofstorm/manifest.json"))?;
-    verify_manifest(&manifest, version, &plan[0])?;
-    let build = bundle::read_json(&candidate.join("build-report.json"))?;
-    ensure!(
-        Path::new(text(&build, "archive")?)
-            .file_name()
-            .and_then(|s| s.to_str())
-            == Some(&archive_name)
-            && build["sha256"] == files[&archive_name]
-            && build["release_ready"] == manifest["release_ready"]
-            && build["release_blockers"] == manifest["release_blockers"],
-        "build report does not match bundle"
-    );
-    let smoke = bundle::read_json(&candidate.join("smoke-report.json"))?;
-    ensure!(
-        smoke["integrity_verified"] == true
-            && smoke["relocated_binaries_verified"] == true
-            && smoke["source_read_access_denied"] == false
-            && smoke["release_ready"] == manifest["release_ready"],
-        "relocation checks are missing or unsuccessful"
-    );
-    let install = bundle::read_json(&candidate.join("install-smoke-report.json"))?;
-    for key in ["local_install", "reinstall", "cli_mcp_metadata_match"] {
-        ensure!(install[key] == true, "installer check missing: {key}");
-    }
-    for key in [
-        "source_checkout_present",
-        "build_tools_present",
-        "network_enabled",
-        "runtime_tested",
-        "github_download_tested",
-        "development_override",
-    ] {
-        ensure!(
-            install[key] == false,
-            "unexpected installer evidence: {key}"
-        );
-    }
-    ensure!(
-        install["archive_sha256"] == files[&archive_name]
-            && install["installer_sha256"] == files["install.sh"],
-        "installer report checksum mismatch"
-    );
-    ensure!(
-        file_digest(&metadata.join("source-install.sh"))? == files["install.sh"],
-        "installer differs from selected source commit"
-    );
-    verify_installer_default(&candidate.join("install.sh"), version)?;
+    let files = candidate::verify(metadata, candidate, version(tag)?, &plan[0])?;
     let notes = format!(
-        "Linux AMD64 alpha candidate {tag}\n\nPromoted without rebuilding from https://github.com/{repo}/actions/runs/{id} (attempt {}).\nSource commit: {}\n\nIncludes the tested installer, archive, checksum, and test reports, with a matching controller verified for startup and anonymous registry access. macOS assets are not included. Runtime setup, workload image availability, and fresh-VM/public-download acceptance remain separate checks. This is not a stable or release-ready build.\n",
+        "Linux AMD64 and macOS Apple Silicon alpha candidate {tag}\n\nPromoted without rebuilding from https://github.com/{repo}/actions/runs/{id} (attempt {}).\nSource commit: {}\n\nIncludes one installer, both native archives/checksums, and platform-specific build, relocation, and installer reports. Each bundle has its matching controller, verified for startup and anonymous registry access. Linux installation was tested in source-free Debian; Mac installation was sandboxed against source reads, compiler execution, networking, and writes outside its test directory.\n\nFresh-host public downloads, runtime setup, workload availability, signing/Gatekeeper, and native GUI acceptance remain separate checks. This is not a stable or release-ready build.\n",
         plan[1], plan[0]
     );
     fs::write(metadata.join("notes.md"), &notes)?;
     fs::write(
         metadata.join("create-release.json"),
         serde_json::to_vec_pretty(
-            &json!({"tag_name":tag,"target_commitish":plan[0],"name":format!("Proofstorm {tag} — Linux alpha"),"body":notes,"draft":true,"prerelease":true,"make_latest":"false"}),
+            &json!({"tag_name":tag,"target_commitish":plan[0],"name":format!("Proofstorm {tag}"),"body":notes,"draft":true,"prerelease":true,"make_latest":"false"}),
         )?,
     )?;
     fs::write(
@@ -257,10 +207,19 @@ fn verify(metadata: &Path, candidate: &Path, repo: &str, id: &str, tag: &str) ->
     Ok(())
 }
 
-fn verify_manifest(manifest: &Value, version: &str, revision: &str) -> Result<()> {
+fn verify_assets(metadata: &Path, directory: &Path) -> Result<()> {
+    let promotion = bundle::read_json(&metadata.join("promotion.json"))?;
+    ensure!(
+        serde_json::to_value(inventory(directory)?)? == promotion["files"],
+        "release assets differ from the verified platform candidates"
+    );
+    Ok(())
+}
+
+fn verify_manifest(manifest: &Value, version: &str, revision: &str, target: &str) -> Result<()> {
     ensure!(
         manifest["version"] == version
-            && manifest["target"] == "x86_64-unknown-linux-gnu"
+            && manifest["target"] == target
             && manifest["channel"] == "alpha"
             && manifest["build_profile"] == "release"
             && manifest["source"]["dirty"] == false
@@ -271,7 +230,7 @@ fn verify_manifest(manifest: &Value, version: &str, revision: &str) -> Result<()
         &manifest["controller"],
         &manifest["source"],
         version,
-        "linux/amd64",
+        super::platform(target)?,
     )
 }
 
@@ -346,7 +305,10 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
             }
         }
         ["evidence", metadata, repo, id, tag] => {
-            println!("{}", evidence(Path::new(metadata), repo, id, tag)?[3]);
+            println!(
+                "{}",
+                evidence(Path::new(metadata), repo, id, tag)?[4..].join("\n")
+            );
         }
         ["unused", metadata, tag] => unused(Path::new(metadata), tag)?,
         ["verify", metadata, candidate, repo, id, tag] => {
@@ -356,6 +318,9 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
             println!("{}", draft(&bundle::read_json(Path::new(file))?, tag, sha)?);
         }
         ["uploaded", metadata, downloaded] => uploaded(Path::new(metadata), Path::new(downloaded))?,
+        ["assets", metadata, directory] => {
+            verify_assets(Path::new(metadata), Path::new(directory))?;
+        }
         _ => bail!("invalid release-promotion arguments"),
     }
     Ok(())

@@ -58,6 +58,29 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: just check-rust
 
+  macos-installer-contract:
+    name: Mac installer isolation
+    needs: quick
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: target/check
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require native Apple Silicon
+        run: test "$(uname -s)/$(uname -m)" = Darwin/arm64
+      - name: Select repository Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target/check"
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Check native sandbox enforcement without a product build
+        run: cargo test --locked -p proofstorm-xtask --test macos_sandbox
+
   linux-bundle:
     name: Linux bundle and installer
     needs: rust
@@ -123,5 +146,110 @@ jobs:
             ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install/install.log
             ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}-controller/build.json
             ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}-controller/controller.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  arm64-controller:
+    name: ARM64 controller
+    needs: rust
+    if: github.repository == 'orangeshyguy21/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      CONTROLLER_WORK_NAME: proofstorm-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Initialize isolated Docker configuration
+        run: printf 'DOCKER_CONFIG=%s/proofstorm-ghcr-auth\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check native ARM64 build prerequisites
+        run: |
+          test "$(uname -m)" = aarch64
+          rustup show active-toolchain
+          docker info
+          docker buildx version
+      - name: Build and verify matching ARM64 controller
+        run: bash scripts/controller-build.sh build --platform linux/arm64 --work-dir "$RUNNER_TEMP/$CONTROLLER_WORK_NAME"
+      - name: Authenticate controller publication
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$DOCKER_CONFIG"
+          chmod 700 "$DOCKER_CONFIG"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+      - name: Publish and anonymously verify exact ARM64 image
+        run: bash scripts/controller-build.sh publish --work-dir "$RUNNER_TEMP/$CONTROLLER_WORK_NAME" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+      - name: Remove publication credentials
+        if: always()
+        run: docker logout ghcr.io
+      - name: Pass only the verified controller receipt to Mac
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proofstorm-controller-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/${{ env.CONTROLLER_WORK_NAME }}/controller.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save ARM64 controller diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proofstorm-arm64-controller-diagnostics-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/${{ env.CONTROLLER_WORK_NAME }}/build.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos-bundle:
+    name: Mac bundle and installer
+    needs: [arm64-controller, macos-installer-contract]
+    if: github.repository == 'orangeshyguy21/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      BUNDLE_WORK_NAME: proofstorm-macos-${{ github.run_id }}-${{ github.run_attempt }}
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: ${{ env.JUST_VERSION }}
+      - name: Prepare native Mac build tools
+        run: |
+          test "$(uname -s)/$(uname -m)" = Darwin/arm64
+          rustup show active-toolchain
+          just web-tools
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: proofstorm-controller-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/proofstorm-controller-input
+      - name: Build Mac bundle and verify isolated installation
+        run: just release-ci-macos --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME" --controller-receipt "$RUNNER_TEMP/proofstorm-controller-input/controller.json"
+      - name: Upload checked Mac bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proofstorm-macos-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/bundle/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Save Mac build and installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proofstorm-macos-diagnostics-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/build.log
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install.log
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/build/result.json
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install/run.json
+            ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/install/isolation.json
           if-no-files-found: warn
           retention-days: 7

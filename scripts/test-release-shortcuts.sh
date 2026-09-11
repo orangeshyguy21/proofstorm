@@ -104,7 +104,7 @@ case "$1" in
         [[ ${SHORTCUT_TEST_FAIL:-none} != skipped-job ]] || status=skipped
         printf '[{"jobs":['
         separator=''
-        for job in 'Formatting and shell' 'Rust lints and tests' 'Linux bundle and installer'; do
+        for job in 'Formatting and shell' 'Rust lints and tests' 'Linux bundle and installer' 'ARM64 controller' 'Mac bundle and installer' 'Mac installer isolation'; do
           printf '%s{"name":"%s","run_id":42,"head_sha":"%s","status":"completed","conclusion":"%s"}' "$separator" "$job" "$sha" "$status"
           separator=,
         done
@@ -113,7 +113,7 @@ case "$1" in
         [[ "$paginated" == true ]] || exit 97
         expired=false
         [[ ${SHORTCUT_TEST_FAIL:-none} != expired ]] || expired=true
-        printf '[{"artifacts":[{"id":123,"name":"proofstorm-linux-amd64-%s-2","expired":%s,"workflow_run":{"id":42,"head_sha":"%s"}}]}]\n' "$sha" "$expired" "$sha" ;;
+        printf '[{"artifacts":[{"id":123,"name":"proofstorm-linux-amd64-%s-2","expired":%s,"workflow_run":{"id":42,"head_sha":"%s"}},{"id":124,"name":"proofstorm-macos-arm64-%s-2","expired":%s,"workflow_run":{"id":42,"head_sha":"%s"}}]}]\n' "$sha" "$expired" "$sha" "$sha" "$expired" "$sha" ;;
       repos/owner/proofstorm/git/matching-refs/tags/v*)
         [[ ${SHORTCUT_TEST_FAIL:-none} != api ]] || exit 25
         if [[ ${SHORTCUT_TEST_FAIL:-none} == tag ]]; then printf '[{"ref":"refs/tags/%s"}]\n' "${endpoint##*/}"; else echo '[]'; fi ;;

@@ -45,7 +45,7 @@ jobs:
           PROMOTION_RUN: ${{ inputs.run_id }}
           PROMOTION_TAG: ${{ inputs.tag }}
         run: |
-          bash scripts/release-promote-linux.sh --repo "$PROMOTION_REPO" --run-id "$PROMOTION_RUN" --tag "$PROMOTION_TAG" --work-dir "$RUNNER_TEMP/alpha-preview"
+          bash scripts/release-promote.sh --repo "$PROMOTION_REPO" --run-id "$PROMOTION_RUN" --tag "$PROMOTION_TAG" --work-dir "$RUNNER_TEMP/alpha-preview"
           cat "$RUNNER_TEMP/alpha-preview/metadata/notes.md" >> "$GITHUB_STEP_SUMMARY"
           echo 'Verification only: this job did not modify GitHub releases.' >> "$GITHUB_STEP_SUMMARY"
 
@@ -69,6 +69,6 @@ jobs:
           PROMOTION_RUN: ${{ inputs.run_id }}
           PROMOTION_TAG: ${{ inputs.tag }}
         run: |
-          bash scripts/release-promote-linux.sh --repo "$PROMOTION_REPO" --run-id "$PROMOTION_RUN" --tag "$PROMOTION_TAG" --work-dir "$RUNNER_TEMP/alpha-draft" --draft
+          bash scripts/release-promote.sh --repo "$PROMOTION_REPO" --run-id "$PROMOTION_RUN" --tag "$PROMOTION_TAG" --work-dir "$RUNNER_TEMP/alpha-draft" --draft
           cat "$RUNNER_TEMP/alpha-draft/metadata/notes.md" >> "$GITHUB_STEP_SUMMARY"
           echo 'Draft created; uploaded bytes verified. Review in Releases and publish manually when approved.' >> "$GITHUB_STEP_SUMMARY"

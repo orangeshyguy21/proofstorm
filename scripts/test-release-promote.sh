@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast orchestration fixture. Rust tests cover real metadata and archive validation.
+# Fast two-platform orchestration fixture. Rust checks real metadata and archives.
 set -Eeuo pipefail
 trap 'printf "Alpha promotion fixture failed at line %s\n" "$LINENO" >&2' ERR
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -8,7 +8,7 @@ scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf -- "$scratch"' EXIT
 fixture="$scratch/checkout's directory"
 mkdir -p "$fixture/scripts" "$scratch/bin"
-cp "$root/scripts/release-promote-linux.sh" "$fixture/scripts/"
+cp "$root/scripts/release-promote.sh" "$fixture/scripts/"
 export PROMOTE_TEST_TRACE="$scratch/trace" PROMOTE_TEST_HELPER="$scratch/helper"
 cat > "$scratch/bin/cargo" <<'STUB'
 #!/usr/bin/env bash
@@ -30,16 +30,21 @@ case "$2" in
     attempt=2
     if [[ ${PROMOTE_TEST_FAIL:-none} == changed-run && -f "$3/run-seen" ]]; then attempt=3; fi
     touch "$3/run-seen"
-    printf '%s\0' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$attempt" "proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-$attempt" ;;
+    printf '%s\0' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$attempt" "proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-$attempt" "proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-$attempt" ;;
   evidence)
-    if [[ ${PROMOTE_TEST_FAIL:-none} == changed-artifact && -f "$3/artifact-seen" ]]; then echo 124; else echo 123; fi
+    echo 123
+    if [[ ${PROMOTE_TEST_FAIL:-none} == changed-artifact && -f "$3/artifact-seen" ]]; then echo 125; else echo 124; fi
     touch "$3/artifact-seen" ;;
   unused) : ;;
   verify)
-    [[ -f "$4/install.sh" && -f "$3/source-install.sh" ]] || exit 97
+    [[ -f "$4/linux-amd64/install.sh" && -f "$4/macos-arm64/install.sh" && -f "$3/source-install.sh" ]] || exit 97
     printf 'fixture notes\n' > "$3/notes.md"
     printf '{"draft":true}\n' > "$3/create-release.json" ;;
   created) echo 9 ;;
+  assets)
+    [[ -f "$4/build-report-linux-amd64.json" && -f "$4/build-report-macos-arm64.json" ]] || exit 97
+    files=("$4"/*)
+    [[ ${#files[@]} == 11 ]] || exit 97 ;;
   uploaded) [[ -f "$4/install.sh" ]] || exit 97 ;;
   *) exit 97 ;;
 esac
@@ -83,18 +88,23 @@ case "$action" in
       esac
     else exit 97; fi ;;
   run)
-    [[ "$1" == download && "$2" == 42 && "$3" == --repo && "$4" == owner/proofstorm && "$5" == --name && "$6" == proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2 && "$7" == --dir ]] || exit 97
+    [[ "$1" == download && "$2" == 42 && "$3" == --repo && "$4" == owner/proofstorm && "$5" == --name && "$7" == --dir ]] || exit 97
+    case "$6" in
+      proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=x86_64-unknown-linux-gnu ;;
+      proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=aarch64-apple-darwin; [[ ${PROMOTE_TEST_FAIL:-none} != mac-download ]] || exit 26 ;;
+      *) exit 97 ;;
+    esac
     printf 'download-candidate\n' >> "$PROMOTE_TEST_TRACE"
     [[ ${PROMOTE_TEST_FAIL:-none} != download ]] || exit 26
     mkdir "$8"
-    for file in proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz.sha256 install.sh build-report.json smoke-report.json install-smoke-report.json; do echo fixture > "$8/$file"; done ;;
+    for file in "proofstorm-0.1.0-alpha.1-$target.tar.gz" "proofstorm-0.1.0-alpha.1-$target.tar.gz.sha256" install.sh build-report.json smoke-report.json install-smoke-report.json; do echo fixture > "$8/$file"; done ;;
   release)
     [[ "$2" == v0.1.0-alpha.1 ]] || exit 97
     case "$1" in
       upload)
         printf 'upload\n' >> "$PROMOTE_TEST_TRACE"
-        [[ $# == 10 && "$9" == --repo && "${10}" == owner/proofstorm ]] || exit 97
-        for file in "$3" "$4" "$5" "$6" "$7" "$8"; do [[ -f "$file" ]] || exit 97; done
+        [[ $# == 15 && "${14}" == --repo && "${15}" == owner/proofstorm ]] || exit 97
+        for file in "${@:3:11}"; do [[ -f "$file" ]] || exit 97; done
         [[ ${PROMOTE_TEST_FAIL:-none} != upload ]] || exit 27 ;;
       download)
         printf 'download-uploaded\n' >> "$PROMOTE_TEST_TRACE"
@@ -113,7 +123,7 @@ count=0
 run() {
   count=$((count + 1))
   : > "$PROMOTE_TEST_TRACE"
-  bash "$fixture/scripts/release-promote-linux.sh" --repo owner/proofstorm --run-id 42 --tag v0.1.0-alpha.1 --work-dir "$scratch/work $count" "$@" > "$scratch/output" 2>&1
+  bash "$fixture/scripts/release-promote.sh" --repo owner/proofstorm --run-id 42 --tag v0.1.0-alpha.1 --work-dir "$scratch/work $count" "$@" > "$scratch/output" 2>&1
 }
 fail() { cat "$scratch/output" >&2; printf '%s\n' "$1" >&2; exit 1; }
 run || fail 'Preview failed'
@@ -125,7 +135,7 @@ for action in 'POST repos/owner/proofstorm/releases' upload download-uploaded up
 done
 [[ $(grep -c '^verify$' "$PROMOTE_TEST_TRACE") == 2 ]] || fail 'Draft must reverify before writing'
 [[ $(grep -c '^GET repos/owner/proofstorm/actions/runs/42$' "$PROMOTE_TEST_TRACE") == 2 ]] || fail 'Draft must recheck source run'
-for failure in run evidence unused verify refs-api download changed-run changed-artifact; do
+for failure in run evidence unused verify assets refs-api download mac-download changed-run changed-artifact; do
   if PROMOTE_TEST_FAIL=$failure run --draft; then fail "Accepted $failure"; fi
   if grep -Eq '^(POST |upload)' "$PROMOTE_TEST_TRACE"; then fail "Mutated after $failure"; fi
 done

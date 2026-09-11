@@ -36,17 +36,25 @@ fn checksum(path: &Path, max: u64) -> Result<String> {
 }
 
 fn input_digests(archive: &Path, installer: &Path) -> Result<(String, String)> {
+    input_digests_for(archive, installer, "x86_64-unknown-linux-gnu")
+}
+
+pub(super) fn input_digests_for(
+    archive: &Path,
+    installer: &Path,
+    target: &str,
+) -> Result<(String, String)> {
     let name = archive
         .file_name()
         .and_then(|v| v.to_str())
         .context("invalid archive name")?;
     ensure!(
         name.starts_with("proofstorm-")
-            && name.ends_with("-x86_64-unknown-linux-gnu.tar.gz")
+            && name.ends_with(&format!("-{target}.tar.gz"))
             && name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b)),
-        "expected a Linux x86-64 archive"
+        "expected a {target} archive"
     );
     let mut receipt = archive.as_os_str().to_owned();
     receipt.push(".sha256");

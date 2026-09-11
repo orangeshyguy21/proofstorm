@@ -71,7 +71,7 @@ if [[ "$local_sha" != "$sha" ]]; then
 fi
 tag=$("$helper" release-shortcut version "$root")
 stage='green build selection'
-printf 'Finding the tested Linux build for %s...\n' "$tag"
+printf 'Finding matching tested Linux and Mac builds for %s...\n' "$tag"
 api --paginate --slurp "repos/$repo/actions/workflows/check.yml/runs?branch=main&head_sha=$sha&per_page=100" > "$scratch/runs.json"
 run_id=$("$helper" release-shortcut select "$scratch/runs.json" "$repo" "$sha")
 api "repos/$repo/actions/runs/$run_id" > "$scratch/run.json"
@@ -79,7 +79,7 @@ api "repos/$repo/actions/workflows/check.yml" > "$scratch/workflow.json"
 "$helper" release-promotion run "$scratch" "$repo" "$run_id" "$tag" > "$scratch/plan"
 plan=()
 while IFS= read -r -d '' field; do plan+=("$field"); done < "$scratch/plan"
-[[ ${#plan[@]} == 3 && ${plan[0]} == "$sha" ]] || exit 1
+[[ ${#plan[@]} == 4 && ${plan[0]} == "$sha" ]] || exit 1
 attempt=${plan[1]}
 api "repos/$repo/compare/$sha...main" > "$scratch/ancestry.json"
 api --paginate --slurp "repos/$repo/actions/runs/$run_id/attempts/$attempt/jobs?per_page=100" > "$scratch/jobs.json"
@@ -88,7 +88,7 @@ api --paginate --slurp "repos/$repo/actions/runs/$run_id/artifacts?per_page=100"
 api "repos/$repo/git/matching-refs/tags/$tag" > "$scratch/refs.json"
 api --paginate --slurp "repos/$repo/releases?per_page=100" > "$scratch/releases.json"
 "$helper" release-promotion unused "$scratch" "$tag"
-printf '\nDraft: %s — Linux AMD64\nRepository: %s\nCommit: %s\nBuild: https://github.com/%s/actions/runs/%s (attempt %s)\nGitHub will verify the bundle, create a draft, and check uploaded bytes. Nothing will publish automatically.\n' "$tag" "$repo" "$sha" "$repo" "$run_id" "$attempt"
+printf '\nDraft: %s — Linux AMD64 + macOS Apple Silicon\nRepository: %s\nCommit: %s\nBuild: https://github.com/%s/actions/runs/%s (attempt %s)\nGitHub will verify both bundles, create one draft, and check uploaded bytes. Nothing will publish automatically.\n' "$tag" "$repo" "$sha" "$repo" "$run_id" "$attempt"
 if [[ "$preview" == true ]]; then printf 'Preview only. No workflow dispatched or GitHub changes made.\n'; exit 0; fi
 if [[ "$confirmed" == false ]]; then
   [[ -t 0 ]] || { printf 'Confirmation needs a terminal. Use --preview to inspect, or --yes to authorize draft preparation.\n' >&2; exit 1; }

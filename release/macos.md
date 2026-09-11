@@ -1,7 +1,8 @@
 # macOS Apple Silicon release
 
-Status: build groundwork, not a published Mac release. The public alpha.2 contains
-only the Linux AMD64 bundle. Do not describe the Mac installer as validated yet.
+Status: CI build/install coverage and multi-platform draft promotion are wired.
+The public alpha.2 still contains only Linux AMD64. Hosted builds and fresh-Mac
+acceptance must pass before announcing a Mac download.
 
 ## What a Mac release contains
 
@@ -21,9 +22,15 @@ registry manifest/config identity and layer access. Native bundle builds now use
 an explicitly supplied ARM64 receipt instead of silently retaining the old Mac
 controller pin. Crossed AMD64/ARM64 receipts are rejected.
 
-The main CI and `just release` promotion remain Linux-only. This slice does not
-publish ARM images, add Mac release assets, provision a runner, or certify runtime
-reconciliation on a clean Mac.
+Main CI builds the ARM64 controller on `ubuntu-24.04-arm`, then passes its verified
+receipt to a native `macos-15` runner. The Mac runner builds the host bundle without
+Docker, verifies relocation with source access denied, and tests install/reinstall
+under a checked sandbox. GitHub-hosted runners are enough for these build checks;
+no AWS host is needed until fresh-host runtime and desktop acceptance.
+
+The CI Mac deployment target is **macOS 15 or newer, Apple Silicon**. Intel Mac is
+not included. These archives are not Developer ID signed/notarized; CI success
+does not establish Gatekeeper or first-run desktop behavior.
 
 ## Build commands
 
@@ -44,14 +51,21 @@ cluster. Publication is a separate, authenticated action when authorized:
 ```sh
 just release-controller-publish --work-dir "$mac_work/controller" \
   --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
-just release-build --work-dir "$mac_work/bundle" \
-  --output "$mac_work/artifacts" \
+just release-ci-macos --work-dir "$mac_work/bundle" \
   --controller-receipt "$mac_work/controller/controller.json"
 ```
 
-The resulting archive targets `aarch64-apple-darwin`. The Linux promotion command
-will not accept it; multi-platform artifact promotion is the next release-tooling
-slice. A build/startup receipt is not fresh-host acceptance evidence.
+The output directory `bundle/bundle` contains the archive, checksum, installer,
+and three reports. Work outside both source trees, a disposable home, restricted
+PATH, and a verified `sandbox-exec` policy isolate the installer from source reads,
+compiler execution, networking, and outside writes. Source and build tools still
+exist on the host; the report explicitly records that access is restricted.
+Unavailable or ineffective sandbox enforcement fails rather than falling back.
+
+`just release` requires matching Linux and Mac artifacts from the same main commit
+and run attempt. It prepares one draft, with one installer and platform-named
+reports, and still asks for approval. See [release flow](../scripts/RELEASING.md).
+A build/startup receipt is not fresh-host acceptance evidence.
 
 ## AWS test host
 
@@ -85,15 +99,14 @@ release the host. AWS warns that Apple Silicon host scrubbing can take up to
 the scrubbing `pending` state. Check the host and retained EBS resources afterward.
 [AWS stop and release procedure](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/mac-instance-stop.html).
 
-## Acceptance and next slices
+## Remaining acceptance
 
 1. Build the ARM64 controller from reviewed source, publish by immutable digest,
    and build the matching native Mac archive. Verify every catalog/helper image
    needed by the smoke lab has an anonymously accessible ARM64 manifest.
-2. Add an isolated Mac bundle/install check and platform-specific artifact/report
-   names. Extend promotion to require both architectures from the same commit and
-   version; retain the explicit human publish gate. Do not silently reuse a stale
-   ARM controller or promote a Linux-only result as multi-platform.
+2. Verify the first hosted Mac build and installer run, then prepare a new alpha
+   version through the shared release flow. Inspect both platform reports before
+   explicitly publishing a candidate for fresh-host testing.
 3. Test the public installer on a fresh Mac account/host with no Proofstorm source,
    installed Rust, development flags, or cached Proofstorm state. Docker and the
    chosen agent are prerequisites, not payload build tools. No compilation should

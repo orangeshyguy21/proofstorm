@@ -1,5 +1,5 @@
 use super::*;
-use crate::release::bundle::tests::Bundle;
+use crate::release::{archive, bundle::tests::Bundle};
 use std::{os::unix::fs::symlink, path::PathBuf};
 
 const REPO: &str = "owner/proofstorm";
@@ -40,41 +40,81 @@ impl Candidate {
             "ancestry.json",
             &json!({"base_commit":{"sha":sha},"merge_base_commit":{"sha":sha},"status":"ahead"}),
         );
-        let jobs: Vec<_> = ["Formatting and shell", "Rust lints and tests", "Linux bundle and installer"].into_iter().map(|name| json!({"name":name,"status":"completed","conclusion":"success","head_sha":sha,"run_id":42})).collect();
+        let jobs: Vec<_> = ["Formatting and shell", "Rust lints and tests", "Linux bundle and installer", "ARM64 controller", "Mac bundle and installer", "Mac installer isolation"].into_iter().map(|name| json!({"name":name,"status":"completed","conclusion":"success","head_sha":sha,"run_id":42})).collect();
         // Real attempt-specific responses do not require run_attempt on jobs.
         save(&metadata, "jobs.json", &json!([{"jobs":jobs}]));
         save(
             &metadata,
             "artifacts.json",
-            &json!([{"artifacts":[{"id":123,"name":format!("proofstorm-linux-amd64-{sha}-2"),"expired":false,"workflow_run":{"id":42,"head_sha":sha}}]}]),
+            &json!([{"artifacts":PLATFORMS.iter().enumerate().map(|(i,(slug,_))| json!({"id":123+i,"name":format!("proofstorm-{slug}-{sha}-2"),"expired":false,"workflow_run":{"id":42,"head_sha":sha}})).collect::<Vec<_>>()}]),
         );
         save(&metadata, "refs.json", &json!([]));
         save(&metadata, "releases.json", &json!([[]]));
-        let mut bundle = Bundle::new("x86_64-unknown-linux-gnu", "alpha");
-        if clean {
-            bundle.optimized_clean();
+        for (slug, target) in PLATFORMS {
+            Self::platform(&files.join(slug), target, clean, None);
         }
-        bundle.matching_controller();
-        let report = archive::pack(bundle.root(), &files).unwrap();
-        save(&files, "build-report.json", &report);
-        save(
-            &files,
-            "smoke-report.json",
-            &json!({"integrity_verified":true,"relocated_binaries_verified":true,"source_read_access_denied":false,"release_ready":false}),
-        );
-        let installer = "#!/bin/sh\ninstall_version=\"0.1.0-alpha.1\"\n";
-        fs::write(files.join("install.sh"), installer).unwrap();
-        fs::write(metadata.join("source-install.sh"), installer).unwrap();
-        save(
-            &files,
-            "install-smoke-report.json",
-            &json!({"local_install":true,"reinstall":true,"cli_mcp_metadata_match":true,"source_checkout_present":false,"build_tools_present":false,"network_enabled":false,"runtime_tested":false,"github_download_tested":false,"development_override":false,"archive_sha256":report["sha256"],"installer_sha256":file_digest(&files.join("install.sh")).unwrap()}),
-        );
+        fs::write(
+            metadata.join("source-install.sh"),
+            "#!/bin/sh\ninstall_version=\"0.1.0-alpha.1\"\n",
+        )
+        .unwrap();
         Self {
             _directory: directory,
             metadata,
             files,
         }
+    }
+
+    fn platform(files: &Path, target: &str, clean: bool, source_hash: Option<&str>) {
+        fs::create_dir(files).unwrap();
+        let mac = target == "aarch64-apple-darwin";
+        let mut bundle = Bundle::new(target, "alpha");
+        if clean {
+            bundle.optimized_clean();
+        }
+        bundle.matching_controller();
+        if let Some(hash) = source_hash {
+            bundle.source_hash(hash);
+        }
+        let report = archive::pack(bundle.root(), files).unwrap();
+        save(files, "build-report.json", &report);
+        save(
+            files,
+            "smoke-report.json",
+            &json!({"integrity_verified":true,"relocated_binaries_verified":true,"source_read_access_denied":mac,"release_ready":false}),
+        );
+        let installer = "#!/bin/sh\ninstall_version=\"0.1.0-alpha.1\"\n";
+        fs::write(files.join("install.sh"), installer).unwrap();
+        save(
+            files,
+            "install-smoke-report.json",
+            &json!({"target":target,"isolation":"macos-sandbox","source_read_access_denied":mac,"compiler_execution_denied":mac,"outside_writes_denied":mac,"local_install":true,"reinstall":true,"cli_mcp_metadata_match":true,"source_checkout_present":mac,"build_tools_present":mac,"network_enabled":false,"runtime_tested":false,"github_download_tested":false,"development_override":false,"archive_sha256":report["sha256"],"installer_sha256":file_digest(&files.join("install.sh")).unwrap()}),
+        );
+    }
+
+    fn linux(&self) -> PathBuf {
+        self.files.join("linux-amd64")
+    }
+
+    fn assets(&self) -> PathBuf {
+        let output = self.metadata.parent().unwrap().join("assets");
+        fs::create_dir(&output).unwrap();
+        for (slug, _) in PLATFORMS {
+            for entry in fs::read_dir(self.files.join(slug)).unwrap() {
+                let entry = entry.unwrap();
+                let name = entry.file_name().into_string().unwrap();
+                let name = if REPORTS
+                    .iter()
+                    .any(|report| name == format!("{report}.json"))
+                {
+                    format!("{}-{slug}.json", name.trim_end_matches(".json"))
+                } else {
+                    name
+                };
+                fs::copy(entry.path(), output.join(name)).unwrap();
+            }
+        }
+        output
     }
 
     fn verify(&self) -> Result<()> {
@@ -83,13 +123,13 @@ impl Candidate {
 
     fn mutate(&self, metadata: bool, name: &str, pointer: &str, value: Value) {
         let root = if metadata {
-            &self.metadata
+            self.metadata.clone()
         } else {
-            &self.files
+            self.linux()
         };
         let mut document = bundle::read_json(&root.join(name)).unwrap();
         *document.pointer_mut(pointer).unwrap() = value;
-        save(root, name, &document);
+        save(&root, name, &document);
     }
 }
 
@@ -110,8 +150,8 @@ fn verified_promotion_is_draft_only_and_never_executes_payloads() {
             .contains("not a stable or release-ready build")
     );
     assert_eq!(
-        evidence(&fixture.metadata, REPO, ID, TAG).unwrap()[3],
-        "123"
+        &evidence(&fixture.metadata, REPO, ID, TAG).unwrap()[4..],
+        &["123", "124"]
     );
 }
 
@@ -139,6 +179,9 @@ fn untrusted_failed_stale_or_incomplete_ci_evidence_is_rejected() {
         ("jobs.json", "/0/jobs/0/conclusion", json!("skipped")),
         ("jobs.json", "/0/jobs/1/run_id", json!(43)),
         ("jobs.json", "/0/jobs/2/head_sha", json!("b".repeat(40))),
+        ("jobs.json", "/0/jobs/3/conclusion", json!("failure")),
+        ("jobs.json", "/0/jobs/4/conclusion", json!("skipped")),
+        ("jobs.json", "/0/jobs/5/conclusion", json!("failure")),
         ("jobs.json", "/0/jobs", json!([])),
         ("artifacts.json", "/0/artifacts/0/expired", json!(true)),
         (
@@ -148,6 +191,8 @@ fn untrusted_failed_stale_or_incomplete_ci_evidence_is_rejected() {
         ),
         ("artifacts.json", "/0/artifacts/0/id", json!(0)),
         ("artifacts.json", "/0/artifacts/0/name", json!("different")),
+        ("artifacts.json", "/0/artifacts/1/expired", json!(true)),
+        ("artifacts.json", "/0/artifacts/1/id", json!(123)),
     ];
     let fixture = Candidate::new(true);
     for (name, pointer, value) in cases {
@@ -239,10 +284,10 @@ fn reports_must_match_tested_bundle_bytes_and_successful_checks() {
         ),
         ("install-smoke-report.json", "/runtime_tested", json!(true)),
     ] {
-        let original = fs::read(fixture.files.join(name)).unwrap();
+        let original = fs::read(fixture.linux().join(name)).unwrap();
         fixture.mutate(false, name, pointer, value);
         assert!(fixture.verify().is_err(), "accepted {name} {pointer}");
-        fs::write(fixture.files.join(name), original).unwrap();
+        fs::write(fixture.linux().join(name), original).unwrap();
     }
     fs::write(fixture.metadata.join("source-install.sh"), "different").unwrap();
     assert!(
@@ -277,10 +322,10 @@ fn dirty_debug_extra_linked_or_wrong_version_candidates_are_rejected() {
     fs::write(fixture.files.join("extra"), "unexpected").unwrap();
     assert!(fixture.verify().is_err());
     fs::remove_file(fixture.files.join("extra")).unwrap();
-    fs::remove_file(fixture.files.join("install.sh")).unwrap();
+    fs::remove_file(fixture.linux().join("install.sh")).unwrap();
     symlink(
         fixture.metadata.join("source-install.sh"),
-        fixture.files.join("install.sh"),
+        fixture.linux().join("install.sh"),
     )
     .unwrap();
     assert!(fixture.verify().is_err());
@@ -290,13 +335,13 @@ fn dirty_debug_extra_linked_or_wrong_version_candidates_are_rejected() {
 fn installer_default_cannot_point_at_a_different_release() {
     let fixture = Candidate::new(true);
     let installer = "install_version=\"0.1.0-alpha.0\"\n";
-    fs::write(fixture.files.join("install.sh"), installer).unwrap();
+    fs::write(fixture.linux().join("install.sh"), installer).unwrap();
     fs::write(fixture.metadata.join("source-install.sh"), installer).unwrap();
     fixture.mutate(
         false,
         "install-smoke-report.json",
         "/installer_sha256",
-        json!(file_digest(&fixture.files.join("install.sh")).unwrap()),
+        json!(file_digest(&fixture.linux().join("install.sh")).unwrap()),
     );
     assert!(
         fixture
@@ -311,11 +356,14 @@ fn installer_default_cannot_point_at_a_different_release() {
 fn uploaded_assets_must_remain_identical_and_unpublished() {
     let fixture = Candidate::new(true);
     fixture.verify().unwrap();
-    let files = inventory(&fixture.files).unwrap();
+    let assets = fixture.assets();
+    verify_assets(&fixture.metadata, &assets).unwrap();
+    let files = inventory(&assets).unwrap();
+    assert_eq!(files.len(), 11);
     let response = json!({"id":9,"tag_name":TAG,"target_commitish":"a".repeat(40),"draft":true,"prerelease":true,"assets":files.keys().map(|name| json!({"name":name,"state":"uploaded"})).collect::<Vec<_>>()});
     save(&fixture.metadata, "created.json", &response);
     save(&fixture.metadata, "uploaded.json", &response);
-    uploaded(&fixture.metadata, &fixture.files).unwrap();
+    uploaded(&fixture.metadata, &assets).unwrap();
     for (pointer, value) in [
         ("/id", json!(10)),
         ("/draft", json!(false)),
@@ -325,11 +373,12 @@ fn uploaded_assets_must_remain_identical_and_unpublished() {
         ("/assets", json!([])),
     ] {
         fixture.mutate(true, "uploaded.json", pointer, value);
-        assert!(uploaded(&fixture.metadata, &fixture.files).is_err());
+        assert!(uploaded(&fixture.metadata, &assets).is_err());
         save(&fixture.metadata, "uploaded.json", &response);
     }
-    fs::write(fixture.files.join("install.sh"), "tampered after upload").unwrap();
-    assert!(uploaded(&fixture.metadata, &fixture.files).is_err());
+    fs::write(assets.join("install.sh"), "tampered after upload").unwrap();
+    assert!(uploaded(&fixture.metadata, &assets).is_err());
+    assert!(verify_assets(&fixture.metadata, &assets).is_err());
 }
 
 #[test]
@@ -342,4 +391,40 @@ fn invalid_cli_and_version_arguments_fail() {
     for (repo, id) in [("bad/repo/extra", ID), (REPO, "0"), (REPO, "-1")] {
         assert!(run_plan(&fixture.metadata, repo, id, TAG).is_err());
     }
+}
+
+#[test]
+fn mac_requires_its_own_isolation_evidence_and_identical_source() {
+    let fixture = Candidate::new(true);
+    let mac = fixture.files.join("macos-arm64");
+    let name = "install-smoke-report.json";
+    let original = bundle::read_json(&mac.join(name)).unwrap();
+    for (key, value) in [
+        ("source_read_access_denied", json!(false)),
+        ("compiler_execution_denied", json!(false)),
+        ("outside_writes_denied", json!(false)),
+        ("network_enabled", json!(true)),
+        ("target", json!("x86_64-unknown-linux-gnu")),
+        ("isolation", json!("none")),
+        ("reinstall", json!(false)),
+    ] {
+        let mut invalid = original.clone();
+        invalid[key] = value;
+        save(&mac, name, &invalid);
+        assert!(fixture.verify().is_err(), "accepted Mac {key}");
+    }
+    save(&mac, name, &original);
+    fixture.verify().unwrap();
+    // Each archive and controller is internally coherent, but they are not the same source.
+    fs::remove_dir_all(&mac).unwrap();
+    Candidate::platform(&mac, "aarch64-apple-darwin", true, Some(&"c".repeat(64)));
+    assert!(
+        fixture
+            .verify()
+            .unwrap_err()
+            .to_string()
+            .contains("source fingerprints differ")
+    );
+    fs::remove_dir_all(&mac).unwrap();
+    assert!(fixture.verify().is_err(), "accepted Linux-only candidate");
 }
