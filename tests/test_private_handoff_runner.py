@@ -21,7 +21,7 @@ def emit(event):
  print(json.dumps(event),flush=True)
 if p.get('errors'):
  for i in range(2):
-  emit({'type':'tool_use','part':{'tool':'storm_component_exec_live','state':{'status':'completed','input':{'operation_id':str(i),'argv':['unchanged']},'output':json.dumps({'isError':True})}}})
+  emit({'type':'tool_use','part':{'tool':'pst_component_exec_live','state':{'status':'completed','input':{'operation_id':str(i),'argv':['unchanged']},'output':json.dumps({'isError':True})}}})
 else:
  for i in range(p.get('steps',1)):
   emit({'type':'step_finish','part':{'tokens':{'total':p.get('tokens',100)},'cost':.01}})
@@ -161,18 +161,18 @@ class EvidenceTests(unittest.TestCase):
                        'output_mode':'private', 'stdout':'', 'stderr':'', 'private_files_retired':True, 'runner_digest':'sha256:'+runner.PINS['runner_sha256']}
             captured = {'artifact':{'content':content}, 'request':{'private_payload':{'reference':reference}}}
             bound = {'artifact':{'content':{'transfer':{'id':reference, 'capture':'ready', 'delivered':False,
-                     'recipient':{'principal':'benchmark-recipient','authority':'run-recipient'}}}}}
-            scope = {'issuer_principal_id':'benchmark-source','component':'wallet-b','mint':'mint','reference':reference,
+                     'recipient':{'principal':'benchmark-recipient','lease':'run-recipient'}}}}}
+            scope = {'parent_lease_id':'run-lease','component':'wallet-b','mint':'mint','reference':reference,
                      'receive_command_digest':runner.approved_digest()}
-            grant = {'scope':scope,'principal_id':'benchmark-recipient','revoked_at_unix':None}
-            child = {'grant_json':json.dumps(grant)}
+            child = {'delegation_json':json.dumps(scope),'principal_id':'benchmark-recipient',
+                     'phase_json':'"active"','expires_at':runner.time.time()+600}
             with patch.object(verifier, 'action', side_effect=lambda identity, principal: captured if identity=='source-capture' else bound), \
-                 patch.object(verifier, 'rows', side_effect=lambda table: {'run-recipient':child} if table=='private_access_grants' else {}):
+                 patch.object(verifier, 'rows', return_value={'run-recipient':child}):
                 packet = verifier('source-prepare', [])
                 self.assertEqual(packet['reference'], reference)
                 self.assertEqual(packet['receive']['input'], {'kind':'argv','index':8})
                 scope['receive_command_digest'] = 'sha256:'+'0'*64
-                child['grant_json'] = json.dumps(grant)
+                child['delegation_json'] = json.dumps(scope)
                 with self.assertRaises(runner.CampaignFailure):verifier('source-prepare', [])
 
     def test_failed_initial_audit_still_invokes_scoped_finalizer(self):

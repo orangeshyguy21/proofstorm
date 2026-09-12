@@ -1,6 +1,5 @@
 //! Small lossless JSON/JSONC editor: change only the managed server, retaining
 //! surrounding bytes. Reject duplicate keys and ambiguous documents before edits.
-use super::SERVER_NAME;
 use anyhow::{Result, bail, ensure};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, ops::Range};
@@ -223,8 +222,7 @@ pub(super) fn is_proofstorm(name: &str, value: &Value) -> bool {
     let command = value["command"]
         .as_str()
         .or_else(|| value["command"][0].as_str());
-    name == SERVER_NAME
-        || name == "proofstorm"
+    name == "proofstorm"
         || command.is_some_and(|s| {
             std::path::Path::new(s)
                 .file_name()
@@ -248,11 +246,11 @@ pub(super) fn merge(
         );
         for (name, node) in &servers.members {
             ensure!(
-                name == SERVER_NAME || !is_proofstorm(name, &node.value),
+                name == "proofstorm" || !is_proofstorm(name, &node.value),
                 "another project MCP entry already starts Proofstorm; resolve it explicitly"
             );
         }
-        if let Some(existing) = servers.members.get(SERVER_NAME) {
+        if let Some(existing) = servers.members.get("proofstorm") {
             ensure!(
                 owned.contains(&existing.value),
                 "the project Proofstorm entry is manual or was changed; refusing to overwrite it"
@@ -267,18 +265,18 @@ pub(super) fn merge(
                 &text[existing.span.end..]
             )
         } else {
-            insert(text, servers, SERVER_NAME, entry)?
+            insert(text, servers, "proofstorm", entry)?
         }
     } else {
         insert(
             text,
             &root,
             key,
-            &Value::Object(Map::from_iter([(SERVER_NAME.into(), entry.clone())])),
+            &Value::Object(Map::from_iter([("proofstorm".into(), entry.clone())])),
         )?
     };
     ensure!(
-        value(&output, comments)?[key][SERVER_NAME] == *entry,
+        value(&output, comments)?[key]["proofstorm"] == *entry,
         "generated configuration did not round-trip"
     );
     Ok(output)

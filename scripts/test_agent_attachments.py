@@ -92,12 +92,12 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
             (root / f"{agent}-mcp-list.log").write_text(result.stdout + result.stderr)
             assert result.returncode == 0, f"{agent}: inspect its private mcp-list log"
             output = result.stdout.lower() + result.stderr.lower()
-            assert "storm" in output and "connected" in output and "failed" not in output, f"{agent}: connection not confirmed; inspect its private log"
+            assert "proofstorm" in output and "connected" in output and "failed" not in output, f"{agent}: connection not confirmed; inspect its private log"
             unrelated = subprocess.run([clients[agent], "mcp", "list"], cwd=other, env=isolated,
                                        capture_output=True, text=True, timeout=180)
-            assert unrelated.returncode == 0 and "storm" not in (unrelated.stdout + unrelated.stderr).lower()
+            assert unrelated.returncode == 0 and "proofstorm" not in (unrelated.stdout + unrelated.stderr).lower()
             content = json.loads(before)
-            content[key]["storm"]["command"] = "manual" if agent == "claude" else ["manual"]
+            content[key]["proofstorm"]["command"] = "manual" if agent == "claude" else ["manual"]
             path.write_text(json.dumps(content))
             modified = path.read_bytes()
             cli("agent", "configure", agent, "--allow-development", expected=1)

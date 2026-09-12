@@ -569,17 +569,17 @@ jq -s \
      },
      workflow: {
        cell_materializations: (
-         completed_tool_count("storm_cell_materialize")
-         + completed_tool_count("storm_cell_apply")
+         completed_tool_count("pst_cell_materialize")
+         + completed_tool_count("pst_cell_apply")
        ),
-       whole_document_edits: tool_count("storm_cell_edit"),
+       whole_document_edits: tool_count("pst_cell_edit"),
        raw_exec_calls: (
-         tool_count("storm_component_exec_live")
-         + tool_count("storm_component_forensics")
+         tool_count("pst_component_exec_live")
+         + tool_count("pst_component_forensics")
        ),
-       live_exec_calls: tool_count("storm_component_exec_live"),
-       forensics_calls: tool_count("storm_component_forensics"),
-       evidence_exports: completed_tool_count("storm_artifact_export"),
+       live_exec_calls: tool_count("pst_component_exec_live"),
+       forensics_calls: tool_count("pst_component_forensics"),
+       evidence_exports: completed_tool_count("pst_artifact_export"),
        operation_failures:
          (terminal_outputs | map(select(.terminal? == true and .phase? == "failed")) | length),
        native_exec_nonzero_exits:
@@ -620,10 +620,10 @@ jq -s \
        builds: (durable_candidate_builds | length),
        successes:
          (durable_candidate_builds | map(select(.phase == "succeeded")) | length),
-       wait_calls: tool_count("storm_candidate_wait"),
+       wait_calls: tool_count("pst_candidate_wait"),
        wait_timeouts:
          ([tool_events[]
-           | select(.part.tool == "storm_candidate_wait")
+           | select(.part.tool == "pst_candidate_wait")
            | (.part.state.output? // empty)
            | fromjson?
            | select(.timed_out? == true)]
@@ -664,7 +664,7 @@ jq -s \
        requested_wallet_fund_calls:
          ([tool_events[]
            | select(
-               .part.tool == "storm_wallet_fund"
+               .part.tool == "pst_wallet_fund"
                and .part.state.input.amount_sat? == ($inputs.wallet_amount_sat // null))]
           | length)
      },
