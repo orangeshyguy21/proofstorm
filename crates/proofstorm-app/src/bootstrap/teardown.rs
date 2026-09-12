@@ -161,6 +161,103 @@ fn read_receipt(installation: &Installation) -> Result<Resources> {
     Ok(receipt)
 }
 
+/// Explicit dev reset can bind the older saved container/network IDs to their
+/// current exclusively used storage. Ordinary retirement never adopts receipts.
+/// This is not data migration: every recorded runtime resource will be removed.
+pub(crate) fn prepare_dev_reset(installation: &Installation) -> Result<()> {
+    if installation.home.join(RECEIPT).try_exists()? {
+        read_receipt(installation)?;
+        return Ok(());
+    }
+    let run = |args: &[&str]| docker(&installation.home, args, 30);
+    let current = snapshot(installation, &run)?;
+    let owner = installation.home.join("runtime-owner.json");
+    if owner.try_exists()? {
+        ensure!(
+            fs::symlink_metadata(&owner)?.is_file(),
+            "linked runtime owner refused"
+        );
+        let owner: Value = serde_json::from_slice(&fs::read(owner)?)?;
+        let tools = format!("{}-tools", installation.context());
+        let mut recorded = current.clone();
+        let auxiliary = owner["containers"].get(&tools).is_none()
+            && recorded.containers.remove(&tools).is_some();
+        bind_previous_owner(&owner, &recorded)?;
+        if auxiliary {
+            let data: Value = serde_json::from_str(&run(&[
+                "inspect",
+                "--type",
+                "container",
+                "--format",
+                r#"{"id":{{json .Id}},"image":{{json .Config.Image}},"cluster":{{json (index .Config.Labels "k3d.cluster")}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}"#,
+                &tools,
+            ])?)?;
+            verify_previous_tools(installation, &current, &data)?;
+        }
+        super::cluster::verify_kubeconfig(installation)?;
+    } else {
+        ensure!(
+            current.containers.is_empty()
+                && current.network_id.is_none()
+                && current.volumes.is_empty()
+                && !installation.kubeconfig().try_exists()?,
+            "unrecorded runtime resources; refusing dev reset"
+        );
+    }
+    exclusive(&current, &run)?;
+    process::save(
+        &installation.home.join(RECEIPT),
+        &serde_json::to_vec(&current)?,
+    )
+}
+
+fn verify_previous_tools(
+    installation: &Installation,
+    current: &Resources,
+    data: &Value,
+) -> Result<()> {
+    let version = include_str!("../../../../tools/versions.env")
+        .lines()
+        .find_map(|line| line.strip_prefix("K3D_VERSION=v"))
+        .context("k3d version missing")?;
+    let tools = format!("{}-tools", installation.context());
+    let networks = data["networks"]
+        .as_object()
+        .context("tools networks missing")?;
+    let volumes = data["mounts"]
+        .as_array()
+        .context("tools mounts missing")?
+        .iter()
+        .filter(|mount| mount["Type"] == "volume")
+        .collect::<Vec<_>>();
+    ensure!(
+        data["id"] == serde_json::to_value(current.containers.get(&tools))?
+            && data["image"] == format!("ghcr.io/k3d-io/k3d-tools:{version}")
+            && data["cluster"] == installation.cluster_name()
+            && networks.len() == 1
+            && data["networks"][installation.network_name()]["NetworkID"]
+                == serde_json::to_value(&current.network_id)?
+            && volumes.len() == 1
+            && volumes[0]["Name"] == format!("{}-images", installation.context())
+            && volumes[0]["Destination"] == "/k3d/images",
+        "unrecorded tools container does not match the pinned helper on the saved runtime network"
+    );
+    Ok(())
+}
+
+fn bind_previous_owner(owner: &Value, current: &Resources) -> Result<()> {
+    ensure!(
+        owner["format_version"] == 1
+            && owner["installation_id"] == current.installation_id
+            && !current.containers.is_empty()
+            && current.network_id.is_some()
+            && owner["containers"] == serde_json::to_value(&current.containers)?
+            && owner["network_id"] == serde_json::to_value(&current.network_id)?,
+        "saved runtime identities differ; refusing to adopt resources for dev reset"
+    );
+    Ok(())
+}
+
 fn unchanged(expected: &Resources, current: &Resources) -> Result<()> {
     ensure!(
         expected.installation_id == current.installation_id
@@ -288,11 +385,15 @@ pub fn retire(home: &Path, installation_id: &str, progress: &dyn Fn(&str)) -> Re
         "installation identity does not match deletion request"
     );
     let _guard = Installation::lock(&installation.home)?;
+    retire_locked(&installation, progress)
+}
+
+pub(crate) fn retire_locked(installation: &Installation, progress: &dyn Fn(&str)) -> Result<()> {
     ensure!(
         !installation.home.join("gui-process.json").exists(),
         "stop this installation's GUI before retiring its runtime"
     );
-    let expected = read_receipt(&installation)?;
+    let expected = read_receipt(installation)?;
     let owner = installation.home.join("runtime-owner.json");
     if owner.exists() {
         let value: Value = serde_json::from_slice(&fs::read(owner)?)?;
@@ -306,7 +407,7 @@ pub fn retire(home: &Path, installation_id: &str, progress: &dyn Fn(&str)) -> Re
                 "unrecorded kubeconfig; refusing deletion"
             );
         } else {
-            super::cluster::verify_kubeconfig(&installation)?;
+            super::cluster::verify_kubeconfig(installation)?;
         }
     } else {
         ensure!(
@@ -315,7 +416,7 @@ pub fn retire(home: &Path, installation_id: &str, progress: &dyn Fn(&str)) -> Re
         );
     }
     let run = |args: &[&str]| docker(&installation.home, args, 30);
-    unchanged(&expected, &snapshot(&installation, &run)?)?;
+    unchanged(&expected, &snapshot(installation, &run)?)?;
     exclusive(&expected, &run)?;
     // Save intent before mutating; setup must never restart a partially retired home.
     process::save(
@@ -325,7 +426,7 @@ pub fn retire(home: &Path, installation_id: &str, progress: &dyn Fn(&str)) -> Re
     )?;
     remove(
         &expected,
-        &installation,
+        installation,
         &|args| docker(&installation.home, args, 30),
         progress,
     )?;

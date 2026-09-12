@@ -139,7 +139,8 @@ pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
 pub fn require_terminal() -> Result<()> {
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-        "opening this agent needs an interactive terminal; use proofstorm agent configure from automation, then open the agent in your terminal"
+        "opening this agent needs an interactive terminal; use {} agent configure from automation, then open the agent in your terminal",
+        crate::command_name()
     );
     Ok(())
 }

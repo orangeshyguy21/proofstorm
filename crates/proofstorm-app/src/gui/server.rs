@@ -136,7 +136,9 @@ impl Session {
                 .as_ref()
                 .is_none_or(|sha| crate::artifacts::hash(&self.record.executable)
                     .is_ok_and(|current| &current == sha)),
-            "GUI build changed; run proofstorm gui stop, then proofstorm gui"
+            "GUI build changed; run {} gui stop, then {} gui",
+            crate::command_name(),
+            crate::command_name()
         );
         Ok(())
     }

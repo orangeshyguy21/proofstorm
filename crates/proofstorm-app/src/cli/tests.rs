@@ -68,11 +68,36 @@ fn agent_configuration_and_launch_are_distinct() {
     for agent in ["codex", "opencode", "claude"] {
         assert!(matches!(
             parse(&["agent", "configure", agent, "--dry-run"]).unwrap(),
-            Action::Attach { dry_run: true, .. }
+            Action::Attach {
+                dry_run: true,
+                replace: false,
+                ..
+            }
         ));
         assert!(matches!(
             parse(&["agent", "open", agent]).unwrap(),
-            Action::Open { gui: false, .. }
+            Action::Open {
+                gui: false,
+                replace: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&["agent", "configure", agent, "--replace", "--dry-run"]).unwrap(),
+            Action::Attach {
+                replace: true,
+                dry_run: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&["agent", "open", agent, "--replace", "--dry-run"]).unwrap(),
+            Action::Open {
+                replace: true,
+                dry_run: true,
+                gui: false,
+                ..
+            }
         ));
         assert!(
             matches!(parse(&["agent", "open", agent, "--desktop", "--project", "/a project"]).unwrap(), Action::Open { gui: true, project, .. } if project == PathBuf::from("/a project"))

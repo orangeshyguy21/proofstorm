@@ -217,17 +217,17 @@ pub fn App() -> impl IntoView {
         <div class=move || if navigation.get() { "workspace-shell" } else { "workspace-shell nav-collapsed" }>
             <aside class="sidebar" aria-label="Workspace navigation">
                 <SystemSummary telemetry open=system_open />
-                <div class="section-label"><span>"Cells"</span><span>{move || environment.get().map_or(0, |v| v.cells.items.len())}</span></div>
-                <input class="search" aria-label="Find a cell" placeholder="Find a cell…" prop:value=move || search.get() on:input=move |ev| search.set(event_target_value(&ev)) />
-                <nav class="cell-list" aria-label="Cells">{move || {
+                <div class="section-label"><span>"Storm cells"</span><span>{move || environment.get().map_or(0, |v| v.cells.items.len())}</span></div>
+                <div class="cell-search"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg><input class="search" aria-label="Find a storm cell" placeholder="Find a storm cell…" prop:value=move || search.get() on:input=move |ev| search.set(event_target_value(&ev)) /></div>
+                <nav class="cell-list" aria-label="Storm cells">{move || {
                     let query = search.get().to_lowercase();
                     environment.get().map(|v| v.cells.items.into_iter().filter(|cell| cell_name(cell).to_lowercase().contains(&query)).map(|cell| {
                         let id = cell.id.clone(); let active_id = id.clone();
-                        let name = cell_name(&cell); let status = cell_phase(&cell);
+                        let name = cell_name(&cell); let name_title = name.clone(); let status = cell_phase(&cell);
                         view! { <button class=move || if !system_open.get() && selected.get() == active_id { "cell-item selected" } else { "cell-item" } on:click=move |_| {
                             system_open.set(false);
                             if selected.get_untracked() != id { selected.set(id.clone()); detail.set(None); zoom.set(1.0); pan.set((0.0,0.0)); component.set(String::new()); history_pages.set(1); }
-                        }><span class="cell-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-6 10a1.3 1.3 0 0 0 1.2 2h13.6a1.3 1.3 0 0 0 1.2-2L14 9V3M8 14h8" /></svg></span><span><strong>{name}</strong><small>{status}</small></span></button> }
+                        }><span class="cell-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M7 16H6a4 4 0 1 1 .8-7.92A6 6 0 0 1 18 7a4.5 4.5 0 0 1 .5 8.97H17M13 12l-3 5h4l-3 5" /></svg></span><span class="cell-item-text"><strong title=name_title>{name}</strong><small>{status}</small></span></button> }
                     }).collect_view())
                 }}</nav>
                 <footer class="sidebar-footer"><span class="sidebar-footer-label">"Theme"</span><ThemePicker /></footer>

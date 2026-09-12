@@ -65,6 +65,30 @@ global PATH mutation, or legacy cell migration is involved.
 
 ## Rebuilding
 
+To start over during pre-alpha development, close coding-agent sessions and run:
+
+```sh
+storm dev reset             # Type reset to confirm deleting all dev cell storage
+storm setup
+storm gui
+```
+
+Outside the dev shell, use `just dev-reset`. For automation, pass `--yes` (also
+required with `--json`). Reset is checkout-only: it stops the managed GUI, removes
+the owned runtime and its volumes, and creates a new installation identity with
+empty state. Build outputs, Cargo/Docker caches, downloaded tools, and unrelated
+installations are preserved. No rebuild or setup is implicit. If the command is
+missing from an older binary, run `just dev-build` first.
+
+Old local state and receipts are retained privately under
+`.proofstorm-dev/reset-history/` for diagnostics; deleted cell volumes cannot be
+restored from that archive. Agent configs outside the checkout are not edited.
+After setup, use Launch Agent in `storm gui` to reconnect existing projects and
+approve replacing the old connection. New projects can use `storm agent open AGENT`.
+An interrupted reset blocks setup/rebuild until `storm dev reset --yes` completes.
+Changed resource identities or shared storage fail closed rather than widening
+the deletion scope. Reset never uses Docker prune.
+
 - Web: run `just web-dev` in another terminal, then refresh the managed GUI after
   each build. Assets use the same authenticated backend/origin; there is no
   separate API proxy. Automatic browser reload is not implemented yet.

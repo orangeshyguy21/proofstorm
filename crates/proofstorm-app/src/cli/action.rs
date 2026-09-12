@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum Action {
+    DevReset {
+        yes: bool,
+    },
     RuntimeDelete {
         installation_id: String,
     },
@@ -26,6 +29,7 @@ pub enum Action {
     Attach {
         harness: Harness,
         project: PathBuf,
+        replace: bool,
         dry_run: bool,
         allow_development: bool,
     },
@@ -33,6 +37,7 @@ pub enum Action {
         harness: Harness,
         project: PathBuf,
         gui: bool,
+        replace: bool,
         dry_run: bool,
         allow_development: bool,
     },

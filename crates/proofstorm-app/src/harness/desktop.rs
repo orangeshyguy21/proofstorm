@@ -83,7 +83,8 @@ pub(super) fn project_url(harness: Harness, project: &Path) -> Result<String> {
 pub(super) fn detect(harness: Harness, project: &Path) -> Result<LaunchPlan> {
     ensure!(
         cfg!(target_os = "macos"),
-        "native agent buttons currently support macOS; run proofstorm agent open without --desktop in a terminal"
+        "native agent buttons currently support macOS; run {} agent open without --desktop in a terminal",
+        crate::command_name()
     );
     let (filename, _, _, _) = identity(harness);
     let mut apps = vec![PathBuf::from("/Applications").join(filename)];
@@ -139,5 +140,5 @@ pub(super) fn detect(harness: Harness, project: &Path) -> Result<LaunchPlan> {
             Err(error) => last_error = Some(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("{} desktop was not found in Applications; install the native app, or run proofstorm agent open without --desktop in a terminal. Nothing was attached.", harness.name())))
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("{} desktop was not found in Applications; install the native app, or run {} agent open without --desktop in a terminal. Nothing was attached.", harness.name(), crate::command_name())))
 }

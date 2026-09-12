@@ -68,6 +68,7 @@ async fn open_inner(
     progress("Checking Proofstorm files");
     let verified = crate::artifacts::Verified::load(home, allow_development)?;
     let installation = &verified.installation;
+    let _installation = Installation::lock(&installation.home)?;
     let project = project
         .map(|project| {
             progress("Checking project folder");
@@ -165,6 +166,7 @@ async fn open_inner(
 }
 
 async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -> Result<Record> {
+    let bin = crate::command_name();
     let installation = &verified.installation;
     progress("Starting GUI server");
     // A held lifetime lease prevents replacing an unresponsive but live GUI.
@@ -200,6 +202,8 @@ async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -
             command.env_remove(key);
         }
     }
+    // Forward only the validated display name after clearing runtime overrides.
+    command.env("PROOFSTORM_CLI_NAME", bin);
     let mut startup_errors = tempfile::tempfile()?;
     command
         .stdin(Stdio::null())
@@ -224,7 +228,7 @@ async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -
             let mut details = String::new();
             startup_errors.take(8192).read_to_string(&mut details)?;
             anyhow::bail!(
-                "GUI startup failed: {}. Run proofstorm doctor, then retry proofstorm gui",
+                "GUI startup failed: {}. Run {bin} doctor, then retry {bin} gui",
                 details.trim()
             );
         }
@@ -241,7 +245,7 @@ async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -
             // This handle refers to our own startup child, never a recorded/recycled PID.
             let _ = child.kill().await;
             let _ = child.wait().await;
-            anyhow::bail!("GUI startup timed out; run proofstorm doctor, then retry");
+            anyhow::bail!("GUI startup timed out; run {bin} doctor, then retry {bin} gui");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

@@ -137,7 +137,7 @@ pub(super) fn project(
             let local_authentication = connections::endpoint(revision, &component, &name)
                 .ok()
                 .map(|(_, a)| a);
-            endpoints.push(Endpoint {component:component.clone(),name,transport:port.protocol.clone().unwrap_or_else(||"TCP".into()),cluster_host:format!("{}.{}.svc",service.metadata.name.as_deref().unwrap_or_default(),namespace),port:port.port,local_connection_supported:local_authentication.is_some(),local_authentication,access_context:"cluster DNS; use proofstorm connect for supported loopback access; this descriptor does not create a tunnel or assert readiness".into()});
+            endpoints.push(Endpoint {component:component.clone(),name,transport:port.protocol.clone().unwrap_or_else(||"TCP".into()),cluster_host:format!("{}.{}.svc",service.metadata.name.as_deref().unwrap_or_default(),namespace),port:port.port,local_connection_supported:local_authentication.is_some(),local_authentication,access_context:format!("cluster DNS; use {} connect for supported loopback access; this descriptor does not create a tunnel or assert readiness", crate::command_name())});
         }
     }
     endpoints.sort_by(|a, b| (&a.component, &a.name).cmp(&(&b.component, &b.name)));

@@ -10,6 +10,7 @@ pub mod config;
 pub use command_name::command_name;
 pub mod cell;
 pub mod connections;
+pub mod dev_reset;
 pub mod developer;
 pub mod environment;
 mod error;

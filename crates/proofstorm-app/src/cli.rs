@@ -203,6 +203,9 @@ struct AgentArgs {
     /// Project folder.
     #[arg(long, default_value = ".", value_name = "PATH")]
     project: PathBuf,
+    /// Back up and replace an existing MCP connection.
+    #[arg(long)]
+    replace: bool,
     /// Preview configuration and access changes.
     #[arg(long)]
     dry_run: bool,
@@ -322,6 +325,12 @@ struct SyncArgs {
 enum DevCommand {
     /// Initialize local state and permissions.
     Init(InitArgs),
+    /// Delete this checkout's runtime and cell storage; preserve build caches.
+    Reset {
+        /// Confirm deletion without prompting (required for scripts and --json).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(ClapArgs)]
@@ -388,6 +397,7 @@ impl AgentArgs {
         let Self {
             harness,
             project,
+            replace,
             dry_run,
             allow_development,
         } = self;
@@ -395,6 +405,7 @@ impl AgentArgs {
             Some(gui) => Action::Open {
                 harness,
                 project,
+                replace,
                 dry_run,
                 allow_development,
                 gui,
@@ -402,6 +413,7 @@ impl AgentArgs {
             None => Action::Attach {
                 harness,
                 project,
+                replace,
                 dry_run,
                 allow_development,
             },
@@ -562,6 +574,9 @@ impl Command {
                 registry_port,
             },
             Self::Version { verbose } => Action::Version { verbose },
+            Self::Dev {
+                command: DevCommand::Reset { yes },
+            } => Action::DevReset { yes },
             Self::Internal {
                 command: InternalCommand::RuntimeDelete { installation_id },
             } => Action::RuntimeDelete { installation_id },

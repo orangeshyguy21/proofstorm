@@ -146,7 +146,10 @@ pub(crate) async fn route(
     if path.starts_with("/v1/") && !(bearer || cookie) {
         return Some(fail(
             StatusCode::UNAUTHORIZED,
-            "Run proofstorm gui to open an authenticated browser session.",
+            &format!(
+                "Run {} gui to open an authenticated browser session.",
+                crate::command_name()
+            ),
         ));
     }
     let response = match (request.method().as_str(), path.as_str()) {
@@ -234,7 +237,10 @@ pub(crate) async fn route(
             if session.stopping.load(std::sync::atomic::Ordering::SeqCst) {
                 return Some(fail(
                     StatusCode::CONFLICT,
-                    "GUI is stopping. Reopen it with proofstorm gui.",
+                    &format!(
+                        "GUI is stopping. Reopen it with {} gui.",
+                        crate::command_name()
+                    ),
                 ));
             }
             let preview = path.ends_with("/plan");

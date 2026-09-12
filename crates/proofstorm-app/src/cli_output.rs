@@ -174,6 +174,12 @@ fn human(command: &str, value: &Value) -> String {
             text
         }
         "init" => "Local permissions configured.\n".into(),
+        "dev-reset" => format!(
+            "Development environment reset. Build caches preserved.\nRun {} setup, then {} gui.\nReconnect coding agents after setup.\nOld local state: {}\nCell storage was deleted and cannot be restored from that state.\n",
+            proofstorm_app::command_name(),
+            proofstorm_app::command_name(),
+            value["diagnostics"].as_str().unwrap_or("<unavailable>")
+        ),
         "install" => installation_summary(value),
         "connect" => format!(
             "Connected to {}/{}: {}\nCtrl-C to disconnect.\n",
