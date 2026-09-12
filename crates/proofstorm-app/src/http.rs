@@ -14,21 +14,9 @@ use hyper::{
     service::service_fn,
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
-use std::{convert::Infallible, net::Ipv4Addr, time::Duration};
+use std::{convert::Infallible, time::Duration};
 use tokio::{net::TcpListener, task::JoinSet};
 
-pub async fn serve(cells: Cells, port: u16) -> Result<(), Error> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-        .await
-        .map_err(|e| Error::failure(e.to_string(), None))?;
-    eprintln!(
-        "Proofstorm: http://{}/ (live environment; local access only)",
-        listener
-            .local_addr()
-            .map_err(|e| Error::failure(e.to_string(), None))?
-    );
-    serve_listener(cells, listener).await
-}
 /// Serve an already-bound loopback listener, also used by transport contract tests.
 pub async fn serve_listener(cells: Cells, listener: TcpListener) -> Result<(), Error> {
     serve_inner(cells, listener, None).await

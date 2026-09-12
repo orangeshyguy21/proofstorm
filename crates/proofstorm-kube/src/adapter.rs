@@ -862,11 +862,11 @@ fn pod_startup_failure(
             {
                 Some("ErrImagePull") => Some((
                     Reason::ImagePullFailed,
-                    "Image pull failed. Operator: run just images and just doctor; verify image availability and registry access.",
+                    "Image pull failed. Run storm doctor for this installation; verify image availability and registry access.",
                 )),
                 Some("ImagePullBackOff") => Some((
                     Reason::ImagePullBackoff,
-                    "Image pull is failing and backing off, not building. Operator: run just images and just doctor; verify registry access.",
+                    "Image pull is failing and backing off, not building. Run storm doctor for this installation; verify image availability and registry access.",
                 )),
                 Some("InvalidImageName") => Some((
                     Reason::InvalidImageName,

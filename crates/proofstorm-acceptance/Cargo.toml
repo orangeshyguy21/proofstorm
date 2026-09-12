@@ -9,14 +9,17 @@ description = "Host-side acceptance harness: MCP stdio client, kubectl wrapper, 
 
 [dependencies]
 anyhow.workspace = true
+nix = { version = "0.29", features = ["term", "fs"] }
 proofstorm-app = { path = "../proofstorm-app" }
 clap = { version = "4.5", features = ["derive", "env"] }
 proofstorm-kube = { path = "../proofstorm-kube" }
 proofstorm-core = { path = "../proofstorm-core" }
 proofstorm-store = { path = "../proofstorm-store" }
 serde_json.workspace = true
+serde.workspace = true
 sha2.workspace = true
 tempfile = "3.20"
+tokio.workspace = true
 
 [lints]
 workspace = true

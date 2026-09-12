@@ -2,8 +2,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STANDARD_IMAGE="localhost:5111/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909"
-LDK_IMAGE="localhost:5111/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a"
+# Use the tested rendering's exact image digest and the configured public namespace.
+# No fixed local registry, live cluster, compiler, or Compose installation is used.
+public_image() {
+  local logical namespace
+  logical=$(jq -er '[.resources.deployments[].spec.template.spec.initContainers[]?
+    | select(.name == "initialize-config") | .image] | unique | if length == 1 then .[0] else error("ambiguous initializer image") end' \
+    "${ROOT_DIR}/crates/proofstorm-kube/tests/golden/$1.json") || return 1
+  namespace=$(jq -er '.namespace' "${ROOT_DIR}/release/ghcr.json") || return 1
+  [[ "$logical" =~ ^proofstorm-registry\.localhost:5000/(cdk-mint-management|cdk-ldk-mint-management)@sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ "$namespace" =~ ^ghcr\.io/[a-z0-9_-]+/proofstorm$ ]] || return 1
+  printf '%s/%s\n' "$namespace" "${logical#proofstorm-registry.localhost:5000/}"
+}
+STANDARD_IMAGE=$(public_image cdk)
 SECRET_FIXTURES="${ROOT_DIR}/tests/fixtures/cdk-mint-secrets"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -21,7 +32,7 @@ validate_config() {
   local image="$2"
   local config="$3"
   shift 3
-  docker run --rm \
+  docker run --rm --network none \
     -v "${config}:/proofstorm-config.toml:ro" \
     -v "${SECRET_FIXTURES}:/mint-secrets:ro" \
     "$@" \
@@ -33,50 +44,41 @@ validate_config() {
 for golden in cdk cdk-cln-cell cdk-bdk cdk-postgres-cell; do
   config="${TMP_DIR}/${golden}.toml"
   extract_golden_config "${golden}" "${config}"
+  image=$(public_image "$golden")
   if [[ "${golden}" == "cdk-postgres-cell" ]]; then
     validate_config \
       "${golden}" \
-      "${STANDARD_IMAGE}" \
+      "$image" \
       "${config}" \
       -e 'CDK_MINTD_POSTGRES_URL=postgresql://proofstorm:proofstorm@database:5432/cdk_mint'
   else
-    validate_config "${golden}" "${STANDARD_IMAGE}" "${config}"
+    validate_config "${golden}" "$image" "${config}"
   fi
 done
 
 config="${TMP_DIR}/cdk-ldk.toml"
 extract_golden_config "cdk-ldk" "${config}"
-validate_config "cdk-ldk" "${LDK_IMAGE}" "${config}"
-
-validate_config \
-  "compose fakewallet" \
-  "${STANDARD_IMAGE}" \
-  "${ROOT_DIR}/docker/mint/mintd.toml" \
-  -e 'CDK_MINTD_MNEMONIC=abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
-validate_config \
-  "compose LND regtest" \
-  "${STANDARD_IMAGE}" \
-  "${ROOT_DIR}/docker/mint/mintd.regtest.toml" \
-  -e 'CDK_MINTD_MNEMONIC=abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+image=$(public_image cdk-ldk)
+validate_config "cdk-ldk" "$image" "${config}"
 
 # Exercise the exact rendered initializer against the pinned CDK database,
 # including accepted edits, restart retries, and failure without data loss.
 jq -er '.resources.deployments[0].spec.template.spec.initContainers[]
   | select(.name == "initialize-config") | .command[2]' \
   "${ROOT_DIR}/crates/proofstorm-kube/tests/golden/cdk.json" > "${TMP_DIR}/initialize.sh"
-docker run --rm -i \
+docker run --rm --network none -i \
   --entrypoint sh \
   --tmpfs /config:rw,mode=1777 \
   --tmpfs /app/data:rw,mode=1777 \
-  -v "${ROOT_DIR}/docker/mint/mintd.toml:/fixture.toml:ro" \
+  -v "${TMP_DIR}/cdk.toml:/fixture.toml:ro" \
+  -v "${SECRET_FIXTURES}:/mint-secrets:ro" \
   -v "${TMP_DIR}/initialize.sh:/initialize.sh:ro" \
   -e CDK_MINTD_WORK_DIR=/app/data \
-  -e 'CDK_MINTD_MNEMONIC=abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
   "${STANDARD_IMAGE}" -es <<'SH'
 cp /fixture.toml /config/config.toml
 sh -e /initialize.sh
 printf 'persistent-state\n' > /app/data/sentinel
-sed 's/name = "proofstorm"/name = "edited mint"/' /fixture.toml > /config/config.toml
+sed 's/name = "Proofstorm CDK mint"/name = "edited mint"/' /fixture.toml > /config/config.toml
 sh -e /initialize.sh
 cdk-mintd config show > /tmp/accepted.toml
 grep -q 'name = "edited mint"' /tmp/accepted.toml
@@ -92,9 +94,9 @@ cdk-mintd config show > /tmp/after-failure.toml
 cmp /tmp/accepted.toml /tmp/after-failure.toml
 cp /fixture.toml /config/config.toml
 sh -e /initialize.sh
-cdk-mintd config show | grep -q 'name = "proofstorm"'
+cdk-mintd config show | grep -q 'name = "Proofstorm CDK mint"'
 grep -q '^persistent-state$' /app/data/sentinel
 echo 'CDK initialization, edit, retry, invalid edit and recovery passed'
 SH
 
-echo "All generated and Compose CDK 0.18 configurations satisfy the pinned upstream binaries"
+echo "All generated CDK 0.18 configurations satisfy the pinned upstream binaries"

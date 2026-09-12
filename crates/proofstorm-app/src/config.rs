@@ -5,7 +5,6 @@ use anyhow::{Context, Result, bail};
 
 pub const DEFAULT_DATABASE: &str = ".proofstorm/proofstorm.sqlite3";
 pub const DEFAULT_WORKSPACE: &str = "local-cell";
-pub const DEFAULT_CONTEXT: &str = "k3d-proofstorm";
 pub const DEFAULT_NAMESPACE: &str = "proofstorm-system";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +45,7 @@ impl Environment {
             Some(principal) if !principal.trim().is_empty() => principal,
             None if mode == Mode::Memory => "local".into(),
             _ => bail!(
-                "set PROOFSTORM_PRINCIPAL to the configured agent identity; use examples/opencode/proofstorm-only.json for local setup"
+                "set PROOFSTORM_PRINCIPAL to the configured agent identity; for normal setup use storm agent open or storm agent configure with your agent name"
             ),
         };
         let absolute = |path: PathBuf| {
@@ -78,17 +77,29 @@ impl Environment {
                 .as_ref()
                 .map(crate::installation::Installation::kubeconfig)
         });
-        let default_context = installation.as_ref().map_or_else(
-            || DEFAULT_CONTEXT.into(),
-            crate::installation::Installation::context,
-        );
+        let context = match get("PROOFSTORM_CONTEXT") {
+            Some(context) => {
+                ensure_path_not_empty("PROOFSTORM_CONTEXT", &context)?;
+                context
+            }
+            None => installation
+                .as_ref()
+                .map(crate::installation::Installation::context)
+                .unwrap_or_default(),
+        };
+        if mode == Mode::Connected {
+            anyhow::ensure!(
+                kubeconfig.is_some() && !context.trim().is_empty(),
+                "select an installation with --home (PROOFSTORM_HOME); an external runtime requires both PROOFSTORM_CONTEXT and PROOFSTORM_KUBECONFIG explicitly; the global kubeconfig is never used"
+            );
+        }
         Ok(Self {
             installation,
             kubeconfig,
             database,
             workspace: value("PROOFSTORM_WORKSPACE", DEFAULT_WORKSPACE)?,
             principal,
-            context: value("PROOFSTORM_CONTEXT", &default_context)?,
+            context,
             namespace: value("PROOFSTORM_CONTROL_NAMESPACE", DEFAULT_NAMESPACE)?,
             mode,
         })
@@ -119,14 +130,23 @@ impl Environment {
             context: Some(self.context.clone()),
             ..Default::default()
         };
-        let config = if let Some(path) = &self.kubeconfig {
-            let kubeconfig = kube::config::Kubeconfig::read_from(path)
-                .with_context(|| format!("read selected kubeconfig {}; no fallback to the developer cluster", path.display()))?;
-            kube::Config::from_custom_kubeconfig(kubeconfig, &options).await
-        } else {
-            kube::Config::from_kubeconfig(&options).await
-        }
-        .with_context(|| format!("read Kubernetes context {:?}; run just setup or select PROOFSTORM_CONTEXT explicitly", self.context))?;
+        // Recheck here too: Environment is public and can be constructed without resolve.
+        anyhow::ensure!(
+            !self.context.trim().is_empty(),
+            "runtime access requires an explicitly selected Kubernetes context"
+        );
+        let path = self.kubeconfig.as_ref().context(
+            "runtime access requires an explicitly selected kubeconfig; the global kubeconfig is never used",
+        )?;
+        let kubeconfig = kube::config::Kubeconfig::read_from(path).with_context(|| {
+            format!(
+                "read selected kubeconfig {}; no fallback to the global configuration",
+                path.display()
+            )
+        })?;
+        let config = kube::Config::from_custom_kubeconfig(kubeconfig, &options)
+            .await
+            .with_context(|| format!("read selected Kubernetes context {:?}", self.context))?;
         Ok(config)
     }
 
@@ -145,7 +165,7 @@ impl Environment {
             self.namespace,
             self.kubeconfig
                 .as_ref()
-                .map_or_else(|| "<user config>".into(), |path| path.display().to_string())
+                .map_or_else(|| "<none>".into(), |path| path.display().to_string())
         );
     }
 }
@@ -162,9 +182,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_pin_cluster_and_resolve_storage_without_ambient_kubeconfig() {
+    fn connected_mode_requires_both_external_selectors_without_an_installation() {
+        for (context, kubeconfig) in [
+            (None, None),
+            (Some("external"), None),
+            (None, Some("external.yaml")),
+        ] {
+            let error = Environment::resolve(
+                |key| match key {
+                    "PROOFSTORM_PRINCIPAL" => Some("agent".into()),
+                    "PROOFSTORM_CONTEXT" => context.map(str::to_owned),
+                    "PROOFSTORM_KUBECONFIG" => kubeconfig.map(str::to_owned),
+                    // An ambient global config never counts as a selector.
+                    "KUBECONFIG" => Some("/global/config".into()),
+                    _ => None,
+                },
+                Path::new("/repo"),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("requires both"), "{error}");
+        }
+    }
+
+    #[test]
+    fn external_runtime_selection_is_explicit_and_resolves_relative_paths() {
         let config = Environment::resolve(
-            |key| (key == "PROOFSTORM_PRINCIPAL").then(|| "agent".into()),
+            |key| match key {
+                "PROOFSTORM_PRINCIPAL" => Some("agent".into()),
+                "PROOFSTORM_CONTEXT" => Some("external".into()),
+                "PROOFSTORM_KUBECONFIG" => Some("selected.yaml".into()),
+                _ => None,
+            },
             Path::new("/repo"),
         )
         .unwrap();
@@ -172,10 +220,65 @@ mod tests {
             config.database,
             Path::new("/repo/.proofstorm/proofstorm.sqlite3")
         );
-        assert_eq!(config.context, "k3d-proofstorm");
+        assert_eq!(config.context, "external");
+        assert_eq!(
+            config.kubeconfig,
+            Some(PathBuf::from("/repo/selected.yaml"))
+        );
         assert_eq!(config.workspace, "local-cell");
         assert_eq!(config.mode, Mode::Connected);
         assert!(Environment::resolve(|_| None, Path::new("/repo")).is_err());
+    }
+
+    #[tokio::test]
+    async fn non_connected_modes_cannot_access_a_runtime() {
+        for mode in ["offline", "memory"] {
+            let mut config = Environment::resolve(
+                |key| match key {
+                    "PROOFSTORM_MODE" => Some(mode.into()),
+                    "PROOFSTORM_PRINCIPAL" if mode == "offline" => Some("reader".into()),
+                    _ => None,
+                },
+                Path::new("/repo"),
+            )
+            .unwrap();
+            assert!(config.context.is_empty());
+            assert!(config.kubeconfig.is_none());
+            assert!(config.kubernetes_config().await.is_err());
+            // Direct mutation cannot recover the old ambient fallback either.
+            config.mode = Mode::Connected;
+            assert!(config.kubernetes_config().await.is_err());
+            config.context = "external".into();
+            assert!(
+                config
+                    .kubernetes_config()
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("explicitly selected kubeconfig")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn installed_selection_uses_private_paths_and_missing_files_do_not_fall_back() {
+        let root = tempfile::tempdir().unwrap();
+        let installation =
+            crate::installation::Installation::initialize(root.path(), None, None).unwrap();
+        let config = Environment::resolve(
+            |key| match key {
+                "PROOFSTORM_HOME" => Some(root.path().display().to_string()),
+                "PROOFSTORM_PRINCIPAL" => Some("developer".into()),
+                _ => None,
+            },
+            Path::new("/unrelated"),
+        )
+        .unwrap();
+        assert_eq!(config.context, installation.context());
+        assert_eq!(config.kubeconfig, Some(installation.kubeconfig()));
+        assert_eq!(config.database, installation.database());
+        let error = config.kubernetes_config().await.unwrap_err();
+        assert!(error.to_string().contains("no fallback"), "{error}");
     }
 
     #[test]

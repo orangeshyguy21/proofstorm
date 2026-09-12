@@ -1,4 +1,4 @@
-use super::{docker, process, tool, tools};
+use super::{docker, process, teardown, tool, tools};
 use crate::installation::Installation;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -100,6 +100,10 @@ fn network(installation: &Installation) -> Result<String> {
 }
 
 pub(super) fn owned(installation: &Installation) -> Result<()> {
+    ensure!(
+        !installation.home.join(teardown::RETIRED).exists(),
+        "installation runtime is being retired or was deleted; select a new home"
+    );
     let receipt: Value = serde_json::from_slice(
         &fs::read(installation.home.join("runtime-owner.json")).context(
             "runtime ownership receipt missing; setup will not adopt existing Docker resources",
@@ -133,6 +137,10 @@ pub(super) fn create(installation: &Installation, progress: &dyn Fn(&str)) -> Re
         progress("Verifying existing Kubernetes runtime");
         owned(installation)?;
     } else {
+        ensure!(
+            !home.join("runtime-resources.json").exists(),
+            "an interrupted create has recorded resources; retire this runtime explicitly before starting a new installation"
+        );
         progress("Checking local runtime ports and ownership");
         // Successful inventory queries are required before interpreting absence.
         let containers = docker(home, &["ps", "-a", "--format", "{{.Names}}"], 15)?;
@@ -145,7 +153,7 @@ pub(super) fn create(installation: &Installation, progress: &dyn Fn(&str)) -> Re
             .context("saved registry port is occupied")?;
         drop((api, registry));
         progress("Starting Kubernetes; waiting for nodes");
-        process::run(
+        let creation = process::run(
             home,
             &tool(home, "k3d")?,
             &[
@@ -160,7 +168,11 @@ pub(super) fn create(installation: &Installation, progress: &dyn Fn(&str)) -> Re
                 "--kubeconfig-switch-context=false",
             ],
             180,
-        )?;
+        );
+        // Even a failed create can leave nodes and volumes. Capture exact IDs
+        // before returning its error so explicit cleanup can retry safely.
+        teardown::record_created(installation, &volumes)?;
+        creation?;
         let receipt = json!({"format_version":1,"installation_id":installation.id,
             "containers":inventory(installation)?,"network_id":network(installation)?});
         process::save(&receipt_path, &serde_json::to_vec(&receipt)?)?;

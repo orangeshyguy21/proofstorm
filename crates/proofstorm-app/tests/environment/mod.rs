@@ -247,7 +247,7 @@ async fn http_preserves_startup_failure_reason_and_recovery_message() {
     let cells = service(store, cluster.clone());
     cells.up("blocked", &spec()).await.unwrap();
     ready(&cluster);
-    let message = "Image pull is failing and backing off, not building. Operator: run just images and just doctor; verify registry access.";
+    let message = "Image pull is failing and backing off, not building. Run storm doctor for this installation; verify image availability and registry access.";
     for (path, object) in &mut cluster.lock().unwrap().objects {
         if path.contains("/proofstormcells/") {
             object["status"]["phase"] = json!("Pending");

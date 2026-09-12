@@ -1,82 +1,96 @@
-#![allow(clippy::doc_markdown)]
-//! Live acceptance gate runner.
-//!
-//! Replaces the per-gate shell wrapper plus Python client pair. Each gate is a
-//! subcommand so the justfile can invoke one directly and read its exit code.
-
-use std::path::PathBuf;
-
-use anyhow::{Context, Result};
+//! Live gates own disposable installations; no implicit developer-cluster fallback.
+use anyhow::Result;
 use clap::Parser;
-use proofstorm_acceptance::{GateContext, Kubectl, doctor, gates};
+use proofstorm_acceptance::{gates, runner};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 #[derive(Parser)]
-#[command(
-    name = "proofstorm-acceptance",
-    about = "Run one live Proofstorm acceptance gate against the cell cluster"
-)]
+#[command(about = "Run live gates in a new, owned Proofstorm installation")]
 struct Arguments {
-    /// Isolated installation for images, images-check, or cluster-schema only.
-    #[arg(long, env = "PROOFSTORM_HOME")]
-    home: Option<PathBuf>,
-    /// Gate to run, matching its `just e2e <gate>` target.
-    #[arg(required_unless_present = "list")]
-    gate: Option<String>,
-    /// Repository root. Defaults to the current directory.
+    /// Verified checkout artifact source. Its runtime is never used or modified.
+    #[arg(long, conflicts_with = "bundle")]
+    checkout_home: Option<PathBuf>,
+    /// Verified unpacked release bundle (not a source checkout).
+    #[arg(long)]
+    bundle: Option<PathBuf>,
+    /// Permit an explicitly selected development bundle.
+    #[arg(long)]
+    allow_development: bool,
+    /// New directory for installation state, logs and report; retained after cleanup.
+    #[arg(long)]
+    work_dir: Option<PathBuf>,
+    /// Retry owned runtime cleanup using a previous run's retained receipt.
+    #[arg(long)]
+    cleanup: Option<PathBuf>,
+    /// Repository fixtures for gates that need them.
     #[arg(long)]
     root: Option<PathBuf>,
-    /// MCP server binary. Defaults to `<root>/target/debug/proofstorm-mcp`.
-    #[arg(long)]
-    mcp_binary: Option<PathBuf>,
-    /// List the available gates and exit.
+    /// Maximum seconds for each gate (setup has its own bounded operations).
+    #[arg(long, default_value_t = 1800, value_parser = clap::value_parser!(u64).range(1..=14400))]
+    timeout: u64,
     #[arg(long)]
     list: bool,
-    /// OpenCode MCP configuration the `doctor` check reads.
-    #[arg(long, default_value = "examples/opencode/proofstorm-only.json")]
-    config: PathBuf,
+    /// Parent-owned worker home; not an existing-installation test mode.
+    #[arg(long, hide = true)]
+    worker_home: Option<PathBuf>,
+    /// Named gates; defaults to the small Bitcoin smoke test.
+    gates: Vec<String>,
 }
 
-fn main() -> Result<()> {
-    let arguments = Arguments::parse();
-    if arguments.list {
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Arguments::parse();
+    if args.list {
         for name in gates::NAMES {
             println!("{name}");
         }
         return Ok(());
     }
-
-    let root = match arguments.root {
-        Some(path) => path,
-        None => std::env::current_dir().context("resolve repository root")?,
+    if let Some(work) = args.cleanup {
+        return runner::cleanup(&work);
+    }
+    let selection = runner::Selection {
+        checkout_home: args.checkout_home,
+        bundle: args.bundle,
+        allow_development: args.allow_development,
     };
-    let gate = arguments.gate.context("no gate given")?;
-    if let Some(home) = &arguments.home {
-        let installation = proofstorm_app::installation::Installation::load(home)?;
-        let kubectl = Kubectl::for_installation(&root, &installation);
-        let registry =
-            proofstorm_acceptance::images::RegistryTarget::for_installation(&installation);
-        return match gate.as_str() {
-            "images" => proofstorm_acceptance::images::provision_for(&registry),
-            "images-check" => proofstorm_acceptance::images::verify_for(&kubectl, &registry),
-            "cluster-schema" => doctor::cluster_schema(&kubectl),
-            _ => anyhow::bail!(
-                "gate {gate} is not installation-aware; refusing to fall back to the development cluster"
-            ),
-        };
+    let root = args.root.unwrap_or(std::env::current_dir()?);
+    let names = if args.gates.is_empty() {
+        vec!["smoke".into()]
+    } else {
+        args.gates
+    };
+    runner::validate_gates(&names)?;
+    if let Some(home) = args.worker_home {
+        anyhow::ensure!(names.len() == 1, "worker requires exactly one gate");
+        return runner::worker(&selection, &root, &home, &names[0]);
     }
-    match gate.as_str() {
-        "images" => proofstorm_acceptance::images::provision(),
-        "images-check" => proofstorm_acceptance::images::verify(&Kubectl::pinned(&root)),
-        "doctor" => {
-            let binary = arguments
-                .mcp_binary
-                .unwrap_or_else(|| root.join("target/release/proofstorm-mcp"));
-            doctor::run(&binary, &root.join(&arguments.config))
-        }
-        "cluster-schema" => doctor::cluster_schema(&Kubectl::pinned(&root)),
-        _ => {
-            let context = GateContext::new(&root, arguments.mcp_binary)?;
-            gates::run(&gate, &context)
-        }
-    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&cancelled);
+    tokio::spawn(async move {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("register SIGTERM");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+        eprintln!(
+            "Interrupted. Finishing the current setup operation, then cleaning up the owned runtime..."
+        );
+        signal.store(true, Ordering::SeqCst);
+    });
+    tokio::task::spawn_blocking(move || {
+        runner::run(
+            &selection,
+            &root,
+            args.work_dir.as_deref(),
+            &names,
+            args.timeout,
+            &cancelled,
+        )
+    })
+    .await?
 }

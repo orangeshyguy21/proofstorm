@@ -33,7 +33,7 @@ impl PortForward {
                 namespace,
                 service,
                 &format!("{port}:{remote}"),
-            ])
+            ])?
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

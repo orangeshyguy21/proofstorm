@@ -67,6 +67,10 @@ lint:
 lint-helm:
     .tools/bin/helm lint charts/proofstorm
 
+# Validate generated CDK configs against pinned images; Docker and jq, no cluster.
+check-cdk-config:
+    bash tests/cdk18-config-contract.sh
+
 # Validate release metadata offline; this does not publish or prove release readiness.
 release-check +args:
     CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-check "$@"
@@ -152,60 +156,29 @@ web-dev *args: web-tools
 tools:
     bash tools/install-host-tools.sh
 
+# Resolve verified candidate runtime-tool pins; review before changing shipped manifests.
+tool-pins target output:
+    bash tools/install-host-tools.sh resolve "$1" "$2"
+
+# Build, prepare a digest-preserving copy, or explicitly publish a catalog image.
+catalog-image *args:
+    bash scripts/catalog-image.sh "$@"
+
 # Remove downloaded checkout tools, not installation state or cells.
 clean-tools:
     rm -rf -- .tools
 
-# LEGACY: build the acceptance runner and its embedded GUI.
-[group('legacy')]
-legacy-gate-build: web
-    PROOFSTORM_WEB_DIST="$PWD/.proofstorm-dev/web" cargo build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance
+# Run named live gates in a disposable installation; default is one Bitcoin smoke.
+e2e *gates: dev-build
+    bash scripts/acceptance.sh "$@"
 
-# LEGACY: create the fixed k3d-proofstorm cluster, not the checkout runtime.
-[group('legacy')]
-cluster-up: tools
-    .tools/bin/k3d cluster get proofstorm >/dev/null 2>&1 || .tools/bin/k3d cluster create --config infra/k3d/proofstorm.yaml
+# Retry cleanup for exactly one retained acceptance run; no rebuild of dev artifacts.
+e2e-cleanup work:
+    bash scripts/acceptance.sh --cleanup "$1"
 
-# LEGACY: build the image-restoration command.
-[group('legacy')]
-images-build:
-    cargo build --locked -p proofstorm-acceptance
-
-# LEGACY: restore exact catalog images without rebuilding them.
-[group('legacy')]
-images: cluster-up images-build
-    target/debug/proofstorm-acceptance images
-
-# LEGACY: build/publish Bitcoin into the fixed local registry.
-[group('legacy')]
-bitcoin-image-build: cluster-up
-    mkdir -p .tools/downloads
-    docker buildx build --platform linux/amd64,linux/arm64 --provenance=false --file docker/bitcoin/Dockerfile --tag localhost:5111/bitcoin-core:31.1 --metadata-file .tools/downloads/bitcoin-31.1-build.json --push docker/bitcoin
-
-# LEGACY: delete the fixed cluster and registry, not the checkout runtime.
-[group('legacy')]
-down: tools
-    .tools/bin/k3d cluster get proofstorm >/dev/null 2>&1 && .tools/bin/k3d cluster delete proofstorm || true
-    .tools/bin/k3d registry list 2>/dev/null | grep -F 'proofstorm-registry.localhost' >/dev/null && .tools/bin/k3d registry delete proofstorm-registry.localhost || true
-
-# LEGACY: run named gates, or the default suite (requires an idle legacy cluster).
-[group('legacy')]
-e2e *gates: legacy-gate-build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ $# == 0 ]]; then
-      # Known upstream failure nutshell-oidc and local-image gates stay opt-in.
-      set -- mint-management private-transfer slice2 slice4 slice5 controller-recovery \
-        network-faults channel-lifecycle native-exec cross-cell-scheduler \
-        cross-implementation-wallet nutshell-mint nutshell-cln nutshell-postgres \
-        cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres \
-        failed-melt quote-composition dynamic-cell
-    fi
-    for gate in "$@"; do
-      printf '[proofstorm] gate %s\n' "$gate"
-      target/debug/proofstorm-acceptance "$gate"
-    done
-    printf '[proofstorm] all %s gates passed\n' "$#"
+# Run the same owned live gates against a verified unpacked bundle; no checkout rebuild.
+e2e-bundle bundle *args:
+    bash scripts/acceptance.sh --bundle "$@"
 
 # Render the standalone Kubernetes installer manifest.
 build-installer: tools
@@ -216,8 +189,3 @@ build-installer: tools
     printf '\n---\n' >> dist/install.yaml
     .tools/bin/helm template proofstorm charts/proofstorm --namespace proofstorm-system >> dist/install.yaml
     printf '[proofstorm] wrote dist/install.yaml\n'
-
-# LEGACY: invoke the unchanged Compose harness; only this recipe still needs Make.
-[group('legacy')]
-compose +args:
-    make -f Makefile.compose "$@"

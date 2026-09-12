@@ -74,7 +74,6 @@ fn every_public_command_accepts_global_json() {
         "agent open",
         "agent configure",
         "dev init",
-        "dev serve",
         "up",
         "rm",
         "status",
@@ -101,6 +100,55 @@ fn every_public_command_accepts_global_json() {
 }
 
 #[test]
+fn doctor_and_unregistered_setup_do_not_initialize_a_home() {
+    let root = tempfile::tempdir().unwrap();
+    for action in ["doctor", "setup"] {
+        let home = root.path().join(action);
+        let result = cli()
+            .arg("--home")
+            .arg(&home)
+            .args([action, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            !result.status.success(),
+            "unregistered {action} unexpectedly succeeded"
+        );
+        assert!(
+            !home.exists(),
+            "{action} created state before verifying its installation"
+        );
+    }
+}
+
+#[test]
+fn missing_runtime_selection_fails_before_local_state_is_created() {
+    let root = tempfile::tempdir().unwrap();
+    let ambient = root.path().join("ambient.yaml");
+    std::fs::write(&ambient, "must not be read or rewritten").unwrap();
+    for args in [
+        vec!["ls"],
+        vec!["--context", "legacy", "ls"],
+        vec!["--kubeconfig", "explicit.yaml", "ls"],
+    ] {
+        let output = cli()
+            .current_dir(root.path())
+            .env("KUBECONFIG", &ambient)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("requires both"));
+        assert!(!root.path().join(".proofstorm").exists());
+    }
+    assert_eq!(
+        std::fs::read_to_string(ambient).unwrap(),
+        "must not be read or rewritten"
+    );
+}
+
+#[test]
 fn operation_listing_uses_recorded_state_and_requires_read_access() {
     use proofstorm_core::Capability;
     let root = tempfile::tempdir().unwrap();
@@ -116,6 +164,7 @@ fn operation_listing_uses_recorded_state_and_requires_read_access() {
             .arg(&database)
             .arg("--kubeconfig")
             .arg(root.path().join("missing-kubeconfig"))
+            .args(["--context", "explicit-test-context"])
             .args(["--json", "ops", "ls", "demo"])
             .output()
             .unwrap()

@@ -7,7 +7,7 @@ authorizes a draft. Publishing the downloadable release remains a manual decisio
 ## Everyday flow
 
 ```sh
-just release-prepare 0.1.0-alpha.3
+just release-prepare VERSION  # Replace VERSION with the next unused alpha version.
 # Review the version changes, run just check, and merge.
 # Once main's Checks run is green, update your local main:
 just release
@@ -136,7 +136,7 @@ For local diagnosis, the lower-level equivalent is:
 just release-promote \
   --repo orangeshyguy21/proofstorm \
   --run-id YOUR_SUCCESSFUL_MAIN_RUN_ID \
-  --tag v0.1.0-alpha.3 \
+  --tag vVERSION \
   --work-dir /tmp/proofstorm-alpha-preview
 ```
 
@@ -153,3 +153,17 @@ Controller diagnosis remains available through `just release-controller-build
 --platform linux/amd64` (or `linux/arm64`) and `just release-controller-publish`.
 See the commands' help and [Mac build instructions](../release/macos.md).
 CI does not rebuild workload images or delete older controller images.
+
+## Workload images and helper pins
+
+When a catalog image actually changes, use
+[`just catalog-image`](../docker/README.md#build-or-publish-a-catalog-image).
+Build or prepare a digest-preserving copy first; publish only after explicitly
+confirming the GHCR namespace. Review the resulting digest/provenance before
+editing the catalog. The regular main CI then rebuilds matching controllers.
+There is no separate AMD64 development publisher or fixed local registry flow.
+
+For k3d/kubectl/Helm updates, generate and review both platform manifests with
+[`just tool-pins`](DEVELOPMENT.md#maintainer-host-tools). Setup and `just tools`
+share pin validation, not installation directories. None of these maintenance
+commands alter the seven release assets or authorize a GitHub Release.

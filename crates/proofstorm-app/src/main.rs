@@ -10,7 +10,6 @@ use proofstorm_core::{
 use proofstorm_store::Store;
 use std::{fmt::Write, path::PathBuf, time::Duration};
 mod cli_output;
-mod server_restart;
 
 mod cli;
 use cli::Action as Command;
@@ -29,6 +28,7 @@ async fn main() -> Result<()> {
         }
         Command::GuiStatus => ("gui-status", None),
         Command::Stop => ("stop", Some("Stopping GUI")),
+        Command::RuntimeDelete { .. } => ("runtime-delete", Some("Verifying runtime ownership")),
         Command::Attach { .. } => ("attach", Some("Checking project connection")),
         Command::Open { .. } => ("open", Some("Preparing coding agent")),
         Command::Doctor { .. } => ("doctor", Some("Checking Proofstorm health")),
@@ -44,7 +44,6 @@ async fn main() -> Result<()> {
         Command::Result { .. } => ("result", Some("Reading operation result")),
         Command::Sync { .. } => ("sync", Some("Syncing cell activity")),
         Command::Connect { .. } => ("connect", Some("Opening cell connection")),
-        Command::Serve { .. } => ("serve", Some("Preparing server")),
         Command::Version { .. } | Command::CheckoutRegister { .. } | Command::GuiServe { .. } => {
             ("internal", None)
         }
@@ -87,6 +86,17 @@ async fn main() -> Result<()> {
         return print(&proofstorm_app::artifacts::register(
             home, source, resources, mcp, web_dist,
         )?);
+    }
+    // Resource retirement must remain available even after a failed/stale build.
+    if let Command::RuntimeDelete { installation_id } = &command {
+        let home = args
+            .home
+            .as_ref()
+            .context("runtime deletion requires an explicit --home")?;
+        proofstorm_app::bootstrap::teardown::retire(home, installation_id, &|label| {
+            output.update(label);
+        })?;
+        return output.show(&serde_json::json!({"deleted":true,"installation_id":installation_id,"diagnostics_retained":true}));
     }
     // Stopping an owned GUI remains possible even after a checkout was rebuilt.
     if matches!(command, Command::Stop) {
@@ -375,6 +385,7 @@ async fn main() -> Result<()> {
         .with_installation(environment.installation.clone());
     match command {
         Command::Version { .. }
+        | Command::RuntimeDelete { .. }
         | Command::CheckoutRegister { .. }
         | Command::Gui { .. }
         | Command::GuiStart { .. }
@@ -469,17 +480,6 @@ async fn main() -> Result<()> {
                 })
                 .await?,
         )?,
-        Command::Serve { port, replace } => {
-            if replace {
-                anyhow::ensure!(
-                    environment.installation.is_none(),
-                    "--replace is only for the contributor server; an isolated installation must use its own free port"
-                );
-                server_restart::stop_previous(port).await?;
-            }
-            output.stop();
-            proofstorm_app::http::serve(cells, port).await?;
-        }
         Command::Status { name, after } => output.show(&cells.inspect(&name, after).await?)?,
         Command::Sync { name, watch } => loop {
             // Re-arm after each snapshot, but never animate during the watch interval.

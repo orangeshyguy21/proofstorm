@@ -2,8 +2,8 @@
 
 The Rust component catalog is the authority for supported versions and immutable
 runtime image digests. Every built-in catalog image is served by the local
-Proofstorm registry. `just images` copies publisher images without rebuilding
-them, preserving their complete multi-architecture manifest and exact digest.
+Proofstorm registry. `storm setup` prepares the installation; cell creation
+downloads the selected images on demand, preserving their exact digests.
 The `upstream/<registry>/<repository>` path records their original source.
 
 | Component | Source |
@@ -17,9 +17,10 @@ The `upstream/<registry>/<repository>` path records their original source.
 | Cocod | Frozen source and dependency lock in its wallet provenance record |
 
 The catalog no longer contains Bitcoin Core 30.0 or the old Polar LND builds.
-The Compose regtest defaults use the same Bitcoin and preferred LND digests via
-the host registry address `localhost:5111`. Run `just images` before bringing up
-that stack. Historical experiment reports retain the versions they actually ran.
+The old Compose stacks and fixed-registry fixtures have been removed. Historical
+experiment reports retain the versions they actually ran. `just check-cdk-config`
+validates the generated CDK configurations against their pinned public images
+without creating a cluster.
 
 ## Bitcoin packaging
 
@@ -37,18 +38,71 @@ and protocol behavior are unchanged. The provenance record identifies the source
 commit, signed checksum document, architecture-specific archive hashes, base
 image, and recipe digest.
 
-Build and push to the local registry:
+## Build or publish a catalog image
+
+This is maintainer work, separate from `storm setup`. Use a clean checkout,
+Rust, Bash, just, curl, and Docker with Buildx. The workflow uses the existing
+reviewed recipes; it does not change versions, catalog pins, or provenance.
 
 ```sh
-make bitcoin-image-build
+just catalog-image list
+scratch="$(mktemp -d)"
+just catalog-image build cdk-cli-wallet linux/arm64 "$scratch/wallet"
+# Inspect image.json and probe.stdout before authorizing a push:
+just catalog-image publish "$scratch/wallet" \
+  --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
 ```
 
-The resulting manifest digest is recorded in
-`.tools/downloads/bitcoin-31.1-build.json`. Review it before changing
-`catalog.rs`, the Compose defaults, and `regtest/versions.env`. A source rebuild
-can produce a different image digest; `just images` deliberately never replaces
-a reviewed local artifact with a fresh build. Preserve the exact approved image
-in the registry or export it with Docker for restoration on other machines.
+Select `linux/amd64` or `linux/arm64` explicitly. Buildx must support that platform
+and the host must be able to execute its native probes (directly or by emulation).
+Available recipes: `bitcoin-core`, `cdk-mint-management`,
+`cdk-ldk-mint-management`, `nutshell-mint-management`, `cdk-cli-wallet`, and
+`cocod-wallet`. Controller builds remain in the existing
+[`release-controller-*` flow](../scripts/RELEASING.md).
+
+Builds retain a clean source snapshot, recipe hash, exact image ID, source label,
+and restricted offline version/help probe. Cocod's downloaded source archive is
+also checked against its recorded hash. A probe proves executable startup, not
+cell behavior; run the affected acceptance gates before changing the catalog.
+Bitcoin/wallet probes require the recipe's non-root user; mint wrappers retain
+their upstream user. Cross-architecture emulation is not native-host acceptance.
+
+To copy an existing reviewed image instead of rebuilding it:
+
+```sh
+just catalog-image prepare-copy \
+  '127.0.0.1:PORT/cdk-cli-wallet@sha256:DIGEST' linux/amd64 "$scratch/copy"
+just catalog-image publish "$scratch/copy" \
+  --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+```
+
+Replace `PORT` and `DIGEST` with the explicit source registry and reviewed digest;
+a public GHCR digest reference is also accepted. There is no implicit port 5111
+or development-cluster fallback. Copies preserve the complete manifest digest,
+including both architectures when present. Every runnable manifest/config is
+hash-checked and its layers checked for availability before and after upload.
+
+Only `publish` writes to GHCR, using Docker's existing package-write login and a
+unique `upload-*` tag. Existing version/development tags are not overwritten.
+Packages must be Public; verification uses anonymous requests, not your login.
+`image.json` distinguishes prepared, upload-attempted, uploaded, and verified
+states. A failed push may already have uploaded content: retain the directory
+and inspect it before taking action. Once upload is recorded, retry read-only
+verification with `just catalog-image verify-work "$scratch/wallet"`.
+A moved tag is refused, and a failed recheck leaves the receipt unverified.
+
+For an independent anonymous check:
+
+```sh
+just catalog-image verify \
+  'ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:DIGEST' \
+  linux/amd64 "$scratch/verification.json"
+```
+
+Receipts do not claim release readiness. Review the new immutable digest and
+provenance, update the catalog deliberately, and run its contracts/live gates.
+CI then builds a matching controller with the normal release flow. A source
+rebuild is not a substitute for a missing approved artifact during installation.
 
 ## Updating a component
 
