@@ -62,24 +62,31 @@
       "additionalProperties": false,
       "properties": {
         "max_components": {
-          "default": 64,
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
+          "description": "Optional user-selected component cap. Omit for no policy cap.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_config_bytes": {
-          "default": 65536,
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "description": "Optional per-component serialized configuration byte cap. Omit for no policy cap.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_links": {
-          "default": 256,
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
+          "description": "Optional user-selected link cap. Omit for no policy cap.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -97,11 +104,7 @@
         },
         "limits": {
           "$ref": "#/$defs/CellLimits",
-          "default": {
-            "max_components": 64,
-            "max_config_bytes": 65536,
-            "max_links": 256
-          }
+          "default": {}
         }
       },
       "type": "object"
@@ -308,11 +311,7 @@
       "$ref": "#/$defs/CellPolicy",
       "default": {
         "allow": [],
-        "limits": {
-          "max_components": 64,
-          "max_config_bytes": 65536,
-          "max_links": 256
-        }
+        "limits": {}
       }
     }
   },

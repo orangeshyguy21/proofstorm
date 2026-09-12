@@ -1,9 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_ACTIVE_PROTOCOL_PROBER_CELLS: usize = 4;
-pub const MAX_PROTOCOL_PROBES_PER_CELL: usize = 64;
-pub const MAX_GLOBAL_PROTOCOL_PROBES: usize =
-    MAX_ACTIVE_PROTOCOL_PROBER_CELLS * MAX_PROTOCOL_PROBES_PER_CELL;
+/// A scheduling target, not a cell admission limit. An oversized cell runs alone.
+pub const PROTOCOL_PROBE_SCHEDULING_BUDGET: usize = 256;
 pub const PROTOCOL_PROBE_LEASE_SECONDS: i64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,15 +13,17 @@ pub struct ProtocolProbeSchedule {
     pub seconds_until_boundary: u64,
 }
 
-/// Select a deterministic bounded rotating window of probe-bearing cells.
+/// Select a fair rotating window, accounting for each cell's actual probe count.
+/// Every cell gets a turn, including a cell larger than the scheduling budget.
 #[must_use]
 pub fn schedule_protocol_probers(
-    candidate_instance_keys: impl IntoIterator<Item = String>,
+    candidate_instance_keys: impl IntoIterator<Item = (String, usize)>,
     now_unix: i64,
 ) -> ProtocolProbeSchedule {
     let candidates = candidate_instance_keys
         .into_iter()
-        .collect::<BTreeSet<_>>()
+        .filter(|(_, probes)| *probes > 0)
+        .collect::<BTreeMap<_, _>>()
         .into_iter()
         .collect::<Vec<_>>();
     let now = now_unix.max(0);
@@ -31,14 +32,23 @@ pub fn schedule_protocol_probers(
     let seconds_until_boundary = u64::try_from(PROTOCOL_PROBE_LEASE_SECONDS - elapsed).unwrap_or(1);
     let mut active_instance_keys = BTreeSet::new();
     if !candidates.is_empty() {
-        let limit = MAX_ACTIVE_PROTOCOL_PROBER_CELLS.min(candidates.len());
-        let start = usize::try_from(
-            (i128::from(epoch) * i128::try_from(limit).unwrap_or(0))
-                % i128::try_from(candidates.len()).unwrap_or(1),
-        )
-        .unwrap_or_default();
-        for offset in 0..limit {
-            active_instance_keys.insert(candidates[(start + offset) % candidates.len()].clone());
+        // Advance by one: advancing by the slot count can starve a heavy cell
+        // when only part of a window fits and the lengths share a divisor.
+        let start =
+            usize::try_from(i128::from(epoch) % i128::try_from(candidates.len()).unwrap_or(1))
+                .unwrap_or_default();
+        let mut probes = 0_usize;
+        for offset in 0..candidates.len() {
+            let (key, count) = &candidates[(start + offset) % candidates.len()];
+            if active_instance_keys.len() == MAX_ACTIVE_PROTOCOL_PROBER_CELLS {
+                break;
+            }
+            if active_instance_keys.is_empty()
+                || probes.saturating_add(*count) <= PROTOCOL_PROBE_SCHEDULING_BUDGET
+            {
+                probes = probes.saturating_add(*count);
+                active_instance_keys.insert(key.clone());
+            }
         }
     }
     let lease_id = proofstorm_core::digest_json(&active_instance_keys);
@@ -54,9 +64,9 @@ pub fn schedule_protocol_probers(
 mod tests {
     use super::*;
 
-    fn candidates(count: usize) -> Vec<String> {
+    fn candidates(count: usize) -> Vec<(String, usize)> {
         (0..count)
-            .map(|index| format!("instance-{index}"))
+            .map(|index| (format!("instance-{index}"), 64))
             .collect()
     }
 
@@ -69,7 +79,7 @@ mod tests {
         let repeated = schedule_protocol_probers(reversed, 31);
         assert_eq!(first, repeated);
         assert_eq!(first.active_instance_keys.len(), 4);
-        assert_eq!(MAX_GLOBAL_PROTOCOL_PROBES, 256);
+        assert_eq!(PROTOCOL_PROBE_SCHEDULING_BUDGET, 256);
         assert_eq!(first.seconds_until_boundary, 29);
     }
 
@@ -85,7 +95,10 @@ mod tests {
                 .active_instance_keys
             })
             .collect::<BTreeSet<_>>();
-        assert_eq!(observed, candidate_set.into_iter().collect());
+        assert_eq!(
+            observed,
+            candidate_set.into_iter().map(|(key, _)| key).collect()
+        );
 
         let small = candidates(3);
         let first = schedule_protocol_probers(small.clone(), 0);
@@ -106,10 +119,41 @@ mod tests {
         let after = schedule_protocol_probers(
             candidates(5)
                 .into_iter()
-                .filter(|candidate| candidate != &removed),
+                .filter(|(candidate, _)| candidate != &removed),
             0,
         );
         assert_eq!(after.active_instance_keys.len(), 4);
         assert!(!after.active_instance_keys.contains(&removed));
+    }
+
+    #[test]
+    fn weighted_windows_admit_large_cells_without_starving_any_candidate() {
+        let candidates = vec![
+            ("a".into(), 300),
+            ("b".into(), 200),
+            ("c".into(), 100),
+            ("d".into(), 65),
+            ("e".into(), 1),
+            ("f".into(), 1),
+            ("g".into(), 1),
+            ("h".into(), 1),
+        ];
+        let mut observed = BTreeSet::new();
+        for epoch in 0..8 {
+            let schedule = schedule_protocol_probers(candidates.clone(), epoch * 30);
+            let active = &schedule.active_instance_keys;
+            let probes: usize = candidates
+                .iter()
+                .filter(|(key, _)| active.contains(key))
+                .map(|(_, probes)| probes)
+                .sum();
+            assert!(probes <= PROTOCOL_PROBE_SCHEDULING_BUDGET || active.len() == 1);
+            observed.extend(active.iter().cloned());
+        }
+        assert_eq!(observed.len(), candidates.len());
+        assert_eq!(
+            schedule_protocol_probers(candidates, 0).active_instance_keys,
+            BTreeSet::from(["a".into()])
+        );
     }
 }

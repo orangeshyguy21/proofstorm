@@ -1,3 +1,8 @@
+mod cell_input;
+pub use cell_input::{CellFile, CellInput};
+mod cell_search;
+pub use cell_search::{CellSearchRequest, CellSearchResult, CellSearchSection};
+
 use proofstorm_app::runtime::missing_action_artifact;
 use proofstorm_app::runtime::runtime_action_resource;
 #[cfg(test)]
@@ -61,7 +66,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct DeveloperUpRequest {
     pub name: String,
-    pub cell: CellSpec,
+    pub cell: CellInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -81,6 +86,16 @@ pub struct DeveloperExecRequest {
     pub argv: Vec<String>,
     #[serde(default = "default_wait_timeout_seconds")]
     pub timeout_seconds: u32,
+    /// Choose before execution: `private` (default) hides both streams;
+    /// `public` returns bounded stdout/stderr for help, addresses, node IDs,
+    /// and other native results. `json_fields` requires 1..=16 named receipt
+    /// fields: `status`, `state`, `failure_reason`, `settled`, `synced_to_chain`, `amount`,
+    /// `amount_sat`, `fee_paid`, `fee_paid_sat`, `value_sat`, `total_fees`, `total_fees_msat`,
+    /// `num_active_channels`, `balance`, `confirmed_balance`, `unconfirmed_balance`,
+    /// `seedAccess.state`, `seedAccess.requiresPassphrase`, cocoSession.state.
+    /// It is not an arbitrary JSON query. `bolt11` extracts an invoice from
+    /// text; `lnd_invoice` extracts one from LND addinvoice JSON. Omit fields
+    /// except in `json_fields` mode. Private output cannot be read from the receipt.
     #[serde(default)]
     pub output: proofstorm_core::native::NativeOutput,
 }
@@ -95,12 +110,25 @@ pub struct DeveloperFinishRequest {
     pub timeout_seconds: u32,
 }
 
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DeveloperFinishReceipt {
+    pub name: String,
+    pub instance_key: String,
+    /// True only after verifying absence of this exact incarnation.
+    pub complete: bool,
+    /// This call's wait ended; repeat `cell_finish` to advance or verify cleanup.
+    pub timed_out: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub teardown_receipt: Option<CoreTeardownReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_tool: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateDraftRequest {
     pub draft_id: String,
-    #[serde(deserialize_with = "deserialize_authored_cell")]
-    pub cell: AuthoredCellSpec,
+    pub cell: CellInput,
     pub idempotency_key: String,
 }
 
@@ -272,8 +300,16 @@ pub struct CellPlanReceipt {
     pub plan_id: String,
     pub plan_digest: String,
     pub version: u64,
+    pub component_count: usize,
+    pub link_count: usize,
+    /// Large plans omit expanded details so clients retain the digest and counts.
+    /// Use `cell_read` for the complete stored document.
+    pub details_omitted: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<CellPlanResolvedComponent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_endpoints: Vec<CellPlanResolvedRuntimeEndpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<LinkSpec>,
     pub validation: CellValidationResult,
     pub next_tool: String,
@@ -569,8 +605,7 @@ pub struct CandidateListResponse {
 pub struct EditDraftRequest {
     pub draft_id: String,
     pub expected_version: u64,
-    #[serde(deserialize_with = "deserialize_authored_cell")]
-    pub cell: AuthoredCellSpec,
+    pub cell: CellInput,
     pub idempotency_key: String,
 }
 
@@ -586,12 +621,20 @@ pub struct DraftMutationResult {
     pub valid: bool,
     pub warnings: Vec<String>,
     pub changed_paths: Vec<String>,
+    /// Counts and digest are complete. Use `cell_search` for omitted ID lists.
+    #[serde(default)]
+    pub details_omitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CellValidationResult {
     pub valid: bool,
+    pub component_count: usize,
+    pub link_count: usize,
+    pub issue_count: usize,
+    pub next_issue_offset: Option<usize>,
+    pub details_omitted: bool,
     pub issues: Vec<ValidationIssue>,
     pub component_ids: Vec<String>,
     pub link_ids: Vec<String>,
@@ -876,8 +919,10 @@ impl TryFrom<AuthoredCellSpec> for CellSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ValidateCellRequest {
-    #[serde(deserialize_with = "deserialize_authored_cell")]
-    pub cell: AuthoredCellSpec,
+    pub cell: CellInput,
+    /// Continue a large validation report using its `next_issue_offset`.
+    #[serde(default)]
+    pub issue_offset: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1012,6 +1057,9 @@ pub struct CellComponentStatusListRequest {
 pub struct CellComponentStatusListResponse {
     pub instance_id: String,
     pub revision_digest: String,
+    /// Identifies this live observation. Readiness can change between pages;
+    /// the cursor is bound to the cell revision and component membership.
+    pub observation_digest: String,
     pub components: Vec<ComponentStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
@@ -1103,8 +1151,22 @@ pub struct OperationWaitResult {
     pub phase: OperationPhase,
     pub terminal: bool,
     pub timed_out: bool,
+    /// Digest remains available even when the optional artifact body is omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_digest: Option<String>,
+    /// Native exit, cleanup, projection and truncation facts, preserved even
+    /// when stdout/stderr would exceed the response budget. Phase alone is not
+    /// native command success. Missing fields mean unavailable, not success.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_result: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<OperationArtifact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OperationWaitError {
+    pub operation_id: String,
+    pub error: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1112,7 +1174,7 @@ pub struct OperationWaitResult {
 pub struct OperationWaitManyRequest {
     /// Unique operation IDs to await together. Start independent operations
     /// first, then prefer this over repeated single-operation waits.
-    #[schemars(length(min = 1, max = 8))]
+    #[schemars(length(min = 1))]
     pub operation_ids: Vec<String>,
     /// Shared server-side wait bound in 1..=120 seconds.
     pub timeout_seconds: u32,
@@ -1121,8 +1183,11 @@ pub struct OperationWaitManyRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OperationWaitManyResult {
-    /// Results preserve the request order.
+    /// Successful reads preserve their relative request order.
     pub operations: Vec<OperationWaitResult>,
+    /// Per-ID failures never discard successfully read operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<OperationWaitError>,
     pub all_terminal: bool,
     pub timed_out: bool,
     /// True only when optional artifact bodies were removed to keep the batch
@@ -1930,6 +1995,7 @@ pub struct CreateExperimentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExperimentRequest {
+    /// Exact experiment/run ID from a receipt or the user; distinct from workspace, cell and session IDs.
     pub experiment_id: String,
 }
 
@@ -2081,10 +2147,9 @@ pub struct ArtifactExportRequest {
     /// Include full artifact bodies for conservation and reachability oracles.
     #[serde(default = "default_true")]
     pub include_oracle_artifacts: bool,
-    /// Optional full bodies for at most 16 additional operations. Do not enumerate
+    /// Optional full bodies for additional operations. Do not enumerate
     /// the experiment: every action and artifact descriptor is always in the journal.
     #[serde(default)]
-    #[schemars(length(max = 16))]
     pub artifact_operation_ids: Vec<String>,
     /// Compatibility-only bulk response switch. Agent discovery intentionally
     /// omits this field; full content is available at the returned resource URI.
@@ -2138,7 +2203,8 @@ pub struct EvidenceSectionReadRequest {
     #[serde(default)]
     pub artifact_operation_ids: Vec<String>,
     pub section: EvidenceSection,
-    /// RFC 6901 JSON Pointer within revision, lock, or one artifact. Empty reads that whole section.
+    /// RFC 6901 pointer within the section. Artifact data lives under `/artifact/content`
+    /// (e.g. `/artifact/content/exit_code`); `/artifact/digest` reads its digest. Empty reads the whole section.
     #[serde(default)]
     pub pointer: String,
     /// Required for artifact reads and ignored for other sections.
@@ -2167,10 +2233,7 @@ const fn default_true() -> bool {
     true
 }
 
-const MAX_EVIDENCE_ACTIONS: u32 = 100;
-const MAX_EXPLICIT_EVIDENCE_ARTIFACTS: usize = 16;
-const MAX_EVIDENCE_ARTIFACTS: usize = 32;
-const MAX_EVIDENCE_BUNDLE_BYTES: usize = 512 * 1024;
+const EVIDENCE_ACTION_PAGE_SIZE: u32 = 100;
 
 const fn default_evidence_section_limit() -> u32 {
     20
@@ -2282,6 +2345,7 @@ impl ProofstormToolset {
                     | "catalog_entry_read"
                     | "catalog_config_schema_read"
                     | "cell_read"
+                    | "cell_search"
                     | "cell_up"
                     | "cell_inspect"
                     | "environment_read"
@@ -2329,6 +2393,7 @@ impl ProofstormToolset {
                     | "network_capabilities"
                     | "cell_create"
                     | "cell_read"
+                    | "cell_search"
                     | "cell_edit"
                     | "component_add"
                     | "component_update"
@@ -2374,6 +2439,7 @@ impl ProofstormToolset {
                     | "candidate_wait"
                     | "candidate_list"
                     | "cell_read"
+                    | "cell_search"
                     | "cell_status"
                     | "cell_component_status_list"
                     | "cell_inventory_list"
@@ -2407,6 +2473,7 @@ fn experiment_tool(tool: &str) -> bool {
             | "candidate_list"
             | "candidate_cancel"
             | "cell_read"
+            | "cell_search"
             | "cell_plan"
             | "cell_apply"
             | "cell_status"
@@ -2598,6 +2665,8 @@ impl ProofstormMcp {
                         | "session_read"
                         | "session_list"
                         | "action_list"
+                        | "artifact_export"
+                        | "evidence_section_read"
                         | "cell_diff"
                 );
             if !available {
@@ -2668,18 +2737,6 @@ impl ProofstormMcp {
         request: &ArtifactExportRequest,
     ) -> Result<EvidenceBundle, ErrorData> {
         self.authorize_all(&[Capability::ExperimentRead, Capability::ArtifactRead])?;
-        if request.artifact_operation_ids.len() > MAX_EXPLICIT_EVIDENCE_ARTIFACTS {
-            return Err(ErrorData::invalid_request(
-                "at most 16 optional artifact bodies may be selected; do not enumerate the journal because every action and artifact descriptor is already included",
-                Some(serde_json::json!({
-                    "code": "evidence_artifact_limit",
-                    "maximum": MAX_EXPLICIT_EVIDENCE_ARTIFACTS,
-                    "requested": request.artifact_operation_ids.len(),
-                    "journal_complete_without_explicit_ids": true,
-                    "recovery": "leave artifact_operation_ids empty, or select at most 16 specific bodies",
-                })),
-            ));
-        }
         let explicit = request
             .artifact_operation_ids
             .iter()
@@ -2710,34 +2767,27 @@ impl ProofstormMcp {
                 Capability::ArtifactRead,
             )
             .map_err(store_error)?;
-        let actions = self
-            .store
-            .actions(
-                &self.workspace,
-                &self.principal,
-                &request.experiment_id,
-                0,
-                MAX_EVIDENCE_ACTIONS,
-            )
-            .map_err(store_error)?;
-        if actions.len() == MAX_EVIDENCE_ACTIONS as usize {
-            let after = actions.last().map_or(0, |action| action.sequence);
-            if !self
+        let mut actions = Vec::new();
+        let mut after = 0;
+        loop {
+            let page = self
                 .store
                 .actions(
                     &self.workspace,
                     &self.principal,
                     &request.experiment_id,
                     after,
-                    1,
+                    EVIDENCE_ACTION_PAGE_SIZE,
                 )
-                .map_err(store_error)?
-                .is_empty()
-            {
-                return Err(coded_invalid_request(
-                    "evidence_action_limit",
-                    "experiment has more than 100 actions and cannot be exported as one bundle",
-                ));
+                .map_err(store_error)?;
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = last.sequence;
+            let complete = page.len() < EVIDENCE_ACTION_PAGE_SIZE as usize;
+            actions.extend(page);
+            if complete {
+                break;
             }
         }
         if actions.iter().any(|action| {
@@ -2772,12 +2822,6 @@ impl ProofstormMcp {
                         )
             })
             .collect::<Vec<_>>();
-        if selected.len() > MAX_EVIDENCE_ARTIFACTS {
-            return Err(coded_invalid_request(
-                "evidence_artifact_limit",
-                "at most 32 artifact bodies may be included in one evidence bundle",
-            ));
-        }
         let mut artifacts = Vec::with_capacity(selected.len());
         for action in selected {
             let artifact = action.artifact.clone().ok_or_else(|| {
@@ -2819,14 +2863,7 @@ impl ProofstormMcp {
             journal: actions.iter().map(EvidenceAction::from).collect(),
             artifacts,
         };
-        let bundle = EvidenceBundle::from_content(content);
-        if bundle.byte_length as usize > MAX_EVIDENCE_BUNDLE_BYTES {
-            return Err(coded_invalid_request(
-                "evidence_bundle_too_large",
-                "evidence bundle content exceeds 512 KiB",
-            ));
-        }
-        Ok(bundle)
+        Ok(EvidenceBundle::from_content(content))
     }
 }
 
@@ -2854,14 +2891,17 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_up",
-        description = "Start a named cell from its specification. Publication and materialization are resumable stages. A default run and its activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing cell applies a live edit and preserves unchanged components. Returns the same status shape as cell_inspect."
+        description = "Start a named cell from its specification. Backend links require flat kind-specific fields: chain_backend network; payment_backend method and unit; database_backend role; authentication_backend protocol. Peer and network_path links have no binding fields. Canonical specifications read from cell_read are also accepted. Publication and materialization are resumable stages. A default run and activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing cell applies a live edit and preserves unchanged components. Returns the same status shape as cell_inspect."
     )]
     async fn proofstorm_cell_up(
         &self,
         Parameters(request): Parameters<DeveloperUpRequest>,
     ) -> Result<CallToolResult, ErrorData> {
+        self.authorize(Capability::CellCreate)?;
+        let cell = CellSpec::try_from(request.cell)
+            .map_err(|message| coded_invalid_request("invalid_cell_input", message))?;
         self.cells()?
-            .up(&request.name, &request.cell)
+            .up(&request.name, &cell)
             .await
             .map_err(app_error)
             .and_then(|view| developer_result(compact_developer_view(view)))
@@ -2899,7 +2939,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_exec",
-        description = "Run one native argv command in a named cell without managing experiment or session IDs. Reuse request_id for an exact retry, and choose a new request_id for a new action. Output defaults to private. The returned operation can be waited or cancelled; command exit does not prove payment settlement. Returns the operation_status record shape."
+        description = "Run one native argv command in a named cell without managing experiment or session IDs. Reuse request_id for an exact retry, and choose a new request_id for a new action. Returns operation_id: pass that exact value to operation_wait_many, operation_status or action_cancel. Output defaults to private. Check artifact exit_code, cleanup_verified and projection_succeeded; phase alone does not describe command success or payment settlement."
     )]
     async fn proofstorm_cell_exec(
         &self,
@@ -2912,6 +2952,7 @@ impl ProofstormMcp {
             timeout_seconds: request.timeout_seconds,
             output: request.output,
         };
+        command.validate().map_err(native_command_error)?;
         self.cells()?
             .exec(
                 &request.name,
@@ -2921,7 +2962,7 @@ impl ProofstormMcp {
             )
             .await
             .map_err(app_error)
-            .and_then(developer_result)
+            .and_then(|operation| developer_result(compact_operation_wait(operation, false)))
     }
 
     #[tool(
@@ -2943,24 +2984,73 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_finish",
-        description = "Finish a named cell: revoke new actions, cancel/collect owned work, close the run and verify teardown. Cell-owned records are removed after verified teardown; export evidence first. A timeout leaves a closing cell; repeat this call to finish, without replaying commands. Returns the cell_inspect status shape."
+        description = "Finish a named cell: revoke actions, collect owned work and verify teardown. Export evidence first. Returns complete and a verified teardown_receipt. Each call waits at most 30 seconds; complete=false is progress, so repeat with the same name and expected_instance_key. Exact retries verify absence even after records are removed. A replaced cell is never closed by an old request."
     )]
     async fn proofstorm_cell_finish(
         &self,
         Parameters(request): Parameters<DeveloperFinishRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        if !(1..=120).contains(&request.timeout_seconds) {
-            return Err(invalid_operation("timeout_seconds must be in 1..=120"));
+        self.authorize(Capability::CellClose)?;
+        if request.timeout_seconds == 0 {
+            return Err(invalid_operation("timeout_seconds must be positive"));
         }
-        self.cells()?
-            .down_checked(
+        let cells = self.cells()?;
+        let wait_seconds = request.timeout_seconds.min(30);
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(u64::from(wait_seconds));
+        let result = tokio::time::timeout_at(
+            deadline,
+            cells.down_checked(
                 &request.name,
-                request.timeout_seconds,
+                wait_seconds,
                 Some(&request.expected_instance_key),
-            )
-            .await
-            .map_err(app_error)
-            .and_then(|view| developer_result(compact_developer_view(view)))
+            ),
+        )
+        .await;
+        let receipt = match result {
+            Ok(Ok(view)) => view.runtime.and_then(|status| status.teardown_receipt),
+            Ok(Err(error)) if error.kind == proofstorm_app::ErrorKind::Missing => {
+                // The shared waiter already fences replacement identities and
+                // verifies both the exact runtime resource and namespace.
+                let verified = tokio::time::timeout_at(
+                    deadline,
+                    cells.wait(proofstorm_app::cell::WaitRequest {
+                        reference: &request.name,
+                        expected_instance_key: Some(&request.expected_instance_key),
+                        expected_generation: None,
+                        target_phase: InstancePhase::Closed,
+                        timeout_seconds: wait_seconds,
+                    }),
+                )
+                .await;
+                match verified {
+                    Ok(result) => result.map_err(app_error)?.status.teardown_receipt,
+                    Err(_) => None,
+                }
+            }
+            Ok(Err(error))
+                if error
+                    .details
+                    .as_ref()
+                    .and_then(|details| details["code"].as_str())
+                    == Some("cell_close_pending") =>
+            {
+                None
+            }
+            Ok(Err(error)) => return Err(app_error(error)),
+            Err(_) => None,
+        };
+        let complete = receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.verified_absent);
+        developer_result(DeveloperFinishReceipt {
+            name: request.name,
+            instance_key: request.expected_instance_key,
+            complete,
+            timed_out: !complete,
+            teardown_receipt: receipt,
+            next_tool: (!complete).then(|| "cell_finish".into()),
+        })
     }
 
     #[tool(
@@ -3280,7 +3370,7 @@ impl ProofstormMcp {
                 .cell
                 .name;
         }
-        let validation = cell_validation_result_with_catalog(&cell, &catalog);
+        let validation = cell_validation_result_with_catalog(&cell, &catalog, 0);
         if !validation.valid {
             return Err(ErrorData::invalid_request(
                 format!(
@@ -3329,17 +3419,33 @@ impl ProofstormMcp {
                     self.store.save_update_plan(&self.workspace, &self.principal, &draft.id, &plan).map_err(store_error)?;
                     Some(plan)
                 } else { None };
-                bounded_agent_response(CellPlanReceipt {
+                // The plan is already durable. A presentation budget must not
+                // turn successful authoring (or its exact retry) into an error.
+                let mut receipt = CellPlanReceipt {
                     plan_digest: update.as_ref().map_or(plan_digest, |p|p.digest.clone()),
                     update,
                     plan_id: draft.id,
                     version: draft.version,
+                    component_count: draft.cell.components.len(),
+                    link_count: draft.cell.links.len(),
+                    details_omitted: false,
                     components,
                     runtime_endpoints,
                     connections,
                     validation,
                     next_tool: "cell_apply".into(),
-                })
+                };
+                if serialized_size(&receipt)? > MAX_AGENT_RESPONSE_BYTES {
+                    receipt.details_omitted = true;
+                    receipt.components.clear();
+                    receipt.runtime_endpoints.clear();
+                    receipt.connections.clear();
+                    if serialized_size(&receipt)? > MAX_AGENT_RESPONSE_BYTES {
+                        receipt.validation.component_ids.clear();
+                        receipt.validation.link_ids.clear();
+                    }
+                }
+                Ok(receipt)
             })
             .map(Json)
     }
@@ -3370,7 +3476,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_create",
-        description = "Create a publication-ready versioned cell draft and return a compact receipt. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Invalid catalog configuration is rejected before any draft is written"
+        description = "Save a validated versioned draft; return counts and topology_digest. cell accepts inline JSON, a JSON string, or {file: local_path} within the MCP working directory. Backend links require network (chain) or method and unit (payment). Policy limits are optional. Review warnings in context"
     )]
     fn proofstorm_cell_create(
         &self,
@@ -3378,12 +3484,12 @@ impl ProofstormMcp {
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::CellCreate)?;
         let cell = CellSpec::try_from(request.cell)
-            .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
+            .map_err(|message| coded_invalid_request("invalid_cell_input", message))?;
         let catalog = self
             .store
             .effective_catalog(&self.workspace, &self.principal)
             .map_err(store_error)?;
-        let validation = cell_validation_result_with_catalog(&cell, &catalog);
+        let validation = cell_validation_result_with_catalog(&cell, &catalog, 0);
         if !validation.valid {
             return Err(ErrorData::invalid_request(
                 "cell failed publication preflight; no draft was created",
@@ -3455,18 +3561,29 @@ impl ProofstormMcp {
                     "Specify instance_id or draft_id, not both",
                 ));
             }
-            let instance_id = self
+            // A canonical instance ID only needs configuration-read authority.
+            // Status readers retain friendly-name resolution and its ambiguity fence.
+            let instance_id = if self
                 .store
-                .resolve_cell(&self.workspace, &self.principal, &instance_id)
+                .capabilities(&self.workspace, &self.principal)
                 .map_err(store_error)?
-                .instance_id;
-            let instance = self
+                .contains(&Capability::CellStatus)
+            {
+                self.store
+                    .resolve_cell(&self.workspace, &self.principal, &instance_id)
+                    .map_err(store_error)?
+                    .instance_id
+            } else {
+                instance_id
+            };
+            let (instance, revision) = self
                 .store
-                .instance(&self.workspace, &self.principal, &instance_id)
-                .map_err(store_error)?;
-            let revision = self
-                .store
-                .revision(&self.workspace, &self.principal, &instance.revision_digest)
+                .operation_context(
+                    &self.workspace,
+                    &self.principal,
+                    &instance_id,
+                    Capability::CellRead,
+                )
                 .map_err(store_error)?;
             return Ok(Json(CellReadResponse {
                 id: instance.id,
@@ -3482,6 +3599,23 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "cell_search",
+        description = "Search a stored draft or live desired topology without loading the entire document. Supports literal/regex matching across component/link JSON, JSON-pointer field projection, exact match counts and snapshot-bound pagination. Use this for large cells, finding configuration values, or locating links by endpoint. No runtime commands or changes are made."
+    )]
+    fn proofstorm_cell_search(
+        &self,
+        Parameters(request): Parameters<CellSearchRequest>,
+    ) -> Result<Json<CellSearchResult>, ErrorData> {
+        let document = self
+            .proofstorm_cell_read(Parameters(ReadDraftRequest {
+                draft_id: request.draft_id.clone(),
+                instance_id: request.instance_id.clone(),
+            }))?
+            .0;
+        cell_search::search(document, &request).map(Json)
+    }
+
+    #[tool(
         name = "cell_edit",
         description = "Replace a cell draft using optimistic version and idempotency checks, returning a compact mutation receipt"
     )]
@@ -3491,7 +3625,7 @@ impl ProofstormMcp {
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
         self.authorize(Capability::CellEdit)?;
         let cell = CellSpec::try_from(request.cell)
-            .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
+            .map_err(|message| coded_invalid_request("invalid_cell_input", message))?;
         self.store
             .edit_draft(
                 &self.workspace,
@@ -3663,7 +3797,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_validate",
-        description = "Validate structural, catalog, configuration, and publication contracts for a complete Proofstorm v1alpha1 cell. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Resolve every returned warning before creating the draft"
+        description = "Validate a complete cell's structure, catalog, configuration and publication contracts. cell accepts inline JSON, a JSON string, or {file: local_path} within the MCP working directory. Returns complete counts and a page of issues; continue with next_issue_offset. Policy limits are optional. Review warnings in context"
     )]
     fn proofstorm_cell_validate(
         &self,
@@ -3671,12 +3805,19 @@ impl ProofstormMcp {
     ) -> Result<Json<CellValidationResult>, ErrorData> {
         self.authorize(Capability::CellValidate)?;
         let cell = CellSpec::try_from(request.cell)
-            .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
+            .map_err(|message| coded_invalid_request("invalid_cell_input", message))?;
         let catalog = self
             .store
             .effective_catalog(&self.workspace, &self.principal)
             .map_err(store_error)?;
-        Ok(Json(cell_validation_result_with_catalog(&cell, &catalog)))
+        let result = cell_validation_result_with_catalog(&cell, &catalog, request.issue_offset);
+        if request.issue_offset > result.issue_count {
+            return Err(coded_invalid_request(
+                "validation_issue_offset_invalid",
+                "issue_offset exceeds the current issue_count; repeat without an offset",
+            ));
+        }
+        Ok(Json(result))
     }
 
     #[tool(
@@ -3777,7 +3918,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_component_status_list",
-        description = "List component readiness and startup failure reasons with recovery guidance. Image pull failures are blocked startup, not build progress; no experiment or logs operation is needed to diagnose these conditions. Results use bounded cursor pages"
+        description = "Page through live component readiness and startup failures. Readiness may change between pages; cursors survive those changes but reject a changed revision or component membership. Image-pull failures are blocked startup, not build progress"
     )]
     async fn proofstorm_cell_component_status_list(
         &self,
@@ -3785,9 +3926,10 @@ impl ProofstormMcp {
     ) -> Result<Json<CellComponentStatusListResponse>, ErrorData> {
         validate_status_list_limit(request.limit)?;
         let status = self.full_cell_status(&request.instance_id).await?;
+        let snapshot_digest = component_status_identity(&status);
         let mut components = status.components;
         components.sort_by(|left, right| left.id.cmp(&right.id));
-        let snapshot_digest = digest_json(&components);
+        let observation_digest = digest_json(&components);
         let start = status_page_start(request.cursor.as_deref(), &components, |component| {
             status_cursor(
                 "component",
@@ -3802,6 +3944,7 @@ impl ProofstormMcp {
             let response = CellComponentStatusListResponse {
                 instance_id: request.instance_id.clone(),
                 revision_digest: status.instance.revision_digest.clone(),
+                observation_digest: observation_digest.clone(),
                 components: components[start..end].to_vec(),
                 next_cursor: (end < components.len() && end > start).then(|| {
                     status_cursor(
@@ -4651,7 +4794,7 @@ impl ProofstormMcp {
             output: request.output.clone(),
         }
         .validate()
-        .map_err(invalid_operation)?;
+        .map_err(native_command_error)?;
         let (instance, revision) = self
             .store
             .operation_context_for(
@@ -6363,33 +6506,36 @@ impl ProofstormMcp {
 
     #[tool(
         name = "operation_wait_many",
-        description = "Preferred after starting up to 8 independent operations (the per-instance active-operation limit): wait for all of them together with bounded parallel polling. Returns compact terminal artifacts in request order; timeout_seconds must be 1..=120"
+        description = "Wait for independent operations together. There is no operation-count cap; polling concurrency is bounded internally. Per-ID errors preserve other results. Native exit, cleanup, projection and truncation facts survive omitted artifact bodies; inspect native_result rather than phase alone. timeout_seconds must be 1..=120"
     )]
     async fn proofstorm_operation_wait_many(
         &self,
         Parameters(request): Parameters<OperationWaitManyRequest>,
     ) -> Result<Json<OperationWaitManyResult>, ErrorData> {
+        use futures::StreamExt;
+
         validate_operation_wait_many_request(&request)?;
         let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_secs(u64::from(request.timeout_seconds));
         let mut backoff = std::time::Duration::from_millis(250);
         let mut last_operations = None;
         loop {
-            let statuses = request.operation_ids.iter().map(|operation_id| {
-                self.proofstorm_operation_status(Parameters(OperationRequest {
-                    operation_id: operation_id.clone(),
-                }))
-            });
-            let operations = match tokio::time::timeout_at(
+            let statuses = request
+                .operation_ids
+                .clone()
+                .into_iter()
+                .map(|operation_id| {
+                    self.proofstorm_operation_status(Parameters(OperationRequest { operation_id }))
+                });
+            let (operations, errors) = match tokio::time::timeout_at(
                 deadline,
-                futures::future::join_all(statuses),
+                futures::stream::iter(statuses)
+                    .buffered(8)
+                    .collect::<Vec<_>>(),
             )
             .await
             {
-                Ok(results) => results
-                    .into_iter()
-                    .map(|result| result.map(|operation| operation.0))
-                    .collect::<Result<Vec<_>, _>>()?,
+                Ok(results) => partition_operation_results(&request.operation_ids, results),
                 Err(_) => {
                     return last_operations.map_or_else(
                         || {
@@ -6398,7 +6544,7 @@ impl ProofstormMcp {
                                 "the runtime action backend did not answer before the requested batch wait deadline",
                             ))
                         },
-                        |operations| compact_operation_wait_many(operations, true).map(Json),
+                        |(operations, errors)| compact_operation_wait_many(operations, errors, true).map(Json),
                     );
                 }
             };
@@ -6406,12 +6552,12 @@ impl ProofstormMcp {
                 .iter()
                 .all(|operation| operation_terminal(operation.phase))
             {
-                return compact_operation_wait_many(operations, false).map(Json);
+                return compact_operation_wait_many(operations, errors, false).map(Json);
             }
-            last_operations = Some(operations.clone());
+            last_operations = Some((operations.clone(), errors.clone()));
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                return compact_operation_wait_many(operations, true).map(Json);
+                return compact_operation_wait_many(operations, errors, true).map(Json);
             }
             tokio::time::sleep(backoff.min(deadline - now)).await;
             backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
@@ -6523,7 +6669,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "artifact_export",
-        description = "Export complete deterministic evidence after experiment_close. The journal always includes every action plus artifact descriptors; leave artifact_operation_ids empty unless up to 16 specific full bodies are needed. A smaller artifact_count does not mean incomplete evidence. Bulk content stays outside model context at resource_uri"
+        description = "Export deterministic evidence for a closed experiment, including offline archives. Every action and artifact descriptor is in the journal; select optional full bodies with artifact_operation_ids. No journal-count or bundle-size admission cap. Bulk content stays at resource_uri; use evidence_section_read for bounded inspection"
     )]
     fn proofstorm_artifact_export(
         &self,
@@ -6790,7 +6936,7 @@ fn compact_draft_mutation(draft: Draft, changed_paths: Vec<String>) -> DraftMuta
             .take(8)
             .map(|issue| format!("{}@{}: {}", issue.code, issue.path, issue.message)),
     );
-    DraftMutationResult {
+    let mut result = DraftMutationResult {
         draft_id: draft.id,
         version: draft.version,
         component_count: summary.component_count,
@@ -6806,7 +6952,19 @@ fn compact_draft_mutation(draft: Draft, changed_paths: Vec<String>) -> DraftMuta
         valid: validation.valid,
         warnings,
         changed_paths,
+        details_omitted: false,
+    };
+    if serialized_size(&result).is_ok_and(|size| size > MAX_AGENT_RESPONSE_BYTES) {
+        result.details_omitted = true;
+        result.structure = format!(
+            "components={}; links={}; backend_bindings={}/{}; use cell_search for IDs and configuration",
+            result.component_count,
+            result.link_count,
+            summary.bound_backend_link_count,
+            summary.backend_link_count
+        );
     }
+    result
 }
 
 struct TopologySummary {
@@ -6874,7 +7032,7 @@ fn topology_summary(cell: &CellSpec) -> TopologySummary {
     if intermediary_lightning && !direct_backend_peers.is_empty() {
         warnings.push(format!(
             "direct_mint_backend_peer: link(s) {} bypass the available forwarding node; routing-fee experiments need backend <-> router <-> backend with no direct backend peer",
-            direct_backend_peers.join(",")
+            direct_backend_peers.iter().take(16).copied().collect::<Vec<_>>().join(",")
         ));
     }
     let mint_count = components
@@ -6904,12 +7062,13 @@ fn topology_summary(cell: &CellSpec) -> TopologySummary {
 }
 
 fn cell_validation_result(cell: &CellSpec) -> CellValidationResult {
-    cell_validation_result_with_catalog(cell, default_catalog())
+    cell_validation_result_with_catalog(cell, default_catalog(), 0)
 }
 
 fn cell_validation_result_with_catalog(
     cell: &CellSpec,
     catalog: &CatalogResponse,
+    issue_offset: usize,
 ) -> CellValidationResult {
     let mut validation = validate_cell(cell);
     if validation.valid {
@@ -6923,13 +7082,50 @@ fn cell_validation_result_with_catalog(
         }
     }
     let summary = topology_summary(cell);
-    CellValidationResult {
+    let issue_count = validation.issues.len();
+    let mut result = CellValidationResult {
         valid: validation.valid,
-        issues: validation.issues,
+        component_count: cell.components.len(),
+        link_count: cell.links.len(),
+        issue_count,
+        next_issue_offset: None,
+        details_omitted: false,
+        issues: validation.issues.into_iter().skip(issue_offset).collect(),
         component_ids: summary.component_ids,
         link_ids: summary.link_ids,
         warnings: summary.warnings,
+    };
+    if serialized_size(&result).is_ok_and(|size| size > MAX_AGENT_RESPONSE_BYTES) {
+        result.component_ids.clear();
+        result.link_ids.clear();
+        result.details_omitted = true;
+        // Keep at least one actionable issue per page, even if a backend
+        // includes an unusually long native validation message.
+        for issue in &mut result.issues {
+            if issue.message.len() > 4096 {
+                issue.message = format!(
+                    "{} [message truncated]",
+                    issue.message.chars().take(1024).collect::<String>()
+                );
+            }
+        }
+        let issues = std::mem::take(&mut result.issues);
+        let mut available = MAX_AGENT_RESPONSE_BYTES
+            .saturating_sub(serialized_size(&result).unwrap_or(MAX_AGENT_RESPONSE_BYTES) + 128);
+        for issue in issues {
+            let size = serialized_size(&issue).unwrap_or(MAX_AGENT_RESPONSE_BYTES) + 1;
+            if size > available && !result.issues.is_empty() {
+                break;
+            }
+            available = available.saturating_sub(size);
+            result.issues.push(issue);
+        }
     }
+    let next = issue_offset.saturating_add(result.issues.len());
+    if next < issue_count {
+        result.next_issue_offset = Some(next);
+    }
+    result
 }
 
 fn validation_issue_summary(issues: &[ValidationIssue]) -> String {
@@ -7115,12 +7311,17 @@ fn evidence_pointer(
         ));
     }
     value.pointer(pointer).cloned().ok_or_else(|| {
-        let available = value
+        let mut parent = pointer;
+        while value.pointer(parent).is_none() {
+            parent = parent.rsplit_once('/').map_or("", |(prefix, _)| prefix);
+        }
+        let available = value.pointer(parent).expect("existing pointer ancestor")
             .as_object()
             .map(|object| {
                 object
                     .keys()
-                    .map(|key| format!("/{key}"))
+                    .take(16)
+                    .map(|key| format!("{parent}/{}", key.replace('~', "~0").replace('/', "~1")))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -7129,7 +7330,7 @@ fn evidence_pointer(
         coded_invalid_request(
             "evidence_pointer_not_found",
             format!(
-                "[evidence_pointer_not_found] JSON Pointer {pointer:?} does not exist in the {section} section; no changes were made. Recovery: choose one of the available top-level pointers ({available}), or use an empty pointer to read the whole section"
+                "[evidence_pointer_not_found] JSON Pointer {pointer:?} does not exist in the {section} section; no changes were made. Recovery: choose one of the available pointers beneath {parent:?} ({available}), or use an empty pointer to read the whole section"
             ),
         )
     })
@@ -8197,6 +8398,7 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ),
         ("cell_recipe_create", &[Capability::CellCreate]),
         ("cell_read", &[Capability::CellRead]),
+        ("cell_search", &[Capability::CellRead]),
         ("cell_edit", &[Capability::CellEdit]),
         (
             "component_add",
@@ -9489,13 +9691,12 @@ fn validate_operation_wait_many_request(
     request: &OperationWaitManyRequest,
 ) -> Result<(), ErrorData> {
     validate_wait_timeout(request.timeout_seconds)?;
-    if !(1..=8).contains(&request.operation_ids.len()) {
+    if request.operation_ids.is_empty() {
         return Err(ErrorData::invalid_request(
-            "operation_ids must contain between 1 and 8 IDs".to_owned(),
+            "operation_ids must contain at least one ID".to_owned(),
             Some(serde_json::json!({
                 "code": "operation_wait_many_count_invalid",
                 "minimum": 1,
-                "maximum": 8,
                 "requested": request.operation_ids.len(),
             })),
         ));
@@ -9526,6 +9727,23 @@ fn validate_status_list_limit(limit: u32) -> Result<(), ErrorData> {
     Err(ErrorData::invalid_request(
         "status list limit must be between 1 and 50".to_owned(),
         Some(serde_json::json!({"code": "status_list_limit_invalid"})),
+    ))
+}
+
+fn component_status_identity(status: &CellInstanceStatus) -> String {
+    let mut ids = status
+        .components
+        .iter()
+        .map(|component| component.id.as_str())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    digest_json(&(
+        &status.instance.instance_key,
+        &status.instance.revision_digest,
+        status.instance.generation,
+        &status.observed_revision_digest,
+        status.observed_generation,
+        ids,
     ))
 }
 
@@ -9868,6 +10086,26 @@ fn matrix_case_summary(
 }
 
 fn compact_operation_wait(operation: CellOperation, timed_out: bool) -> OperationWaitResult {
+    let native_result = operation.artifact.as_ref().and_then(|artifact| {
+        let content = &artifact.content;
+        content.get("exit_code")?;
+        Some(serde_json::Value::Object(
+            [
+                "exit_code",
+                "exit_signal",
+                "exit_scope",
+                "cleanup_verified",
+                "projection_succeeded",
+                "output_truncated",
+                "streams_complete",
+                "timed_out",
+                "cancelled",
+            ]
+            .into_iter()
+            .filter_map(|key| content.get(key).map(|value| (key.into(), value.clone())))
+            .collect(),
+        ))
+    });
     OperationWaitResult {
         operation_id: operation.id,
         sequence: operation.sequence,
@@ -9875,17 +10113,42 @@ fn compact_operation_wait(operation: CellOperation, timed_out: bool) -> Operatio
         phase: operation.phase,
         terminal: operation_terminal(operation.phase),
         timed_out,
+        artifact_digest: operation
+            .artifact
+            .as_ref()
+            .map(|artifact| artifact.digest.clone()),
+        native_result,
         artifact: operation.artifact,
     }
 }
 
+fn partition_operation_results(
+    ids: &[String],
+    results: Vec<Result<Json<CellOperation>, ErrorData>>,
+) -> (Vec<CellOperation>, Vec<OperationWaitError>) {
+    let mut operations = Vec::new();
+    let mut errors = Vec::new();
+    for (id, result) in ids.iter().zip(results) {
+        match result {
+            Ok(operation) => operations.push(operation.0),
+            Err(error) => errors.push(OperationWaitError {
+                operation_id: id.clone(),
+                error: serde_json::json!(error),
+            }),
+        }
+    }
+    (operations, errors)
+}
+
 fn compact_operation_wait_many(
     operations: Vec<CellOperation>,
+    errors: Vec<OperationWaitError>,
     timed_out: bool,
 ) -> Result<OperationWaitManyResult, ErrorData> {
-    let all_terminal = operations
-        .iter()
-        .all(|operation| operation_terminal(operation.phase));
+    let all_terminal = errors.is_empty()
+        && operations
+            .iter()
+            .all(|operation| operation_terminal(operation.phase));
     let mut result = OperationWaitManyResult {
         operations: operations
             .into_iter()
@@ -9895,6 +10158,7 @@ fn compact_operation_wait_many(
             })
             .collect(),
         all_terminal,
+        errors,
         timed_out,
         artifact_bodies_omitted: false,
     };
@@ -9913,6 +10177,23 @@ fn compact_operation_wait_many(
 /// identifier rather than parsing prose.
 fn coded_invalid_request(code: &str, message: impl Into<String>) -> ErrorData {
     ErrorData::invalid_request(message.into(), Some(serde_json::json!({"code": code})))
+}
+
+fn native_command_error(message: &str) -> ErrorData {
+    if message.contains("field") {
+        return ErrorData::invalid_params(
+            format!(
+                "{message}. The command was not executed. json_fields only supports the fixed receipt fields listed in output's schema. For addresses, node IDs, help, or other native JSON, use output: {{\"mode\":\"public\"}} with no fields. For LND addinvoice, use output: {{\"mode\":\"lnd_invoice\"}}."
+            ),
+            Some(serde_json::json!({
+                "code": "native_output_invalid",
+                "executed": false,
+                "public_output_example": {"mode": "public"},
+                "receipt_output_example": {"mode": "json_fields", "fields": ["confirmed_balance"]}
+            })),
+        );
+    }
+    invalid_operation(message)
 }
 
 fn invalid_operation(message: &str) -> ErrorData {
@@ -10703,6 +10984,51 @@ mod tests {
     }
 
     #[test]
+    fn developer_creation_requires_backend_fields_and_accepts_canonical_round_trip() {
+        let mut cell = serde_json::json!({
+            "api_version": API_VERSION,
+            "name": "authoring",
+            "components": [],
+            "links": [{"id":"backend", "kind":"chain_backend", "from":"node", "to":"chain", "network":"regtest"}]
+        });
+        let flat: DeveloperUpRequest = serde_json::from_value(serde_json::json!({
+            "name":"authoring", "cell":cell
+        }))
+        .unwrap();
+        let canonical = CellSpec::try_from(flat.cell).unwrap();
+        assert_eq!(
+            canonical.links[0].binding,
+            Some(DependencyBinding::Chain {
+                network: BitcoinNetwork::Regtest
+            })
+        );
+        for input in [
+            serde_json::to_value(&canonical).unwrap(),
+            serde_json::json!(serde_json::to_string(&canonical).unwrap()),
+        ] {
+            let request: DeveloperUpRequest = serde_json::from_value(serde_json::json!({
+                "name":"authoring", "cell":input
+            }))
+            .unwrap();
+            assert_eq!(CellSpec::try_from(request.cell).unwrap(), canonical);
+        }
+        cell["links"][0].as_object_mut().unwrap().remove("network");
+        let error = serde_json::from_value::<DeveloperUpRequest>(serde_json::json!({
+            "name":"authoring", "cell":cell
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("network"));
+        cell["links"][0]["binding"] =
+            serde_json::json!({"type":"payment", "method":"bolt11", "unit":"sat"});
+        assert!(
+            serde_json::from_value::<DeveloperUpRequest>(serde_json::json!({
+                "name":"authoring", "cell":cell
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn authored_cell_policy_is_optional_and_defaults_safely() {
         let authored = serde_json::from_value::<AuthoredCellSpec>(serde_json::json!({
             "api_version": API_VERSION,
@@ -10738,6 +11064,51 @@ mod tests {
     }
 
     #[test]
+    fn file_import_uses_normal_authorization_validation_and_storage() {
+        let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let path = dir.path().join("cell.json");
+        let document = serde_json::json!({
+            "api_version":API_VERSION, "name":"imported", "links":[],
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core",
+                "version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell",
+                "config":{"txindex":false}}]
+        });
+        std::fs::write(&path, document.to_string()).unwrap();
+        let store = seeded_store();
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer").unwrap();
+        let request = serde_json::json!({"draft_id":"imported", "cell":{"file":path}, "idempotency_key":"import-once"});
+        let receipt = service
+            .proofstorm_cell_create(Parameters(serde_json::from_value(request.clone()).unwrap()))
+            .unwrap()
+            .0;
+        assert_eq!(receipt.component_count, 1);
+        let saved = service
+            .proofstorm_cell_read(Parameters(ReadDraftRequest {
+                instance_id: None,
+                draft_id: "imported".into(),
+            }))
+            .unwrap()
+            .0;
+        assert_eq!(
+            saved.cell,
+            CellSpec::try_from(serde_json::from_value::<CellInput>(document).unwrap()).unwrap()
+        );
+        store
+            .revoke("alpha", "designer", Capability::CellCreate)
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let error = service
+            .proofstorm_cell_create(Parameters(serde_json::from_value(request).unwrap()))
+            .err()
+            .expect("revoked import must fail");
+        assert_eq!(
+            error.data.unwrap()["code"],
+            "access_denied",
+            "authorization precedes filesystem access"
+        );
+    }
+
+    #[test]
     fn persisted_cell_output_round_trips_back_into_validation() {
         let request = serde_json::from_value::<ValidateCellRequest>(serde_json::json!({
             "cell": {
@@ -10756,11 +11127,10 @@ mod tests {
         }))
         .expect("persisted canonical cell output must remain valid MCP input");
         assert!(matches!(
-            request.cell.links.as_slice(),
-            [AddLinkInput::ChainBackend {
-                network: BitcoinNetwork::Regtest,
-                ..
-            }]
+            CellSpec::try_from(request.cell).unwrap().links[0].binding,
+            Some(DependencyBinding::Chain {
+                network: BitcoinNetwork::Regtest
+            })
         ));
     }
 
@@ -10828,7 +11198,8 @@ mod tests {
 
         let validation = service
             .proofstorm_cell_validate(Parameters(ValidateCellRequest {
-                cell: authored.clone(),
+                cell: authored.clone().into(),
+                issue_offset: 0,
             }))
             .expect("validation result")
             .0;
@@ -10839,7 +11210,7 @@ mod tests {
 
         let error = match service.proofstorm_cell_create(Parameters(CreateDraftRequest {
             draft_id: "invalid-alias".into(),
-            cell: authored,
+            cell: authored.into(),
             idempotency_key: "invalid-alias-once".into(),
         })) {
             Ok(_) => panic!("invalid effective config must not create a draft"),
@@ -10968,6 +11339,37 @@ mod tests {
             serde_json::from_value::<CellRecipeFeeMatrixRequest>(input).is_err(),
             "recipe matrix must reject caller-controlled wallet roles"
         );
+    }
+
+    #[test]
+    fn large_cell_plan_remains_readable_and_replayable() {
+        let store = seeded_store();
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer").unwrap();
+        let request: CellPlanRequest = serde_json::from_value(serde_json::json!({
+            "plan_id": "large-plan",
+            "idempotency_key": "large-plan",
+            "components": (0..64).map(|index| serde_json::json!({
+                "id": format!("chain-{index:02}"),
+                "implementation": "bitcoin-core"
+            })).collect::<Vec<_>>(),
+            "connections": [],
+            "runtime_requirements": []
+        }))
+        .unwrap();
+        let accepted = service
+            .proofstorm_cell_plan(Parameters(request.clone()))
+            .unwrap()
+            .0;
+        assert!(accepted.validation.valid);
+        assert_eq!(accepted.component_count, 64);
+        assert_eq!(accepted.link_count, 0);
+        assert!(accepted.details_omitted);
+        assert!(serialized_size(&accepted).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
+        let draft = store.read_draft("alpha", "designer", "large-plan").unwrap();
+        assert_eq!(draft.cell.components.len(), 64);
+        assert_eq!(accepted.plan_digest, digest_json(&draft.cell));
+        let replay = service.proofstorm_cell_plan(Parameters(request)).unwrap().0;
+        assert_eq!(replay, accepted);
     }
 
     #[test]
@@ -11208,6 +11610,14 @@ mod tests {
         assert!(message.contains("Recovery:"));
         assert!(message.contains("/components"));
         assert!(message.contains("/cell"));
+        let error = evidence_pointer(
+            serde_json::json!({"artifact": {"content": {"exit_code": 0}, "digest": "abc"}}),
+            "/artifact/exit_code",
+            "artifact",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("/artifact/content"));
+        assert!(error.message.contains("/artifact/digest"));
     }
 
     #[test]
@@ -11860,7 +12270,7 @@ mod tests {
         let designer =
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("designer session");
         let reader = ProofstormMcp::new(store, "alpha", "reader").expect("reader session");
-        assert_eq!(designer.tool_names().len(), 20);
+        assert_eq!(designer.tool_names().len(), 21);
         assert!(!designer.tool_names().contains(&"cell_edit".to_owned()));
         assert!(designer.tool_names().contains(&"cell_wait".to_owned()));
         let backend = designer
@@ -11934,7 +12344,7 @@ mod tests {
         assert_nutshell_support(catalog);
         assert_eq!(
             reader.tool_names(),
-            vec!["cell_diff", "cell_read", "workspace_read",]
+            vec!["cell_diff", "cell_read", "cell_search", "workspace_read",]
         );
     }
 
@@ -12139,6 +12549,33 @@ mod tests {
             assert!(required.contains(&serde_json::json!("operation_id")));
             assert!(required.contains(&serde_json::json!("idempotency_key")));
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_native_projection_explains_recovery_before_cell_lookup() {
+        let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").unwrap();
+        let error = service
+            .proofstorm_cell_exec(Parameters(DeveloperExecRequest {
+                name: "no-cell-was-created".into(),
+                component: "node".into(),
+                request_id: "read-address".into(),
+                argv: vec!["lncli".into(), "newaddress".into(), "p2wkh".into()],
+                timeout_seconds: 30,
+                output: proofstorm_core::native::NativeOutput {
+                    mode: proofstorm_core::native::OutputMode::JsonFields,
+                    fields: vec!["address".into()],
+                },
+            }))
+            .await
+            .expect_err("invalid projection must be rejected before execution");
+        assert!(error.message.contains("command was not executed"));
+        assert!(error.message.contains("public"));
+        let data = error.data.unwrap();
+        assert_eq!(data["executed"], false);
+        assert_eq!(
+            data["public_output_example"],
+            serde_json::json!({"mode": "public"})
+        );
     }
 
     #[tokio::test]
@@ -12356,7 +12793,7 @@ mod tests {
         let receipt = service
             .proofstorm_cell_create(Parameters(CreateDraftRequest {
                 draft_id: "compact-draft".into(),
-                cell: authored_cell("compact-draft"),
+                cell: authored_cell("compact-draft").into(),
                 idempotency_key: "create-compact-draft".into(),
             }))
             .expect("create draft")
@@ -12719,7 +13156,7 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 93);
+        assert_eq!(service.tool_names().len(), 94);
         assert_optional_tracking(&service);
 
         assert!(
@@ -12756,9 +13193,9 @@ mod tests {
             "routing policy is a first-class typed runtime operation"
         );
         assert!(
-            // The opt-in compatibility union includes five new lifecycle routes.
-            // The default developer profile has its own much smaller budget below.
-            encoded.len() < 288 * 1024,
+            // The opt-in union includes search, file inputs and recovery documentation.
+            // Keep its growth explicit; the developer profile has a separate smaller budget.
+            encoded.len() < 304 * 1024,
             "fully authorized tool discovery is {} bytes",
             encoded.len()
         );
@@ -12768,7 +13205,8 @@ mod tests {
             (ProofstormToolset::Developer, 64 * 1024),
             // Full configuration reads, update previews, and revision/generation receipts.
             // Human-readable tool titles add at most 2 KiB to these dense profiles.
-            (ProofstormToolset::Experiment, 174 * 1024),
+            // Includes scoped topology search and workspace file inputs.
+            (ProofstormToolset::Experiment, 180 * 1024),
             (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
             (ProofstormToolset::Runtime, 220 * 1024),
@@ -13035,6 +13473,132 @@ mod tests {
     }
 
     #[test]
+    fn large_authoring_receipts_preserve_counts_and_digest_and_page_issues() {
+        let mut cell: CellSpec = serde_json::from_value(serde_json::json!({
+            "api_version": "proofstorm/v1alpha1", "name": "large-import", "links": [],
+            "components": (0..3000).map(|index| serde_json::json!({
+                "id": format!("fleet-chain-{index:04}"), "kind": "bitcoin",
+                "implementation": "bitcoin-core", "version": "31.1",
+                "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {},
+            })).collect::<Vec<_>>(),
+        }))
+        .unwrap();
+        let validation = cell_validation_result(&cell);
+        assert!(validation.valid && validation.details_omitted);
+        assert_eq!(validation.component_count, 3000);
+        assert!(serialized_size(&validation).unwrap() < MAX_AGENT_RESPONSE_BYTES);
+        let digest = topology_summary(&cell).topology_digest;
+        let mutation = compact_draft_mutation(
+            Draft {
+                id: "large-import".into(),
+                workspace_id: "alpha".into(),
+                version: 1,
+                cell: cell.clone(),
+            },
+            vec!["/".into()],
+        );
+        assert_eq!(mutation.topology_digest, digest);
+        assert_eq!(mutation.component_count, 3000);
+        assert!(mutation.details_omitted);
+        assert!(serialized_size(&mutation).unwrap() < MAX_AGENT_RESPONSE_BYTES);
+
+        for component in &mut cell.components {
+            component.id = "duplicate".into();
+        }
+        let mut offset = 0;
+        let mut paths = BTreeSet::new();
+        loop {
+            let page = cell_validation_result_with_catalog(&cell, default_catalog(), offset);
+            assert!(!page.valid);
+            assert!(serialized_size(&page).unwrap() < MAX_AGENT_RESPONSE_BYTES);
+            for issue in &page.issues {
+                assert!(paths.insert(issue.path.clone()));
+            }
+            if let Some(next) = page.next_issue_offset {
+                assert!(next > offset);
+                offset = next;
+            } else {
+                assert_eq!(paths.len(), page.issue_count);
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn batch_wait_preserves_native_failure_facts_and_successful_reads() {
+        let operation = |index: u64| {
+            let content = serde_json::json!({
+                "exit_code": if index == 4 { 7 } else { 0 },
+                "cleanup_verified": true, "output_truncated": true,
+                "streams_complete": true, "stdout": "x".repeat(14_000),
+                "private_output_ref": "private-reference",
+            });
+            CellOperation {
+                revision_digest: String::new(),
+                id: format!("diag-{index}"),
+                workspace_id: "alpha".into(),
+                instance_id: "instance".into(),
+                experiment_id: "experiment".into(),
+                session_id: "session".into(),
+                principal_id: "designer".into(),
+                sequence: index,
+                kind: OperationKind::ComponentExecLive,
+                capability: Capability::ComponentExecLive,
+                resource_name: format!("resource-{index}"),
+                request_digest: format!("sha256:{index}"),
+                request: serde_json::json!({}),
+                phase: OperationPhase::Succeeded,
+                accepted_at_unix: 1,
+                started_at_unix: Some(2),
+                completed_at_unix: Some(3),
+                artifact: Some(OperationArtifact {
+                    media_type: "application/json".into(),
+                    digest: proofstorm_core::digest_json(&content),
+                    byte_length: u32::try_from(content.to_string().len()).unwrap(),
+                    content,
+                }),
+            }
+        };
+        let ids = vec!["diag-1".into(), "missing".into(), "diag-4".into()];
+        let (good, errors) = partition_operation_results(
+            &ids,
+            vec![
+                Ok(Json(operation(1))),
+                Err(coded_invalid_request("missing", "unknown operation")),
+                Ok(Json(operation(4))),
+            ],
+        );
+        assert_eq!(
+            good.iter().map(|op| op.id.as_str()).collect::<Vec<_>>(),
+            ["diag-1", "diag-4"]
+        );
+        assert_eq!(errors[0].operation_id, "missing");
+        let result =
+            compact_operation_wait_many((1..=6).map(operation).collect(), errors, false).unwrap();
+        assert!(result.artifact_bodies_omitted);
+        assert!(!result.all_terminal);
+        assert!(!result.timed_out);
+        assert_eq!(result.operations[3].phase, OperationPhase::Succeeded);
+        assert_eq!(
+            result.operations[3].native_result.as_ref().unwrap()["exit_code"],
+            7
+        );
+        assert_eq!(
+            result.operations[3].native_result.as_ref().unwrap()["cleanup_verified"],
+            true
+        );
+        assert!(
+            result
+                .operations
+                .iter()
+                .all(|op| op.artifact.is_none() && op.artifact_digest.is_some())
+        );
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("private-reference"));
+        assert!(json.len() < MAX_AGENT_RESPONSE_BYTES);
+    }
+
+    #[test]
     fn wait_contracts_are_bounded_terminal_and_capability_filtered() {
         assert!(validate_wait_timeout(1).is_ok());
         assert!(validate_wait_timeout(120).is_ok());
@@ -13050,30 +13614,22 @@ mod tests {
             timeout_seconds: 120,
         };
         assert!(validate_operation_wait_many_request(&valid_batch).is_ok());
-        for operation_ids in [
-            Vec::new(),
-            vec![
-                "a".into(),
-                "b".into(),
-                "c".into(),
-                "d".into(),
-                "e".into(),
-                "f".into(),
-                "g".into(),
-                "h".into(),
-                "i".into(),
-            ],
-        ] {
-            let error = validate_operation_wait_many_request(&OperationWaitManyRequest {
-                operation_ids,
+        assert!(
+            validate_operation_wait_many_request(&OperationWaitManyRequest {
+                operation_ids: (0..150).map(|index| format!("operation-{index}")).collect(),
                 timeout_seconds: 30,
             })
-            .expect_err("batch size must refuse");
-            assert_eq!(
-                error.data.expect("structured batch error")["code"],
-                "operation_wait_many_count_invalid"
-            );
-        }
+            .is_ok()
+        );
+        let empty_error = validate_operation_wait_many_request(&OperationWaitManyRequest {
+            operation_ids: Vec::new(),
+            timeout_seconds: 30,
+        })
+        .expect_err("empty batch must refuse");
+        assert_eq!(
+            empty_error.data.unwrap()["code"],
+            "operation_wait_many_count_invalid"
+        );
         let duplicate_error = validate_operation_wait_many_request(&OperationWaitManyRequest {
             operation_ids: vec!["same".into(), "same".into()],
             timeout_seconds: 30,
@@ -13086,7 +13642,7 @@ mod tests {
         let schema = serde_json::to_string(&schemars::schema_for!(OperationWaitManyRequest))
             .expect("batch wait schema");
         assert!(schema.contains("\"minItems\":1"));
-        assert!(schema.contains("\"maxItems\":8"));
+        assert!(!schema.contains("\"maxItems\""));
         assert!(!proofstorm_app::cell::wait_terminal(InstancePhase::Ready));
         assert!(proofstorm_app::cell::wait_terminal(InstancePhase::Closed));
         assert!(proofstorm_app::cell::wait_terminal(
@@ -13166,6 +13722,26 @@ mod tests {
         assert!(!encoded.contains("inventory\":"));
         assert_eq!(receipt.instance_key, "i0123456789abcdef0123");
         assert!(serialized_size(&receipt).expect("status size") < 1024);
+
+        let mut live = status.clone();
+        live.components.push(
+            serde_json::from_value(serde_json::json!({
+                "id":"chain", "kind":"bitcoin", "observed_revision_digest":"revision",
+                "observed_rollout_digest":"rollout", "conditions":[], "ready":false,
+                "service":"chain", "ports":{},
+            }))
+            .unwrap(),
+        );
+        let identity = component_status_identity(&live);
+        let observation = digest_json(&live.components);
+        live.components[0].ready = true;
+        assert_eq!(component_status_identity(&live), identity);
+        assert_ne!(digest_json(&live.components), observation);
+        live.instance.generation += 1;
+        assert_ne!(component_status_identity(&live), identity);
+        live.instance.generation -= 1;
+        live.components[0].id = "replacement".into();
+        assert_ne!(component_status_identity(&live), identity);
 
         let close_receipt = compact_cell_wait(status, InstancePhase::Closed, false, false);
         assert_eq!(close_receipt.phase, InstancePhase::Ready);
@@ -13315,7 +13891,7 @@ mod tests {
         let encoded = serde_json::to_string(&schema).expect("artifact export schema");
         assert!(!encoded.contains("include_content"));
         assert!(encoded.contains("artifact_operation_ids"));
-        assert!(encoded.contains("\"maxItems\":16"));
+        assert!(!encoded.contains("\"maxItems\""));
         assert!(encoded.contains("Do not enumerate"));
     }
 
@@ -13329,7 +13905,7 @@ mod tests {
             .expect("revoke");
         let result = session.proofstorm_cell_create(Parameters(CreateDraftRequest {
             draft_id: "refused".into(),
-            cell: authored_cell("refused"),
+            cell: authored_cell("refused").into(),
             idempotency_key: "create-refused".into(),
         }));
         let Err(error) = result else {
@@ -13958,6 +14534,165 @@ mod tests {
         );
     }
 
+    fn closed_archive_fixture() -> (Store, PublishedRevision) {
+        let store = seeded_store();
+        for capability in [
+            Capability::ExperimentCreate,
+            Capability::ExperimentRead,
+            Capability::ExperimentClose,
+            Capability::CellOperate,
+            Capability::OracleRun,
+            Capability::ArtifactRead,
+        ] {
+            store.grant("alpha", "designer", capability).unwrap();
+        }
+        store
+            .create_draft("alpha", "designer", "archive", &cell("archive"), "create")
+            .unwrap();
+        let revision = store
+            .publish("alpha", "designer", "archive", 1, "publish")
+            .unwrap();
+        store
+            .materialize(
+                "alpha",
+                "designer",
+                "archive-instance",
+                &revision.digest,
+                "materialize",
+            )
+            .unwrap();
+        store
+            .create_experiment(
+                "alpha",
+                "designer",
+                "archive-experiment",
+                "archive-instance",
+                "experiment",
+            )
+            .unwrap();
+        store
+            .start_session(
+                "alpha",
+                "designer",
+                "archive-experiment",
+                "archive-session",
+                "session",
+            )
+            .unwrap();
+        for index in 1..=125 {
+            let id = format!("observation-{index}");
+            let operation = store
+                .create_operation(
+                    "alpha",
+                    "designer",
+                    "archive-instance",
+                    "archive-experiment",
+                    "archive-session",
+                    &id,
+                    OperationKind::ConservationOracle,
+                    &serde_json::json!({"expected_sat":100,"tolerance_sat":0}),
+                    &id,
+                    Capability::OracleRun,
+                )
+                .unwrap();
+            store
+                .record_operation_result(
+                    "alpha",
+                    &operation.id,
+                    OperationPhase::Succeeded,
+                    serde_json::json!({"synthetic_fixture":true,"diagnostic":"x".repeat(8192)}),
+                )
+                .unwrap();
+        }
+        store
+            .finish_session("alpha", "designer", "archive-session", "finish")
+            .unwrap();
+        store
+            .close_experiment("alpha", "designer", "archive-experiment", "close")
+            .unwrap();
+
+        (store, revision)
+    }
+
+    #[test]
+    fn large_closed_archives_export_offline_and_remain_pageable() {
+        let (store, revision) = closed_archive_fixture();
+        let reader = ProofstormMcp::new(store.clone(), "alpha", "reader")
+            .unwrap()
+            .offline();
+        let read = reader
+            .proofstorm_cell_read(Parameters(ReadDraftRequest {
+                draft_id: String::new(),
+                instance_id: Some("archive-instance".into()),
+            }))
+            .unwrap()
+            .0;
+        assert_eq!(read.cell, revision.cell);
+        assert_eq!(read.version, 1);
+        let service = ProofstormMcp::new(store, "alpha", "designer")
+            .unwrap()
+            .offline();
+        assert!(service.tool_names().contains(&"artifact_export".into()));
+        assert!(
+            service
+                .tool_names()
+                .contains(&"evidence_section_read".into())
+        );
+        let ids = (1..=40)
+            .map(|index| format!("observation-{index}"))
+            .collect::<Vec<_>>();
+        let request = ArtifactExportRequest {
+            experiment_id: "archive-experiment".into(),
+            include_oracle_artifacts: true,
+            artifact_operation_ids: ids.clone(),
+            include_content: false,
+        };
+        let manifest = service
+            .proofstorm_artifact_export(Parameters(request.clone()))
+            .unwrap()
+            .0;
+        let repeated = service
+            .proofstorm_artifact_export(Parameters(request))
+            .unwrap()
+            .0;
+        assert_eq!(manifest, repeated);
+        assert_eq!(manifest.journal_count, 125);
+        assert_eq!(manifest.artifact_count, 125);
+        assert!(manifest.byte_length > 512 * 1024);
+        assert!(serialized_size(&manifest).unwrap() < MAX_AGENT_RESPONSE_BYTES);
+        let page = service
+            .proofstorm_evidence_section_read(Parameters(EvidenceSectionReadRequest {
+                experiment_id: "archive-experiment".into(),
+                include_oracle_artifacts: true,
+                artifact_operation_ids: ids.clone(),
+                section: EvidenceSection::Journal,
+                pointer: String::new(),
+                operation_id: None,
+                after_sequence: 100,
+                limit: 50,
+            }))
+            .unwrap()
+            .0;
+        assert_eq!(page.evidence_digest, manifest.digest);
+        assert_eq!(page.data.as_array().unwrap().len(), 25);
+        assert!(page.next_after_sequence.is_none());
+        let marker = service
+            .proofstorm_evidence_section_read(Parameters(EvidenceSectionReadRequest {
+                experiment_id: "archive-experiment".into(),
+                include_oracle_artifacts: true,
+                artifact_operation_ids: ids,
+                section: EvidenceSection::Artifact,
+                pointer: "/artifact/content/synthetic_fixture".into(),
+                operation_id: Some("observation-125".into()),
+                after_sequence: 0,
+                limit: 50,
+            }))
+            .unwrap()
+            .0;
+        assert_eq!(marker.data, true);
+        assert_eq!(marker.evidence_digest, manifest.digest);
+    }
+
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -14102,7 +14837,7 @@ mod tests {
         assert_eq!(content.artifacts.len(), 1);
         assert_eq!(content.revision.digest, revision.digest);
         assert_eq!(content.instance.lock_digest, content.revision.lock.digest);
-        assert!(first.byte_length as usize <= MAX_EVIDENCE_BUNDLE_BYTES);
+        assert!(first.byte_length as usize <= MAX_AGENT_RESPONSE_BYTES);
         let encoded = serde_json::to_string(&first).expect("serialize evidence");
         assert!(!encoded.contains("resource_name"));
         assert!(!encoded.contains("instance_key"));

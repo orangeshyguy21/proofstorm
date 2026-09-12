@@ -370,6 +370,20 @@ fn filter_resources(resources: &mut Option<ResourceDemand>, components: &Page<Co
                 .is_none_or(|id| components.items.iter().any(|c| &c.id == id))
         };
         resources.workloads.retain(|w| keep(&w.component));
+        let probes = components
+            .items
+            .iter()
+            .map(|c| proofstorm_kube::protocol_probe_container_name(&c.id))
+            .collect::<std::collections::BTreeSet<_>>();
+        for workload in &mut resources.workloads {
+            if workload.name == proofstorm_kube::PROTOCOL_PROBER_NAME {
+                let previous_count = workload.containers.len();
+                workload
+                    .containers
+                    .retain(|container| probes.contains(&container.name));
+                workload.omitted_container_count += previous_count - workload.containers.len();
+            }
+        }
         resources.storage.retain(|s| keep(&s.component));
     }
 }

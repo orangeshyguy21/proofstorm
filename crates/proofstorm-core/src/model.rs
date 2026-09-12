@@ -285,37 +285,21 @@ pub struct LinkSpec {
     pub binding: Option<DependencyBinding>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CellLimits {
-    #[serde(default = "default_max_components")]
-    pub max_components: u16,
-    #[serde(default = "default_max_links")]
-    pub max_links: u16,
-    #[serde(default = "default_max_config_bytes")]
-    pub max_config_bytes: u32,
-}
-
-impl Default for CellLimits {
-    fn default() -> Self {
-        Self {
-            max_components: default_max_components(),
-            max_links: default_max_links(),
-            max_config_bytes: default_max_config_bytes(),
-        }
-    }
-}
-
-const fn default_max_components() -> u16 {
-    64
-}
-
-const fn default_max_links() -> u16 {
-    256
-}
-
-const fn default_max_config_bytes() -> u32 {
-    65_536
+    /// Optional user-selected component cap. Omit for no policy cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_components: Option<u64>,
+    /// Optional user-selected link cap. Omit for no policy cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_links: Option<u64>,
+    /// Optional per-component serialized configuration byte cap. Omit for no policy cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_config_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]

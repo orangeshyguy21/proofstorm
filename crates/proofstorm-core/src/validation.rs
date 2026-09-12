@@ -7,10 +7,6 @@ use crate::{
     API_VERSION, CellSpec, ComponentKind, DependencyBinding, LinkKind, LinkSpec, PaymentMethod,
 };
 
-const HARD_MAX_COMPONENTS: usize = 128;
-const HARD_MAX_LINKS: usize = 1_024;
-const HARD_MAX_CONFIG_BYTES: usize = 1_048_576;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ValidationIssue {
@@ -56,23 +52,6 @@ pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
             "must be a lowercase kebab-case identifier of 1..=63 bytes",
         );
     }
-    if cell.components.len() > HARD_MAX_COMPONENTS {
-        issue(
-            &mut issues,
-            "too_many_components",
-            "/components",
-            format!("hard maximum is {HARD_MAX_COMPONENTS}"),
-        );
-    }
-    if cell.links.len() > HARD_MAX_LINKS {
-        issue(
-            &mut issues,
-            "too_many_links",
-            "/links",
-            format!("hard maximum is {HARD_MAX_LINKS}"),
-        );
-    }
-
     validate_limits(cell, &mut issues);
 
     let ids = validate_components(cell, &mut issues);
@@ -402,14 +381,12 @@ fn validate_components<'a>(
             );
         }
         let config_bytes = serde_json::to_vec(&component.config).map_or(usize::MAX, |v| v.len());
-        if config_bytes > usize::try_from(cell.policy.limits.max_config_bytes).unwrap_or(usize::MAX)
-            || config_bytes > HARD_MAX_CONFIG_BYTES
-        {
+        if exceeds_policy_limit(config_bytes, cell.policy.limits.max_config_bytes) {
             issue(
                 issues,
                 "config_too_large",
                 format!("/components/{index}/config"),
-                "serialized configuration exceeds the configured or hard byte limit",
+                "serialized configuration exceeds the user-selected byte limit",
             );
         }
     }
@@ -418,29 +395,21 @@ fn validate_components<'a>(
 
 fn validate_limits(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
     let limits = &cell.policy.limits;
-    for (field, value, hard_max) in [
-        (
-            "max_components",
-            usize::from(limits.max_components),
-            HARD_MAX_COMPONENTS,
-        ),
-        ("max_links", usize::from(limits.max_links), HARD_MAX_LINKS),
-        (
-            "max_config_bytes",
-            usize::try_from(limits.max_config_bytes).unwrap_or(usize::MAX),
-            HARD_MAX_CONFIG_BYTES,
-        ),
+    for (field, value) in [
+        ("max_components", limits.max_components),
+        ("max_links", limits.max_links),
+        ("max_config_bytes", limits.max_config_bytes),
     ] {
-        if value == 0 || value > hard_max {
+        if value == Some(0) {
             issue(
                 issues,
                 "invalid_limit",
                 format!("/policy/limits/{field}"),
-                format!("must be in 1..={hard_max}"),
+                "must be positive when supplied; omit this field for no policy cap",
             );
         }
     }
-    if cell.components.len() > usize::from(limits.max_components) {
+    if exceeds_policy_limit(cell.components.len(), limits.max_components) {
         issue(
             issues,
             "component_limit_exceeded",
@@ -448,7 +417,7 @@ fn validate_limits(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
             "component count exceeds policy limit",
         );
     }
-    if cell.links.len() > usize::from(limits.max_links) {
+    if exceeds_policy_limit(cell.links.len(), limits.max_links) {
         issue(
             issues,
             "link_limit_exceeded",
@@ -456,6 +425,10 @@ fn validate_limits(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
             "link count exceeds policy limit",
         );
     }
+}
+
+fn exceeds_policy_limit(count: usize, limit: Option<u64>) -> bool {
+    limit.is_some_and(|limit| u64::try_from(count).map_or(true, |count| count > limit))
 }
 
 fn issue(
@@ -740,10 +713,60 @@ mod tests {
     }
 
     #[test]
+    fn default_policy_allows_large_topologies_and_explicit_caps_still_apply() {
+        let mut cell = valid_cell();
+        let template = cell.components[0].clone();
+        cell.components = (0..150)
+            .map(|index| ComponentSpec {
+                id: format!("chain-{index:03}"),
+                ..template.clone()
+            })
+            .collect();
+        cell.links = (0..150)
+            .flat_map(|from| {
+                (1..=8).map(move |offset| LinkSpec {
+                    id: format!("peer-{from}-{offset}"),
+                    kind: LinkKind::BitcoinPeer,
+                    from: format!("chain-{from:03}"),
+                    to: format!("chain-{:03}", (from + offset) % 150),
+                    binding: None,
+                })
+            })
+            .collect();
+        cell.components[0]
+            .config
+            .insert("data".into(), "x".repeat(1_048_577).into());
+        assert_eq!(cell.links.len(), 1200);
+        assert!(validate_cell(&cell).valid);
+
+        cell.policy.limits.max_components = Some(128);
+        cell.policy.limits.max_links = Some(1024);
+        cell.policy.limits.max_config_bytes = Some(1_048_576);
+        let issues = validate_cell(&cell).issues;
+        for code in [
+            "component_limit_exceeded",
+            "link_limit_exceeded",
+            "config_too_large",
+        ] {
+            assert!(issues.iter().any(|issue| issue.code == code), "{code}");
+        }
+
+        // Existing serialized policies retain their values and digest inputs.
+        let legacy =
+            serde_json::json!({"max_components":64,"max_links":256,"max_config_bytes":65536});
+        let limits: crate::CellLimits = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(limits).unwrap(), legacy);
+        assert_eq!(
+            serde_json::to_value(crate::CellLimits::default()).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
     fn zero_and_exceeded_limits_refuse() {
         let mut cell = valid_cell();
-        cell.policy.limits.max_components = 0;
-        cell.policy.limits.max_links = 1;
+        cell.policy.limits.max_components = Some(0);
+        cell.policy.limits.max_links = Some(1);
         let report = validate_cell(&cell);
         assert_eq!(
             report

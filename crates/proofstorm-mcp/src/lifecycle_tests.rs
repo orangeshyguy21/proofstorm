@@ -76,6 +76,10 @@ fn cluster_client() -> Client {
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one lifecycle verifies cross-transport identity, retry and replacement fencing"
+)]
 async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     let store = tests::seeded_store();
     for cap in [Capability::ExperimentRead, Capability::CellOperate] {
@@ -161,12 +165,43 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
         .unwrap()
         .0;
     assert_eq!(closing.phase, InstancePhase::Closing);
-    mcp.proofstorm_cell_finish(Parameters(DeveloperFinishRequest {
+    let finish = DeveloperFinishRequest {
         name: "cli-name".into(),
-        expected_instance_key: named.instance_key,
+        expected_instance_key: named.instance_key.clone(),
         timeout_seconds: 2,
-    }))
-    .await
-    .unwrap();
+    };
+    let closed = mcp
+        .proofstorm_cell_finish(Parameters(finish.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        closed.structured_content.as_ref().unwrap()["complete"],
+        true
+    );
     assert!(store.cell_handle("alpha", "designer", "cli-name").is_err());
+    let replay = mcp
+        .proofstorm_cell_finish(Parameters(finish.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.structured_content.as_ref().unwrap()["complete"],
+        true
+    );
+    assert_eq!(
+        replay.structured_content.as_ref().unwrap()["teardown_receipt"]["verified_absent"],
+        true
+    );
+
+    let replacement = cli.up("cli-name", &read.cell).await.unwrap();
+    assert_ne!(
+        replacement.instance_key.as_deref(),
+        Some(named.instance_key.as_str())
+    );
+    let error = mcp
+        .proofstorm_cell_finish(Parameters(finish))
+        .await
+        .unwrap_err();
+    assert_eq!(error.data.unwrap()["code"], "stale_incarnation");
+    assert!(cli.inspect("cli-name", 0).await.unwrap().runtime.is_some());
+    cli.down("cli-name", 2).await.unwrap();
 }

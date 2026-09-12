@@ -76,3 +76,62 @@ async fn scheduled_prober_reports_live_scale_without_mutations() {
             .all(|(method, _)| method == "GET")
     );
 }
+
+#[tokio::test]
+async fn large_prober_containers_follow_component_pages_without_losing_counts() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("state.db")).unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let cells = service(store, cluster);
+    let mut fleet = spec();
+    let chain = fleet
+        .components
+        .iter()
+        .find(|c| c.id == "chain")
+        .unwrap()
+        .clone();
+    fleet.components = (0..150)
+        .map(|i| {
+            let mut component = chain.clone();
+            component.id = format!("chain-{i:03}");
+            component
+        })
+        .collect();
+    fleet.links.clear();
+    let cell = cells.up("fleet", &fleet).await.unwrap();
+    let reader = observer(&cells);
+    let mut query = EnvironmentQuery {
+        instance_id: Some(cell.cell.instance_id),
+        limit: 20,
+        ..EnvironmentQuery::default()
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        let mut view = reader.environment(&query).await.unwrap();
+        proofstorm_app::environment::bound_page_bytes(&mut view, 8 * 1024).unwrap();
+        let cell = &view.cells.items[0];
+        let prober = cell
+            .resources
+            .as_ref()
+            .unwrap()
+            .workloads
+            .iter()
+            .find(|w| w.name == PROTOCOL_PROBER_NAME)
+            .unwrap();
+        assert_eq!(prober.containers.len(), cell.components.items.len());
+        assert_eq!(
+            prober.containers.len() + prober.omitted_container_count,
+            150
+        );
+        for container in &prober.containers {
+            assert!(seen.insert(container.name.clone()));
+        }
+        if let Some(cursor) = &cell.components.next_cursor {
+            query.component_cursor.clone_from(cursor);
+        } else {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 150);
+}

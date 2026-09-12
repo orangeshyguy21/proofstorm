@@ -76,6 +76,7 @@ pub fn tool_title(name: &str) -> Option<&'static str> {
         "cell_create" => "Create cell draft",
         "cell_recipe_create" => "Create cell from recipe",
         "cell_read" => "View cell configuration",
+        "cell_search" => "Search cell configuration",
         "cell_edit" => "Edit cell",
         "component_add" => "Add component",
         "component_update" => "Update component",
