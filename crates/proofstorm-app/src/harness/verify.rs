@@ -28,7 +28,7 @@ pub(super) async fn server(entry: &Value) -> Result<Value> {
         let result: Result<Value> = async {
             ensure!(client.peer_info().is_some_and(|info| info.server_info.as_ref().is_some_and(|server| server.name == "proofstorm-mcp")), "unexpected MCP server identity");
             let tools = client.list_all_tools().await?;
-            for required in ["environment_read", "lab_up", "lab_inspect"] {
+            for required in ["environment_read", "cell_up", "cell_inspect"] {
                 ensure!(tools.iter().any(|tool| tool.name == required), "required tool {required} unavailable; review this actor's grants (not automatically restored)");
             }
             let environment = client.call_tool(CallToolRequestParams::new("environment_read").with_arguments(serde_json::Map::new())).await?;

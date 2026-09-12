@@ -197,7 +197,7 @@ pub(crate) async fn route(
                 session.shutdown.notify_one();
                 json(
                     StatusCode::OK,
-                    &json!({"stopping":true,"labs_stopped":false}),
+                    &json!({"stopping":true,"cells_stopped":false}),
                 )
             } else {
                 fail(

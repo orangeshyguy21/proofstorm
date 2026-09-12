@@ -1,4 +1,4 @@
-//! Deterministic, state-preserving edits of an existing lab.
+//! Deterministic, state-preserving edits of an existing cell.
 use crate::{PublishedRevision, digest_json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabUpdateTarget {
+pub struct CellUpdateTarget {
     pub instance_id: String,
     pub expected_generation: u64,
     #[serde(default)]
@@ -18,7 +18,7 @@ pub struct LabUpdateTarget {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabChanges {
+pub struct CellChanges {
     pub added: Vec<String>,
     pub unchanged: Vec<String>,
     pub restarted: Vec<String>,
@@ -33,18 +33,18 @@ pub struct LabChanges {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabUpdatePlan {
+pub struct CellUpdatePlan {
     #[serde(default)]
     pub instance_key: String,
-    pub target: LabUpdateTarget,
+    pub target: CellUpdateTarget,
     pub base_revision: String,
     pub target_revision: String,
     pub target_lock: String,
-    pub changes: LabChanges,
+    pub changes: CellChanges,
     pub digest: String,
 }
 
-impl LabUpdatePlan {
+impl CellUpdatePlan {
     pub fn bind_instance(&mut self, key: &str) {
         self.instance_key = key.into();
         self.digest.clear();
@@ -56,15 +56,15 @@ impl LabUpdatePlan {
     /// # Errors
     /// Returns an error if a revision has an incomplete lock.
     pub fn new(
-        target: LabUpdateTarget,
+        target: CellUpdateTarget,
         old: &PublishedRevision,
         new: &PublishedRevision,
     ) -> Result<Self, String> {
-        let mut changes = LabChanges::default();
-        for component in &new.lab.components {
+        let mut changes = CellChanges::default();
+        for component in &new.cell.components {
             let next = locked(new, &component.id)?;
             changes.required_images.push(next.image.clone());
-            if let Some(previous) = old.lab.components.iter().find(|c| c.id == component.id) {
+            if let Some(previous) = old.cell.components.iter().find(|c| c.id == component.id) {
                 let prior = locked(old, &component.id)?;
                 if prior.image != next.image
                     || prior.catalog_id != next.catalog_id
@@ -101,23 +101,23 @@ impl LabUpdatePlan {
             }
         }
         changes.removed = old
-            .lab
+            .cell
             .components
             .iter()
-            .filter(|c| !new.lab.components.iter().any(|n| n.id == c.id))
+            .filter(|c| !new.cell.components.iter().any(|n| n.id == c.id))
             .map(|c| c.id.clone())
             .collect();
         changes.deleted_data.clone_from(&target.delete_retained);
         if target.delete_data {
             changes.deleted_data.extend(changes.removed.clone());
         }
-        for component in &old.lab.components {
-            if !new.lab.components.iter().any(|c| c.id == component.id) {
+        for component in &old.cell.components {
+            if !new.cell.components.iter().any(|c| c.id == component.id) {
                 continue;
             }
             let databases = |revision: &PublishedRevision| {
                 revision
-                    .lab
+                    .cell
                     .links
                     .iter()
                     .filter(|l| {
@@ -133,8 +133,8 @@ impl LabUpdatePlan {
                 ));
             }
         }
-        changes.policy_changed = old.lab.policy != new.lab.policy;
-        changes.connections_changed = old.lab.links != new.lab.links;
+        changes.policy_changed = old.cell.policy != new.cell.policy;
+        changes.connections_changed = old.cell.links != new.cell.links;
         for list in [
             &mut changes.added,
             &mut changes.unchanged,

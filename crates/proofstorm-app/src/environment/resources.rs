@@ -4,8 +4,8 @@ use k8s_openapi::{
     api::core::v1::{PodSpec, ResourceRequirements},
     apimachinery::pkg::api::resource::Quantity,
 };
-use proofstorm_core::{LabInstance, PublishedRevision};
-use proofstorm_kube::{COMPONENT_LABEL, PROTOCOL_PROBER_NAME, render_lab, render_security_spine};
+use proofstorm_core::{CellInstance, PublishedRevision};
+use proofstorm_kube::{COMPONENT_LABEL, PROTOCOL_PROBER_NAME, render_cell, render_security_spine};
 use proofstorm_view::ReplicaPolicy;
 use std::collections::BTreeMap;
 
@@ -15,7 +15,7 @@ pub use proofstorm_view::{
 
 pub(super) fn include_runtime(
     resources: &mut Option<ResourceDemand>,
-    resource: Option<&proofstorm_kube::ProofstormLab>,
+    resource: Option<&proofstorm_kube::ProofstormCell>,
     prober: Option<(i32, proofstorm_view::WorkloadObservation)>,
 ) {
     let Some(resources) = resources else {
@@ -40,13 +40,13 @@ pub(super) fn include_runtime(
     reason = "one resource projection keeps workload, storage and endpoint demand consistent"
 )]
 pub(super) fn project(
-    instance: &LabInstance,
+    instance: &CellInstance,
     revision: &PublishedRevision,
 ) -> Result<(ResourceDemand, Vec<Endpoint>), Error> {
-    let rendered = render_lab(
+    let rendered = render_cell(
         &instance.instance_key,
         &revision.digest,
-        &revision.lab,
+        &revision.cell,
         &revision.lock,
     )
     .map_err(|_| {

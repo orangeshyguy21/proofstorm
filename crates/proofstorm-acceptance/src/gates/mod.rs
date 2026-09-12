@@ -10,9 +10,9 @@ pub mod cdk_ldk;
 pub mod cdk_postgres;
 pub mod cdk_wallet;
 pub mod cocod_wallet;
+pub mod cross_cell_scheduler;
 pub mod cross_implementation_wallet;
-pub mod cross_lab_scheduler;
-pub mod dynamic_lab;
+pub mod dynamic_cell;
 pub mod failed_melt;
 pub mod mint_management;
 pub mod native_exec;
@@ -31,7 +31,7 @@ pub mod slice5;
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
     "mint-management",
-    "dynamic-lab",
+    "dynamic-cell",
     "nutshell-mint",
     "cdk-cln",
     "cdk-wallet",
@@ -44,7 +44,7 @@ pub const NAMES: &[&str] = &[
     "nutshell-cln",
     "nutshell-postgres",
     "cdk-postgres",
-    "cross-lab-scheduler",
+    "cross-cell-scheduler",
     "cdk-ldk",
     "cdk-ldk-postgres",
     "cdk-bdk-stress",
@@ -66,7 +66,7 @@ pub const NAMES: &[&str] = &[
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
         "mint-management" => mint_management::run(context),
-        "dynamic-lab" => dynamic_lab::run(context),
+        "dynamic-cell" => dynamic_cell::run(context),
         "nutshell-mint" => nutshell_mint::run(context),
         "cdk-cln" => cdk_cln::run(context),
         "cdk-wallet" => cdk_wallet::run(context),
@@ -79,7 +79,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "nutshell-cln" => nutshell_cln::run(context),
         "nutshell-postgres" => nutshell_postgres::run(context),
         "cdk-postgres" => cdk_postgres::run(context),
-        "cross-lab-scheduler" => cross_lab_scheduler::run(context),
+        "cross-cell-scheduler" => cross_cell_scheduler::run(context),
         "cdk-ldk" => cdk_ldk::run(context, crate::postgres::enabled()),
         "cdk-ldk-postgres" => cdk_ldk::run(context, true),
         "cdk-bdk-stress" => cdk_bdk_stress::run(context, crate::postgres::enabled()),

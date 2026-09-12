@@ -21,36 +21,36 @@ pub enum Capability {
     CandidateRead,
     #[serde(rename = "candidate.cancel")]
     CandidateCancel,
-    #[serde(rename = "lab.read")]
-    LabRead,
-    #[serde(rename = "lab.create")]
-    LabCreate,
-    #[serde(rename = "lab.edit")]
-    LabEdit,
-    #[serde(rename = "lab.clone")]
-    LabClone,
-    #[serde(rename = "lab.validate")]
-    LabValidate,
-    #[serde(rename = "lab.publish")]
-    LabPublish,
-    #[serde(rename = "lab.materialize")]
-    LabMaterialize,
-    #[serde(rename = "lab.status")]
-    LabStatus,
-    #[serde(rename = "lab.close")]
-    LabClose,
+    #[serde(rename = "cell.read")]
+    CellRead,
+    #[serde(rename = "cell.create")]
+    CellCreate,
+    #[serde(rename = "cell.edit")]
+    CellEdit,
+    #[serde(rename = "cell.clone")]
+    CellClone,
+    #[serde(rename = "cell.validate")]
+    CellValidate,
+    #[serde(rename = "cell.publish")]
+    CellPublish,
+    #[serde(rename = "cell.materialize")]
+    CellMaterialize,
+    #[serde(rename = "cell.status")]
+    CellStatus,
+    #[serde(rename = "cell.close")]
+    CellClose,
     // Open a local application connection; authenticated endpoints may reveal
-    // disposable lab credentials through a private configuration file.
-    #[serde(rename = "lab.connect")]
-    LabConnect,
+    // disposable cell credentials through a private configuration file.
+    #[serde(rename = "cell.connect")]
+    CellConnect,
     #[serde(rename = "experiment.create")]
     ExperimentCreate,
     #[serde(rename = "experiment.read")]
     ExperimentRead,
     #[serde(rename = "experiment.close")]
     ExperimentClose,
-    #[serde(rename = "lab.operate")]
-    LabOperate,
+    #[serde(rename = "cell.operate")]
+    CellOperate,
     #[serde(rename = "action.cancel")]
     ActionCancel,
     #[serde(rename = "topology.inspect")]
@@ -142,7 +142,7 @@ pub enum ComponentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlClass {
-    Laboratory,
+    Cell,
     Target,
     Attacker,
     Oracle,
@@ -225,7 +225,7 @@ pub enum DependencyBinding {
 // Kubernetes structural schemas cannot merge internally tagged enum branches
 // that assign different constants to the same discriminator. Keep the strict
 // serde representation above and expose its union as one structural object;
-// validate_lab enforces the legal field combinations before publication.
+// validate_cell enforces the legal field combinations before publication.
 impl JsonSchema for DependencyBinding {
     fn schema_name() -> Cow<'static, str> {
         "DependencyBinding".into()
@@ -276,7 +276,7 @@ impl JsonSchema for DependencyBinding {
     }]
 ))]
 pub struct LinkSpec {
-    /// Stable binding identity within one lab revision.
+    /// Stable binding identity within one cell revision.
     pub id: String,
     pub kind: LinkKind,
     pub from: String,
@@ -287,7 +287,7 @@ pub struct LinkSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabLimits {
+pub struct CellLimits {
     #[serde(default = "default_max_components")]
     pub max_components: u16,
     #[serde(default = "default_max_links")]
@@ -296,7 +296,7 @@ pub struct LabLimits {
     pub max_config_bytes: u32,
 }
 
-impl Default for LabLimits {
+impl Default for CellLimits {
     fn default() -> Self {
         Self {
             max_components: default_max_components(),
@@ -320,35 +320,35 @@ const fn default_max_config_bytes() -> u32 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabPolicy {
+pub struct CellPolicy {
     #[serde(default)]
     pub allow: BTreeSet<Capability>,
     #[serde(default)]
-    pub limits: LabLimits,
+    pub limits: CellLimits,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabSpec {
+pub struct CellSpec {
     pub api_version: String,
     pub name: String,
     pub components: Vec<ComponentSpec>,
     pub links: Vec<LinkSpec>,
     #[serde(default)]
-    pub policy: LabPolicy,
+    pub policy: CellPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ValidateLabRequest {
-    pub lab: LabSpec,
+pub struct ValidateCellRequest {
+    pub cell: CellSpec,
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{ComponentSpec, LabSpec};
+    use super::{CellSpec, ComponentSpec};
 
     #[test]
     fn component_config_must_be_explicit() {
@@ -357,7 +357,7 @@ mod tests {
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
             "config_version": "bitcoin-core/31/v1",
-            "control": "laboratory"
+            "control": "cell"
         });
         let error = serde_json::from_value::<ComponentSpec>(missing)
             .expect_err("an omitted component config must not silently become empty");
@@ -368,7 +368,7 @@ mod tests {
             "kind": "bitcoin",
             "implementation": "bitcoin-core",
             "config_version": "bitcoin-core/31/v1",
-            "control": "laboratory",
+            "control": "cell",
             "config": {}
         });
         serde_json::from_value::<ComponentSpec>(explicit)
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn lab_topology_collections_must_be_explicit() {
+    fn cell_topology_collections_must_be_explicit() {
         for (field, document) in [
             (
                 "components",
@@ -395,7 +395,7 @@ mod tests {
                 }),
             ),
         ] {
-            let error = serde_json::from_value::<LabSpec>(document)
+            let error = serde_json::from_value::<CellSpec>(document)
                 .expect_err("an omitted topology collection must not silently become empty");
             assert!(
                 error
@@ -405,7 +405,7 @@ mod tests {
             );
         }
 
-        serde_json::from_value::<LabSpec>(json!({
+        serde_json::from_value::<CellSpec>(json!({
             "api_version": "proofstorm/v1alpha1",
             "name": "explicitly-empty",
             "components": [],

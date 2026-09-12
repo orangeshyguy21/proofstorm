@@ -3,7 +3,7 @@ use super::{
     cocod_wallet::operation,
     private_transfer::{capture, reserve, transfer},
 };
-use crate::{GateContext, McpClient, lab};
+use crate::{GateContext, McpClient, cell};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -46,9 +46,9 @@ fn child_operation(
     parameters: Value,
 ) -> Result<Value> {
     client.call(tool, scoped(session, id, parameters))?;
-    let receipt = lab::wait_operation(client, id, 60)?;
+    let receipt = cell::wait_operation(client, id, 60)?;
     save(directory, id, &receipt)?;
-    Ok(lab::artifact_content(&receipt)?.clone())
+    Ok(cell::artifact_content(&receipt)?.clone())
 }
 fn refused(
     client: &mut McpClient,

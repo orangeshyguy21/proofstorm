@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live checkout controller rollout/reuse gate. Leave this installation idle.
 
-Builds/deploys only into the selected owned installation. Creates no labs,
+Builds/deploys only into the selected owned installation. Creates no cells,
 launches no GUI/agents, and publishes nothing to an external registry.
 """
 import argparse

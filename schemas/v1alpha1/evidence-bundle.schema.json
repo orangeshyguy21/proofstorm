@@ -90,20 +90,20 @@
         "candidate.build",
         "candidate.read",
         "candidate.cancel",
-        "lab.read",
-        "lab.create",
-        "lab.edit",
-        "lab.clone",
-        "lab.validate",
-        "lab.publish",
-        "lab.materialize",
-        "lab.status",
-        "lab.close",
-        "lab.connect",
+        "cell.read",
+        "cell.create",
+        "cell.edit",
+        "cell.clone",
+        "cell.validate",
+        "cell.publish",
+        "cell.materialize",
+        "cell.status",
+        "cell.close",
+        "cell.connect",
         "experiment.create",
         "experiment.read",
         "experiment.close",
-        "lab.operate",
+        "cell.operate",
         "action.cancel",
         "topology.inspect",
         "topology.mutate",
@@ -185,6 +185,95 @@
       ],
       "type": "string"
     },
+    "CellLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_components": {
+          "default": 64,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_config_bytes": {
+          "default": 65536,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_links": {
+          "default": 256,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CellPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "limits": {
+          "$ref": "#/$defs/CellLimits",
+          "default": {
+            "max_components": 64,
+            "max_config_bytes": 65536,
+            "max_links": 256
+          }
+        }
+      },
+      "type": "object"
+    },
+    "CellSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentSpec"
+          },
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/LinkSpec"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/CellPolicy",
+          "default": {
+            "allow": [],
+            "limits": {
+              "max_components": 64,
+              "max_config_bytes": 65536,
+              "max_links": 256
+            }
+          }
+        }
+      },
+      "required": [
+        "api_version",
+        "name",
+        "components",
+        "links"
+      ],
+      "type": "object"
+    },
     "ComponentKind": {
       "enum": [
         "bitcoin",
@@ -242,7 +331,7 @@
     },
     "ControlClass": {
       "enum": [
-        "laboratory",
+        "cell",
         "target",
         "attacker",
         "oracle"
@@ -458,7 +547,7 @@
         },
         "revisions": {
           "default": [],
-          "description": "Immutable configurations actually used by the journal, including earlier lab generations.",
+          "description": "Immutable configurations actually used by the journal, including earlier cell generations.",
           "items": {
             "$ref": "#/$defs/PublishedRevision"
           },
@@ -546,95 +635,6 @@
       ],
       "type": "string"
     },
-    "LabLimits": {
-      "additionalProperties": false,
-      "properties": {
-        "max_components": {
-          "default": 64,
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "max_config_bytes": {
-          "default": 65536,
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "max_links": {
-          "default": 256,
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
-    "LabPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "allow": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/Capability"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "limits": {
-          "$ref": "#/$defs/LabLimits",
-          "default": {
-            "max_components": 64,
-            "max_config_bytes": 65536,
-            "max_links": 256
-          }
-        }
-      },
-      "type": "object"
-    },
-    "LabSpec": {
-      "additionalProperties": false,
-      "properties": {
-        "api_version": {
-          "type": "string"
-        },
-        "components": {
-          "items": {
-            "$ref": "#/$defs/ComponentSpec"
-          },
-          "type": "array"
-        },
-        "links": {
-          "items": {
-            "$ref": "#/$defs/LinkSpec"
-          },
-          "type": "array"
-        },
-        "name": {
-          "type": "string"
-        },
-        "policy": {
-          "$ref": "#/$defs/LabPolicy",
-          "default": {
-            "allow": [],
-            "limits": {
-              "max_components": 64,
-              "max_config_bytes": 65536,
-              "max_links": 256
-            }
-          }
-        }
-      },
-      "required": [
-        "api_version",
-        "name",
-        "components",
-        "links"
-      ],
-      "type": "object"
-    },
     "LinkKind": {
       "enum": [
         "bitcoin_peer",
@@ -664,7 +664,7 @@
           "type": "string"
         },
         "id": {
-          "description": "Stable binding identity within one lab revision.",
+          "description": "Stable binding identity within one cell revision.",
           "type": "string"
         },
         "kind": {
@@ -854,11 +854,11 @@
     "PublishedRevision": {
       "additionalProperties": false,
       "properties": {
+        "cell": {
+          "$ref": "#/$defs/CellSpec"
+        },
         "digest": {
           "type": "string"
-        },
-        "lab": {
-          "$ref": "#/$defs/LabSpec"
         },
         "lock": {
           "$ref": "#/$defs/ResolvedLock"
@@ -870,7 +870,7 @@
       "required": [
         "workspace_id",
         "digest",
-        "lab",
+        "cell",
         "lock"
       ],
       "type": "object"

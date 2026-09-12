@@ -13,7 +13,7 @@ use proofstorm_acceptance::{GateContext, Kubectl, doctor, gates};
 #[derive(Parser)]
 #[command(
     name = "proofstorm-acceptance",
-    about = "Run one live Proofstorm acceptance gate against the lab cluster"
+    about = "Run one live Proofstorm acceptance gate against the cell cluster"
 )]
 struct Arguments {
     /// Isolated installation for images, images-check, or cluster-schema only.

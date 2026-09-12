@@ -159,7 +159,7 @@
     },
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:bc2476c689c7ec11a786c393ac5f5cc556e142841f17f676f11a73f4cb3bd755",
+    "rollout_digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec",
     "storage": [
       {
         "claim_name": "data-chain-0"
@@ -267,7 +267,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:bc2476c689c7ec11a786c393ac5f5cc556e142841f17f676f11a73f4cb3bd755"
+                "proofstorm.dev/rollout-digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

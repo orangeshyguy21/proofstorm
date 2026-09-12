@@ -22,25 +22,25 @@ pub fn enabled() -> bool {
 }
 
 /// Append the database component and its link when the variant is active.
-pub fn augment_lab(enabled: bool, lab: &mut Value, database_name: &str) {
+pub fn augment_cell(enabled: bool, cell: &mut Value, database_name: &str) {
     if !enabled {
         return;
     }
-    if let Some(name) = lab.get("name").and_then(Value::as_str).map(str::to_owned) {
-        lab["name"] = Value::from(format!("{name}-postgres"));
+    if let Some(name) = cell.get("name").and_then(Value::as_str).map(str::to_owned) {
+        cell["name"] = Value::from(format!("{name}-postgres"));
     }
-    if let Some(components) = lab.get_mut("components").and_then(Value::as_array_mut) {
+    if let Some(components) = cell.get_mut("components").and_then(Value::as_array_mut) {
         components.push(json!({
             "id": "database",
             "kind": "database",
             "implementation": "postgresql",
             "version": "17.11",
             "config_version": "postgresql/17/v1",
-            "control": "laboratory",
+            "control": "cell",
             "config": {"database_name": database_name, "storage_size": "2Gi"}
         }));
     }
-    if let Some(links) = lab.get_mut("links").and_then(Value::as_array_mut) {
+    if let Some(links) = cell.get_mut("links").and_then(Value::as_array_mut) {
         links.push(json!({
             "id": "mint-database",
             "kind": "database_backend",

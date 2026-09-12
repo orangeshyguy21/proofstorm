@@ -2,12 +2,12 @@ use super::*;
 use std::fs;
 
 fn sample_lock() -> proofstorm_core::ResolvedLock {
-    let spec = serde_json::from_str::<proofstorm_core::LabSpec>(include_str!(
-        "../../../../examples/developer-lab.json"
+    let spec = serde_json::from_str::<proofstorm_core::CellSpec>(include_str!(
+        "../../../../examples/developer-cell.json"
     ))
     .unwrap();
     let catalog = proofstorm_core::default_catalog();
-    let effective = proofstorm_core::resolve_effective_lab(&spec, catalog).unwrap();
+    let effective = proofstorm_core::resolve_effective_cell(&spec, catalog).unwrap();
     proofstorm_core::resolve_lock(&effective, catalog).unwrap()
 }
 
@@ -174,14 +174,14 @@ fn retry_does_not_regrant_revoked_permissions() {
         .authorize(
             workspace,
             "developer",
-            proofstorm_core::Capability::LabCreate,
+            proofstorm_core::Capability::CellCreate,
         )
         .unwrap();
     store
         .revoke(
             workspace,
             "developer",
-            proofstorm_core::Capability::LabCreate,
+            proofstorm_core::Capability::CellCreate,
         )
         .unwrap();
     initialize_permissions(&installation).unwrap();
@@ -190,7 +190,7 @@ fn retry_does_not_regrant_revoked_permissions() {
             .authorize(
                 workspace,
                 "developer",
-                proofstorm_core::Capability::LabCreate
+                proofstorm_core::Capability::CellCreate
             )
             .is_err()
     );

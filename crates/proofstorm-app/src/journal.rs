@@ -1,7 +1,7 @@
 //! Explicit synchronization of bounded runtime receipts into durable history.
 use crate::{Error, Runtime};
 use proofstorm_core::{
-    LabOperation, OperationKind, OperationPhase, WalletQuoteObservationInput,
+    CellOperation, OperationKind, OperationPhase, WalletQuoteObservationInput,
     WalletQuoteObservationRole, wallet_quote_observations_from_artifact,
 };
 use proofstorm_store::Store;
@@ -9,10 +9,10 @@ use proofstorm_store::Store;
 pub fn record(
     store: &Store,
     workspace: &str,
-    operation: &LabOperation,
+    operation: &CellOperation,
     phase: OperationPhase,
     artifact: serde_json::Value,
-) -> Result<LabOperation, Error> {
+) -> Result<CellOperation, Error> {
     let Ok(observations) = wallet_quote_observations_from_artifact(&artifact) else {
         return store
             .record_operation_result(
@@ -54,7 +54,7 @@ pub fn record(
         .map_err(Error::from)
 }
 pub fn validate_operation_quote_observations(
-    operation: &LabOperation,
+    operation: &CellOperation,
     observations: &[WalletQuoteObservationInput],
 ) -> Result<(), Error> {
     let field = |name: &str| {
@@ -107,7 +107,7 @@ pub fn validate_operation_quote_observations(
 }
 #[must_use]
 pub fn invalid_terminal_artifact(
-    operation: &LabOperation,
+    operation: &CellOperation,
     reported_phase: OperationPhase,
     code: &str,
     message: &str,
@@ -127,7 +127,7 @@ pub async fn reconcile(
     workspace: &str,
     principal: &str,
     run: &str,
-) -> Result<Vec<LabOperation>, Error> {
+) -> Result<Vec<CellOperation>, Error> {
     let mut after = 0;
     let mut pending = Vec::new();
     loop {

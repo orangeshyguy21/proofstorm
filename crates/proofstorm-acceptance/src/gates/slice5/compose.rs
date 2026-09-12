@@ -1,8 +1,8 @@
 use super::{
-    common::{DRAFT, INSTANCE, components, empty_lab, links, now_unix},
-    support::LabCleanup,
+    common::{DRAFT, INSTANCE, components, empty_cell, links, now_unix},
+    support::CellCleanup,
 };
-use crate::{GateContext, McpClient, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
@@ -16,7 +16,7 @@ pub(super) struct Materialized {
 
 pub(super) fn compose(
     client: &mut McpClient,
-    cleanup: &mut LabCleanup<'_>,
+    cleanup: &mut CellCleanup<'_>,
     scenario: super::Scenario,
 ) -> Result<Materialized> {
     // --- network backend discovery is explicit and bounded ------------------
@@ -35,10 +35,10 @@ pub(super) fn compose(
         bail!("network backend discovery is not explicit and bounded: {backend}");
     }
 
-    // --- compose the lab one mutation at a time ----------------------------
+    // --- compose the cell one mutation at a time ----------------------------
     let mut draft = client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": empty_lab(), "idempotency_key": "create-slice5"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": empty_cell(), "idempotency_key": "create-slice5"}),
     )?;
     for component in components(scenario) {
         let id = expect::string(&component, "/id")?.to_string();
@@ -74,8 +74,8 @@ pub(super) fn compose(
         )?;
     }
 
-    let document = client.call("lab_read", json!({"draft_id": DRAFT}))?;
-    let composed: Vec<&str> = expect::array(&document, "/lab/components")?
+    let document = client.call("cell_read", json!({"draft_id": DRAFT}))?;
+    let composed: Vec<&str> = expect::array(&document, "/cell/components")?
         .iter()
         .map(|component| expect::string(component, "/id"))
         .collect::<Result<_>>()?;
@@ -88,15 +88,15 @@ pub(super) fn compose(
         bail!("component composer did not produce canonical ordering: {composed:?}");
     }
     let validation = client.call(
-        "lab_validate",
-        json!({"lab": document.get("lab").cloned().unwrap_or(Value::Null)}),
+        "cell_validate",
+        json!({"cell": document.get("cell").cloned().unwrap_or(Value::Null)}),
     )?;
     if !expect::boolean(&validation, "/valid")? {
         bail!("agent-composed draft is invalid: {validation}");
     }
 
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({
             "draft_id": DRAFT,
             "expected_version": expect::integer(&draft, "/version")?,
@@ -111,10 +111,10 @@ pub(super) fn compose(
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-slice5"}),
     )?;
-    let status = lab::wait_phase(client, INSTANCE, "ready", 180, Duration::from_secs(3))?;
+    let status = cell::wait_phase(client, INSTANCE, "ready", 180, Duration::from_secs(3))?;
     let instance_key = expect::string(&status, "/instance_key")?.to_string();
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
     let revision_digest = expect::string(&status, "/revision_digest")?.to_string();
@@ -122,7 +122,7 @@ pub(super) fn compose(
     let lock_digest = expect::string(&status, "/lock_digest")?.to_string();
 
     let component_status = client.call(
-        "lab_component_status_list",
+        "cell_component_status_list",
         json!({"instance_id": INSTANCE, "limit": 50}),
     )?;
     let mut ready: Vec<&str> = expect::array(&component_status, "/components")?
@@ -142,7 +142,7 @@ pub(super) fn compose(
             "wallet",
         ]
     {
-        bail!("lab topology is not ready: {component_status}");
+        bail!("cell topology is not ready: {component_status}");
     }
 
     Ok(Materialized {
@@ -189,35 +189,35 @@ pub(super) fn conformance(
     )?;
 
     // --- a hand-written invalid action must fail closed with no Job --------
-    let labs = kubectl.get_json(&[
+    let cells = kubectl.get_json(&[
         "get",
-        "proofstormlabs.proofstorm.dev",
+        "proofstormcells.proofstorm.dev",
         "-n",
         CONTROL_NAMESPACE,
     ])?;
-    let lab_resource = expect::array(&labs, "/items")?
+    let cell_resource = expect::array(&cells, "/items")?
         .iter()
         .find(|item| {
             item.pointer("/spec/instanceId").and_then(Value::as_str) == Some(INSTANCE)
                 && item.pointer("/spec/workspaceId").and_then(Value::as_str) == Some(workspace)
         })
-        .ok_or_else(|| anyhow::anyhow!("no lab resource for {INSTANCE}"))?;
-    let instance_key = expect::string(lab_resource, "/spec/instanceKey")?;
-    let lab_name = expect::string(lab_resource, "/metadata/name")?;
+        .ok_or_else(|| anyhow::anyhow!("no cell resource for {INSTANCE}"))?;
+    let instance_key = expect::string(cell_resource, "/spec/instanceKey")?;
+    let cell_name = expect::string(cell_resource, "/metadata/name")?;
     let invalid = json!({
         "apiVersion": "proofstorm.dev/v1alpha1",
-        "kind": "ProofstormLabAction",
+        "kind": "ProofstormCellAction",
         "metadata": {
             "name": invalid_action,
             "namespace": CONTROL_NAMESPACE,
             "labels": {
                 "proofstorm.dev/instance": instance_key,
-                "proofstorm.dev/lab": lab_name,
+                "proofstorm.dev/cell": cell_name,
                 "app.kubernetes.io/managed-by": "proofstorm-controller-conformance"
             }
         },
         "spec": {
-            "labName": lab_name,
+            "cellName": cell_name,
             "workspaceId": workspace,
             "instanceId": INSTANCE,
             "instanceKey": instance_key,
@@ -242,7 +242,7 @@ pub(super) fn conformance(
     for _ in 0..30 {
         let runtime = kubectl.get_json(&[
             "get",
-            "proofstormlabaction.proofstorm.dev",
+            "proofstormcellaction.proofstorm.dev",
             invalid_action,
             "-n",
             CONTROL_NAMESPACE,
@@ -279,7 +279,7 @@ pub(super) fn conformance(
     }
     kubectl.run(&[
         "delete",
-        "proofstormlabaction.proofstorm.dev",
+        "proofstormcellaction.proofstorm.dev",
         invalid_action,
         "-n",
         CONTROL_NAMESPACE,

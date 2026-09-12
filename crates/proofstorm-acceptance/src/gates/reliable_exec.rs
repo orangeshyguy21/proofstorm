@@ -1,5 +1,5 @@
 //! Focused supervisor contract in real glibc and musl component environments.
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::fs;
@@ -79,22 +79,22 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     let document = json!({"api_version":"proofstorm/v1alpha1","name":"reliable-exec",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}},
-            {"id":"lightning","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-            {"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}}
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+            {"id":"lightning","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
+            {"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],"links":[{"id":"chain-link","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}],
         "policy":{"allow":["component.exec_live"],"limits":{"max_components":4,"max_links":4,"max_config_bytes":16384}}});
     client.call(
-        "lab_create",
-        json!({"draft_id":"reliable-exec","lab":document,"idempotency_key":"create"}),
+        "cell_create",
+        json!({"draft_id":"reliable-exec","cell":document,"idempotency_key":"create"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id":"reliable-exec","expected_version":1,"idempotency_key":"publish"}),
     )?;
-    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"apply"}))?;
+    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"apply"}))?;
     let result = (|| -> Result<()> {
-        let ready = lab::wait_ready(&mut client, INSTANCE)?;
+        let ready = cell::wait_ready(&mut client, INSTANCE)?;
         let namespace = expect::string(&ready, "/instance_namespace")?;
         client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
@@ -246,8 +246,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         "experiment_close",
         json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
     );
-    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
     fs::write(
         root.join("closed.json"),
         serde_json::to_vec_pretty(&closed)?,

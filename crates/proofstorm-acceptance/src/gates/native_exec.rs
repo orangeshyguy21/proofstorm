@@ -13,18 +13,18 @@ use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect};
 /// granted `component.exec_live` and nothing from the typed runtime surface.
 const CAPABILITIES: &[&str] = &[
     "catalog.read",
-    "lab.read",
-    "lab.create",
-    "lab.edit",
-    "lab.validate",
-    "lab.publish",
-    "lab.materialize",
-    "lab.status",
-    "lab.close",
+    "cell.read",
+    "cell.create",
+    "cell.edit",
+    "cell.validate",
+    "cell.publish",
+    "cell.materialize",
+    "cell.status",
+    "cell.close",
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lab.operate",
+    "cell.operate",
     "component.exec_live",
     "component.logs",
     "artifact.read",
@@ -90,15 +90,15 @@ fn commands() -> Vec<(
     ]
 }
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
         "name": "native-exec-acceptance",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
-            {"id": "chain-b", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
-            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "native-exec-lnd"}},
-            {"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "chain-b", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "native-exec-lnd"}},
+            {"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}},
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Native Exec Mint"}}
         ],
         "links": [
@@ -131,20 +131,20 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let created = client.call(
-        "lab_create",
-        json!({"draft_id": draft, "lab": lab_document(), "idempotency_key": format!("create-{run_id}")}),
+        "cell_create",
+        json!({"draft_id": draft, "cell": cell_document(), "idempotency_key": format!("create-{run_id}")}),
     )?;
-    let document = client.call("lab_read", json!({"draft_id": draft}))?;
+    let document = client.call("cell_read", json!({"draft_id": draft}))?;
     let validation = client.call(
-        "lab_validate",
-        json!({"lab": document.get("lab").cloned().unwrap_or(Value::Null)}),
+        "cell_validate",
+        json!({"cell": document.get("cell").cloned().unwrap_or(Value::Null)}),
     )?;
     if !expect::boolean(&validation, "/valid")? {
-        bail!("native exec lab is invalid: {validation}");
+        bail!("native exec cell is invalid: {validation}");
     }
 
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({
             "draft_id": draft,
             "expected_version": expect::integer(&created, "/version")?,
@@ -164,21 +164,21 @@ pub fn run(context: &GateContext) -> Result<()> {
     if names != ["chain", "chain-b", "lightning", "mint", "wallet"]
         || !locks.values().all(|image| image.contains("@sha256:"))
     {
-        bail!("native exec lab did not resolve exact images: {locks:?}");
+        bail!("native exec cell did not resolve exact images: {locks:?}");
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": instance, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": format!("materialize-{run_id}")}),
     )?;
     let waited = client.call(
-        "lab_wait",
+        "cell_wait",
         json!({"instance_id": instance, "target_phase": "ready", "timeout_seconds": 120}),
     )?;
     if !expect::boolean(&waited, "/reached")? || expect::boolean(&waited, "/timed_out")? {
-        bail!("native exec lab did not become ready: {waited}");
+        bail!("native exec cell did not become ready: {waited}");
     }
-    let status = client.call("lab_status", json!({"instance_id": instance}))?;
+    let status = client.call("cell_status", json!({"instance_id": instance}))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
     client.call(
@@ -310,7 +310,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     for (_, resource, pod_name, expected_component) in &records {
         let action = context.kubectl.get_json(&[
             "get",
-            "proofstormlabaction.proofstorm.dev",
+            "proofstormcellaction.proofstorm.dev",
             resource,
             "-n",
             CONTROL_NAMESPACE,
@@ -388,13 +388,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("native exec evidence is incomplete: {evidence}");
     }
 
-    client.call("lab_close", json!({"instance_id": instance}))?;
+    client.call("cell_close", json!({"instance_id": instance}))?;
     let closed = client.call(
-        "lab_wait",
+        "cell_wait",
         json!({"instance_id": instance, "target_phase": "closed", "timeout_seconds": 120}),
     )?;
     if !expect::boolean(&closed, "/reached")? || expect::boolean(&closed, "/timed_out")? {
-        bail!("native exec lab did not close: {closed}");
+        bail!("native exec cell did not close: {closed}");
     }
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {
         bail!("native exec teardown was not verified: {closed}");
@@ -402,7 +402,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     context.kubectl.assert_teardown_verified()?;
     context.kubectl.assert_no_instance_namespaces()?;
-    context.kubectl.assert_no_lab_actions()?;
+    context.kubectl.assert_no_cell_actions()?;
 
     println!(
         "MCP native component execution, bounded artifacts, workload isolation, evidence, and verified close acceptance passed"

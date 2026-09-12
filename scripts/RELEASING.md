@@ -119,7 +119,7 @@ Uploaded assets must retain their names, exact bytes, and unpublished draft stat
 
 These checks are **not full acceptance**; reports retain `release_ready: false`.
 Before announcing a version, test public downloads and install → setup/doctor →
-agent attachment → lab creation/read → reinstall → cleanup on fresh Linux and Mac
+agent attachment → cell creation/read → reinstall → cleanup on fresh Linux and Mac
 hosts. Test native apps and browser behavior separately. See
 [Mac acceptance](../release/macos.md), including signing/Gatekeeper limitations.
 

@@ -20,7 +20,7 @@ pub struct Options {
     /// Kubeconfig for an external runtime.
     #[arg(long, global = true, env = "PROOFSTORM_KUBECONFIG", hide = true)]
     pub kubeconfig: Option<PathBuf>,
-    /// Lab state database.
+    /// Cell state database.
     #[arg(long, global = true, env = "PROOFSTORM_DB", hide = true)]
     pub database: Option<PathBuf>,
     /// Authorization workspace.
@@ -48,7 +48,7 @@ pub struct Options {
     name = "proofstorm",
     version,
     disable_help_subcommand = true,
-    about = "Proofstorm — local labs for Bitcoin, Lightning, and Cashu"
+    about = "Proofstorm — local cells for Bitcoin, Lightning, and Cashu"
 )]
 struct Cli {
     #[command(flatten)]
@@ -70,24 +70,24 @@ enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
-    /// Create or update a lab from a JSON specification.
+    /// Create or update a cell from a JSON specification.
     Up(UpArgs),
-    /// List current labs.
+    /// List current cells.
     #[command(name = "ls")]
     List(ListArgs),
-    /// Show lab status.
+    /// Show cell status.
     Status {
-        /// Lab name or ID.
-        #[arg(value_name = "LAB")]
+        /// Cell name or ID.
+        #[arg(value_name = "CELL")]
         name: String,
         /// Read recorded activity after this sequence number.
         #[arg(long, default_value_t = 0)]
         after: u64,
     },
-    /// Open a local connection to a lab service.
+    /// Open a local connection to a cell service.
     Connect {
-        /// Lab name or ID.
-        #[arg(value_name = "LAB")]
+        /// Cell name or ID.
+        #[arg(value_name = "CELL")]
         name: String,
         /// Component ID.
         component: String,
@@ -102,8 +102,8 @@ enum Command {
     },
     /// Run a command in a component and record its outcome.
     Exec {
-        /// Lab name or ID.
-        #[arg(value_name = "LAB")]
+        /// Cell name or ID.
+        #[arg(value_name = "CELL")]
         name: String,
         /// Component ID.
         component: String,
@@ -120,7 +120,7 @@ enum Command {
         #[arg(last = true, required = true, value_name = "COMMAND")]
         argv: Vec<String>,
     },
-    /// Delete a lab, its storage, and its activity history.
+    /// Delete a cell, its storage, and its activity history.
     #[command(name = "rm")]
     Remove(RemoveArgs),
     /// Inspect recorded operations.
@@ -161,7 +161,7 @@ struct SetupArgs {
     /// Prepare tools without starting the runtime.
     #[arg(long)]
     prepare_only: bool,
-    /// Download all lab images now.
+    /// Download all cell images now.
     #[arg(long, conflicts_with = "prepare_only")]
     prefetch_all: bool,
 }
@@ -189,7 +189,7 @@ enum GuiCommand {
     },
     /// Start the GUI service without a browser.
     Start,
-    /// Stop the GUI service; labs keep running.
+    /// Stop the GUI service; cells keep running.
     Stop,
     /// Show GUI service status.
     Status,
@@ -227,9 +227,9 @@ enum AgentCommand {
 
 #[derive(ClapArgs)]
 struct UpArgs {
-    /// JSON lab specification.
+    /// JSON cell specification.
     file: PathBuf,
-    /// Override the lab name.
+    /// Override the cell name.
     #[arg(long)]
     name: Option<String>,
     /// Preview an edit; saves the plan locally.
@@ -252,8 +252,8 @@ struct UpArgs {
 
 #[derive(ClapArgs)]
 struct RemoveArgs {
-    /// Lab to delete, including its data.
-    #[arg(value_name = "LAB")]
+    /// Cell to delete, including its data.
+    #[arg(value_name = "CELL")]
     name: String,
     /// Seconds to wait for verified removal.
     #[arg(long, default_value_t = 120)]
@@ -268,7 +268,7 @@ struct ListArgs {
     /// Next-page cursor.
     #[arg(long, default_value = "")]
     cursor: String,
-    /// Maximum labs per page (1–50).
+    /// Maximum cells per page (1–50).
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=50))]
     limit: u32,
     /// Continue the sessions page in detailed JSON output.
@@ -289,8 +289,8 @@ struct ListArgs {
 enum OpsCommand {
     /// List recorded operations.
     Ls {
-        /// Lab name or ID.
-        #[arg(value_name = "LAB")]
+        /// Cell name or ID.
+        #[arg(value_name = "CELL")]
         name: String,
         /// Next-page cursor.
         #[arg(long, default_value = "")]
@@ -310,8 +310,8 @@ enum OpsCommand {
 
 #[derive(ClapArgs)]
 struct SyncArgs {
-    /// Lab name or ID.
-    #[arg(value_name = "LAB")]
+    /// Cell name or ID.
+    #[arg(value_name = "CELL")]
     name: String,
     /// Keep collecting every two seconds until Ctrl-C.
     #[arg(long)]
@@ -614,7 +614,7 @@ impl Command {
 
 fn help_tree(program: &'static str) -> clap::Command {
     let examples = format!(
-        "Examples:\n  {program} setup\n  {program} gui\n  {program} up lab.json --name demo\n  {program} status demo\n\nDetails: {program} <command> --help\nAdvanced: {program} help advanced"
+        "Examples:\n  {program} setup\n  {program} gui\n  {program} up cell.json --name demo\n  {program} status demo\n\nDetails: {program} <command> --help\nAdvanced: {program} help advanced"
     );
     Cli::command().bin_name(program).after_help(examples)
 }

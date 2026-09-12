@@ -1,6 +1,6 @@
 //! Deliberately prevent the lost Job from starting: test replay fencing, not a race.
 use super::{common::scoped, support::ControllerPause};
-use crate::{GateContext, McpClient, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
 use anyhow::{Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
@@ -56,7 +56,7 @@ pub(super) fn run(
     for _ in 0..60 {
         let action = kubectl.get_json(&[
             "get",
-            "proofstormlabaction",
+            "proofstormcellaction",
             resource,
             "-n",
             CONTROL_NAMESPACE,
@@ -106,9 +106,9 @@ pub(super) fn run(
     ])?;
     pause.resume()?;
     kubectl.run(&["delete", "resourcequota/recovery-hold", "-n", namespace])?;
-    let failed = lab::wait_operation_phase(client, "lost-probe", "failed", 120)?;
+    let failed = cell::wait_operation_phase(client, "lost-probe", "failed", 120)?;
     ensure!(
-        lab::artifact_content(&failed)?["code"] == "action_job_lost",
+        cell::artifact_content(&failed)?["code"] == "action_job_lost",
         "lost Job had wrong terminal error: {failed}"
     );
     ensure!(
@@ -139,9 +139,9 @@ pub(super) fn run(
         "cancellation retry changed identity"
     );
     pause.resume()?;
-    let cancelled = lab::wait_operation_phase(client, "cancelled-probe", "cancelled", 120)?;
+    let cancelled = cell::wait_operation_phase(client, "cancelled-probe", "cancelled", 120)?;
     ensure!(
-        lab::artifact_content(&cancelled)?["code"] == "action_cancelled",
+        cell::artifact_content(&cancelled)?["code"] == "action_cancelled",
         "wrong cancellation error: {cancelled}"
     );
     let selector = format!(

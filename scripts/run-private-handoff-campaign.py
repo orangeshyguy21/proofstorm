@@ -117,7 +117,7 @@ class EvidenceVerifier:
         if stage == 'recipient-receive':
             self.refusal(events, 'recipient-parent-release-denied', 'only the recorded actor', operation=False)
             for identity in ['recipient-wallet-denied', 'recipient-command-denied']:
-                self.refusal(events, identity, 'LabOperate')
+                self.refusal(events, identity, 'CellOperate')
             if json.loads(sessions[parent_id]['phase_json']) != 'active':
                 raise CampaignFailure('forbidden parent release changed root authority')
             received = self.action('recipient-receive', recipient)
@@ -140,7 +140,7 @@ class EvidenceVerifier:
                 raise CampaignFailure('child revocation not recorded')
             return {**self.packet, 'child_released': True}
         if stage == 'recipient-revoked':
-            self.refusal(events, 'recipient-revoked-balance', 'LabOperate')
+            self.refusal(events, 'recipient-revoked-balance', 'CellOperate')
             return {**self.packet, 'revoked_request_refused': True}
         if stage == 'source-finalize':
             closed, exported = False, False
@@ -186,9 +186,9 @@ class EvidenceVerifier:
 INSTRUCTIONS = {
     'source-prepare': '''Use the assisted setup already completed under your source identity; never reinitialize or refund. Prepare one 65536-byte reference wallet-a→wallet-b (source-prepare). Native private capture source-capture: cocod send cashu 70 --mint-url http://mint:3338; timeout60, cashu_token format. Await terminal native receipt and ready capture. Use private_access_issue to authorize grant <run>-recipient for benchmark-recipient for wallet-b/mint/exact reference. Approve the supplied receive contract exactly. Handoff under source-handoff to this child. Do not deliver or receive. Return the operation IDs; host validates durable metadata before switching roles.''',
     'recipient-receive': '''Use private_access_read to read the supplied recipient grant; confirm its exact wallet/mint/reference and receive digest. Once each, test finishing the source session (idempotency_key recipient-parent-release-denied), wrong wallet-a balance under child (recipient-wallet-denied), and private consume on wallet-b with only approved argv[0] changed to unapproved-receive (recipient-command-denied). Keep input index8 and timeout60 valid so this tests scope, not malformed arguments. If any is admitted, stop and return its handle without importing. After all three authority refusals, deliver once (recipient-deliver), then consume once (recipient-receive) with EXACT approved argv, private output and argv index8. Await terminal receipt including cleanup/retirement; then fresh passive wallet-b/mint balance (recipient-balance), require70 and zero reserved/pending/pending_spent. No source-wallet mutation, help, reconciliation, extra transfer or finalization. Report only your own observations and IDs.''',
-    'source-revoke': '''Read recipient-receive and recipient-balance receipts yourself, verify terminal native completion and70sat destination. Read your parent session to verify active after the forbidden release. Use private_access_revoke on the recipient grant only. Retain its receipt. No money mutation, second import or lab close yet.''',
+    'source-revoke': '''Read recipient-receive and recipient-balance receipts yourself, verify terminal native completion and70sat destination. Read your parent session to verify active after the forbidden release. Use private_access_revoke on the recipient grant only. Retain its receipt. No money mutation, second import or cell close yet.''',
     'recipient-revoked': '''The host has verified the child release. Once, call fresh wallet-b/mint balance under that revoked child with operation/idempotency ID recipient-revoked-balance. Require an authority refusal, no action. Report the actual private argv index8 receive binding, observed balance/receipt IDs and refusal outcomes. You have not observed source finalization. Do not claim exhaustive privacy or invent budget totals.''',
-    'source-finalize': '''Cleanup has priority. If experimental work is incomplete, do not resume it. Observe/cancel owned accepted operations and retain terminal cleanup evidence. If still in work phase and recipient receive completed, request fresh balances source-final-a and source-final-b; expect4930/70 and zero supported unsettled categories. While source access remains authorized, release any owned custody reference (source-release), await terminal receipt; revoke remaining recipient access, finish your session, close experiment, export evidence, close lab, then lab_wait target closed timeout60. Observe verified_absent yourself and return a concise report of receipts/actual bindings/missing criteria. No guessed usage totals, no claim that revocation reversed money, no new receive/send/recovery.''',
+    'source-finalize': '''Cleanup has priority. If experimental work is incomplete, do not resume it. Observe/cancel owned accepted operations and retain terminal cleanup evidence. If still in work phase and recipient receive completed, request fresh balances source-final-a and source-final-b; expect4930/70 and zero supported unsettled categories. While source access remains authorized, release any owned custody reference (source-release), await terminal receipt; revoke remaining recipient access, finish your session, close experiment, export evidence, close cell, then cell_wait target closed timeout60. Observe verified_absent yourself and return a concise report of receipts/actual bindings/missing criteria. No guessed usage totals, no claim that revocation reversed money, no new receive/send/recovery.''',
 }
 
 
@@ -197,7 +197,7 @@ def stage_prompt(stage, run_id, metadata, budget):
             + json.dumps(PLAN['RECEIVE']) + '\nVerified coordination metadata: ' + json.dumps(metadata)
             + '\nShared absolute budget: ' + json.dumps(budget)
             + '\nUse only configured Proofstorm MCP. Token bytes/credentials remain private. Native exit, delivery and financial observations are separate evidence. '
-              'This source is a trusted whole-lab owner. Final30seconds are reporting reserve. Respect _benchmark_budget on every reply. '
+              'This source is a trusted whole-cell owner. Final30seconds are reporting reserve. Respect _benchmark_budget on every reply. '
               'Two equivalent failures end experimental work; never replay an ambiguous accepted mutation. No guessed counters or broad secret-absence claims.')
 
 
@@ -232,7 +232,7 @@ class SerialCampaign:
         self.results = []
         self.failures = []
         self.equivalent_errors = {}
-        self.metadata = {'instance_id': contract['run_id']+'-lab', 'experiment_id': contract['run_id']+'-experiment',
+        self.metadata = {'instance_id': contract['run_id']+'-cell', 'experiment_id': contract['run_id']+'-experiment',
                          'source_session_id': contract['run_id']+'-session'}
         self.started = time.time()
         self.monotonic_started = time.monotonic()
@@ -461,7 +461,7 @@ def prerequisites(gate, binary, cluster):
         raise CampaignFailure('release MCP pin mismatch')
     if (read('outcome').get('passed') is not True
             or read('closed').get('teardown_receipt', {}).get('verified_absent') is not True
-            or read('cluster-after').get('remaining_labs_and_actions') != 0
+            or read('cluster-after').get('remaining_cells_and_actions') != 0
             or read('cluster-after').get('instance_namespace_absent') is not True
             or audit.get('journal_complete') is not True
             or audit.get('all_native_cleanup_streams_and_runner_verified') is not True
@@ -527,7 +527,7 @@ def dispatch(run_id):
                 subprocess.run([sys.executable, str(ROOT/'scripts/seed-agent-usability-plan.py'),
                     str(paths['source']), str(ROOT/'scripts/fixtures/private-ecash-verified-plan.json'), run_id],
                     stdout=log, stderr=subprocess.STDOUT, check=True, timeout=120)
-                # Provision recipient grants without a model. No lab mutation.
+                # Provision recipient grants without a model. No cell mutation.
                 provision = run/'recipient-provision'; provision.mkdir()
                 Client = runpy.run_path(str(ROOT/'scripts/prepare-private-ecash-benchmark.py'))['Client']
                 client = Client(configs['recipient']['mcp']['pst'], provision)

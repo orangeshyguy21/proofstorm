@@ -2,7 +2,7 @@
 """Exercise a registered checkout's live product path (setup must already pass).
 
 Uses private agent homes/projects and starts no model sessions. Leaves the selected
-runtime/labs alone; stops only the test GUI. Requires an idle/stopped GUI initially.
+runtime/cells alone; stops only the test GUI. Requires an idle/stopped GUI initially.
 """
 import argparse
 import json

@@ -4,7 +4,7 @@ use crate::{
 };
 use leptos::prelude::*;
 use proofstorm_core::ComponentKind;
-use proofstorm_view::{ComponentBalance, EnvironmentLab, ProcessUsage, SystemView, UsageTotals};
+use proofstorm_view::{ComponentBalance, EnvironmentCell, ProcessUsage, SystemView, UsageTotals};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[component]
@@ -16,7 +16,7 @@ pub fn SystemSummary(
         <button class=move || if open.get() { "system-summary selected" } else { "system-summary" } on:click=move |_| open.set(true) aria-label="Open system usage">
             <span class="system-summary-title"><span>"System"</span><span>"↗"</span></span>
             <span class="system-summary-values"><span><small>"CPU usage"</small><strong>{move || cpu(telemetry.get().filter(|s|s.error.is_none()).and_then(|s|s.totals.cpu_millicores))}</strong></span><span><small>"Memory"</small><strong>{move || memory(telemetry.get().filter(|s|s.error.is_none()).and_then(|s|s.totals.memory_bytes))}</strong></span></span>
-            <small class="system-summary-count">{move || telemetry.get().map_or_else(||"Loading…".into(), |s| if s.error.is_some(){"Unavailable".into()}else if s.labs.iter().any(|lab|lab.error.is_some()){"Partial inventory".into()}else if s.sampled_at_unix==0{"Sampling…".into()}else if s.totals.sampled<s.totals.running {format!("{} running · partial measurement",s.totals.running)}else{format!("{} running · {} lab{}",s.totals.running,s.labs.len(),if s.labs.len()==1{""}else{"s"})})}</small>
+            <small class="system-summary-count">{move || telemetry.get().map_or_else(||"Loading…".into(), |s| if s.error.is_some(){"Unavailable".into()}else if s.cells.iter().any(|cell|cell.error.is_some()){"Partial inventory".into()}else if s.sampled_at_unix==0{"Sampling…".into()}else if s.totals.sampled<s.totals.running {format!("{} running · partial measurement",s.totals.running)}else{format!("{} running · {} cell{}",s.totals.running,s.cells.len(),if s.cells.len()==1{""}else{"s"})})}</small>
         </button>
     }
 }
@@ -24,51 +24,51 @@ pub fn SystemSummary(
 #[component]
 pub fn SystemPanel(
     telemetry: RwSignal<Option<SystemView>>,
-    selected_lab: RwSignal<String>,
+    selected_cell: RwSignal<String>,
     selected_component: RwSignal<String>,
     open: RwSignal<bool>,
 ) -> impl IntoView {
     let filter = RwSignal::new(String::new());
     let search = RwSignal::new(String::new());
     let include_stopped = RwSignal::new(false);
-    let expanded_labs = RwSignal::new(BTreeSet::<String>::new());
+    let expanded_cells = RwSignal::new(BTreeSet::<String>::new());
     let expanded_groups = RwSignal::new(BTreeSet::<String>::new());
     view! {
         <section class="system-page">
-            <div class="page-heading"><div><h1>"System"</h1><p class="page-description">"Containers in this workspace’s labs"</p></div><span class="heading-note"><FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||telemetry.get().is_some_and(|s|s.error.is_some()||s.labs.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /></span></div>
+            <div class="page-heading"><div><h1>"System"</h1><p class="page-description">"Containers in this workspace’s cells"</p></div><span class="heading-note"><FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||telemetry.get().is_some_and(|s|s.error.is_some()||s.cells.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /></span></div>
             {move ||telemetry.get().and_then(|s|s.error).map(|message|view!{<div class="notice warning">{message}</div>})}
             {move ||telemetry.get().map(|s|{
-                let incomplete=s.error.is_some()||s.labs.iter().any(|lab|lab.error.is_some());
+                let incomplete=s.error.is_some()||s.cells.iter().any(|cell|cell.error.is_some());
                 let t=s.totals;
                 let partial=t.sampled<t.running;
                 view!{
                     <div class="metrics"><div><span>"CPU usage"</span><strong>{cpu(t.cpu_millicores)}</strong>{partial.then(||view!{<small class="partial-label">"Partial measurement"</small>})}</div><div><span>"Memory"</span><strong>{memory(t.memory_bytes)}</strong>{partial.then(||view!{<small class="partial-label">"Partial measurement"</small>})}</div><div><span>"Running"</span><strong>{if incomplete{"—".into()}else{t.running.to_string()}}</strong><small>{if incomplete{"Inventory unavailable".into()}else{format!("{} ready",t.ready)}}</small></div><div><span>"Restarts"</span><strong>{if incomplete{"—".into()}else{t.restarts.to_string()}}</strong></div></div>
-                    {incomplete.then(||view!{<p class="measurement-note">"Totals unavailable · some lab inventories could not be read"</p>})}
+                    {incomplete.then(||view!{<p class="measurement-note">"Totals unavailable · some cell inventories could not be read"</p>})}
                     {(!incomplete).then(||view!{<p class="measurement-note">{format!("Measurements available for {} of {} running containers",t.sampled,t.running)}</p>})}
                 }
             })}
             <section class="resource-panel">
-                <div class="panel-title"><h2>"Resources & processes"</h2><span>"Expand a lab or component"</span></div>
-                <div class="process-filters"><select aria-label="Filter by lab" prop:value=move ||filter.get() on:change=move |event|filter.set(event_target_value(&event))><option value="">"All labs"</option>{move ||telemetry.get().map(|s|s.labs.into_iter().map(|lab|view!{<option value=lab.id>{lab.name}</option>}).collect_view())}</select><input class="search" placeholder="Find a component or process…" aria-label="Find a component or process" on:input=move |event|search.set(event_target_value(&event)) /><label><input type="checkbox" on:change=move |event|include_stopped.set(event_target_checked(&event)) />"Include stopped"</label></div>
-                <div class="table-scroll"><table><thead><tr><th>"Lab / component / container"</th><th>"State"</th><th>"CPU usage"</th><th>"Memory"</th><th>"Restarts"</th><th>"Measurements"</th></tr></thead><tbody>{move ||{
-                    let query=search.get().to_lowercase();let lab_filter=filter.get();let mut rows=Vec::new();
-                    for lab in telemetry.get().into_iter().flat_map(|s|s.labs).filter(|lab|lab_filter.is_empty()||lab.id==lab_filter) {
-                        let expanded=expanded_labs.get().contains(&lab.id)||!query.is_empty();
+                <div class="panel-title"><h2>"Resources & processes"</h2><span>"Expand a cell or component"</span></div>
+                <div class="process-filters"><select aria-label="Filter by cell" prop:value=move ||filter.get() on:change=move |event|filter.set(event_target_value(&event))><option value="">"All cells"</option>{move ||telemetry.get().map(|s|s.cells.into_iter().map(|cell|view!{<option value=cell.id>{cell.name}</option>}).collect_view())}</select><input class="search" placeholder="Find a component or process…" aria-label="Find a component or process" on:input=move |event|search.set(event_target_value(&event)) /><label><input type="checkbox" on:change=move |event|include_stopped.set(event_target_checked(&event)) />"Include stopped"</label></div>
+                <div class="table-scroll"><table><thead><tr><th>"Cell / component / container"</th><th>"State"</th><th>"CPU usage"</th><th>"Memory"</th><th>"Restarts"</th><th>"Measurements"</th></tr></thead><tbody>{move ||{
+                    let query=search.get().to_lowercase();let cell_filter=filter.get();let mut rows=Vec::new();
+                    for cell in telemetry.get().into_iter().flat_map(|s|s.cells).filter(|cell|cell_filter.is_empty()||cell.id==cell_filter) {
+                        let expanded=expanded_cells.get().contains(&cell.id)||!query.is_empty();
                         let mut groups=BTreeMap::<String,Vec<ProcessUsage>>::new();
-                        for process in lab.processes { groups.entry(process_group(&process)).or_default().push(process); }
-                        let id=lab.id.clone();let nav_id=id.clone();let totals=lab.totals;let unavailable=lab.error.is_some();
-                        rows.push(view!{<tr class="lab-resource-row"><td><button class="tree-toggle" aria-expanded=expanded on:click=move |_|toggle(expanded_labs,&id)><span>{if expanded{"⌄"}else{"›"}}</span>{lab.name}</button><button class="lab-open" aria-label="Open lab topology" on:click=move |_|{selected_component.set(String::new());selected_lab.set(nav_id.clone());open.set(false);}>"↗"</button>{lab.error.or(lab.metrics_error).map(|message|view!{<small class="table-warning">{message}</small>})}</td><TotalsCells totals unavailable /></tr>}.into_any());
+                        for process in cell.processes { groups.entry(process_group(&process)).or_default().push(process); }
+                        let id=cell.id.clone();let nav_id=id.clone();let totals=cell.totals;let unavailable=cell.error.is_some();
+                        rows.push(view!{<tr class="cell-resource-row"><td><button class="tree-toggle" aria-expanded=expanded on:click=move |_|toggle(expanded_cells,&id)><span>{if expanded{"⌄"}else{"›"}}</span>{cell.name}</button><button class="cell-open" aria-label="Open cell topology" on:click=move |_|{selected_component.set(String::new());selected_cell.set(nav_id.clone());open.set(false);}>"↗"</button>{cell.error.or(cell.metrics_error).map(|message|view!{<small class="table-warning">{message}</small>})}</td><TotalsCells totals unavailable /></tr>}.into_any());
                         if !expanded {continue;}
                         for (name,processes) in groups {
                             let filtered=processes.iter().filter(|p| (include_stopped.get()||!p.terminated) && (query.is_empty()||format!("{name} {} {}",p.pod,p.container).to_lowercase().contains(&query))).cloned().collect::<Vec<_>>();
                             if filtered.is_empty(){continue;}
-                            let key=format!("{}:{name}",lab.id);let group_open=expanded_groups.get().contains(&key)||!query.is_empty();
-                            let totals=UsageTotals::from_processes(processes.iter());let nav_id=lab.id.clone();let component=processes.iter().find_map(|p|p.component.clone());
-                            rows.push(view!{<tr class="component-resource-row"><td><button class="tree-toggle" aria-expanded=group_open on:click=move |_|toggle(expanded_groups,&key)><span>{if group_open{"⌄"}else{"›"}}</span>{name}</button>{component.map(|component|view!{<button class="lab-open" aria-label="Inspect component on topology" on:click=move |_|{selected_lab.set(nav_id.clone());selected_component.set(component.clone());open.set(false);}>"↗"</button>})}</td><TotalsCells totals /></tr>}.into_any());
+                            let key=format!("{}:{name}",cell.id);let group_open=expanded_groups.get().contains(&key)||!query.is_empty();
+                            let totals=UsageTotals::from_processes(processes.iter());let nav_id=cell.id.clone();let component=processes.iter().find_map(|p|p.component.clone());
+                            rows.push(view!{<tr class="component-resource-row"><td><button class="tree-toggle" aria-expanded=group_open on:click=move |_|toggle(expanded_groups,&key)><span>{if group_open{"⌄"}else{"›"}}</span>{name}</button>{component.map(|component|view!{<button class="cell-open" aria-label="Inspect component on topology" on:click=move |_|{selected_cell.set(nav_id.clone());selected_component.set(component.clone());open.set(false);}>"↗"</button>})}</td><TotalsCells totals /></tr>}.into_any());
                             if group_open { for p in filtered { rows.push(view!{<ProcessRow process=p />}.into_any()); } }
                         }
                     }
-                    if rows.is_empty(){rows.push(view!{<tr><td colspan="6" class="quiet-empty">"No labs"</td></tr>}.into_any());}
+                    if rows.is_empty(){rows.push(view!{<tr><td colspan="6" class="quiet-empty">"No cells"</td></tr>}.into_any());}
                     rows.collect_view()
                 }}</tbody></table></div>
             </section>
@@ -120,14 +120,14 @@ fn ProcessRow(process: ProcessUsage) -> impl IntoView {
 
 pub(crate) fn balance(
     telemetry: RwSignal<Option<SystemView>>,
-    lab: &str,
+    cell: &str,
     component: &str,
 ) -> Option<ComponentBalance> {
     telemetry
         .get()?
-        .labs
+        .cells
         .into_iter()
-        .find(|l| l.id == lab)?
+        .find(|l| l.id == cell)?
         .balances
         .into_iter()
         .find(|b| b.component == component)
@@ -135,12 +135,12 @@ pub(crate) fn balance(
 #[component]
 pub fn BlockHeight(
     telemetry: RwSignal<Option<SystemView>>,
-    lab: RwSignal<Option<EnvironmentLab>>,
+    cell: RwSignal<Option<EnvironmentCell>>,
 ) -> impl IntoView {
-    view! {<span class="block-height" title="Highest current block height observed across this lab’s Bitcoin nodes"><span class="block-height-label">"Block height"</span>{move ||{
-        let lab=lab.get();let id=lab.as_ref().map(|l|l.id.as_str()).unwrap_or_default();
-        let expected=lab.as_ref().map_or(0,|l|l.components.items.iter().filter(|c|c.kind==ComponentKind::Bitcoin).count());
-        let usage=telemetry.get().and_then(|s|s.labs.into_iter().find(|l|l.id==id));
+    view! {<span class="block-height" title="Highest current block height observed across this cell’s Bitcoin nodes"><span class="block-height-label">"Block height"</span>{move ||{
+        let cell=cell.get();let id=cell.as_ref().map(|l|l.id.as_str()).unwrap_or_default();
+        let expected=cell.as_ref().map_or(0,|l|l.components.items.iter().filter(|c|c.kind==ComponentKind::Bitcoin).count());
+        let usage=telemetry.get().and_then(|s|s.cells.into_iter().find(|l|l.id==id));
         let value=usage.as_ref().and_then(block_height);
         let sampled=usage.as_ref().map_or(0,|l|l.balances.iter().filter(|b|b.block_height.is_some()&&b.error.is_none()).count());
         view! {<span class="block-height-reading"><strong>{value.map_or_else(||"—".into(),sat)}</strong>{(sampled>0&&sampled<expected).then(||view!{<small>"partial"</small>})}</span>}
@@ -149,14 +149,14 @@ pub fn BlockHeight(
 #[component]
 pub fn NodeBalance(
     telemetry: RwSignal<Option<SystemView>>,
-    lab: RwSignal<Option<EnvironmentLab>>,
+    cell: RwSignal<Option<EnvironmentCell>>,
     data: Memo<Option<crate::canvas_model::CanvasNode>>,
 ) -> impl IntoView {
     let displayed = Memo::new(move |_| {
-        let Some((lab, node)) = lab.get().zip(data.get()) else {
+        let Some((cell, node)) = cell.get().zip(data.get()) else {
             return ("—".into(), "Balance".into());
         };
-        let observation = balance(telemetry, &lab.id, &node.owner);
+        let observation = balance(telemetry, &cell.id, &node.owner);
         if node.kind == ComponentKind::Bitcoin {
             (
                 observation
@@ -179,7 +179,7 @@ pub fn NodeBalance(
         } else {
             let memory = telemetry
                 .get()
-                .and_then(|s| s.labs.into_iter().find(|l| l.id == lab.id))
+                .and_then(|s| s.cells.into_iter().find(|l| l.id == cell.id))
                 .and_then(|l| {
                     let processes = l
                         .processes
@@ -199,10 +199,10 @@ pub fn NodeBalance(
 #[component]
 pub fn BalancePanel(
     telemetry: RwSignal<Option<SystemView>>,
-    lab_id: String,
+    cell_id: String,
     component: String,
 ) -> impl IntoView {
-    view! {{move ||balance(telemetry,&lab_id,&component).map(|b|{let unix=if b.error.is_some()&&b.amounts.is_empty()&&b.block_height.is_none(){0}else{b.observed_at_unix};let failed=b.error.is_some();view!{
+    view! {{move ||balance(telemetry,&cell_id,&component).map(|b|{let unix=if b.error.is_some()&&b.amounts.is_empty()&&b.block_height.is_none(){0}else{b.observed_at_unix};let failed=b.error.is_some();view!{
         <div class="balance-panel"><h4>"Latest observation"</h4>{b.error.clone().map(|message|view!{<p>{message}</p>})}{b.block_height.map(|height|view!{<div class="balance-row"><span>"Block height"</span><strong>{sat(height)}</strong></div>})}{b.amounts.into_iter().map(|a|view!{<div class="balance-row"><span>{a.label}</span><strong>{sat(a.sat)}<small>"sat"</small></strong></div>}).collect_view()}<small><FreshnessStatus unix failed /></small></div>
     }})}}
 }

@@ -10,7 +10,7 @@ fn tempdir() -> tempfile::TempDir {
 fn grants() -> (Grant, Grant) {
     let a = Grant {
         workspace: "workspace".into(),
-        lab: "lab".into(),
+        cell: "cell".into(),
         principal: "alice".into(),
         wallet: "cdk".into(),
         authority: "source-session".into(),
@@ -42,7 +42,7 @@ fn produced(payload: &[u8], native: NativeReceipt) -> ProducedPayload {
     }
 }
 fn vault(root: &Path) -> Vault {
-    Vault::open(root, "workspace", "lab", Limits::default()).unwrap()
+    Vault::open(root, "workspace", "cell", Limits::default()).unwrap()
 }
 fn captured(v: &mut Vault, a: &Grant, b: &Grant, key: &str, payload: &[u8]) -> Transfer {
     let t = v
@@ -120,7 +120,7 @@ fn large_private_transfer_survives_restart_and_separates_native_receipts() {
 }
 
 #[test]
-fn handles_do_not_authorize_other_principals_wallets_labs_or_authorities() {
+fn handles_do_not_authorize_other_principals_wallets_cells_or_authorities() {
     let root = tempdir();
     let mut v = vault(root.path());
     let (a, b) = grants();
@@ -130,7 +130,7 @@ fn handles_do_not_authorize_other_principals_wallets_labs_or_authorities() {
         match kind {
             0 => wrong.principal = "mallory".into(),
             1 => wrong.wallet = "other".into(),
-            2 => wrong.lab = "other".into(),
+            2 => wrong.cell = "other".into(),
             3 => wrong.authority = "other".into(),
             _ => wrong.workspace = "other".into(),
         }
@@ -141,7 +141,7 @@ fn handles_do_not_authorize_other_principals_wallets_labs_or_authorities() {
     assert_eq!(v.begin_capture(&b, &t.id, "wrong"), Err(Error::Access));
     assert_eq!(v.status(&b, "guessed-reference"), Err(Error::Access));
     assert!(matches!(
-        Vault::open(root.path(), "workspace", "other-lab", Limits::default()),
+        Vault::open(root.path(), "workspace", "other-cell", Limits::default()),
         Err(Error::Access)
     ));
 }
@@ -151,11 +151,11 @@ fn capacity_is_reserved_before_producer_and_idempotency_survives_reconnection() 
     let root = tempdir();
     let limits = Limits {
         payload_bytes: 100,
-        lab_bytes: 200,
+        cell_bytes: 200,
         active_transfers: 1,
         retention_seconds: 60,
     };
-    let mut v = Vault::open(root.path(), "workspace", "lab", limits).unwrap();
+    let mut v = Vault::open(root.path(), "workspace", "cell", limits).unwrap();
     let (a, b) = grants();
     let t = v.prepare(&a, &b, "same", 100).unwrap();
     assert_eq!(v.prepare(&a, &b, "same", 100).unwrap(), t);
@@ -167,7 +167,7 @@ fn capacity_is_reserved_before_producer_and_idempotency_survives_reconnection() 
             .unwrap(),
         200
     );
-    let mut reopened = Vault::open(root.path(), "workspace", "lab", limits).unwrap();
+    let mut reopened = Vault::open(root.path(), "workspace", "cell", limits).unwrap();
     assert_eq!(
         reopened.prepare(&a, &b, "second", 100),
         Err(Error::Capacity)
@@ -309,14 +309,14 @@ fn unsafe_storage_permissions_and_symlinks_are_refused() {
     let root = tempdir();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
     assert!(matches!(
-        Vault::open(root.path(), "workspace", "lab", Limits::default()),
+        Vault::open(root.path(), "workspace", "cell", Limits::default()),
         Err(Error::Storage)
     ));
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let target = tempfile::NamedTempFile::new().unwrap();
     std::os::unix::fs::symlink(target.path(), root.path().join("private.sqlite3")).unwrap();
     assert!(matches!(
-        Vault::open(root.path(), "workspace", "lab", Limits::default()),
+        Vault::open(root.path(), "workspace", "cell", Limits::default()),
         Err(Error::Storage)
     ));
 }
@@ -405,11 +405,11 @@ fn competing_admission_cannot_exceed_capacity_or_start_native_work_twice() {
     let root = tempdir();
     let limits = Limits {
         payload_bytes: 100,
-        lab_bytes: 200,
+        cell_bytes: 200,
         active_transfers: 1,
         retention_seconds: 60,
     };
-    let _initial = Vault::open(root.path(), "workspace", "lab", limits).unwrap();
+    let _initial = Vault::open(root.path(), "workspace", "cell", limits).unwrap();
     let (a, b) = grants();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let mut workers = vec![];
@@ -419,7 +419,7 @@ fn competing_admission_cannot_exceed_capacity_or_start_native_work_twice() {
         let b = b.clone();
         let barrier = barrier.clone();
         workers.push(std::thread::spawn(move || {
-            let mut v = Vault::open(&path, "workspace", "lab", limits).unwrap();
+            let mut v = Vault::open(&path, "workspace", "cell", limits).unwrap();
             barrier.wait();
             v.prepare(&a, &b, key, 100)
         }));

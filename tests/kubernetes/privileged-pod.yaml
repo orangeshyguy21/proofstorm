@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: privileged-must-refuse
-  namespace: proofstorm-01slice2lab00
+  namespace: proofstorm-01slice2cell00
 spec:
   containers:
     - name: privileged

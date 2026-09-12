@@ -17,28 +17,30 @@ use kube::{
 use proofstorm_core::{
     API_VERSION, AuthenticationProtocol, BitcoinNetwork, CandidateBuild, CandidateBuildPhase,
     CandidateSource, Capability, CatalogDependencySupport, CatalogEntry, CatalogFeature,
-    CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, ComponentKind, ComponentSpec,
+    CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, CellInstance,
+    CellInstanceStatus, CellOperation, CellPolicy, CellSpec, ComponentKind, ComponentSpec,
     ComponentStatus, ControlClass, DatabaseRole, DependencyBinding, DraftMutation,
     EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent,
-    EvidenceInstance, Experiment, ExperimentPhase, InstancePhase, InventoryEntry, LabInstance,
-    LabInstanceStatus, LabOperation, LabPolicy, LabSpec, LinkKind, LinkSpec, MAX_NETWORK_DELAY_MS,
-    MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS, NetworkFaultBackend,
-    NetworkFaultDirection, NetworkFaultFeature, OperationArtifact, OperationKind, OperationPhase,
-    PaymentMethod, PublishedRevision, ReleaseChannel, SupportLifecycle,
-    TeardownReceipt as CoreTeardownReceipt, ValidationIssue, WalletQuoteDirection,
-    WalletQuoteObservation, WalletQuoteObservationRole, default_catalog, digest_json,
-    network_policy_fault_backend, validate_lab, wallet_quote_observations_from_artifact,
+    EvidenceInstance, Experiment, ExperimentPhase, InstancePhase, InventoryEntry, LinkKind,
+    LinkSpec, MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
+    NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature, OperationArtifact,
+    OperationKind, OperationPhase, PaymentMethod, PublishedRevision, ReleaseChannel,
+    SupportLifecycle, TeardownReceipt as CoreTeardownReceipt, ValidationIssue,
+    WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationRole, default_catalog,
+    digest_json, network_policy_fault_backend, validate_cell,
+    wallet_quote_observations_from_artifact,
 };
 use proofstorm_kube::{
     AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
     AuthenticationReplayAction, BootstrapLiquidityAction, CANDIDATE_BUILD_LABEL,
-    CANDIDATE_CANCEL_ANNOTATION, ChannelCloseAction, ChannelOpenAction, ChannelPolicySetAction,
-    ChannelRebalanceAction, ComponentExecLiveAction, ComponentForensicsAction, ComponentLogsAction,
-    LabAction, NetworkHealAction, NetworkPartitionAction, PeerConnectAction, PeerDisconnectAction,
-    ProofstormCandidateBuild, ProofstormCandidateBuildSpec, ProofstormLabAction,
-    ReachabilityOracleAction, WalletBalanceAction, WalletFundAction, WalletInitializeAction,
-    WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction, WalletQuoteClaimAction,
-    WalletRoundTripAction, component_ports,
+    CANDIDATE_CANCEL_ANNOTATION, CellAction, ChannelCloseAction, ChannelOpenAction,
+    ChannelPolicySetAction, ChannelRebalanceAction, ComponentExecLiveAction,
+    ComponentForensicsAction, ComponentLogsAction, NetworkHealAction, NetworkPartitionAction,
+    PeerConnectAction, PeerDisconnectAction, ProofstormCandidateBuild,
+    ProofstormCandidateBuildSpec, ProofstormCellAction, ReachabilityOracleAction,
+    WalletBalanceAction, WalletFundAction, WalletInitializeAction, WalletInvoiceAction,
+    WalletMeltQuoteRefreshAction, WalletPayAction, WalletQuoteClaimAction, WalletRoundTripAction,
+    component_ports,
 };
 use proofstorm_store::{Draft, DraftDiff, Store, StoreError, Workspace};
 use rmcp::{
@@ -59,7 +61,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct DeveloperUpRequest {
     pub name: String,
-    pub lab: LabSpec,
+    pub cell: CellSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -87,7 +89,7 @@ pub struct DeveloperExecRequest {
 #[serde(deny_unknown_fields)]
 pub struct DeveloperFinishRequest {
     pub name: String,
-    /// Copy `instance_key` from `lab_inspect`.
+    /// Copy `instance_key` from `cell_inspect`.
     pub expected_instance_key: String,
     #[serde(default = "default_wait_timeout_seconds")]
     pub timeout_seconds: u32,
@@ -97,33 +99,33 @@ pub struct DeveloperFinishRequest {
 #[serde(deny_unknown_fields)]
 pub struct CreateDraftRequest {
     pub draft_id: String,
-    #[serde(deserialize_with = "deserialize_authored_lab")]
-    pub lab: AuthoredLabSpec,
+    #[serde(deserialize_with = "deserialize_authored_cell")]
+    pub cell: AuthoredCellSpec,
     pub idempotency_key: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum LabRecipe {
+pub enum CellRecipe {
     NutshellLndClnRoutingFees,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CreateLabRecipeRequest {
+pub struct CreateCellRecipeRequest {
     pub draft_id: String,
     pub idempotency_key: String,
-    pub recipe: LabRecipe,
-    /// Human-readable lab name. Defaults to `draft_id`.
+    pub recipe: CellRecipe,
+    /// Human-readable cell name. Defaults to `draft_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
-/// Catalog-backed component role for a generic lab plan. Kind, adapter
+/// Catalog-backed component role for a generic cell plan. Kind, adapter
 /// contract, and preferred version are resolved by Proofstorm.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabPlanComponentInput {
+pub struct CellPlanComponentInput {
     pub id: String,
     /// Catalog implementation ID, for example bitcoin-core, lnd, cln,
     /// nutshell, cdk-ldk, or nutshell-wallet. This remains an open string so
@@ -145,7 +147,7 @@ pub struct LabPlanComponentInput {
 /// catalog entries whenever there is one compatible choice.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LabPlanConnectionInput {
+pub enum CellPlanConnectionInput {
     BitcoinPeer {
         id: String,
         node_a: String,
@@ -203,25 +205,25 @@ pub enum LabPlanConnectionInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabPlanRequest {
-    /// Edit an existing lab at the generation returned by `lab_status`. Supply the complete desired topology.
+pub struct CellPlanRequest {
+    /// Edit an existing cell at the generation returned by `cell_status`. Supply the complete desired topology.
     #[serde(default)]
-    pub update: Option<proofstorm_core::LabUpdateTarget>,
+    pub update: Option<proofstorm_core::CellUpdateTarget>,
     pub plan_id: String,
-    pub components: Vec<LabPlanComponentInput>,
-    pub connections: Vec<LabPlanConnectionInput>,
+    pub components: Vec<CellPlanComponentInput>,
+    pub connections: Vec<CellPlanConnectionInput>,
     /// Required endpoint controls, grouped by component. Discover IDs from
     /// `catalog_entry_read`. Use [] only for plans with no runtime work.
     /// Unsupported controls fail before storage.
-    pub runtime_requirements: Vec<LabPlanRuntimeRequirement>,
+    pub runtime_requirements: Vec<CellPlanRuntimeRequirement>,
     #[serde(default)]
-    pub policy: LabPolicy,
+    pub policy: CellPolicy,
     pub idempotency_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabPlanRuntimeRequirement {
+pub struct CellPlanRuntimeRequirement {
     pub component: String,
     /// Defaults to the component's primary `component` endpoint. Embedded
     /// endpoint IDs are discovered from `catalog_entry_read`.
@@ -240,7 +242,7 @@ fn default_runtime_endpoint() -> String {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabPlanResolvedComponent {
+pub struct CellPlanResolvedComponent {
     pub id: String,
     pub kind: ComponentKind,
     pub implementation: String,
@@ -253,7 +255,7 @@ pub struct LabPlanResolvedComponent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabPlanResolvedRuntimeEndpoint {
+pub struct CellPlanResolvedRuntimeEndpoint {
     pub component: String,
     pub endpoint: String,
     pub kind: String,
@@ -264,22 +266,22 @@ pub struct LabPlanResolvedRuntimeEndpoint {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabPlanReceipt {
+pub struct CellPlanReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update: Option<proofstorm_core::LabUpdatePlan>,
+    pub update: Option<proofstorm_core::CellUpdatePlan>,
     pub plan_id: String,
     pub plan_digest: String,
     pub version: u64,
-    pub components: Vec<LabPlanResolvedComponent>,
-    pub runtime_endpoints: Vec<LabPlanResolvedRuntimeEndpoint>,
+    pub components: Vec<CellPlanResolvedComponent>,
+    pub runtime_endpoints: Vec<CellPlanResolvedRuntimeEndpoint>,
     pub connections: Vec<LinkSpec>,
-    pub validation: LabValidationResult,
+    pub validation: CellValidationResult,
     pub next_tool: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabApplyRequest {
+pub struct CellApplyRequest {
     pub plan_id: String,
     pub expected_plan_digest: String,
     pub instance_id: String,
@@ -288,7 +290,7 @@ pub struct LabApplyRequest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabApplyReceipt {
+pub struct CellApplyReceipt {
     pub instance_key: String,
     pub current_generation: u64,
     pub superseded: bool,
@@ -303,13 +305,13 @@ pub struct LabApplyReceipt {
     pub next_tool: String,
     /// Saved edit; reconciliation failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reconciliation_error: Option<LabReconciliationError>,
+    pub reconciliation_error: Option<CellReconciliationError>,
 }
 
-pub use proofstorm_app::lab::ReconciliationError as LabReconciliationError;
+pub use proofstorm_app::cell::ReconciliationError as CellReconciliationError;
 
-impl From<proofstorm_app::lab::AppliedLab> for LabApplyReceipt {
-    fn from(applied: proofstorm_app::lab::AppliedLab) -> Self {
+impl From<proofstorm_app::cell::AppliedCell> for CellApplyReceipt {
+    fn from(applied: proofstorm_app::cell::AppliedCell) -> Self {
         Self {
             instance_key: applied.instance.instance_key,
             current_generation: applied.instance.generation,
@@ -322,7 +324,7 @@ impl From<proofstorm_app::lab::AppliedLab> for LabApplyReceipt {
             instance_id: applied.instance.id,
             phase: applied.phase,
             component_count: applied.component_count,
-            next_tool: "lab_wait".into(),
+            next_tool: "cell_wait".into(),
             reconciliation_error: applied.reconciliation_error,
         }
     }
@@ -333,7 +335,7 @@ impl From<proofstorm_app::lab::AppliedLab> for LabApplyReceipt {
 pub struct ReadDraftRequest {
     #[serde(default)]
     pub draft_id: String,
-    /// Read the complete desired configuration of a live lab; version is its generation.
+    /// Read the complete desired configuration of a live cell; version is its generation.
     #[serde(default)]
     pub instance_id: Option<String>,
 }
@@ -341,21 +343,21 @@ pub struct ReadDraftRequest {
 /// Full configuration is returned only on this explicit read, not expanded into every discovery profile.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabReadResponse {
+pub struct CellReadResponse {
     pub id: String,
     pub workspace_id: String,
     pub version: u64,
-    /// Canonical complete lab document. Preserve all components, links and policy when editing.
+    /// Canonical complete cell document. Preserve all components, links and policy when editing.
     #[schemars(with = "serde_json::Value")]
-    pub lab: LabSpec,
+    pub cell: CellSpec,
 }
-impl From<Draft> for LabReadResponse {
+impl From<Draft> for CellReadResponse {
     fn from(draft: Draft) -> Self {
         Self {
             id: draft.id,
             workspace_id: draft.workspace_id,
             version: draft.version,
-            lab: draft.lab,
+            cell: draft.cell,
         }
     }
 }
@@ -438,7 +440,7 @@ pub struct CatalogEntrySummary {
     pub config_schema_digest: String,
     /// Controls accepted by publication for this exact component release.
     pub allowed_control: Vec<ControlClass>,
-    /// Safe default control for ordinary lab authoring.
+    /// Safe default control for ordinary cell authoring.
     pub recommended_control: ControlClass,
     pub release_channel: ReleaseChannel,
     pub support_lifecycle: SupportLifecycle,
@@ -478,7 +480,7 @@ pub struct CatalogEntryDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CandidateSource>,
     pub allowed_control: Vec<ControlClass>,
-    /// Safe default control for ordinary lab authoring.
+    /// Safe default control for ordinary cell authoring.
     pub recommended_control: ControlClass,
     /// Names of all agent-authorable configuration properties. An empty
     /// configuration is valid when `required_config_fields` is empty.
@@ -531,7 +533,7 @@ pub struct CandidateCancelRequest {
 pub struct CandidateBuildReceipt {
     pub candidate_id: String,
     pub base_version: String,
-    /// Copy these fields verbatim into one `lab_plan.components` entry.
+    /// Copy these fields verbatim into one `cell_plan.components` entry.
     pub catalog_entry: CandidateCatalogSelector,
     pub commit_sha: String,
     pub phase: CandidateBuildPhase,
@@ -567,8 +569,8 @@ pub struct CandidateListResponse {
 pub struct EditDraftRequest {
     pub draft_id: String,
     pub expected_version: u64,
-    #[serde(deserialize_with = "deserialize_authored_lab")]
-    pub lab: AuthoredLabSpec,
+    #[serde(deserialize_with = "deserialize_authored_cell")]
+    pub cell: AuthoredCellSpec,
     pub idempotency_key: String,
 }
 
@@ -588,7 +590,7 @@ pub struct DraftMutationResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabValidationResult {
+pub struct CellValidationResult {
     pub valid: bool,
     pub issues: Vec<ValidationIssue>,
     pub component_ids: Vec<String>,
@@ -789,11 +791,11 @@ impl TryFrom<LinkSpec> for AddLinkInput {
     }
 }
 
-/// Complete lab input accepted at the MCP boundary. Unlike the persisted core
+/// Complete cell input accepted at the MCP boundary. Unlike the persisted core
 /// model, backend-link variants require their binding fields as flat scalars.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AuthoredLabSpec {
+pub struct AuthoredCellSpec {
     pub api_version: String,
     pub name: String,
     pub components: Vec<ComponentSpec>,
@@ -801,14 +803,14 @@ pub struct AuthoredLabSpec {
     /// Optional capability restrictions. Omit this field for the safe default
     /// policy unless the experiment deliberately needs a narrower envelope.
     #[serde(default)]
-    pub policy: LabPolicy,
+    pub policy: CellPolicy,
 }
 
 /// Accept the canonical JSON object and the common MCP-client failure mode where
 /// that object is encoded one extra time as a JSON string. Parsing still lands
-/// in the same strict `AuthoredLabSpec` contract, including unknown-field and
+/// in the same strict `AuthoredCellSpec` contract, including unknown-field and
 /// required-field checks; malformed or incomplete strings remain fail-closed.
-fn deserialize_authored_lab<'de, D>(deserializer: D) -> Result<AuthoredLabSpec, D::Error>
+fn deserialize_authored_cell<'de, D>(deserializer: D) -> Result<AuthoredCellSpec, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -835,11 +837,11 @@ where
     if !has_canonical_binding {
         return Err(serde::de::Error::custom(authored_error));
     }
-    let canonical: LabSpec = match serde_json::from_value(value) {
+    let canonical: CellSpec = match serde_json::from_value(value) {
         Ok(canonical) => canonical,
         Err(_) => return Err(serde::de::Error::custom(authored_error)),
     };
-    Ok(AuthoredLabSpec {
+    Ok(AuthoredCellSpec {
         api_version: canonical.api_version,
         name: canonical.name,
         components: canonical.components,
@@ -853,10 +855,10 @@ where
     })
 }
 
-impl TryFrom<AuthoredLabSpec> for LabSpec {
+impl TryFrom<AuthoredCellSpec> for CellSpec {
     type Error = String;
 
-    fn try_from(input: AuthoredLabSpec) -> Result<Self, Self::Error> {
+    fn try_from(input: AuthoredCellSpec) -> Result<Self, Self::Error> {
         Ok(Self {
             api_version: input.api_version,
             name: input.name,
@@ -873,9 +875,9 @@ impl TryFrom<AuthoredLabSpec> for LabSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ValidateLabRequest {
-    #[serde(deserialize_with = "deserialize_authored_lab")]
-    pub lab: AuthoredLabSpec,
+pub struct ValidateCellRequest {
+    #[serde(deserialize_with = "deserialize_authored_cell")]
+    pub cell: AuthoredCellSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -917,7 +919,7 @@ pub struct PublishDraftRequest {
     pub draft_id: String,
     pub expected_version: u64,
     pub idempotency_key: String,
-    /// Explicitly embed the complete published lab and resolved lock.
+    /// Explicitly embed the complete published cell and resolved lock.
     #[serde(default)]
     pub include_revision: bool,
 }
@@ -930,9 +932,9 @@ pub struct PublishDraftResponse {
     pub lock_digest: String,
     pub component_count: u32,
     pub revision_included: bool,
-    /// Schema-opaque bulk lab document, present only after explicit opt-in.
+    /// Schema-opaque bulk cell document, present only after explicit opt-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lab: Option<serde_json::Value>,
+    pub cell: Option<serde_json::Value>,
     /// Schema-opaque bulk resolved lock, present only after explicit opt-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock: Option<serde_json::Value>,
@@ -940,8 +942,8 @@ pub struct PublishDraftResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct MaterializeLabRequest {
-    /// Published draft/plan identity; consumed plans cannot resurrect deleted labs.
+pub struct MaterializeCellRequest {
+    /// Published draft/plan identity; consumed plans cannot resurrect deleted cells.
     pub plan_id: String,
     pub instance_id: String,
     pub revision_digest: String,
@@ -956,15 +958,15 @@ pub struct InstanceRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CloseLabRequest {
+pub struct CloseCellRequest {
     pub instance_id: String,
-    /// Copy `instance_key` from `lab_status`; protects a same-name replacement from old requests.
+    /// Copy `instance_key` from `cell_status`; protects a same-name replacement from old requests.
     pub expected_instance_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabStatusSummary {
+pub struct CellStatusSummary {
     pub instance_key: String,
     pub observed_generation: u64,
     pub observed_revision_digest: String,
@@ -995,7 +997,7 @@ pub struct LabStatusSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabComponentStatusListRequest {
+pub struct CellComponentStatusListRequest {
     pub instance_id: String,
     #[serde(default = "default_status_list_limit")]
     #[schemars(range(min = 1, max = 50))]
@@ -1007,7 +1009,7 @@ pub struct LabComponentStatusListRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabComponentStatusListResponse {
+pub struct CellComponentStatusListResponse {
     pub instance_id: String,
     pub revision_digest: String,
     pub components: Vec<ComponentStatus>,
@@ -1017,7 +1019,7 @@ pub struct LabComponentStatusListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabInventoryListRequest {
+pub struct CellInventoryListRequest {
     pub instance_id: String,
     #[serde(default = "default_status_list_limit")]
     #[schemars(range(min = 1, max = 50))]
@@ -1029,7 +1031,7 @@ pub struct LabInventoryListRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabInventoryListResponse {
+pub struct CellInventoryListResponse {
     pub instance_id: String,
     pub inventory_digest: String,
     pub inventory: Vec<InventoryEntry>,
@@ -1039,7 +1041,7 @@ pub struct LabInventoryListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabWaitRequest {
+pub struct CellWaitRequest {
     /// Copy from close/status to verify deletion even after local cleanup.
     #[serde(default)]
     pub expected_instance_key: Option<String>,
@@ -1056,7 +1058,7 @@ pub struct LabWaitRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabWaitResult {
+pub struct CellWaitResult {
     pub instance_key: String,
     pub observed_generation: u64,
     pub observed_revision_digest: String,
@@ -1129,13 +1131,13 @@ pub struct OperationWaitManyResult {
     pub artifact_bodies_omitted: bool,
 }
 
-pub use proofstorm_app::lab::ComponentControlRequest;
+pub use proofstorm_app::cell::ComponentControlRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentLogsRequest {
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
@@ -1192,14 +1194,14 @@ pub struct AuthenticationReplayRequest {
 #[serde(deny_unknown_fields)]
 pub struct ComponentExecRequest {
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
     pub operation_id: String,
     pub component: String,
-    /// Lab component whose native service endpoint should be exposed to the
+    /// Cell component whose native service endpoint should be exposed to the
     /// command. When omitted, the execution component is also the target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_component: Option<String>,
@@ -1218,7 +1220,7 @@ pub struct ComponentExecLiveRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_payload: Option<proofstorm_core::private_io::PayloadBinding>,
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
@@ -1388,7 +1390,7 @@ fn validate_private_transfer_endpoints(
     }
     if let Some(destination) = &transfer.destination_component {
         let is_cdk = revision
-            .lab
+            .cell
             .components
             .iter()
             .any(|c| &c.id == destination && c.implementation == "cdk-cli-wallet");
@@ -1409,7 +1411,7 @@ fn validate_private_transfer_endpoints(
 #[serde(deny_unknown_fields)]
 pub struct PrivateTransferRequest {
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
@@ -1453,18 +1455,18 @@ pub struct BootstrapLiquidityRequest {
     pub idempotency_key: String,
 }
 
-/// Runtime identifiers for a server-owned lab recipe. Recipe-specific
+/// Runtime identifiers for a server-owned cell recipe. Recipe-specific
 /// component identities and safe liquidity values are deliberately not
 /// caller-controlled.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabRecipeSetupRequest {
+pub struct CellRecipeSetupRequest {
     pub instance_id: String,
     pub experiment_id: String,
     #[serde(default)]
     pub session_id: String,
     pub operation_id: String,
-    pub recipe: LabRecipe,
+    pub recipe: CellRecipe,
     pub idempotency_key: String,
 }
 
@@ -1473,7 +1475,7 @@ pub struct LabRecipeSetupRequest {
 /// levels are recipe-owned so they cannot be accidentally omitted or crossed.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabRecipeFeeMatrixRequest {
+pub struct CellRecipeFeeMatrixRequest {
     pub instance_id: String,
     pub experiment_id: String,
     #[serde(default)]
@@ -1482,7 +1484,7 @@ pub struct LabRecipeFeeMatrixRequest {
     /// derives bounded internal operation IDs from it. Replaying the same
     /// matrix ID and idempotency key is idempotent.
     pub matrix_id: String,
-    pub recipe: LabRecipe,
+    pub recipe: CellRecipe,
     pub idempotency_key: String,
 }
 
@@ -1528,7 +1530,7 @@ const ROUTING_FEE_RECIPE_PAYMENT_DIRECTIONS: [RecipePaymentDirection; 2] = [
     },
 ];
 
-fn recipe_fee_matrix_operation_prefix(request: &LabRecipeFeeMatrixRequest) -> String {
+fn recipe_fee_matrix_operation_prefix(request: &CellRecipeFeeMatrixRequest) -> String {
     let digest = digest_json(&(
         request.instance_id.as_str(),
         request.experiment_id.as_str(),
@@ -1542,9 +1544,9 @@ fn recipe_fee_matrix_operation_prefix(request: &LabRecipeFeeMatrixRequest) -> St
     format!("matrix-{}", &hex[..16])
 }
 
-fn recipe_bootstrap_request(request: LabRecipeSetupRequest) -> BootstrapLiquidityRequest {
+fn recipe_bootstrap_request(request: CellRecipeSetupRequest) -> BootstrapLiquidityRequest {
     match request.recipe {
-        LabRecipe::NutshellLndClnRoutingFees => BootstrapLiquidityRequest {
+        CellRecipe::NutshellLndClnRoutingFees => BootstrapLiquidityRequest {
             instance_id: request.instance_id,
             experiment_id: request.experiment_id,
             session_id: request.session_id,
@@ -1560,9 +1562,9 @@ fn recipe_bootstrap_request(request: LabRecipeSetupRequest) -> BootstrapLiquidit
     }
 }
 
-fn recipe_route_channel_request(request: LabRecipeSetupRequest) -> ChannelOpenRequest {
+fn recipe_route_channel_request(request: CellRecipeSetupRequest) -> ChannelOpenRequest {
     match request.recipe {
-        LabRecipe::NutshellLndClnRoutingFees => ChannelOpenRequest {
+        CellRecipe::NutshellLndClnRoutingFees => ChannelOpenRequest {
             instance_id: request.instance_id,
             experiment_id: request.experiment_id,
             session_id: request.session_id,
@@ -1685,7 +1687,7 @@ pub struct ChannelRebalanceRequest {
 #[serde(deny_unknown_fields)]
 pub struct NetworkPartitionRequest {
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
@@ -1731,7 +1733,7 @@ pub struct NetworkLossRequest {
 #[serde(deny_unknown_fields)]
 pub struct NetworkHealRequest {
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
@@ -1758,7 +1760,7 @@ pub struct WalletInitializeRequest {
 #[serde(deny_unknown_fields)]
 pub struct WalletBalanceRequest {
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
@@ -1879,7 +1881,7 @@ pub struct ConservationOracleRequest {
 #[serde(deny_unknown_fields)]
 pub struct ReachabilityOracleRequest {
     pub instance_id: String,
-    /// Optional; defaults to this actor's lab run.
+    /// Optional; defaults to this actor's cell run.
     #[serde(default)]
     pub experiment_id: String,
     #[serde(default)]
@@ -2045,8 +2047,8 @@ pub struct ActionSummary {
     pub artifact: Option<ActionArtifactSummary>,
 }
 
-impl From<&LabOperation> for ActionSummary {
-    fn from(operation: &LabOperation) -> Self {
+impl From<&CellOperation> for ActionSummary {
+    fn from(operation: &CellOperation) -> Self {
         Self {
             id: operation.id.clone(),
             instance_id: operation.instance_id.clone(),
@@ -2234,7 +2236,7 @@ const MAX_AGENT_RESPONSE_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofstormToolset {
-    /// Ordinary named labs; advanced experiments and scenarios remain opt-in.
+    /// Ordinary named cells; advanced experiments and scenarios remain opt-in.
     Developer,
     All,
     /// One compact, cross-phase surface for an agent that must design, run,
@@ -2279,15 +2281,15 @@ impl ProofstormToolset {
                 "catalog_list"
                     | "catalog_entry_read"
                     | "catalog_config_schema_read"
-                    | "lab_read"
-                    | "lab_up"
-                    | "lab_inspect"
+                    | "cell_read"
+                    | "cell_up"
+                    | "cell_inspect"
                     | "environment_read"
                     | "session_list"
-                    | "lab_exec"
-                    | "lab_finish"
-                    | "lab_sync"
-                    | "lab_component_status_list"
+                    | "cell_exec"
+                    | "cell_finish"
+                    | "cell_sync"
+                    | "cell_component_status_list"
                     | "operation_status"
                     | "operation_wait_many"
                     | "action_cancel"
@@ -2325,41 +2327,41 @@ impl ProofstormToolset {
                     | "candidate_list"
                     | "candidate_cancel"
                     | "network_capabilities"
-                    | "lab_create"
-                    | "lab_read"
-                    | "lab_edit"
+                    | "cell_create"
+                    | "cell_read"
+                    | "cell_edit"
                     | "component_add"
                     | "component_update"
                     | "component_remove"
                     | "link_add"
                     | "link_remove"
-                    | "lab_clone"
-                    | "lab_validate"
-                    | "lab_diff"
-                    | "lab_publish"
+                    | "cell_clone"
+                    | "cell_validate"
+                    | "cell_diff"
+                    | "cell_publish"
             ),
             Self::Runtime => !matches!(
                 tool,
-                "lab_up"
-                    | "lab_inspect"
+                "cell_up"
+                    | "cell_inspect"
                     | "environment_read"
-                    | "lab_exec"
-                    | "lab_sync"
-                    | "lab_finish"
-                    | "lab_plan"
+                    | "cell_exec"
+                    | "cell_sync"
+                    | "cell_finish"
+                    | "cell_plan"
                     | "candidate_build"
-                    | "lab_apply"
-                    | "lab_create"
-                    | "lab_edit"
+                    | "cell_apply"
+                    | "cell_create"
+                    | "cell_edit"
                     | "component_add"
                     | "component_update"
                     | "component_remove"
                     | "link_add"
                     | "link_remove"
-                    | "lab_clone"
-                    | "lab_validate"
-                    | "lab_diff"
-                    | "lab_publish"
+                    | "cell_clone"
+                    | "cell_validate"
+                    | "cell_diff"
+                    | "cell_publish"
                     | "artifact_export"
                     | "evidence_section_read"
             ),
@@ -2371,11 +2373,11 @@ impl ProofstormToolset {
                     | "catalog_config_schema_read"
                     | "candidate_wait"
                     | "candidate_list"
-                    | "lab_read"
-                    | "lab_status"
-                    | "lab_component_status_list"
-                    | "lab_inventory_list"
-                    | "lab_wait"
+                    | "cell_read"
+                    | "cell_status"
+                    | "cell_component_status_list"
+                    | "cell_inventory_list"
+                    | "cell_wait"
                     | "experiment_read"
                     | "session_read"
                     | "operation_status"
@@ -2404,13 +2406,13 @@ fn experiment_tool(tool: &str) -> bool {
             | "candidate_wait"
             | "candidate_list"
             | "candidate_cancel"
-            | "lab_read"
-            | "lab_plan"
-            | "lab_apply"
-            | "lab_status"
-            | "lab_component_status_list"
-            | "lab_wait"
-            | "lab_close"
+            | "cell_read"
+            | "cell_plan"
+            | "cell_apply"
+            | "cell_status"
+            | "cell_component_status_list"
+            | "cell_wait"
+            | "cell_close"
             | "experiment_create"
             | "experiment_read"
             | "experiment_close"
@@ -2489,7 +2491,7 @@ impl Default for ProofstormMcp {
         store
             .put_principal(principal)
             .expect("seed legacy principal");
-        for capability in [Capability::CatalogRead, Capability::LabValidate] {
+        for capability in [Capability::CatalogRead, Capability::CellValidate] {
             store
                 .grant(workspace, principal, capability)
                 .expect("seed legacy grant");
@@ -2519,7 +2521,7 @@ impl ProofstormMcp {
         // Whole-document replacement is retained in the store for non-agent
         // callers, but is intentionally absent from MCP. Stable-ID component
         // and link mutations are the safe agent editing contract.
-        tool_router.disable_route("lab_edit");
+        tool_router.disable_route("cell_edit");
         for (tool, required) in tool_capabilities() {
             if !required
                 .iter()
@@ -2591,12 +2593,12 @@ impl ProofstormMcp {
                 && !name.contains("candidate"))
                 || matches!(
                     name.as_str(),
-                    "lab_plan"
+                    "cell_plan"
                         | "experiment_read"
                         | "session_read"
                         | "session_list"
                         | "action_list"
-                        | "lab_diff"
+                        | "cell_diff"
                 );
             if !available {
                 self.tool_router.disable_route(name);
@@ -2623,7 +2625,7 @@ impl ProofstormMcp {
         control: &str,
     ) -> Result<(), ErrorData> {
         let component = revision
-            .lab
+            .cell
             .components
             .iter()
             .find(|component| component.id == wallet)
@@ -2653,8 +2655,8 @@ impl ProofstormMcp {
         Ok(())
     }
 
-    async fn full_lab_status(&self, instance_id: &str) -> Result<LabInstanceStatus, ErrorData> {
-        self.labs()?.status(instance_id).await.map_err(app_error)
+    async fn full_cell_status(&self, instance_id: &str) -> Result<CellInstanceStatus, ErrorData> {
+        self.cells()?.status(instance_id).await.map_err(app_error)
     }
 
     #[allow(
@@ -2839,9 +2841,9 @@ struct KubernetesRuntime {
 
 #[tool_router(router = tool_router)]
 impl ProofstormMcp {
-    fn labs(&self) -> Result<proofstorm_app::lab::Labs, ErrorData> {
+    fn cells(&self) -> Result<proofstorm_app::cell::Cells, ErrorData> {
         let runtime = self.runtime()?;
-        Ok(proofstorm_app::lab::Labs::new(
+        Ok(proofstorm_app::cell::Cells::new(
             self.store.clone(),
             runtime.shared(),
             self.workspace.clone(),
@@ -2851,15 +2853,15 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_up",
-        description = "Start a named lab from its specification. Publication and materialization are resumable stages. A default run and its activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing lab applies a live edit and preserves unchanged components. Returns the same status shape as lab_inspect."
+        name = "cell_up",
+        description = "Start a named cell from its specification. Publication and materialization are resumable stages. A default run and its activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing cell applies a live edit and preserves unchanged components. Returns the same status shape as cell_inspect."
     )]
-    async fn proofstorm_lab_up(
+    async fn proofstorm_cell_up(
         &self,
         Parameters(request): Parameters<DeveloperUpRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.labs()?
-            .up(&request.name, &request.lab)
+        self.cells()?
+            .up(&request.name, &request.cell)
             .await
             .map_err(app_error)
             .and_then(|view| developer_result(compact_developer_view(view)))
@@ -2867,13 +2869,13 @@ impl ProofstormMcp {
 
     #[tool(
         name = "environment_read",
-        description = "Read the workspace environment: labs currently present in the selected cluster, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. Deleted and unmaterialized labs are excluded. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page labs, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one lab's sections. Same JSON contract as proofstorm ls and GET /v1/environment."
+        description = "Read the workspace environment: cells currently present in the selected cluster, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. Deleted and unmaterialized cells are excluded. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page cells, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one cell's sections. Same JSON contract as proofstorm ls and GET /v1/environment."
     )]
     async fn proofstorm_environment_read(
         &self,
         Parameters(request): Parameters<proofstorm_app::environment::EnvironmentQuery>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.labs()?
+        self.cells()?
             .environment(&request)
             .await
             .map_err(app_error)
@@ -2881,14 +2883,14 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_inspect",
-        description = "Read named lab runtime status, run, owner and cached activity. This read does not execute commands or synchronize receipts. Use lab_sync for fresh action results."
+        name = "cell_inspect",
+        description = "Read named cell runtime status, run, owner and cached activity. This read does not execute commands or synchronize receipts. Use cell_sync for fresh action results."
     )]
-    async fn proofstorm_lab_inspect(
+    async fn proofstorm_cell_inspect(
         &self,
         Parameters(request): Parameters<DeveloperInspectRequest>,
-    ) -> Result<Json<DeveloperLabView>, ErrorData> {
-        self.labs()?
+    ) -> Result<Json<DeveloperCellView>, ErrorData> {
+        self.cells()?
             .inspect(&request.name, request.after_sequence)
             .await
             .map(|view| Json(compact_developer_view(view)))
@@ -2896,10 +2898,10 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_exec",
-        description = "Run one native argv command in a named lab without managing experiment or session IDs. Reuse request_id for an exact retry, and choose a new request_id for a new action. Output defaults to private. The returned operation can be waited or cancelled; command exit does not prove payment settlement. Returns the operation_status record shape."
+        name = "cell_exec",
+        description = "Run one native argv command in a named cell without managing experiment or session IDs. Reuse request_id for an exact retry, and choose a new request_id for a new action. Output defaults to private. The returned operation can be waited or cancelled; command exit does not prove payment settlement. Returns the operation_status record shape."
     )]
-    async fn proofstorm_lab_exec(
+    async fn proofstorm_cell_exec(
         &self,
         Parameters(request): Parameters<DeveloperExecRequest>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -2910,7 +2912,7 @@ impl ProofstormMcp {
             timeout_seconds: request.timeout_seconds,
             output: request.output,
         };
-        self.labs()?
+        self.cells()?
             .exec(
                 &request.name,
                 &request.component,
@@ -2923,33 +2925,34 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_sync",
-        description = "Synchronize runtime receipts into durable activity for a named lab, without executing a new action. Then returns status and the first activity page. Unknown outcomes remain explicit. Returns the lab_inspect status shape."
+        name = "cell_sync",
+        description = "Synchronize runtime receipts into durable activity for a named cell, without executing a new action. Then returns status and the first activity page. Unknown outcomes remain explicit. Returns the cell_inspect status shape."
     )]
-    async fn proofstorm_lab_sync(
+    async fn proofstorm_cell_sync(
         &self,
         Parameters(request): Parameters<DeveloperInspectRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let labs = self.labs()?;
-        labs.sync(&request.name).await.map_err(app_error)?;
-        labs.inspect(&request.name, request.after_sequence)
+        let cells = self.cells()?;
+        cells.sync(&request.name).await.map_err(app_error)?;
+        cells
+            .inspect(&request.name, request.after_sequence)
             .await
             .map_err(app_error)
             .and_then(|view| developer_result(compact_developer_view(view)))
     }
 
     #[tool(
-        name = "lab_finish",
-        description = "Finish a named lab: revoke new actions, cancel/collect owned work, close the run and verify teardown. Lab-owned records are removed after verified teardown; export evidence first. A timeout leaves a closing lab; repeat this call to finish, without replaying commands. Returns the lab_inspect status shape."
+        name = "cell_finish",
+        description = "Finish a named cell: revoke new actions, cancel/collect owned work, close the run and verify teardown. Cell-owned records are removed after verified teardown; export evidence first. A timeout leaves a closing cell; repeat this call to finish, without replaying commands. Returns the cell_inspect status shape."
     )]
-    async fn proofstorm_lab_finish(
+    async fn proofstorm_cell_finish(
         &self,
         Parameters(request): Parameters<DeveloperFinishRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         if !(1..=120).contains(&request.timeout_seconds) {
             return Err(invalid_operation("timeout_seconds must be in 1..=120"));
         }
-        self.labs()?
+        self.cells()?
             .down_checked(
                 &request.name,
                 request.timeout_seconds,
@@ -2965,7 +2968,7 @@ impl ProofstormMcp {
         description = "Read the selected Proofstorm workspace"
     )]
     fn proofstorm_workspace_read(&self) -> Result<Json<Workspace>, ErrorData> {
-        self.authorize(Capability::LabRead)?;
+        self.authorize(Capability::CellRead)?;
         self.store
             .workspace(&self.workspace, &self.principal)
             .map(Json)
@@ -3029,7 +3032,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "candidate_build",
-        description = "Build a durable candidate image from a public GitHub PR; then wait. On success, copy the returned catalog_entry fields verbatim into a lab_plan component"
+        description = "Build a durable candidate image from a public GitHub PR; then wait. On success, copy the returned catalog_entry fields verbatim into a cell_plan component"
     )]
     async fn proofstorm_candidate_build(
         &self,
@@ -3246,67 +3249,67 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_plan",
-        description = "Plan a new lab or edit an existing lab with update={instance_id,expected_generation,delete_data}. Updates require complete desired topology; inspect the change summary. Unchanged components keep state and endpoints. Backend migrations are rejected. Plan from catalog IDs and backend-role connections. Declare advertised endpoint controls in runtime_requirements. Verify component config in the receipt before lab_apply. Changed plans need a new plan_id and idempotency_key; exact retries reuse both. Versions, kinds and backend bindings are inferred"
+        name = "cell_plan",
+        description = "Plan a new cell or edit an existing cell with update={instance_id,expected_generation,delete_data}. Updates require complete desired topology; inspect the change summary. Unchanged components keep state and endpoints. Backend migrations are rejected. Plan from catalog IDs and backend-role connections. Declare advertised endpoint controls in runtime_requirements. Verify component config in the receipt before cell_apply. Changed plans need a new plan_id and idempotency_key; exact retries reuse both. Versions, kinds and backend bindings are inferred"
     )]
-    fn proofstorm_lab_plan(
+    fn proofstorm_cell_plan(
         &self,
-        Parameters(mut request): Parameters<LabPlanRequest>,
-    ) -> Result<Json<LabPlanReceipt>, ErrorData> {
-        self.authorize(Capability::LabCreate)?;
+        Parameters(mut request): Parameters<CellPlanRequest>,
+    ) -> Result<Json<CellPlanReceipt>, ErrorData> {
+        self.authorize(Capability::CellCreate)?;
         self.authorize(Capability::CatalogRead)?;
         let catalog = self
             .store
             .effective_catalog(&self.workspace, &self.principal)
             .map_err(store_error)?;
-        let mut lab = compile_lab_plan_with_catalog(&request, &catalog)?;
+        let mut cell = compile_cell_plan_with_catalog(&request, &catalog)?;
         if let Some(target) = &mut request.update {
             target.instance_id = self
                 .store
-                .resolve_lab(&self.workspace, &self.principal, &target.instance_id)
+                .resolve_cell(&self.workspace, &self.principal, &target.instance_id)
                 .map_err(store_error)?
                 .instance_id;
             let instance = self
                 .store
                 .instance(&self.workspace, &self.principal, &target.instance_id)
                 .map_err(store_error)?;
-            lab.name = self
+            cell.name = self
                 .store
                 .revision(&self.workspace, &self.principal, &instance.revision_digest)
                 .map_err(store_error)?
-                .lab
+                .cell
                 .name;
         }
-        let validation = lab_validation_result_with_catalog(&lab, &catalog);
+        let validation = cell_validation_result_with_catalog(&cell, &catalog);
         if !validation.valid {
             return Err(ErrorData::invalid_request(
                 format!(
-                    "lab plan failed publication preflight; no plan was stored: {}",
+                    "cell plan failed publication preflight; no plan was stored: {}",
                     validation_issue_summary(&validation.issues)
                 ),
                 Some(serde_json::json!({
-                    "code": "lab_plan_invalid",
+                    "code": "cell_plan_invalid",
                     "validation": validation,
                 })),
             ));
         }
-        let plan_digest = digest_json(&lab);
-        let components = resolved_plan_components(&lab);
-        let runtime_endpoints = resolved_plan_runtime_endpoints_with_catalog(&lab, &catalog)?;
-        let connections = lab.links.clone();
+        let plan_digest = digest_json(&cell);
+        let components = resolved_plan_components(&cell);
+        let runtime_endpoints = resolved_plan_runtime_endpoints_with_catalog(&cell, &catalog)?;
+        let connections = cell.links.clone();
         self.store
             .create_draft(
                 &self.workspace,
                 &self.principal,
                 &request.plan_id,
-                &lab,
+                &cell,
                 &request.idempotency_key,
             )
             .map_err(|error| match error {
                 StoreError::Conflict { resource: "draft", id } => ErrorData::invalid_request(
                     "plan_id already exists; existing plan unchanged and nothing applied. Use a new plan_id and idempotency_key for a changed plan; replay the original request and key for an exact retry",
                     Some(serde_json::json!({
-                        "code": "lab_plan_id_conflict",
+                        "code": "cell_plan_id_conflict",
                         "plan_id": id,
                         "mutation_disposition": "existing_plan_unchanged",
                         "recovery": "use a new plan_id and idempotency_key for a changed plan",
@@ -3318,7 +3321,7 @@ impl ProofstormMcp {
                 let update = if let Some(target) = request.update {
                     let revision = self.store.publish(&self.workspace, &self.principal, &draft.id, draft.version, &format!("{}:update-publication", request.idempotency_key)).map_err(store_error)?;
                     let plan = if let Some(existing) = self.store.update_plan(&self.workspace, &self.principal, &draft.id).map_err(store_error)? {
-                        if existing.target != target || existing.target_revision != revision.digest { return Err(coded_invalid_request("lab_plan_id_conflict", "Use a new plan ID for changed configuration")); }
+                        if existing.target != target || existing.target_revision != revision.digest { return Err(coded_invalid_request("cell_plan_id_conflict", "Use a new plan ID for changed configuration")); }
                         existing
                     } else {
                         self.store.plan_update(&self.workspace, &self.principal, target, &revision).map_err(store_error)?
@@ -3326,7 +3329,7 @@ impl ProofstormMcp {
                     self.store.save_update_plan(&self.workspace, &self.principal, &draft.id, &plan).map_err(store_error)?;
                     Some(plan)
                 } else { None };
-                bounded_agent_response(LabPlanReceipt {
+                bounded_agent_response(CellPlanReceipt {
                     plan_digest: update.as_ref().map_or(plan_digest, |p|p.digest.clone()),
                     update,
                     plan_id: draft.id,
@@ -3335,21 +3338,21 @@ impl ProofstormMcp {
                     runtime_endpoints,
                     connections,
                     validation,
-                    next_tool: "lab_apply".into(),
+                    next_tool: "cell_apply".into(),
                 })
             })
             .map(Json)
     }
 
     #[tool(
-        name = "lab_apply",
-        description = "Apply a reviewed update in place, preserving unchanged components and retained storage, or publish and materialize a new lab plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. These are separate resumable stages: replay the same request after interruption; both are idempotent. Then wait for ready"
+        name = "cell_apply",
+        description = "Apply a reviewed update in place, preserving unchanged components and retained storage, or publish and materialize a new cell plan identified by plan_id and expected_plan_digest. A digest mismatch fails before publication. These are separate resumable stages: replay the same request after interruption; both are idempotent. Then wait for ready"
     )]
-    async fn proofstorm_lab_apply(
+    async fn proofstorm_cell_apply(
         &self,
-        Parameters(request): Parameters<LabApplyRequest>,
-    ) -> Result<Json<LabApplyReceipt>, ErrorData> {
-        let reviewed = proofstorm_app::lab::review_apply(
+        Parameters(request): Parameters<CellApplyRequest>,
+    ) -> Result<Json<CellApplyReceipt>, ErrorData> {
+        let reviewed = proofstorm_app::cell::review_apply(
             &self.store,
             &self.workspace,
             &self.principal,
@@ -3358,7 +3361,7 @@ impl ProofstormMcp {
             &request.expected_plan_digest,
         )
         .map_err(app_error)?;
-        self.labs()?
+        self.cells()?
             .apply_reviewed(reviewed, &request.idempotency_key)
             .await
             .map(|result| Json(result.into()))
@@ -3366,28 +3369,28 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_create",
-        description = "Create a publication-ready versioned lab draft and return a compact receipt. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Invalid catalog configuration is rejected before any draft is written"
+        name = "cell_create",
+        description = "Create a publication-ready versioned cell draft and return a compact receipt. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Invalid catalog configuration is rejected before any draft is written"
     )]
-    fn proofstorm_lab_create(
+    fn proofstorm_cell_create(
         &self,
         Parameters(request): Parameters<CreateDraftRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
-        self.authorize(Capability::LabCreate)?;
-        let lab = LabSpec::try_from(request.lab)
+        self.authorize(Capability::CellCreate)?;
+        let cell = CellSpec::try_from(request.cell)
             .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
         let catalog = self
             .store
             .effective_catalog(&self.workspace, &self.principal)
             .map_err(store_error)?;
-        let validation = lab_validation_result_with_catalog(&lab, &catalog);
+        let validation = cell_validation_result_with_catalog(&cell, &catalog);
         if !validation.valid {
             return Err(ErrorData::invalid_request(
-                "lab failed publication preflight; no draft was created",
+                "cell failed publication preflight; no draft was created",
                 Some(serde_json::json!({
-                    "code": "lab_validation_failed",
+                    "code": "cell_validation_failed",
                     "validation": validation,
-                    "next_tool": "lab_validate"
+                    "next_tool": "cell_validate"
                 })),
             ));
         }
@@ -3396,7 +3399,7 @@ impl ProofstormMcp {
                 &self.workspace,
                 &self.principal,
                 &request.draft_id,
-                &lab,
+                &cell,
                 &request.idempotency_key,
             )
             .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
@@ -3404,22 +3407,22 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_recipe_create",
-        description = "Create a validated lab draft from a server-owned recipe; no catalog lookup, manual topology JSON, or separate validation call is needed. nutshell_lnd_cln_routing_fees creates bitcoin-core, lnd-backend, lnd-router, cln-backend, mint-lnd, mint-cln, payer-lnd, recipient-lnd, payer-cln, and recipient-cln with exact preferred versions and typed backend bindings. Initialize all four wallets, fund only payer-lnd and payer-cln, and create invoices only on the opposite recipient so both directions can run concurrently without cross-crediting baselines. Next call lab_publish"
+        name = "cell_recipe_create",
+        description = "Create a validated cell draft from a server-owned recipe; no catalog lookup, manual topology JSON, or separate validation call is needed. nutshell_lnd_cln_routing_fees creates bitcoin-core, lnd-backend, lnd-router, cln-backend, mint-lnd, mint-cln, payer-lnd, recipient-lnd, payer-cln, and recipient-cln with exact preferred versions and typed backend bindings. Initialize all four wallets, fund only payer-lnd and payer-cln, and create invoices only on the opposite recipient so both directions can run concurrently without cross-crediting baselines. Next call cell_publish"
     )]
-    fn proofstorm_lab_recipe_create(
+    fn proofstorm_cell_recipe_create(
         &self,
-        Parameters(request): Parameters<CreateLabRecipeRequest>,
+        Parameters(request): Parameters<CreateCellRecipeRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
-        self.authorize(Capability::LabCreate)?;
+        self.authorize(Capability::CellCreate)?;
         let name = request.name.unwrap_or_else(|| request.draft_id.clone());
-        let lab = lab_from_recipe(request.recipe, name)?;
-        let validation = lab_validation_result(&lab);
+        let cell = cell_from_recipe(request.recipe, name)?;
+        let validation = cell_validation_result(&cell);
         if !validation.valid {
             return Err(ErrorData::internal_error(
-                "built-in lab recipe failed publication preflight",
+                "built-in cell recipe failed publication preflight",
                 Some(serde_json::json!({
-                    "code": "lab_recipe_invalid",
+                    "code": "cell_recipe_invalid",
                     "validation": validation,
                 })),
             ));
@@ -3429,7 +3432,7 @@ impl ProofstormMcp {
                 &self.workspace,
                 &self.principal,
                 &request.draft_id,
-                &lab,
+                &cell,
                 &request.idempotency_key,
             )
             .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
@@ -3437,24 +3440,24 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_read",
-        description = "Read complete configuration. Supply instance_id for a live lab (version is its desired generation), or draft_id for a draft. Use this before planning an update; never reconstruct a lab from a partial environment page."
+        name = "cell_read",
+        description = "Read complete configuration. Supply instance_id for a live cell (version is its desired generation), or draft_id for a draft. Use this before planning an update; never reconstruct a cell from a partial environment page."
     )]
-    fn proofstorm_lab_read(
+    fn proofstorm_cell_read(
         &self,
         Parameters(request): Parameters<ReadDraftRequest>,
-    ) -> Result<Json<LabReadResponse>, ErrorData> {
-        self.authorize(Capability::LabRead)?;
+    ) -> Result<Json<CellReadResponse>, ErrorData> {
+        self.authorize(Capability::CellRead)?;
         if let Some(instance_id) = request.instance_id {
             if !request.draft_id.is_empty() {
                 return Err(coded_invalid_request(
-                    "lab_read_target",
+                    "cell_read_target",
                     "Specify instance_id or draft_id, not both",
                 ));
             }
             let instance_id = self
                 .store
-                .resolve_lab(&self.workspace, &self.principal, &instance_id)
+                .resolve_cell(&self.workspace, &self.principal, &instance_id)
                 .map_err(store_error)?
                 .instance_id;
             let instance = self
@@ -3465,29 +3468,29 @@ impl ProofstormMcp {
                 .store
                 .revision(&self.workspace, &self.principal, &instance.revision_digest)
                 .map_err(store_error)?;
-            return Ok(Json(LabReadResponse {
+            return Ok(Json(CellReadResponse {
                 id: instance.id,
                 workspace_id: instance.workspace_id,
                 version: instance.generation,
-                lab: revision.lab,
+                cell: revision.cell,
             }));
         }
         self.store
             .read_draft(&self.workspace, &self.principal, &request.draft_id)
-            .map(|draft| Json(LabReadResponse::from(draft)))
+            .map(|draft| Json(CellReadResponse::from(draft)))
             .map_err(store_error)
     }
 
     #[tool(
-        name = "lab_edit",
-        description = "Replace a lab draft using optimistic version and idempotency checks, returning a compact mutation receipt"
+        name = "cell_edit",
+        description = "Replace a cell draft using optimistic version and idempotency checks, returning a compact mutation receipt"
     )]
-    fn proofstorm_lab_edit(
+    fn proofstorm_cell_edit(
         &self,
         Parameters(request): Parameters<EditDraftRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
-        self.authorize(Capability::LabEdit)?;
-        let lab = LabSpec::try_from(request.lab)
+        self.authorize(Capability::CellEdit)?;
+        let cell = CellSpec::try_from(request.cell)
             .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
         self.store
             .edit_draft(
@@ -3495,7 +3498,7 @@ impl ProofstormMcp {
                 &self.principal,
                 &request.draft_id,
                 request.expected_version,
-                &lab,
+                &cell,
                 &request.idempotency_key,
             )
             .map(|draft| Json(compact_draft_mutation(draft, vec!["/".into()])))
@@ -3604,7 +3607,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "link_remove",
-        description = "Remove one link from a lab draft by its stable link_id"
+        description = "Remove one link from a cell draft by its stable link_id"
     )]
     fn proofstorm_link_remove(
         &self,
@@ -3616,7 +3619,7 @@ impl ProofstormMcp {
             .read_draft(&self.workspace, &self.principal, &request.draft_id)
             .map_err(store_error)?;
         let link = draft
-            .lab
+            .cell
             .links
             .into_iter()
             .find(|link| link.id == request.link_id)
@@ -3638,14 +3641,14 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_clone",
-        description = "Clone a lab draft and return a compact mutation receipt"
+        name = "cell_clone",
+        description = "Clone a cell draft and return a compact mutation receipt"
     )]
-    fn proofstorm_lab_clone(
+    fn proofstorm_cell_clone(
         &self,
         Parameters(request): Parameters<CloneDraftRequest>,
     ) -> Result<Json<DraftMutationResult>, ErrorData> {
-        self.authorize(Capability::LabClone)?;
+        self.authorize(Capability::CellClone)?;
         self.store
             .clone_draft(
                 &self.workspace,
@@ -3659,32 +3662,32 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_validate",
-        description = "Validate structural, catalog, configuration, and publication contracts for a complete Proofstorm v1alpha1 lab. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Resolve every returned warning before creating the draft"
+        name = "cell_validate",
+        description = "Validate structural, catalog, configuration, and publication contracts for a complete Proofstorm v1alpha1 cell. Omit policy for safe defaults. Backend links use flat kind-specific fields, never a nested binding: chain_backend network; payment_backend method+unit. Resolve every returned warning before creating the draft"
     )]
-    fn proofstorm_lab_validate(
+    fn proofstorm_cell_validate(
         &self,
-        Parameters(request): Parameters<ValidateLabRequest>,
-    ) -> Result<Json<LabValidationResult>, ErrorData> {
-        self.authorize(Capability::LabValidate)?;
-        let lab = LabSpec::try_from(request.lab)
+        Parameters(request): Parameters<ValidateCellRequest>,
+    ) -> Result<Json<CellValidationResult>, ErrorData> {
+        self.authorize(Capability::CellValidate)?;
+        let cell = CellSpec::try_from(request.cell)
             .map_err(|message| coded_invalid_request("invalid_link_binding", message))?;
         let catalog = self
             .store
             .effective_catalog(&self.workspace, &self.principal)
             .map_err(store_error)?;
-        Ok(Json(lab_validation_result_with_catalog(&lab, &catalog)))
+        Ok(Json(cell_validation_result_with_catalog(&cell, &catalog)))
     }
 
     #[tool(
-        name = "lab_diff",
-        description = "Compare two lab drafts in the selected workspace"
+        name = "cell_diff",
+        description = "Compare two cell drafts in the selected workspace"
     )]
-    fn proofstorm_lab_diff(
+    fn proofstorm_cell_diff(
         &self,
         Parameters(request): Parameters<DiffDraftRequest>,
     ) -> Result<Json<DraftDiff>, ErrorData> {
-        self.authorize(Capability::LabRead)?;
+        self.authorize(Capability::CellRead)?;
         self.store
             .diff_drafts(
                 &self.workspace,
@@ -3697,14 +3700,14 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_publish",
-        description = "Publish an immutable lab revision and return a compact digest receipt. Set include_revision only for an explicit bulk read of the lab and resolved lock"
+        name = "cell_publish",
+        description = "Publish an immutable cell revision and return a compact digest receipt. Set include_revision only for an explicit bulk read of the cell and resolved lock"
     )]
-    fn proofstorm_lab_publish(
+    fn proofstorm_cell_publish(
         &self,
         Parameters(request): Parameters<PublishDraftRequest>,
     ) -> Result<Json<PublishDraftResponse>, ErrorData> {
-        self.authorize(Capability::LabPublish)?;
+        self.authorize(Capability::CellPublish)?;
         self.store
             .publish(
                 &self.workspace,
@@ -3718,14 +3721,14 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_materialize",
-        description = "Materialize an immutable published lab revision in the configured Kubernetes runtime"
+        name = "cell_materialize",
+        description = "Materialize an immutable published cell revision in the configured Kubernetes runtime"
     )]
-    async fn proofstorm_lab_materialize(
+    async fn proofstorm_cell_materialize(
         &self,
-        Parameters(request): Parameters<MaterializeLabRequest>,
-    ) -> Result<Json<LabInstanceStatus>, ErrorData> {
-        self.authorize(Capability::LabMaterialize)?;
+        Parameters(request): Parameters<MaterializeCellRequest>,
+    ) -> Result<Json<CellInstanceStatus>, ErrorData> {
+        self.authorize(Capability::CellMaterialize)?;
         let draft = self
             .store
             .read_draft(&self.workspace, &self.principal, &request.plan_id)
@@ -3742,11 +3745,11 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         if published.digest != request.revision_digest {
             return Err(coded_invalid_request(
-                "lab_plan_digest_mismatch",
+                "cell_plan_digest_mismatch",
                 "The requested revision does not belong to this plan",
             ));
         }
-        self.labs()?
+        self.cells()?
             .materialize_revision(
                 &request.instance_id,
                 &request.revision_digest,
@@ -3759,29 +3762,29 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_status",
-        description = "Read lab readiness counts and up to eight startup blockers with reasons and recovery guidance. Use component-status and inventory list tools for paged detail"
+        name = "cell_status",
+        description = "Read cell readiness counts and up to eight startup blockers with reasons and recovery guidance. Use component-status and inventory list tools for paged detail"
     )]
-    async fn proofstorm_lab_status(
+    async fn proofstorm_cell_status(
         &self,
         Parameters(request): Parameters<InstanceRequest>,
-    ) -> Result<Json<LabStatusSummary>, ErrorData> {
-        self.full_lab_status(&request.instance_id)
+    ) -> Result<Json<CellStatusSummary>, ErrorData> {
+        self.full_cell_status(&request.instance_id)
             .await
-            .map(compact_lab_status)
+            .map(compact_cell_status)
             .map(Json)
     }
 
     #[tool(
-        name = "lab_component_status_list",
+        name = "cell_component_status_list",
         description = "List component readiness and startup failure reasons with recovery guidance. Image pull failures are blocked startup, not build progress; no experiment or logs operation is needed to diagnose these conditions. Results use bounded cursor pages"
     )]
-    async fn proofstorm_lab_component_status_list(
+    async fn proofstorm_cell_component_status_list(
         &self,
-        Parameters(request): Parameters<LabComponentStatusListRequest>,
-    ) -> Result<Json<LabComponentStatusListResponse>, ErrorData> {
+        Parameters(request): Parameters<CellComponentStatusListRequest>,
+    ) -> Result<Json<CellComponentStatusListResponse>, ErrorData> {
         validate_status_list_limit(request.limit)?;
-        let status = self.full_lab_status(&request.instance_id).await?;
+        let status = self.full_cell_status(&request.instance_id).await?;
         let mut components = status.components;
         components.sort_by(|left, right| left.id.cmp(&right.id));
         let snapshot_digest = digest_json(&components);
@@ -3796,7 +3799,7 @@ impl ProofstormMcp {
         let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
         let mut end = (start + limit).min(components.len());
         loop {
-            let response = LabComponentStatusListResponse {
+            let response = CellComponentStatusListResponse {
                 instance_id: request.instance_id.clone(),
                 revision_digest: status.instance.revision_digest.clone(),
                 components: components[start..end].to_vec(),
@@ -3823,15 +3826,15 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_inventory_list",
-        description = "List sanitized Kubernetes inventory for a lab instance in bounded cursor pages"
+        name = "cell_inventory_list",
+        description = "List sanitized Kubernetes inventory for a cell instance in bounded cursor pages"
     )]
-    async fn proofstorm_lab_inventory_list(
+    async fn proofstorm_cell_inventory_list(
         &self,
-        Parameters(request): Parameters<LabInventoryListRequest>,
-    ) -> Result<Json<LabInventoryListResponse>, ErrorData> {
+        Parameters(request): Parameters<CellInventoryListRequest>,
+    ) -> Result<Json<CellInventoryListResponse>, ErrorData> {
         validate_status_list_limit(request.limit)?;
-        let status = self.full_lab_status(&request.instance_id).await?;
+        let status = self.full_cell_status(&request.instance_id).await?;
         let mut inventory = status.inventory;
         inventory.sort_by_key(inventory_key);
         let inventory_digest = digest_json(&inventory);
@@ -3846,7 +3849,7 @@ impl ProofstormMcp {
         let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
         let mut end = (start + limit).min(inventory.len());
         loop {
-            let response = LabInventoryListResponse {
+            let response = CellInventoryListResponse {
                 instance_id: request.instance_id.clone(),
                 inventory_digest: inventory_digest.clone(),
                 inventory: inventory[start..end].to_vec(),
@@ -3873,17 +3876,17 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_wait",
-        description = "Wait for a lab to reach a target phase. A ready wait returns early with blockers when image pulls, scheduling or container startup are failing; reached=false and timed_out=false means blocked, not still loading. Inspect blocker reasons and recovery messages instead of repeating waits. timeout_seconds must be 1..=120"
+        name = "cell_wait",
+        description = "Wait for a cell to reach a target phase. A ready wait returns early with blockers when image pulls, scheduling or container startup are failing; reached=false and timed_out=false means blocked, not still loading. Inspect blocker reasons and recovery messages instead of repeating waits. timeout_seconds must be 1..=120"
     )]
-    async fn proofstorm_lab_wait(
+    async fn proofstorm_cell_wait(
         &self,
-        Parameters(request): Parameters<LabWaitRequest>,
-    ) -> Result<Json<LabWaitResult>, ErrorData> {
+        Parameters(request): Parameters<CellWaitRequest>,
+    ) -> Result<Json<CellWaitResult>, ErrorData> {
         validate_wait_timeout(request.timeout_seconds)?;
         let waited = self
-            .labs()?
-            .wait(proofstorm_app::lab::WaitRequest {
+            .cells()?
+            .wait(proofstorm_app::cell::WaitRequest {
                 reference: &request.instance_id,
                 expected_instance_key: request.expected_instance_key.as_deref(),
                 expected_generation: request.expected_generation,
@@ -3892,7 +3895,7 @@ impl ProofstormMcp {
             })
             .await
             .map_err(app_error)?;
-        let mut result = compact_lab_wait(
+        let mut result = compact_cell_wait(
             waited.status,
             request.target_phase,
             waited.reached,
@@ -3900,26 +3903,26 @@ impl ProofstormMcp {
         );
         result.superseded = waited.superseded;
         if waited.superseded {
-            result.message = Some("The requested generation was superseded; inspect the current lab before waiting again.".into());
+            result.message = Some("The requested generation was superseded; inspect the current cell before waiting again.".into());
         }
         Ok(Json(result))
     }
 
     #[tool(
-        name = "lab_close",
-        description = "Close the incarnation identified by expected_instance_key from lab_status. Export evidence first: verified teardown removes lab-owned records. Then lab_wait with target_phase=closed and the same expected_instance_key; success includes verified_absent=true"
+        name = "cell_close",
+        description = "Close the incarnation identified by expected_instance_key from cell_status. Export evidence first: verified teardown removes cell-owned records. Then cell_wait with target_phase=closed and the same expected_instance_key; success includes verified_absent=true"
     )]
-    async fn proofstorm_lab_close(
+    async fn proofstorm_cell_close(
         &self,
-        Parameters(request): Parameters<CloseLabRequest>,
-    ) -> Result<Json<LabWaitResult>, ErrorData> {
+        Parameters(request): Parameters<CloseCellRequest>,
+    ) -> Result<Json<CellWaitResult>, ErrorData> {
         let status = self
-            .labs()?
+            .cells()?
             .close(&request.instance_id, &request.expected_instance_key)
             .await
             .map_err(app_error)?;
         let reached = status.phase == InstancePhase::Closed;
-        Ok(Json(compact_lab_wait(
+        Ok(Json(compact_cell_wait(
             status,
             InstancePhase::Closed,
             reached,
@@ -3929,7 +3932,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "experiment_create",
-        description = "Create a durable experiment bound to one lab instance"
+        description = "Create a durable experiment bound to one cell instance"
     )]
     fn proofstorm_experiment_create(
         &self,
@@ -4075,7 +4078,7 @@ impl ProofstormMcp {
     }
     #[tool(
         name = "session_finish",
-        description = "Finish an activity interval. This does not stop actions, revoke access or close the lab. Further work automatically starts another session."
+        description = "Finish an activity interval. This does not stop actions, revoke access or close the cell. Further work automatically starts another session."
     )]
     fn proofstorm_session_finish(
         &self,
@@ -4093,7 +4096,7 @@ impl ProofstormMcp {
     }
     #[tool(
         name = "session_list",
-        description = "List sessions in a lab, or temporal overlaps with session_id. Bounded pagination; no expiry or liveness inference. Overlap is advisory and never blocks work."
+        description = "List sessions in a cell, or temporal overlaps with session_id. Bounded pagination; no expiry or liveness inference. Overlap is advisory and never blocks work."
     )]
     fn proofstorm_session_list(
         &self,
@@ -4125,7 +4128,7 @@ impl ProofstormMcp {
     }
     #[tool(
         name = "private_access_issue",
-        description = "Authorize a different principal to receive one private transfer using the exact approved wallet command. Independent of sessions. No broad lab permissions are granted; handoff must still bind the captured transfer."
+        description = "Authorize a different principal to receive one private transfer using the exact approved wallet command. Independent of sessions. No broad cell permissions are granted; handoff must still bind the captured transfer."
     )]
     async fn proofstorm_private_access_issue(
         &self,
@@ -4221,7 +4224,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "component_restart",
-        description = "Restart any running lab component, whether its workload is a Deployment or StatefulSet, and wait for the exact accepted rollout to become ready. Use this for mints and wallets as well as Bitcoin and Lightning nodes"
+        description = "Restart any running cell component, whether its workload is a Deployment or StatefulSet, and wait for the exact accepted rollout to become ready. Use this for mints and wallets as well as Bitcoin and Lightning nodes"
     )]
     async fn proofstorm_component_restart(
         &self,
@@ -4233,7 +4236,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "component_start",
-        description = "Start any stopped lab component. Preserves its storage; poll operation_status for readiness."
+        description = "Start any stopped cell component. Preserves its storage; poll operation_status for readiness."
     )]
     async fn proofstorm_component_start(
         &self,
@@ -4245,7 +4248,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "component_stop",
-        description = "Stop any lab component without deleting its storage. The stop persists across lab edits and controller restarts; poll operation_status for completion."
+        description = "Stop any cell component without deleting its storage. The stop persists across cell edits and controller restarts; poll operation_status for completion."
     )]
     async fn proofstorm_component_stop(
         &self,
@@ -4262,7 +4265,7 @@ impl ProofstormMcp {
     async fn proofstorm_component_logs(
         &self,
         Parameters(request): Parameters<ComponentLogsRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ComponentLogs)?;
         if !(1..=2_000).contains(&request.tail_lines) {
             return Err(invalid_operation("tail_lines must be in 1..=2000"));
@@ -4278,11 +4281,11 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         let component = revision
-            .lab
+            .cell
             .components
             .iter()
             .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+            .ok_or_else(|| invalid_operation("component is not part of this cell revision"))?;
         component_image_any(&revision, &request.component, component.kind)?;
         let operation = self.create_operation(
             &instance.revision_digest,
@@ -4302,7 +4305,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::ComponentLogs(ComponentLogsAction {
+            CellAction::ComponentLogs(ComponentLogsAction {
                 component: request.component,
                 tail_lines: request.tail_lines,
             }),
@@ -4321,7 +4324,7 @@ impl ProofstormMcp {
     async fn proofstorm_authentication_conformance(
         &self,
         Parameters(request): Parameters<AuthenticationConformanceRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::AuthenticationTest)?;
         let (instance, revision) = self
             .store
@@ -4352,7 +4355,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::AuthenticationConformance(AuthenticationConformanceAction {
+            CellAction::AuthenticationConformance(AuthenticationConformanceAction {
                 mint: request.mint,
                 identity_provider: request.identity_provider,
             }),
@@ -4366,12 +4369,12 @@ impl ProofstormMcp {
 
     #[tool(
         name = "authentication_protected_spend",
-        description = "Mint valid BATs with the disposable test identity, spend one against a protected mint endpoint, and retain the spent bearer token as an opaque in-lab session. MCP returns only typed conformance observations and the source operation identity"
+        description = "Mint valid BATs with the disposable test identity, spend one against a protected mint endpoint, and retain the spent bearer token as an opaque in-cell session. MCP returns only typed conformance observations and the source operation identity"
     )]
     async fn proofstorm_authentication_protected_spend(
         &self,
         Parameters(request): Parameters<AuthenticationProtectedSpendRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::AuthenticationTest)?;
         let (instance, revision) = self
             .store
@@ -4402,7 +4405,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::AuthenticationProtectedSpend(AuthenticationProtectedSpendAction {
+            CellAction::AuthenticationProtectedSpend(AuthenticationProtectedSpendAction {
                 mint: request.mint,
                 identity_provider: request.identity_provider,
             }),
@@ -4421,7 +4424,7 @@ impl ProofstormMcp {
     async fn proofstorm_authentication_replay(
         &self,
         Parameters(request): Parameters<AuthenticationReplayRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize_all(&[Capability::AuthenticationTest, Capability::ArtifactRead])?;
         let (instance, revision) = self
             .store
@@ -4479,7 +4482,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::AuthenticationReplay(AuthenticationReplayAction {
+            CellAction::AuthenticationReplay(AuthenticationReplayAction {
                 mint: request.mint,
                 identity_provider: request.identity_provider,
                 session_secret,
@@ -4500,7 +4503,7 @@ impl ProofstormMcp {
     async fn proofstorm_component_forensics(
         &self,
         Parameters(request): Parameters<ComponentExecRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ComponentForensics)?;
         if request.script.is_empty() || request.script.len() > 16 * 1024 {
             return Err(invalid_operation(
@@ -4521,11 +4524,11 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         let component = revision
-            .lab
+            .cell
             .components
             .iter()
             .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+            .ok_or_else(|| invalid_operation("component is not part of this cell revision"))?;
         component_image_any(&revision, &request.component, component.kind)?;
         let target_component = request
             .target_component
@@ -4533,12 +4536,12 @@ impl ProofstormMcp {
             .unwrap_or(&request.component)
             .to_owned();
         let target = revision
-            .lab
+            .cell
             .components
             .iter()
             .find(|component| component.id == target_component)
             .ok_or_else(|| {
-                invalid_operation("target_component is not part of this lab revision")
+                invalid_operation("target_component is not part of this cell revision")
             })?;
         component_image_any(&revision, &target_component, target.kind)?;
         let operation = self.create_operation(
@@ -4559,7 +4562,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::ComponentForensics(ComponentForensicsAction {
+            CellAction::ComponentForensics(ComponentForensicsAction {
                 component: request.component,
                 target_component,
                 script: request.script,
@@ -4583,7 +4586,7 @@ impl ProofstormMcp {
     async fn proofstorm_private_transfer(
         &self,
         Parameters(request): Parameters<PrivateTransferRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ComponentExecLive)?;
         let transfer = request.transfer.action()?;
         let (instance, revision) = self
@@ -4615,7 +4618,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::PrivateTransfer(transfer),
+            CellAction::PrivateTransfer(transfer),
         );
         action.spec.access_scope = self
             .store
@@ -4638,7 +4641,7 @@ impl ProofstormMcp {
     async fn proofstorm_component_exec_live(
         &self,
         Parameters(request): Parameters<ComponentExecLiveRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ComponentExecLive)?;
         proofstorm_core::native::NativeCommand {
             private_io: None,
@@ -4660,11 +4663,11 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         let component = revision
-            .lab
+            .cell
             .components
             .iter()
             .find(|component| component.id == request.component)
-            .ok_or_else(|| invalid_operation("component is not part of this lab revision"))?;
+            .ok_or_else(|| invalid_operation("component is not part of this cell revision"))?;
         component_image_any(&revision, &request.component, component.kind)?;
         let operation = self.create_operation(
             &instance.revision_digest,
@@ -4684,7 +4687,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::ComponentExecLive(ComponentExecLiveAction {
+            CellAction::ComponentExecLive(ComponentExecLiveAction {
                 private_payload: request.private_payload,
                 component: request.component,
                 script: request.script,
@@ -4708,43 +4711,43 @@ impl ProofstormMcp {
     }
 
     #[tool(
-        name = "lab_recipe_bootstrap",
-        description = "First runtime action for a lab made by lab_recipe_create. Proofstorm supplies the recipe's exact Bitcoin/LND component IDs and safe funding/channel amounts. Await success, then call lab_recipe_route_channel_open; do not call generic liquidity or channel tools for this recipe"
+        name = "cell_recipe_bootstrap",
+        description = "First runtime action for a cell made by cell_recipe_create. Proofstorm supplies the recipe's exact Bitcoin/LND component IDs and safe funding/channel amounts. Await success, then call cell_recipe_route_channel_open; do not call generic liquidity or channel tools for this recipe"
     )]
-    async fn proofstorm_lab_recipe_bootstrap(
+    async fn proofstorm_cell_recipe_bootstrap(
         &self,
-        Parameters(request): Parameters<LabRecipeSetupRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+        Parameters(request): Parameters<CellRecipeSetupRequest>,
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.proofstorm_liquidity_bootstrap(Parameters(recipe_bootstrap_request(request)))
             .await
     }
 
     #[tool(
-        name = "lab_recipe_route_channel_open",
-        description = "Second runtime action for a lab made by lab_recipe_create. After recipe bootstrap succeeds, Proofstorm opens the remaining router-to-CLN channel with server-owned IDs, safe capacity, and balanced directional liquidity. Await success, then call lab_recipe_fee_matrix_run once"
+        name = "cell_recipe_route_channel_open",
+        description = "Second runtime action for a cell made by cell_recipe_create. After recipe bootstrap succeeds, Proofstorm opens the remaining router-to-CLN channel with server-owned IDs, safe capacity, and balanced directional liquidity. Await success, then call cell_recipe_fee_matrix_run once"
     )]
-    async fn proofstorm_lab_recipe_route_channel_open(
+    async fn proofstorm_cell_recipe_route_channel_open(
         &self,
-        Parameters(request): Parameters<LabRecipeSetupRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+        Parameters(request): Parameters<CellRecipeSetupRequest>,
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.proofstorm_channel_open(Parameters(recipe_route_channel_request(request)))
             .await
     }
 
     #[tool(
-        name = "lab_recipe_fee_matrix_run",
+        name = "cell_recipe_fee_matrix_run",
         description = "Run the complete auditable payment matrix for a ready nutshell_lnd_cln_routing_fees recipe after both recipe setup operations succeed. Proofstorm initializes the four role wallets, funds only the two payers, applies known below- and above-reserve routing policies, pays in both directions, and runs four exact conservation oracles. All 26 child actions remain individually journaled. The call returns a compact scientific summary; replay the same matrix_id after interruption"
     )]
     #[allow(
         clippy::too_many_lines,
         reason = "the recipe matrix keeps one auditable, dependency-ordered experiment together"
     )]
-    async fn proofstorm_lab_recipe_fee_matrix_run(
+    async fn proofstorm_cell_recipe_fee_matrix_run(
         &self,
-        Parameters(request): Parameters<LabRecipeFeeMatrixRequest>,
+        Parameters(request): Parameters<CellRecipeFeeMatrixRequest>,
     ) -> Result<Json<serde_json::Value>, ErrorData> {
         match request.recipe {
-            LabRecipe::NutshellLndClnRoutingFees => {}
+            CellRecipe::NutshellLndClnRoutingFees => {}
         }
         let operation_prefix = recipe_fee_matrix_operation_prefix(&request);
         let operation_id = |suffix: &str| format!("{operation_prefix}-{suffix}");
@@ -4989,18 +4992,18 @@ impl ProofstormMcp {
             "wallet_funding_sat_each": ROUTING_FEE_RECIPE_WALLET_FUNDING_SAT,
             "payment_amount_sat": ROUTING_FEE_RECIPE_PAYMENT_SAT,
             "cases": cases,
-            "guidance": "Matrix complete. Close the experiment, export evidence, then close and await the lab.",
+            "guidance": "Matrix complete. Close the experiment, export evidence, then close and await the cell.",
         })))
     }
 
     #[tool(
         name = "liquidity_bootstrap",
-        description = "Optional convenience workflow for two distinct LND nodes: mine 101 blocks, fund them, and open their channel. Required only by the typed peer_connect/channel_open helpers, not by native CLI operations or arbitrary lab topologies. Use native Bitcoin and Lightning CLIs for other funding and channel arrangements"
+        description = "Optional convenience workflow for two distinct LND nodes: mine 101 blocks, fund them, and open their channel. Required only by the typed peer_connect/channel_open helpers, not by native CLI operations or arbitrary cell topologies. Use native Bitcoin and Lightning CLIs for other funding and channel arrangements"
     )]
     async fn proofstorm_liquidity_bootstrap(
         &self,
         Parameters(request): Parameters<BootstrapLiquidityRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         const REQUIRED: &[Capability] = &[
             Capability::ChainMine,
             Capability::WalletFund,
@@ -5060,7 +5063,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::BootstrapLiquidity(BootstrapLiquidityAction {
+            CellAction::BootstrapLiquidity(BootstrapLiquidityAction {
                 chain: request.chain.clone(),
                 mint_lightning: request.mint_lightning.clone(),
                 payer_lightning: request.payer_lightning.clone(),
@@ -5086,7 +5089,7 @@ impl ProofstormMcp {
     async fn proofstorm_peer_connect(
         &self,
         Parameters(request): Parameters<PeerConnectRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::PeerConnect)?;
         validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
         let (instance, revision) = self
@@ -5120,7 +5123,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::PeerConnect(PeerConnectAction {
+            CellAction::PeerConnect(PeerConnectAction {
                 from_lightning: request.from_lightning.clone(),
                 to_lightning: request.to_lightning.clone(),
             }),
@@ -5142,7 +5145,7 @@ impl ProofstormMcp {
     async fn proofstorm_peer_disconnect(
         &self,
         Parameters(request): Parameters<PeerDisconnectRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::PeerDisconnect)?;
         validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
         let (instance, revision) = self
@@ -5175,7 +5178,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::PeerDisconnect(PeerDisconnectAction {
+            CellAction::PeerDisconnect(PeerDisconnectAction {
                 from_lightning: request.from_lightning.clone(),
                 to_lightning: request.to_lightning.clone(),
             }),
@@ -5192,12 +5195,12 @@ impl ProofstormMcp {
 
     #[tool(
         name = "channel_open",
-        description = "Connect two Lightning endpoints in a custom lab, then open and confirm a channel. Requires a succeeded liquidity_bootstrap. Proofstorm rejects unproven funding sources and channel amounts above the bootstrapped node's safe remaining on-chain budget. Labs created from a recipe should use lab_recipe_route_channel_open instead"
+        description = "Connect two Lightning endpoints in a custom cell, then open and confirm a channel. Requires a succeeded liquidity_bootstrap. Proofstorm rejects unproven funding sources and channel amounts above the bootstrapped node's safe remaining on-chain budget. Cells created from a recipe should use cell_recipe_route_channel_open instead"
     )]
     async fn proofstorm_channel_open(
         &self,
         Parameters(request): Parameters<ChannelOpenRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize_all(&[Capability::ChannelOpen, Capability::ChainMine])?;
         validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
         validate_channel_bounds(request.channel_sat, request.push_sat)?;
@@ -5235,7 +5238,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::ChannelOpen(ChannelOpenAction {
+            CellAction::ChannelOpen(ChannelOpenAction {
                 chain: request.chain.clone(),
                 from_lightning: request.from_lightning.clone(),
                 to_lightning: request.to_lightning.clone(),
@@ -5260,7 +5263,7 @@ impl ProofstormMcp {
     async fn proofstorm_channel_policy_set(
         &self,
         Parameters(request): Parameters<ChannelPolicySetRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ChannelOpen)?;
         validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
         if request.base_fee_sat > 100_000 || request.fee_rate_ppm > 1_000_000 {
@@ -5306,7 +5309,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::ChannelPolicySet(ChannelPolicySetAction {
+            CellAction::ChannelPolicySet(ChannelPolicySetAction {
                 from_lightning: request.from_lightning.clone(),
                 to_lightning: request.to_lightning.clone(),
                 base_fee_msat,
@@ -5330,7 +5333,7 @@ impl ProofstormMcp {
     async fn proofstorm_channel_close(
         &self,
         Parameters(request): Parameters<ChannelCloseRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.submit_channel_close(request, false).await
     }
 
@@ -5341,7 +5344,7 @@ impl ProofstormMcp {
     async fn proofstorm_channel_force_close(
         &self,
         Parameters(request): Parameters<ChannelCloseRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.submit_channel_close(request, true).await
     }
 
@@ -5352,7 +5355,7 @@ impl ProofstormMcp {
     async fn proofstorm_channel_rebalance(
         &self,
         Parameters(request): Parameters<ChannelRebalanceRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ChannelRebalance)?;
         validate_channel_id(&request.outgoing_channel_id)?;
         validate_channel_id(&request.incoming_channel_id)?;
@@ -5386,7 +5389,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::ChannelRebalance(ChannelRebalanceAction {
+            CellAction::ChannelRebalance(ChannelRebalanceAction {
                 lightning: request.lightning,
                 outgoing_channel_id: request.outgoing_channel_id,
                 incoming_channel_id: request.incoming_channel_id,
@@ -5411,7 +5414,7 @@ impl ProofstormMcp {
     async fn proofstorm_network_partition(
         &self,
         Parameters(request): Parameters<NetworkPartitionRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::NetworkPartition)?;
         if request.from_component == request.to_component {
             return Err(invalid_operation("partition endpoints must be distinct"));
@@ -5428,13 +5431,13 @@ impl ProofstormMcp {
             .map_err(store_error)?;
         for component in [&request.from_component, &request.to_component] {
             if !revision
-                .lab
+                .cell
                 .components
                 .iter()
                 .any(|item| item.id == *component)
             {
                 return Err(invalid_operation(&format!(
-                    "component {component:?} is not part of this lab revision"
+                    "component {component:?} is not part of this cell revision"
                 )));
             }
         }
@@ -5456,7 +5459,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::NetworkPartition(NetworkPartitionAction {
+            CellAction::NetworkPartition(NetworkPartitionAction {
                 from_component: request.from_component,
                 to_component: request.to_component,
             }),
@@ -5478,7 +5481,7 @@ impl ProofstormMcp {
     fn proofstorm_network_delay(
         &self,
         Parameters(request): Parameters<NetworkDelayRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::NetworkDelay)?;
         validate_network_pair(&request.from_component, &request.to_component)?;
         validate_network_delay_bounds(&request)?;
@@ -5493,7 +5496,7 @@ impl ProofstormMcp {
     fn proofstorm_network_loss(
         &self,
         Parameters(request): Parameters<NetworkLossRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::NetworkDrop)?;
         validate_network_pair(&request.from_component, &request.to_component)?;
         validate_network_loss_bounds(&request)?;
@@ -5508,7 +5511,7 @@ impl ProofstormMcp {
     async fn proofstorm_network_heal(
         &self,
         Parameters(request): Parameters<NetworkHealRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::NetworkHeal)?;
         let mut request = request;
         request.experiment_id = self
@@ -5566,7 +5569,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::NetworkHeal(NetworkHealAction {
+            CellAction::NetworkHeal(NetworkHealAction {
                 partition_operation_id: request.partition_operation_id,
             }),
         );
@@ -5587,7 +5590,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_initialize(
         &self,
         Parameters(request): Parameters<WalletInitializeRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::WalletCreate)?;
         let (instance, revision) = self
             .store
@@ -5620,7 +5623,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletInitialize(WalletInitializeAction {
+            CellAction::WalletInitialize(WalletInitializeAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
             }),
@@ -5642,7 +5645,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_balance(
         &self,
         Parameters(request): Parameters<WalletBalanceRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::WalletControl)?;
         let (instance, revision) = self
             .store
@@ -5675,7 +5678,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletBalance(WalletBalanceAction {
+            CellAction::WalletBalance(WalletBalanceAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
             }),
@@ -5701,7 +5704,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_fund(
         &self,
         Parameters(request): Parameters<WalletFundRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::WalletFund)?;
         validate_wallet_amount(request.amount_sat)?;
         let (instance, revision) = self
@@ -5733,7 +5736,7 @@ impl ProofstormMcp {
             ComponentKind::Lightning,
             "lnd",
         )?;
-        validate_wallet_fund_payer(&revision.lab, &request.mint, &request.payer_lightning)?;
+        validate_wallet_fund_payer(&revision.cell, &request.mint, &request.payer_lightning)?;
         self.require_wallet_action(&revision, &request.wallet, "wallet_fund")?;
         let operation = self.create_operation(
             &instance.revision_digest,
@@ -5753,7 +5756,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletFund(WalletFundAction {
+            CellAction::WalletFund(WalletFundAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 payer_lightning: request.payer_lightning.clone(),
@@ -5777,7 +5780,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_invoice(
         &self,
         Parameters(request): Parameters<WalletInvoiceRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::WalletFund)?;
         validate_wallet_amount(request.amount_sat)?;
         if !(30..=600).contains(&request.timeout_seconds) {
@@ -5816,7 +5819,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletInvoice(WalletInvoiceAction {
+            CellAction::WalletInvoice(WalletInvoiceAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 amount_sat: request.amount_sat,
@@ -5840,7 +5843,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_pay(
         &self,
         Parameters(request): Parameters<WalletPayRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize_all(&[Capability::WalletControl, Capability::ArtifactRead])?;
         if request.recipient_wallet == request.wallet {
             return Err(invalid_operation(
@@ -5898,7 +5901,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletPay(WalletPayAction {
+            CellAction::WalletPay(WalletPayAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 recipient_wallet: request.recipient_wallet.clone(),
@@ -5923,7 +5926,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_quote_claim(
         &self,
         Parameters(request): Parameters<WalletQuoteClaimRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::WalletControl)?;
         if !(1..=30).contains(&request.timeout_seconds) {
             return Err(invalid_operation(
@@ -5961,7 +5964,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletQuoteClaim(WalletQuoteClaimAction {
+            CellAction::WalletQuoteClaim(WalletQuoteClaimAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 mint_quote_id: request.mint_quote_id.clone(),
@@ -5985,7 +5988,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_melt_quote_refresh(
         &self,
         Parameters(request): Parameters<WalletMeltQuoteRefreshRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::WalletControl)?;
         validate_quote_id(&request.melt_quote_id)?;
         if !(1..=30).contains(&request.timeout_seconds) {
@@ -6024,7 +6027,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletMeltQuoteRefresh(WalletMeltQuoteRefreshAction {
+            CellAction::WalletMeltQuoteRefresh(WalletMeltQuoteRefreshAction {
                 wallet: request.wallet,
                 mint: request.mint,
                 melt_quote_id: request.melt_quote_id,
@@ -6048,7 +6051,7 @@ impl ProofstormMcp {
     async fn proofstorm_wallet_round_trip(
         &self,
         Parameters(request): Parameters<WalletRoundTripRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         const REQUIRED: &[Capability] = &[
             Capability::WalletCreate,
             Capability::WalletFund,
@@ -6093,7 +6096,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::WalletRoundTrip(WalletRoundTripAction {
+            CellAction::WalletRoundTrip(WalletRoundTripAction {
                 wallet: request.wallet.clone(),
                 mint: request.mint.clone(),
                 payer_lightning: request.payer_lightning.clone(),
@@ -6118,7 +6121,7 @@ impl ProofstormMcp {
     async fn proofstorm_conservation_oracle(
         &self,
         Parameters(request): Parameters<ConservationOracleRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize_all(&[Capability::OracleRun, Capability::ArtifactRead])?;
         let (instance, revision) = self
             .store
@@ -6183,12 +6186,12 @@ impl ProofstormMcp {
 
     #[tool(
         name = "reachability_oracle",
-        description = "Observe bounded service reachability between two lab components using the source component's actual network-policy identity"
+        description = "Observe bounded service reachability between two cell components using the source component's actual network-policy identity"
     )]
     async fn proofstorm_reachability_oracle(
         &self,
         Parameters(request): Parameters<ReachabilityOracleRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::OracleRun)?;
         validate_reachability_oracle_bounds(&request)?;
         let (instance, revision) = self
@@ -6202,24 +6205,24 @@ impl ProofstormMcp {
             )
             .map_err(store_error)?;
         if !revision
-            .lab
+            .cell
             .components
             .iter()
             .any(|component| component.id == request.from_component)
         {
             return Err(invalid_operation(&format!(
-                "component {:?} is not part of this lab revision",
+                "component {:?} is not part of this cell revision",
                 request.from_component
             )));
         }
         let destination = revision
-            .lab
+            .cell
             .components
             .iter()
             .find(|component| component.id == request.to_component)
             .ok_or_else(|| {
                 invalid_operation(&format!(
-                    "component {:?} is not part of this lab revision",
+                    "component {:?} is not part of this cell revision",
                     request.to_component
                 ))
             })?;
@@ -6247,7 +6250,7 @@ impl ProofstormMcp {
             &self.runtime()?.control_namespace,
             &instance,
             &operation,
-            LabAction::ReachabilityOracle(ReachabilityOracleAction {
+            CellAction::ReachabilityOracle(ReachabilityOracleAction {
                 from_component: request.from_component.clone(),
                 to_component: request.to_component.clone(),
                 service: request.service.clone(),
@@ -6272,7 +6275,7 @@ impl ProofstormMcp {
     async fn proofstorm_operation_status(
         &self,
         Parameters(request): Parameters<OperationRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ArtifactRead)?;
         let operation = self
             .store
@@ -6302,10 +6305,10 @@ impl ProofstormMcp {
     /// never leave a completed runtime job occupying an active-operation slot.
     fn record_runtime_terminal_result(
         &self,
-        operation: &LabOperation,
+        operation: &CellOperation,
         phase: OperationPhase,
         artifact: serde_json::Value,
-    ) -> Result<LabOperation, ErrorData> {
+    ) -> Result<CellOperation, ErrorData> {
         proofstorm_app::journal::record(&self.store, &self.workspace, operation, phase, artifact)
             .map_err(app_error)
     }
@@ -6422,7 +6425,7 @@ impl ProofstormMcp {
     async fn proofstorm_action_cancel(
         &self,
         Parameters(request): Parameters<CancelOperationRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.authorize(Capability::ActionCancel)?;
         let operation = self
             .store
@@ -6741,7 +6744,7 @@ impl ProofstormMcp {
     async fn proofstorm_action_status(
         &self,
         Parameters(request): Parameters<OperationRequest>,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         self.proofstorm_operation_status(Parameters(request)).await
     }
 }
@@ -6777,8 +6780,8 @@ impl CatalogEntryDetail {
 }
 
 fn compact_draft_mutation(draft: Draft, changed_paths: Vec<String>) -> DraftMutationResult {
-    let validation = validate_lab(&draft.lab);
-    let summary = topology_summary(&draft.lab);
+    let validation = validate_cell(&draft.cell);
+    let summary = topology_summary(&draft.cell);
     let mut warnings = summary.warnings;
     warnings.extend(
         validation
@@ -6817,10 +6820,10 @@ struct TopologySummary {
     warnings: Vec<String>,
 }
 
-fn topology_summary(lab: &LabSpec) -> TopologySummary {
-    let mut components = lab.components.clone();
+fn topology_summary(cell: &CellSpec) -> TopologySummary {
+    let mut components = cell.components.clone();
     components.sort_by(|left, right| left.id.cmp(&right.id));
-    let mut links = lab.links.clone();
+    let mut links = cell.links.clone();
     links.sort_by(|left, right| left.id.cmp(&right.id));
 
     let component_ids = components
@@ -6900,17 +6903,17 @@ fn topology_summary(lab: &LabSpec) -> TopologySummary {
     }
 }
 
-fn lab_validation_result(lab: &LabSpec) -> LabValidationResult {
-    lab_validation_result_with_catalog(lab, default_catalog())
+fn cell_validation_result(cell: &CellSpec) -> CellValidationResult {
+    cell_validation_result_with_catalog(cell, default_catalog())
 }
 
-fn lab_validation_result_with_catalog(
-    lab: &LabSpec,
+fn cell_validation_result_with_catalog(
+    cell: &CellSpec,
     catalog: &CatalogResponse,
-) -> LabValidationResult {
-    let mut validation = validate_lab(lab);
+) -> CellValidationResult {
+    let mut validation = validate_cell(cell);
     if validation.valid {
-        if let Err(message) = proofstorm_core::resolve_lock(lab, catalog) {
+        if let Err(message) = proofstorm_core::resolve_lock(cell, catalog) {
             validation.valid = false;
             validation.issues.push(ValidationIssue {
                 code: "publication_preflight_failed".into(),
@@ -6919,8 +6922,8 @@ fn lab_validation_result_with_catalog(
             });
         }
     }
-    let summary = topology_summary(lab);
-    LabValidationResult {
+    let summary = topology_summary(cell);
+    CellValidationResult {
         valid: validation.valid,
         issues: validation.issues,
         component_ids: summary.component_ids,
@@ -7140,10 +7143,10 @@ fn publish_draft_response(
         workspace_id: revision.workspace_id,
         digest: revision.digest,
         lock_digest: revision.lock.digest.clone(),
-        component_count: u32::try_from(revision.lab.components.len()).unwrap_or(u32::MAX),
+        component_count: u32::try_from(revision.cell.components.len()).unwrap_or(u32::MAX),
         revision_included: include_revision,
-        lab: include_revision
-            .then(|| serde_json::to_value(revision.lab).expect("typed lab serializes")),
+        cell: include_revision
+            .then(|| serde_json::to_value(revision.cell).expect("typed cell serializes")),
         lock: include_revision
             .then(|| serde_json::to_value(revision.lock).expect("typed lock serializes")),
     }
@@ -7237,7 +7240,7 @@ fn catalog_page_with_catalog(
 fn recommended_control(entry: &CatalogEntry) -> ControlClass {
     [
         ControlClass::Target,
-        ControlClass::Laboratory,
+        ControlClass::Cell,
         ControlClass::Attacker,
         ControlClass::Oracle,
     ]
@@ -7460,14 +7463,14 @@ fn bounded_agent_response<T: Serialize>(value: T) -> Result<T, ErrorData> {
 }
 
 #[cfg(test)]
-fn compile_lab_plan(request: &LabPlanRequest) -> Result<LabSpec, ErrorData> {
-    compile_lab_plan_with_catalog(request, default_catalog())
+fn compile_cell_plan(request: &CellPlanRequest) -> Result<CellSpec, ErrorData> {
+    compile_cell_plan_with_catalog(request, default_catalog())
 }
 
-fn compile_lab_plan_with_catalog(
-    request: &LabPlanRequest,
+fn compile_cell_plan_with_catalog(
+    request: &CellPlanRequest,
     catalog: &CatalogResponse,
-) -> Result<LabSpec, ErrorData> {
+) -> Result<CellSpec, ErrorData> {
     let (components, selected_entries) = resolve_plan_components(&request.components, catalog)?;
     validate_plan_runtime_requirements(&request.runtime_requirements, &selected_entries)?;
     let links = request
@@ -7476,7 +7479,7 @@ fn compile_lab_plan_with_catalog(
         .map(|connection| compile_plan_connection(connection, &selected_entries))
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(LabSpec {
+    Ok(CellSpec {
         api_version: API_VERSION.into(),
         name: request.plan_id.clone(),
         components,
@@ -7486,7 +7489,7 @@ fn compile_lab_plan_with_catalog(
 }
 
 fn validate_plan_runtime_requirements(
-    requirements: &[LabPlanRuntimeRequirement],
+    requirements: &[CellPlanRuntimeRequirement],
     selected_entries: &BTreeMap<String, &CatalogEntry>,
 ) -> Result<(), ErrorData> {
     for requirement in requirements {
@@ -7497,7 +7500,7 @@ fn validate_plan_runtime_requirements(
                     requirement.component, requirement.endpoint
                 ),
                 Some(serde_json::json!({
-                    "code": "lab_plan_runtime_controls_empty",
+                    "code": "cell_plan_runtime_controls_empty",
                     "component_id": requirement.component,
                     "endpoint": requirement.endpoint,
                     "recovery": "remove the empty requirement or list the runtime controls the experiment will execute",
@@ -7516,7 +7519,7 @@ fn validate_plan_runtime_requirements(
                         requirement.component, requirement.endpoint
                     ),
                     Some(serde_json::json!({
-                        "code": "lab_plan_runtime_endpoint_not_found",
+                        "code": "cell_plan_runtime_endpoint_not_found",
                         "component_id": requirement.component,
                         "implementation": entry.id,
                         "requested_endpoint": requirement.endpoint,
@@ -7533,14 +7536,14 @@ fn validate_plan_runtime_requirements(
         if !unavailable.is_empty() {
             return Err(ErrorData::invalid_request(
                 format!(
-                    "[lab_plan_runtime_control_unsupported] component {:?} endpoint {:?} cannot execute required control(s) {}; no plan was stored. {} Recovery: choose an implementation endpoint that advertises every required control, or limit the experiment to supported observations",
+                    "[cell_plan_runtime_control_unsupported] component {:?} endpoint {:?} cannot execute required control(s) {}; no plan was stored. {} Recovery: choose an implementation endpoint that advertises every required control, or limit the experiment to supported observations",
                     requirement.component,
                     requirement.endpoint,
                     unavailable.iter().cloned().collect::<Vec<_>>().join(", "),
                     endpoint.limitations.join("; ")
                 ),
                 Some(serde_json::json!({
-                    "code": "lab_plan_runtime_control_unsupported",
+                    "code": "cell_plan_runtime_control_unsupported",
                     "component_id": requirement.component,
                     "implementation": entry.id,
                     "endpoint": endpoint,
@@ -7554,7 +7557,7 @@ fn validate_plan_runtime_requirements(
 }
 
 fn resolve_plan_components<'a>(
-    inputs: &[LabPlanComponentInput],
+    inputs: &[CellPlanComponentInput],
     catalog: &'a CatalogResponse,
 ) -> Result<(Vec<ComponentSpec>, BTreeMap<String, &'a CatalogEntry>), ErrorData> {
     let mut components = Vec::with_capacity(inputs.len());
@@ -7567,7 +7570,7 @@ fn resolve_plan_components<'a>(
             })
         {
             return Err(coded_invalid_request(
-                "lab_plan_explicit_version_required",
+                "cell_plan_explicit_version_required",
                 "experimental-only implementations require an exact version",
             ));
         }
@@ -7585,7 +7588,7 @@ fn resolve_plan_components<'a>(
                             input.implementation
                         ),
                         Some(serde_json::json!({
-                            "code": "lab_plan_implementation_not_found",
+                            "code": "cell_plan_implementation_not_found",
                             "component_id": input.id,
                             "requested_implementation": input.implementation,
                             "available_implementations": catalog.implementations.iter()
@@ -7606,7 +7609,7 @@ fn resolve_plan_components<'a>(
                     input.id
                 ),
                 Some(serde_json::json!({
-                    "code": "lab_plan_control_unsupported",
+                    "code": "cell_plan_control_unsupported",
                     "component_id": input.id,
                     "implementation": entry.id,
                     "allowed_control": entry.allowed_control,
@@ -7635,7 +7638,7 @@ fn plan_endpoint<'a>(
         ErrorData::invalid_request(
             format!("connection references unknown component {id:?}"),
             Some(serde_json::json!({
-                "code": "lab_plan_connection_endpoint_not_found",
+                "code": "cell_plan_connection_endpoint_not_found",
                 "requested_component_id": id,
                 "available_component_ids": selected_entries.keys().collect::<Vec<_>>(),
             })),
@@ -7644,25 +7647,25 @@ fn plan_endpoint<'a>(
 }
 
 fn compile_plan_connection(
-    connection: &LabPlanConnectionInput,
+    connection: &CellPlanConnectionInput,
     selected_entries: &BTreeMap<String, &CatalogEntry>,
 ) -> Result<LinkSpec, ErrorData> {
     let link = match connection {
-        LabPlanConnectionInput::BitcoinPeer { id, node_a, node_b } => LinkSpec {
+        CellPlanConnectionInput::BitcoinPeer { id, node_a, node_b } => LinkSpec {
             id: id.clone(),
             kind: LinkKind::BitcoinPeer,
             from: node_a.clone(),
             to: node_b.clone(),
             binding: None,
         },
-        LabPlanConnectionInput::LightningPeer { id, node_a, node_b } => LinkSpec {
+        CellPlanConnectionInput::LightningPeer { id, node_a, node_b } => LinkSpec {
             id: id.clone(),
             kind: LinkKind::LightningPeer,
             from: node_a.clone(),
             to: node_b.clone(),
             binding: None,
         },
-        LabPlanConnectionInput::ChainBackend {
+        CellPlanConnectionInput::ChainBackend {
             id,
             component,
             chain,
@@ -7676,7 +7679,7 @@ fn compile_plan_connection(
                 network: network.unwrap_or(BitcoinNetwork::Regtest),
             }),
         },
-        LabPlanConnectionInput::PaymentBackend {
+        CellPlanConnectionInput::PaymentBackend {
             id,
             mint,
             lightning,
@@ -7701,7 +7704,7 @@ fn compile_plan_connection(
                 }),
             }
         }
-        LabPlanConnectionInput::DatabaseBackend {
+        CellPlanConnectionInput::DatabaseBackend {
             id,
             component,
             database,
@@ -7724,7 +7727,7 @@ fn compile_plan_connection(
                 }),
             }
         }
-        LabPlanConnectionInput::AuthenticationBackend {
+        CellPlanConnectionInput::AuthenticationBackend {
             id,
             component,
             identity_provider,
@@ -7738,7 +7741,7 @@ fn compile_plan_connection(
                 protocol: protocol.unwrap_or(AuthenticationProtocol::Oidc),
             }),
         },
-        LabPlanConnectionInput::NetworkPath { id, source, target } => LinkSpec {
+        CellPlanConnectionInput::NetworkPath { id, source, target } => LinkSpec {
             id: id.clone(),
             kind: LinkKind::NetworkPath,
             from: source.clone(),
@@ -7777,9 +7780,9 @@ fn resolve_plan_payment_binding<'a>(
         ),
         Some(serde_json::json!({
             "code": if candidates.is_empty() {
-                "lab_plan_payment_binding_unsupported"
+                "cell_plan_payment_binding_unsupported"
             } else {
-                "lab_plan_payment_binding_ambiguous"
+                "cell_plan_payment_binding_ambiguous"
             },
             "link_id": link_id,
             "from_implementation": source.id,
@@ -7802,7 +7805,7 @@ fn default_plan_control(kind: ComponentKind, allowed: &[ControlClass]) -> Contro
         | ComponentKind::Database
         | ComponentKind::IdentityProvider
         | ComponentKind::Wallet
-        | ComponentKind::Proxy => ControlClass::Laboratory,
+        | ComponentKind::Proxy => ControlClass::Cell,
     };
     if allowed.contains(&preferred) {
         preferred
@@ -7811,10 +7814,10 @@ fn default_plan_control(kind: ComponentKind, allowed: &[ControlClass]) -> Contro
     }
 }
 
-fn resolved_plan_components(lab: &LabSpec) -> Vec<LabPlanResolvedComponent> {
-    lab.components
+fn resolved_plan_components(cell: &CellSpec) -> Vec<CellPlanResolvedComponent> {
+    cell.components
         .iter()
-        .map(|component| LabPlanResolvedComponent {
+        .map(|component| CellPlanResolvedComponent {
             id: component.id.clone(),
             kind: component.kind,
             implementation: component.implementation.clone(),
@@ -7827,10 +7830,10 @@ fn resolved_plan_components(lab: &LabSpec) -> Vec<LabPlanResolvedComponent> {
 }
 
 fn resolved_plan_runtime_endpoints_with_catalog(
-    lab: &LabSpec,
+    cell: &CellSpec,
     catalog: &CatalogResponse,
-) -> Result<Vec<LabPlanResolvedRuntimeEndpoint>, ErrorData> {
-    lab.components
+) -> Result<Vec<CellPlanResolvedRuntimeEndpoint>, ErrorData> {
+    cell.components
         .iter()
         .flat_map(|component| {
             let entry = exact_catalog_entry(
@@ -7843,7 +7846,7 @@ fn resolved_plan_runtime_endpoints_with_catalog(
                     .runtime_endpoints
                     .iter()
                     .map(|endpoint| {
-                        Ok(LabPlanResolvedRuntimeEndpoint {
+                        Ok(CellPlanResolvedRuntimeEndpoint {
                             component: component.id.clone(),
                             endpoint: endpoint.id.clone(),
                             kind: endpoint.kind.clone(),
@@ -7873,7 +7876,7 @@ fn preferred_recipe_component(
         .ok_or_else(|| {
             ErrorData::internal_error(
                 format!("built-in recipe implementation {implementation:?} is not installed"),
-                Some(serde_json::json!({"code": "lab_recipe_catalog_entry_missing"})),
+                Some(serde_json::json!({"code": "cell_recipe_catalog_entry_missing"})),
             )
         })?;
     let entry = exact_catalog_entry(&catalog.entries, implementation, version)?;
@@ -7882,7 +7885,7 @@ fn preferred_recipe_component(
             format!(
                 "built-in recipe control {control:?} is invalid for {implementation} {version}"
             ),
-            Some(serde_json::json!({"code": "lab_recipe_control_invalid"})),
+            Some(serde_json::json!({"code": "cell_recipe_control_invalid"})),
         ));
     }
     Ok(ComponentSpec {
@@ -7900,34 +7903,34 @@ fn preferred_recipe_component(
     clippy::too_many_lines,
     reason = "the recipe keeps one auditable topology declaration together"
 )]
-fn lab_from_recipe(recipe: LabRecipe, name: String) -> Result<LabSpec, ErrorData> {
+fn cell_from_recipe(recipe: CellRecipe, name: String) -> Result<CellSpec, ErrorData> {
     match recipe {
-        LabRecipe::NutshellLndClnRoutingFees => Ok(LabSpec {
+        CellRecipe::NutshellLndClnRoutingFees => Ok(CellSpec {
             api_version: API_VERSION.into(),
             name,
             components: vec![
                 preferred_recipe_component(
                     "bitcoin-core",
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::new(),
                 )?,
                 preferred_recipe_component(
                     "lnd-backend",
                     "lnd",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::from([("alias".into(), serde_json::json!("lnd-backend"))]),
                 )?,
                 preferred_recipe_component(
                     "lnd-router",
                     "lnd",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::from([("alias".into(), serde_json::json!("lnd-router"))]),
                 )?,
                 preferred_recipe_component(
                     "cln-backend",
                     "cln",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::from([("alias".into(), serde_json::json!("cln-backend"))]),
                 )?,
                 preferred_recipe_component(
@@ -7951,25 +7954,25 @@ fn lab_from_recipe(recipe: LabRecipe, name: String) -> Result<LabSpec, ErrorData
                 preferred_recipe_component(
                     "payer-lnd",
                     "nutshell-wallet",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::new(),
                 )?,
                 preferred_recipe_component(
                     "recipient-lnd",
                     "nutshell-wallet",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::new(),
                 )?,
                 preferred_recipe_component(
                     "payer-cln",
                     "nutshell-wallet",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::new(),
                 )?,
                 preferred_recipe_component(
                     "recipient-cln",
                     "nutshell-wallet",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                     BTreeMap::new(),
                 )?,
             ],
@@ -8036,7 +8039,7 @@ fn lab_from_recipe(recipe: LabRecipe, name: String) -> Result<LabSpec, ErrorData
                     }),
                 },
             ],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }),
     }
 }
@@ -8066,9 +8069,9 @@ impl ServerHandler for ProofstormMcp {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(if self.toolset == ProofstormToolset::Developer {
-            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named lab with lab_up, inspect runtime and cached activity with lab_inspect, and run native argv commands with lab_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use lab_sync to collect durable receipts; inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate lab is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with lab_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
+            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named cell with cell_up, inspect runtime and cached activity with cell_inspect, and run native argv commands with cell_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use cell_sync to collect durable receipts; inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate cell is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with cell_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
         } else {
-            "Use catalog_list to discover implementation IDs, then lab_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a lab_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call lab_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the lab; deletion purges lab-owned activity. Read full evidence only through its manifest resource_uri; use evidence_section_read for bounded inspection."
+            "Use catalog_list to discover implementation IDs, then cell_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a cell_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call cell_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the cell; deletion purges cell-owned activity. Read full evidence only through its manifest resource_uri; use evidence_section_read for bounded inspection."
         }
         )
     }
@@ -8156,7 +8159,7 @@ fn tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
 )]
 fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
-        ("workspace_read", &[Capability::LabRead]),
+        ("workspace_read", &[Capability::CellRead]),
         ("catalog_list", &[Capability::CatalogRead]),
         ("catalog_entry_read", &[Capability::CatalogRead]),
         ("catalog_config_schema_read", &[Capability::CatalogRead]),
@@ -8176,66 +8179,69 @@ fn design_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             &[Capability::CandidateCancel, Capability::CandidateRead],
         ),
         (
-            "lab_plan",
-            &[Capability::CatalogRead, Capability::LabCreate],
+            "cell_plan",
+            &[Capability::CatalogRead, Capability::CellCreate],
         ),
         (
-            "lab_apply",
+            "cell_apply",
             &[
-                Capability::LabRead,
-                Capability::LabPublish,
-                Capability::LabMaterialize,
-                Capability::LabStatus,
+                Capability::CellRead,
+                Capability::CellPublish,
+                Capability::CellMaterialize,
+                Capability::CellStatus,
             ],
         ),
         (
-            "lab_create",
-            &[Capability::LabCreate, Capability::CatalogRead],
+            "cell_create",
+            &[Capability::CellCreate, Capability::CatalogRead],
         ),
-        ("lab_recipe_create", &[Capability::LabCreate]),
-        ("lab_read", &[Capability::LabRead]),
-        ("lab_edit", &[Capability::LabEdit]),
+        ("cell_recipe_create", &[Capability::CellCreate]),
+        ("cell_read", &[Capability::CellRead]),
+        ("cell_edit", &[Capability::CellEdit]),
         (
             "component_add",
-            &[Capability::LabEdit, Capability::TopologyMutate],
+            &[Capability::CellEdit, Capability::TopologyMutate],
         ),
         (
             "component_update",
-            &[Capability::LabEdit, Capability::TopologyMutate],
+            &[Capability::CellEdit, Capability::TopologyMutate],
         ),
         (
             "component_remove",
-            &[Capability::LabEdit, Capability::TopologyMutate],
+            &[Capability::CellEdit, Capability::TopologyMutate],
         ),
         (
             "link_add",
-            &[Capability::LabEdit, Capability::TopologyMutate],
+            &[Capability::CellEdit, Capability::TopologyMutate],
         ),
         (
             "link_remove",
-            &[Capability::LabEdit, Capability::TopologyMutate],
+            &[Capability::CellEdit, Capability::TopologyMutate],
         ),
-        ("lab_clone", &[Capability::LabClone]),
+        ("cell_clone", &[Capability::CellClone]),
         (
-            "lab_validate",
-            &[Capability::LabValidate, Capability::CatalogRead],
+            "cell_validate",
+            &[Capability::CellValidate, Capability::CatalogRead],
         ),
-        ("lab_diff", &[Capability::LabRead]),
-        ("lab_publish", &[Capability::LabPublish]),
+        ("cell_diff", &[Capability::CellRead]),
+        ("cell_publish", &[Capability::CellPublish]),
         (
-            "lab_materialize",
+            "cell_materialize",
             &[
-                Capability::LabMaterialize,
-                Capability::LabRead,
-                Capability::LabPublish,
-                Capability::LabStatus,
+                Capability::CellMaterialize,
+                Capability::CellRead,
+                Capability::CellPublish,
+                Capability::CellStatus,
             ],
         ),
-        ("lab_status", &[Capability::LabStatus]),
-        ("lab_component_status_list", &[Capability::LabStatus]),
-        ("lab_inventory_list", &[Capability::LabStatus]),
-        ("lab_wait", &[Capability::LabStatus]),
-        ("lab_close", &[Capability::LabClose, Capability::LabStatus]),
+        ("cell_status", &[Capability::CellStatus]),
+        ("cell_component_status_list", &[Capability::CellStatus]),
+        ("cell_inventory_list", &[Capability::CellStatus]),
+        ("cell_wait", &[Capability::CellStatus]),
+        (
+            "cell_close",
+            &[Capability::CellClose, Capability::CellStatus],
+        ),
         ("experiment_create", &[Capability::ExperimentCreate]),
         ("experiment_read", &[Capability::ExperimentRead]),
         ("experiment_close", &[Capability::ExperimentClose]),
@@ -8247,7 +8253,7 @@ fn activity_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("session_start", &[Capability::ExperimentRead]),
         (
             "private_access_issue",
-            &[Capability::LabOperate, Capability::ComponentExecLive],
+            &[Capability::CellOperate, Capability::ComponentExecLive],
         ),
         ("session_list", &[Capability::ExperimentRead]),
         ("private_access_read", &[Capability::ExperimentRead]),
@@ -8264,53 +8270,53 @@ fn activity_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
 fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
     vec![
         (
-            "lab_up",
+            "cell_up",
             &[
-                Capability::LabCreate,
-                Capability::LabRead,
-                Capability::LabPublish,
-                Capability::LabMaterialize,
-                Capability::LabStatus,
+                Capability::CellCreate,
+                Capability::CellRead,
+                Capability::CellPublish,
+                Capability::CellMaterialize,
+                Capability::CellStatus,
                 Capability::CatalogRead,
                 Capability::ExperimentRead,
-                Capability::LabOperate,
+                Capability::CellOperate,
             ],
         ),
         (
             "environment_read",
             &[
-                Capability::LabRead,
-                Capability::LabStatus,
+                Capability::CellRead,
+                Capability::CellStatus,
                 Capability::ExperimentRead,
             ],
         ),
         (
-            "lab_inspect",
-            &[Capability::LabStatus, Capability::ExperimentRead],
+            "cell_inspect",
+            &[Capability::CellStatus, Capability::ExperimentRead],
         ),
         (
-            "lab_exec",
+            "cell_exec",
             &[
-                Capability::LabStatus,
+                Capability::CellStatus,
                 Capability::ComponentExecLive,
                 Capability::ArtifactRead,
                 Capability::ExperimentRead,
-                Capability::LabOperate,
+                Capability::CellOperate,
             ],
         ),
         (
-            "lab_sync",
+            "cell_sync",
             &[
-                Capability::LabStatus,
+                Capability::CellStatus,
                 Capability::ArtifactRead,
                 Capability::ExperimentRead,
             ],
         ),
         (
-            "lab_finish",
+            "cell_finish",
             &[
-                Capability::LabStatus,
-                Capability::LabClose,
+                Capability::CellStatus,
+                Capability::CellClose,
                 Capability::ExperimentRead,
                 Capability::ExperimentClose,
                 Capability::ExperimentRead,
@@ -8328,7 +8334,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("component_exec_live", &[Capability::ComponentExecLive]),
         ("component_forensics", &[Capability::ComponentForensics]),
         (
-            "lab_recipe_bootstrap",
+            "cell_recipe_bootstrap",
             &[
                 Capability::ChainMine,
                 Capability::WalletFund,
@@ -8337,7 +8343,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "lab_recipe_route_channel_open",
+            "cell_recipe_route_channel_open",
             &[
                 Capability::ChannelOpen,
                 Capability::ChainMine,
@@ -8345,7 +8351,7 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
             ],
         ),
         (
-            "lab_recipe_fee_matrix_run",
+            "cell_recipe_fee_matrix_run",
             &[
                 Capability::WalletCreate,
                 Capability::WalletFund,
@@ -8467,7 +8473,7 @@ impl ProofstormMcp {
         &self,
         request: ChannelCloseRequest,
         force: bool,
-    ) -> Result<Json<LabOperation>, ErrorData> {
+    ) -> Result<Json<CellOperation>, ErrorData> {
         let (capability, kind) = if force {
             (
                 Capability::ChannelForceClose,
@@ -8513,9 +8519,9 @@ impl ProofstormMcp {
             channel_id: request.channel_id,
         };
         let action = if force {
-            LabAction::ChannelForceClose(parameters)
+            CellAction::ChannelForceClose(parameters)
         } else {
-            LabAction::ChannelClose(parameters)
+            CellAction::ChannelClose(parameters)
         };
         let resource = runtime_action_resource(
             &self.runtime()?.control_namespace,
@@ -8535,7 +8541,7 @@ impl ProofstormMcp {
         request: ComponentControlRequest,
         kind: OperationKind,
     ) -> Result<CallToolResult, ErrorData> {
-        self.labs()?
+        self.cells()?
             .control_component(request, kind)
             .await
             .map_err(app_error)
@@ -8550,7 +8556,7 @@ impl ProofstormMcp {
         &self,
         experiment_id: &str,
         instance_id: &str,
-    ) -> Result<LabOperation, ErrorData> {
+    ) -> Result<CellOperation, ErrorData> {
         let actions = self
             .store
             .actions(&self.workspace, &self.principal, experiment_id, 0, 100)
@@ -8626,7 +8632,7 @@ impl ProofstormMcp {
         request: &R,
         idempotency_key: &str,
         capability: Capability,
-    ) -> Result<LabOperation, ErrorData> {
+    ) -> Result<CellOperation, ErrorData> {
         let mut value = serde_json::to_value(request).map_err(|error| {
             ErrorData::internal_error(
                 format!("operation request serialization failed: {error}"),
@@ -8662,7 +8668,7 @@ fn component_image(
 ) -> Result<String, ErrorData> {
     let valid_component_ids = || valid_component_ids(revision, kind, Some(implementation));
     let Some(component) = revision
-        .lab
+        .cell
         .components
         .iter()
         .find(|component| component.id == id)
@@ -8733,7 +8739,7 @@ fn component_image_any(
 ) -> Result<String, ErrorData> {
     let valid_component_ids = || valid_component_ids(revision, kind, None);
     let Some(component) = revision
-        .lab
+        .cell
         .components
         .iter()
         .find(|component| component.id == id)
@@ -8786,7 +8792,7 @@ fn require_component_runtime_control(
     catalog: &CatalogResponse,
 ) -> Result<(), ErrorData> {
     let component = revision
-        .lab
+        .cell
         .components
         .iter()
         .find(|component| component.id == component_id)
@@ -8836,7 +8842,7 @@ fn valid_component_ids(
     implementation: Option<&str>,
 ) -> Vec<String> {
     let mut ids = revision
-        .lab
+        .cell
         .components
         .iter()
         .filter(|component| {
@@ -8888,7 +8894,7 @@ fn validate_authentication_components(
         "keycloak",
     )?;
     let links = revision
-        .lab
+        .cell
         .links
         .iter()
         .filter(|link| {
@@ -8966,18 +8972,18 @@ fn validate_lightning_pair(from: &str, to: &str) -> Result<(), ErrorData> {
 }
 
 fn validate_wallet_fund_payer(
-    lab: &LabSpec,
+    cell: &CellSpec,
     mint: &str,
     payer_lightning: &str,
 ) -> Result<(), ErrorData> {
-    let is_own_backend = lab.links.iter().any(|link| {
+    let is_own_backend = cell.links.iter().any(|link| {
         link.kind == LinkKind::PaymentBackend && link.from == mint && link.to == payer_lightning
     });
     if !is_own_backend {
         return Ok(());
     }
 
-    let eligible = lab
+    let eligible = cell
         .components
         .iter()
         .filter(|component| {
@@ -9079,7 +9085,7 @@ fn validate_channel_bounds(channel_sat: u64, push_sat: u64) -> Result<(), ErrorD
 
 fn validate_channel_funding_admission(
     request: &ChannelOpenRequest,
-    bootstrap_operation: &LabOperation,
+    bootstrap_operation: &CellOperation,
 ) -> Result<(), ErrorData> {
     let bootstrap =
         serde_json::from_value::<StoredBootstrapFunding>(bootstrap_operation.request.clone())
@@ -9203,12 +9209,12 @@ fn validate_wallet_amount(amount_sat: u64) -> Result<(), ErrorData> {
 
 fn conservation_observation(
     request: &ConservationOracleRequest,
-    baseline: &LabOperation,
-    treatment: &LabOperation,
+    baseline: &CellOperation,
+    treatment: &CellOperation,
     workspace: &str,
     principal: &str,
 ) -> Result<serde_json::Value, ErrorData> {
-    let same_scope = |operation: &LabOperation| {
+    let same_scope = |operation: &CellOperation| {
         operation.workspace_id == workspace
             && operation.principal_id == principal
             && operation.instance_id == request.instance_id
@@ -9340,7 +9346,7 @@ fn conservation_input_evidence(
 )]
 fn conservation_treatment_evidence(
     request: &ConservationOracleRequest,
-    treatment: &LabOperation,
+    treatment: &CellOperation,
     baseline_sat: u64,
 ) -> Result<ConservationTreatmentEvidence, ErrorData> {
     let treatment_content = treatment
@@ -9561,15 +9567,15 @@ fn inventory_key(entry: &InventoryEntry) -> String {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct DeveloperLabView {
+pub struct DeveloperCellView {
     pub instance_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reconciliation_error: Option<LabReconciliationError>,
-    pub lab: proofstorm_store::LabHandle,
-    pub runtime: Option<LabStatusSummary>,
+    pub reconciliation_error: Option<CellReconciliationError>,
+    pub cell: proofstorm_store::CellHandle,
+    pub runtime: Option<CellStatusSummary>,
     pub run: Option<Experiment>,
     pub sessions: proofstorm_store::SessionPage,
-    pub activity: Vec<proofstorm_app::lab::Activity>,
+    pub activity: Vec<proofstorm_app::cell::Activity>,
     pub next_sequence: Option<u64>,
     pub observed_at_unix: i64,
 }
@@ -9592,14 +9598,14 @@ fn developer_result(value: impl Serialize) -> Result<CallToolResult, ErrorData> 
     bounded_agent_response(CallToolResult::structured(value))
 }
 
-fn compact_developer_view(view: proofstorm_app::lab::LabView) -> DeveloperLabView {
-    DeveloperLabView {
+fn compact_developer_view(view: proofstorm_app::cell::CellView) -> DeveloperCellView {
+    DeveloperCellView {
         instance_key: view.instance_key,
         reconciliation_error: view.reconciliation_error,
-        lab: view.lab,
+        cell: view.cell,
         runtime: view.runtime.map(|status| {
-            let mut summary = compact_lab_status(status);
-            summary.runtime_guidance = Some("Readiness describes infrastructure availability, not funding or payment settlement. Inspect individual components for recovery; execute native commands in the selected lab.".into());
+            let mut summary = compact_cell_status(status);
+            summary.runtime_guidance = Some("Readiness describes infrastructure availability, not funding or payment settlement. Inspect individual components for recovery; execute native commands in the selected cell.".into());
             summary
         }),
         run: view.run,
@@ -9618,7 +9624,7 @@ pub struct StartupBlocker {
     pub message: String,
 }
 
-fn startup_blockers(status: &LabInstanceStatus) -> Vec<StartupBlocker> {
+fn startup_blockers(status: &CellInstanceStatus) -> Vec<StartupBlocker> {
     status
         .components
         .iter()
@@ -9640,7 +9646,7 @@ fn startup_blockers(status: &LabInstanceStatus) -> Vec<StartupBlocker> {
         .collect()
 }
 
-fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
+fn compact_cell_status(mut status: CellInstanceStatus) -> CellStatusSummary {
     let blockers = startup_blockers(&status);
     if status.phase == InstancePhase::Pending && !blockers.is_empty() {
         status.message = Some("Component startup is blocked. Follow the blocker recovery guidance; another wait alone will not fix the failure.".into());
@@ -9651,7 +9657,7 @@ fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
         .filter(|component| component.ready)
         .count();
     status.inventory.sort_by_key(inventory_key);
-    LabStatusSummary {
+    CellStatusSummary {
         instance_key: status.instance.instance_key.clone(),
         observed_generation: status.observed_generation,
         observed_revision_digest: status.observed_revision_digest,
@@ -9674,12 +9680,12 @@ fn compact_lab_status(mut status: LabInstanceStatus) -> LabStatusSummary {
     }
 }
 
-fn compact_lab_wait(
-    mut status: LabInstanceStatus,
+fn compact_cell_wait(
+    mut status: CellInstanceStatus,
     target_phase: InstancePhase,
     reached: bool,
     timed_out: bool,
-) -> LabWaitResult {
+) -> CellWaitResult {
     let blockers = startup_blockers(&status);
     if status.phase == InstancePhase::Pending && !blockers.is_empty() {
         status.message = Some("Component startup is blocked. Follow the blocker recovery guidance; another wait alone will not fix the failure.".into());
@@ -9689,7 +9695,7 @@ fn compact_lab_wait(
         .iter()
         .filter(|component| component.ready)
         .count();
-    LabWaitResult {
+    CellWaitResult {
         instance_key: status.instance.instance_key.clone(),
         observed_generation: status.observed_generation,
         observed_revision_digest: status.observed_revision_digest,
@@ -9774,7 +9780,7 @@ fn matrix_case_summary(
     base_fee_sat: u64,
     fee_rate_ppm: u32,
     payment: &OperationWaitResult,
-    oracle: &LabOperation,
+    oracle: &CellOperation,
 ) -> Result<serde_json::Value, ErrorData> {
     let payment_content = payment
         .artifact
@@ -9861,7 +9867,7 @@ fn matrix_case_summary(
     }))
 }
 
-fn compact_operation_wait(operation: LabOperation, timed_out: bool) -> OperationWaitResult {
+fn compact_operation_wait(operation: CellOperation, timed_out: bool) -> OperationWaitResult {
     OperationWaitResult {
         operation_id: operation.id,
         sequence: operation.sequence,
@@ -9874,7 +9880,7 @@ fn compact_operation_wait(operation: LabOperation, timed_out: bool) -> Operation
 }
 
 fn compact_operation_wait_many(
-    operations: Vec<LabOperation>,
+    operations: Vec<CellOperation>,
     timed_out: bool,
 ) -> Result<OperationWaitManyResult, ErrorData> {
     let all_terminal = operations
@@ -9985,7 +9991,7 @@ fn candidate_build_resource(
 
 fn compact_candidate_build(candidate: &CandidateBuild, timed_out: bool) -> CandidateBuildReceipt {
     let next_tool = match candidate.phase {
-        CandidateBuildPhase::Succeeded => "lab_plan",
+        CandidateBuildPhase::Succeeded => "cell_plan",
         CandidateBuildPhase::Failed | CandidateBuildPhase::Cancelled => "none",
         CandidateBuildPhase::Pending
         | CandidateBuildPhase::Resolving
@@ -10309,8 +10315,8 @@ impl KubernetesRuntime {
 
     async fn apply_action(
         &self,
-        instance: &LabInstance,
-        action: &ProofstormLabAction,
+        instance: &CellInstance,
+        action: &ProofstormCellAction,
     ) -> Result<(), ErrorData> {
         self.shared()
             .apply_action(instance, action)
@@ -10320,7 +10326,7 @@ impl KubernetesRuntime {
 
     async fn action_status(
         &self,
-        operation: &LabOperation,
+        operation: &CellOperation,
     ) -> Result<Option<(OperationPhase, serde_json::Value)>, ErrorData> {
         self.shared()
             .action_status(operation)
@@ -10333,7 +10339,7 @@ impl KubernetesRuntime {
     /// entry itself instead of leaving it non-terminal forever.
     async fn request_action_cancellation(
         &self,
-        operation: &LabOperation,
+        operation: &CellOperation,
         token: &str,
     ) -> Result<bool, ErrorData> {
         self.shared()
@@ -10437,7 +10443,7 @@ mod tests {
                 .find(|e| e.id == implementation)
                 .unwrap();
             let component = revision
-                .lab
+                .cell
                 .components
                 .iter_mut()
                 .find(|c| c.id == "wallet-b")
@@ -10447,7 +10453,7 @@ mod tests {
             component.config_version = entry.config_version.clone();
             component.control = entry.allowed_control[0];
             revision.lock =
-                proofstorm_core::resolve_lock(&revision.lab, default_catalog()).unwrap();
+                proofstorm_core::resolve_lock(&revision.cell, default_catalog()).unwrap();
             revision
         };
         let revision = recipient("cdk-cli-wallet");
@@ -10496,7 +10502,7 @@ mod tests {
 
     #[test]
     fn experimental_wallet_requires_exact_selection_and_retains_source_identity() {
-        let mut input = LabPlanComponentInput {
+        let mut input = CellPlanComponentInput {
             id: "wallet".into(),
             implementation: "cocod-wallet".into(),
             version: None,
@@ -10506,7 +10512,7 @@ mod tests {
         let error = resolve_plan_components(&[input.clone()], default_catalog()).unwrap_err();
         assert_eq!(
             error.data.unwrap()["code"],
-            "lab_plan_explicit_version_required"
+            "cell_plan_explicit_version_required"
         );
         input.version = Some("0.0.17-dev.44e5101c".into());
         let (components, entries) = resolve_plan_components(&[input], default_catalog()).unwrap();
@@ -10539,7 +10545,7 @@ mod tests {
         ] {
             let receipt = serde_json::json!({"stdout":text,"stderr":text,
                 "cleanup_verified":true,"exit_code":7,"output_truncated":false});
-            let status = proofstorm_kube::ProofstormLabActionStatus {
+            let status = proofstorm_kube::ProofstormCellActionStatus {
                 phase: ActionPhase::Succeeded,
                 artifact: Some(serde_json::from_value(receipt).unwrap()),
                 ..Default::default()
@@ -10560,7 +10566,7 @@ mod tests {
         ] {
             let receipt = serde_json::json!({"cleanup_verified": phase == ActionPhase::Cancelled,
                 "cancelled":true,"exit_signal":15,"stdout":"","stderr":""});
-            let status = proofstorm_kube::ProofstormLabActionStatus {
+            let status = proofstorm_kube::ProofstormCellActionStatus {
                 phase,
                 artifact: Some(serde_json::from_value(receipt.clone()).unwrap()),
                 error: Some(
@@ -10582,7 +10588,7 @@ mod tests {
                 Some((expected, legacy))
             );
         }
-        let status = proofstorm_kube::ProofstormLabActionStatus {
+        let status = proofstorm_kube::ProofstormCellActionStatus {
             phase: ActionPhase::Cancelled,
             ..Default::default()
         };
@@ -10595,25 +10601,25 @@ mod tests {
         );
     }
     use super::*;
-    use proofstorm_core::{API_VERSION, LabPolicy};
+    use proofstorm_core::{API_VERSION, CellPolicy};
 
-    fn lab(name: &str) -> LabSpec {
-        LabSpec {
+    fn cell(name: &str) -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
             name: name.into(),
             components: vec![],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
-    fn authored_lab(name: &str) -> AuthoredLabSpec {
-        AuthoredLabSpec {
+    fn authored_cell(name: &str) -> AuthoredCellSpec {
+        AuthoredCellSpec {
             api_version: API_VERSION.into(),
             name: name.into(),
             components: vec![],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
@@ -10635,7 +10641,7 @@ mod tests {
                 config: BTreeMap::new(),
             }
         };
-        let authored = LabSpec {
+        let authored = CellSpec {
             api_version: API_VERSION.into(),
             name: "component-references".into(),
             components: vec![
@@ -10644,15 +10650,15 @@ mod tests {
                 component("wallet-a", "nutshell-wallet"),
             ],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lab = proofstorm_core::resolve_effective_lab(&authored, catalog)
+        let cell = proofstorm_core::resolve_effective_cell(&authored, catalog)
             .expect("effective component fixture");
-        let lock = proofstorm_core::resolve_lock(&lab, catalog).expect("locked component fixture");
+        let lock = proofstorm_core::resolve_lock(&cell, catalog).expect("locked component fixture");
         PublishedRevision {
             workspace_id: "alpha".into(),
-            digest: digest_json(&(&lab, &lock)),
-            lab,
+            digest: digest_json(&(&cell, &lock)),
+            cell,
             lock,
         }
     }
@@ -10697,44 +10703,44 @@ mod tests {
     }
 
     #[test]
-    fn authored_lab_policy_is_optional_and_defaults_safely() {
-        let authored = serde_json::from_value::<AuthoredLabSpec>(serde_json::json!({
+    fn authored_cell_policy_is_optional_and_defaults_safely() {
+        let authored = serde_json::from_value::<AuthoredCellSpec>(serde_json::json!({
             "api_version": API_VERSION,
             "name": "default-policy",
             "components": [],
             "links": []
         }))
         .expect("policy may be omitted");
-        assert_eq!(authored.policy, LabPolicy::default());
+        assert_eq!(authored.policy, CellPolicy::default());
     }
 
     #[test]
-    fn lab_request_accepts_object_or_once_stringified_object() {
-        let lab = serde_json::json!({
+    fn cell_request_accepts_object_or_once_stringified_object() {
+        let cell = serde_json::json!({
             "api_version": API_VERSION,
             "name": "wire-compatible",
             "components": [],
             "links": []
         });
-        let object = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
-            "lab": lab.clone()
+        let object = serde_json::from_value::<ValidateCellRequest>(serde_json::json!({
+            "cell": cell.clone()
         }))
         .expect("canonical object");
-        let stringified = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
-            "lab": serde_json::to_string(&lab).expect("encode lab")
+        let stringified = serde_json::from_value::<ValidateCellRequest>(serde_json::json!({
+            "cell": serde_json::to_string(&cell).expect("encode cell")
         }))
         .expect("once-stringified object");
 
         assert_eq!(
-            serde_json::to_value(object.lab).expect("object value"),
-            serde_json::to_value(stringified.lab).expect("stringified value")
+            serde_json::to_value(object.cell).expect("object value"),
+            serde_json::to_value(stringified.cell).expect("stringified value")
         );
     }
 
     #[test]
-    fn persisted_lab_output_round_trips_back_into_validation() {
-        let request = serde_json::from_value::<ValidateLabRequest>(serde_json::json!({
-            "lab": {
+    fn persisted_cell_output_round_trips_back_into_validation() {
+        let request = serde_json::from_value::<ValidateCellRequest>(serde_json::json!({
+            "cell": {
                 "api_version": API_VERSION,
                 "name": "canonical-round-trip",
                 "components": [],
@@ -10748,9 +10754,9 @@ mod tests {
                 "policy": {}
             }
         }))
-        .expect("persisted canonical lab output must remain valid MCP input");
+        .expect("persisted canonical cell output must remain valid MCP input");
         assert!(matches!(
-            request.lab.links.as_slice(),
+            request.cell.links.as_slice(),
             [AddLinkInput::ChainBackend {
                 network: BitcoinNetwork::Regtest,
                 ..
@@ -10759,7 +10765,7 @@ mod tests {
     }
 
     #[test]
-    fn stringified_lab_still_enforces_the_strict_contract() {
+    fn stringified_cell_still_enforces_the_strict_contract() {
         for invalid in [
             "not json".to_owned(),
             serde_json::json!({
@@ -10777,9 +10783,9 @@ mod tests {
             .to_string(),
         ] {
             assert!(
-                serde_json::from_value::<ValidateLabRequest>(serde_json::json!({"lab": invalid}))
+                serde_json::from_value::<ValidateCellRequest>(serde_json::json!({"cell": invalid}))
                     .is_err(),
-                "invalid stringified lab must fail closed"
+                "invalid stringified cell must fail closed"
             );
         }
     }
@@ -10787,7 +10793,7 @@ mod tests {
     #[test]
     fn create_rejects_catalog_invalid_config_without_writing_a_draft() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
-        let authored = serde_json::from_value::<AuthoredLabSpec>(serde_json::json!({
+        let authored = serde_json::from_value::<AuthoredCellSpec>(serde_json::json!({
             "api_version": API_VERSION,
             "name": "invalid-alias",
             "components": [
@@ -10797,7 +10803,7 @@ mod tests {
                     "implementation": "bitcoin-core",
                     "version": "31.1",
                     "config_version": "bitcoin-core/31/v1",
-                    "control": "laboratory",
+                    "control": "cell",
                     "config": {}
                 },
                 {
@@ -10806,7 +10812,7 @@ mod tests {
                     "implementation": "lnd",
                     "version": "0.20.4-beta",
                     "config_version": "lnd/0.20/v1",
-                    "control": "laboratory",
+                    "control": "cell",
                     "config": {"alias": "this-alias-is-deliberately-far-too-long-for-lnd"}
                 }
             ],
@@ -10818,11 +10824,11 @@ mod tests {
                 "network": "regtest"
             }]
         }))
-        .expect("wire-valid authored lab");
+        .expect("wire-valid authored cell");
 
         let validation = service
-            .proofstorm_lab_validate(Parameters(ValidateLabRequest {
-                lab: authored.clone(),
+            .proofstorm_cell_validate(Parameters(ValidateCellRequest {
+                cell: authored.clone(),
             }))
             .expect("validation result")
             .0;
@@ -10831,9 +10837,9 @@ mod tests {
             issue.code == "publication_preflight_failed" && issue.message.contains("alias")
         }));
 
-        let error = match service.proofstorm_lab_create(Parameters(CreateDraftRequest {
+        let error = match service.proofstorm_cell_create(Parameters(CreateDraftRequest {
             draft_id: "invalid-alias".into(),
-            lab: authored,
+            cell: authored,
             idempotency_key: "invalid-alias-once".into(),
         })) {
             Ok(_) => panic!("invalid effective config must not create a draft"),
@@ -10841,16 +10847,16 @@ mod tests {
         };
         assert_eq!(
             error.data.expect("structured error")["code"],
-            "lab_validation_failed"
+            "cell_validation_failed"
         );
         assert!(
             service
-                .proofstorm_lab_read(Parameters(ReadDraftRequest {
+                .proofstorm_cell_read(Parameters(ReadDraftRequest {
                     instance_id: None,
                     draft_id: "invalid-alias".into(),
                 }))
                 .is_err(),
-            "rejected lab left no draft behind"
+            "rejected cell left no draft behind"
         );
     }
 
@@ -10858,10 +10864,10 @@ mod tests {
     fn routing_fee_recipe_creates_a_valid_versioned_topology_in_one_call() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
         let receipt = service
-            .proofstorm_lab_recipe_create(Parameters(CreateLabRecipeRequest {
+            .proofstorm_cell_recipe_create(Parameters(CreateCellRecipeRequest {
                 draft_id: "routing-fees".into(),
                 idempotency_key: "routing-fees-once".into(),
-                recipe: LabRecipe::NutshellLndClnRoutingFees,
+                recipe: CellRecipe::NutshellLndClnRoutingFees,
                 name: None,
             }))
             .expect("recipe draft")
@@ -10872,13 +10878,13 @@ mod tests {
         assert!(receipt.structure.contains("backend_bindings=5/5"));
 
         let draft = service
-            .proofstorm_lab_read(Parameters(ReadDraftRequest {
+            .proofstorm_cell_read(Parameters(ReadDraftRequest {
                 instance_id: None,
                 draft_id: "routing-fees".into(),
             }))
             .expect("created recipe draft")
             .0;
-        assert_eq!(draft.lab.name, "routing-fees");
+        assert_eq!(draft.cell.name, "routing-fees");
         for id in [
             "bitcoin-core",
             "lnd-backend",
@@ -10892,24 +10898,24 @@ mod tests {
             "recipient-cln",
         ] {
             let component = draft
-                .lab
+                .cell
                 .components
                 .iter()
                 .find(|component| component.id == id)
                 .unwrap_or_else(|| panic!("recipe component {id}"));
             assert!(component.version.is_some(), "{id} has an exact version");
         }
-        assert!(validate_lab(&draft.lab).issues.is_empty());
+        assert!(validate_cell(&draft.cell).issues.is_empty());
     }
 
     #[test]
     fn routing_fee_recipe_setup_owns_component_ids_and_liquidity_values() {
-        let request = LabRecipeSetupRequest {
+        let request = CellRecipeSetupRequest {
             instance_id: "instance".into(),
             experiment_id: "experiment".into(),
             session_id: "session".into(),
             operation_id: "operation".into(),
-            recipe: LabRecipe::NutshellLndClnRoutingFees,
+            recipe: CellRecipe::NutshellLndClnRoutingFees,
             idempotency_key: "once".into(),
         };
         let bootstrap = recipe_bootstrap_request(request.clone());
@@ -10938,10 +10944,10 @@ mod tests {
             "recipe": "nutshell_lnd_cln_routing_fees",
             "idempotency_key": "once"
         });
-        assert!(serde_json::from_value::<LabRecipeSetupRequest>(input.clone()).is_ok());
+        assert!(serde_json::from_value::<CellRecipeSetupRequest>(input.clone()).is_ok());
         input["chain"] = serde_json::json!("regtest");
         assert!(
-            serde_json::from_value::<LabRecipeSetupRequest>(input).is_err(),
+            serde_json::from_value::<CellRecipeSetupRequest>(input).is_err(),
             "recipe setup must reject caller-controlled component IDs"
         );
     }
@@ -10956,35 +10962,35 @@ mod tests {
             "recipe": "nutshell_lnd_cln_routing_fees",
             "idempotency_key": "once"
         });
-        assert!(serde_json::from_value::<LabRecipeFeeMatrixRequest>(input.clone()).is_ok());
+        assert!(serde_json::from_value::<CellRecipeFeeMatrixRequest>(input.clone()).is_ok());
         input["payer_wallet"] = serde_json::json!("recipient-lnd");
         assert!(
-            serde_json::from_value::<LabRecipeFeeMatrixRequest>(input).is_err(),
+            serde_json::from_value::<CellRecipeFeeMatrixRequest>(input).is_err(),
             "recipe matrix must reject caller-controlled wallet roles"
         );
     }
 
     #[test]
-    fn generic_lab_plan_resolves_catalog_versions_kinds_and_bindings() {
-        let request = LabPlanRequest {
+    fn generic_cell_plan_resolves_catalog_versions_kinds_and_bindings() {
+        let request = CellPlanRequest {
             update: None,
             plan_id: "generic-plan".into(),
             components: vec![
-                LabPlanComponentInput {
+                CellPlanComponentInput {
                     id: "chain".into(),
                     implementation: "bitcoin-core".into(),
                     version: None,
                     control: None,
                     config: BTreeMap::new(),
                 },
-                LabPlanComponentInput {
+                CellPlanComponentInput {
                     id: "lnd-a".into(),
                     implementation: "lnd".into(),
                     version: None,
                     control: None,
                     config: BTreeMap::from([("alias".into(), serde_json::json!("authored-lnd"))]),
                 },
-                LabPlanComponentInput {
+                CellPlanComponentInput {
                     id: "lnd-b".into(),
                     implementation: "lnd".into(),
                     version: None,
@@ -10993,66 +10999,66 @@ mod tests {
                 },
             ],
             connections: vec![
-                LabPlanConnectionInput::ChainBackend {
+                CellPlanConnectionInput::ChainBackend {
                     id: "a-chain".into(),
                     component: "lnd-a".into(),
                     chain: "chain".into(),
                     network: None,
                 },
-                LabPlanConnectionInput::ChainBackend {
+                CellPlanConnectionInput::ChainBackend {
                     id: "b-chain".into(),
                     component: "lnd-b".into(),
                     chain: "chain".into(),
                     network: None,
                 },
-                LabPlanConnectionInput::LightningPeer {
+                CellPlanConnectionInput::LightningPeer {
                     id: "direct".into(),
                     node_a: "lnd-a".into(),
                     node_b: "lnd-b".into(),
                 },
             ],
             runtime_requirements: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
             idempotency_key: "generic-plan-once".into(),
         };
-        let lab = compile_lab_plan(&request).expect("generic plan compiles");
-        let validation = lab_validation_result(&lab);
+        let cell = compile_cell_plan(&request).expect("generic plan compiles");
+        let validation = cell_validation_result(&cell);
         assert!(validation.valid, "{:#?}", validation.issues);
-        assert_eq!(lab.components.len(), 3);
+        assert_eq!(cell.components.len(), 3);
         assert!(
-            lab.components
+            cell.components
                 .iter()
                 .all(|component| component.version.is_some())
         );
-        assert!(lab.components.iter().all(|component| {
+        assert!(cell.components.iter().all(|component| {
             component.kind == ComponentKind::Bitcoin || component.kind == ComponentKind::Lightning
         }));
-        assert!(lab.links[..2].iter().all(|link| {
+        assert!(cell.links[..2].iter().all(|link| {
             link.binding
                 == Some(DependencyBinding::Chain {
                     network: BitcoinNetwork::Regtest,
                 })
         }));
-        assert!(lab.links[2].binding.is_none());
-        let components = resolved_plan_components(&lab);
+        assert!(cell.links[2].binding.is_none());
+        let components = resolved_plan_components(&cell);
         assert_eq!(components[1].config["alias"], "authored-lnd");
         assert!(components[0].config.is_empty());
     }
 
     #[test]
-    fn generic_lab_plan_infers_the_exact_catalog_payment_binding() {
-        let request = LabPlanRequest {
+    fn generic_cell_plan_infers_the_exact_catalog_payment_binding() {
+        let request = CellPlanRequest {
             update: None,
             plan_id: "payment-plan".into(),
             components: vec![
-                LabPlanComponentInput {
+                CellPlanComponentInput {
                     id: "mint".into(),
                     implementation: "nutshell".into(),
                     version: None,
                     control: None,
                     config: BTreeMap::new(),
                 },
-                LabPlanComponentInput {
+                CellPlanComponentInput {
                     id: "backend".into(),
                     implementation: "lnd".into(),
                     version: None,
@@ -11060,7 +11066,7 @@ mod tests {
                     config: BTreeMap::new(),
                 },
             ],
-            connections: vec![LabPlanConnectionInput::PaymentBackend {
+            connections: vec![CellPlanConnectionInput::PaymentBackend {
                 id: "payment".into(),
                 mint: "mint".into(),
                 lightning: "backend".into(),
@@ -11068,12 +11074,12 @@ mod tests {
                 unit: None,
             }],
             runtime_requirements: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
             idempotency_key: "payment-plan-once".into(),
         };
-        let lab = compile_lab_plan(&request).expect("payment binding is unambiguous");
+        let cell = compile_cell_plan(&request).expect("payment binding is unambiguous");
         assert_eq!(
-            lab.links[0].binding,
+            cell.links[0].binding,
             Some(DependencyBinding::Payment {
                 method: PaymentMethod::Bolt11,
                 unit: "sat".into(),
@@ -11082,17 +11088,17 @@ mod tests {
     }
 
     #[test]
-    fn generic_lab_plan_keeps_implementation_ids_open_and_reports_catalog_alternatives() {
-        let schema = serde_json::to_value(schemars::schema_for!(LabPlanComponentInput))
+    fn generic_cell_plan_keeps_implementation_ids_open_and_reports_catalog_alternatives() {
+        let schema = serde_json::to_value(schemars::schema_for!(CellPlanComponentInput))
             .expect("plan component schema");
         assert!(
             schema["properties"]["implementation"].get("enum").is_none(),
             "catalog growth must not require an MCP schema change"
         );
-        let request = LabPlanRequest {
+        let request = CellPlanRequest {
             update: None,
             plan_id: "unknown-plan".into(),
-            components: vec![LabPlanComponentInput {
+            components: vec![CellPlanComponentInput {
                 id: "future-mint".into(),
                 implementation: "future-mint".into(),
                 version: None,
@@ -11101,12 +11107,13 @@ mod tests {
             }],
             connections: vec![],
             runtime_requirements: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
             idempotency_key: "unknown-plan-once".into(),
         };
-        let error = compile_lab_plan(&request).expect_err("unknown catalog entry must fail closed");
+        let error =
+            compile_cell_plan(&request).expect_err("unknown catalog entry must fail closed");
         let data = error.data.expect("structured plan error");
-        assert_eq!(data["code"], "lab_plan_implementation_not_found");
+        assert_eq!(data["code"], "cell_plan_implementation_not_found");
         assert!(
             data["available_implementations"]
                 .as_array()
@@ -11115,9 +11122,9 @@ mod tests {
     }
 
     #[test]
-    fn generic_lab_plan_rejects_unavailable_runtime_controls_before_storage() {
+    fn generic_cell_plan_rejects_unavailable_runtime_controls_before_storage() {
         let plan_schema =
-            serde_json::to_value(schemars::schema_for!(LabPlanRequest)).expect("lab plan schema");
+            serde_json::to_value(schemars::schema_for!(CellPlanRequest)).expect("cell plan schema");
         assert!(
             plan_schema["required"].as_array().is_some_and(
                 |required| required.contains(&serde_json::json!("runtime_requirements"))
@@ -11125,7 +11132,7 @@ mod tests {
             "runtime intent must not be silently omitted"
         );
         assert!(
-            serde_json::from_value::<LabPlanRequest>(serde_json::json!({
+            serde_json::from_value::<CellPlanRequest>(serde_json::json!({
                 "plan_id": "omitted-runtime-intent",
                 "components": [],
                 "connections": [],
@@ -11135,7 +11142,7 @@ mod tests {
             "the wire contract must reject omitted runtime requirements"
         );
         let requirement_schema =
-            serde_json::to_value(schemars::schema_for!(LabPlanRuntimeRequirement))
+            serde_json::to_value(schemars::schema_for!(CellPlanRuntimeRequirement))
                 .expect("runtime requirement schema");
         assert!(
             requirement_schema["properties"]["endpoint"]
@@ -11150,10 +11157,10 @@ mod tests {
             "runtime control growth must not require an MCP schema change"
         );
 
-        let request = LabPlanRequest {
+        let request = CellPlanRequest {
             update: None,
             plan_id: "embedded-ldk-control-plan".into(),
-            components: vec![LabPlanComponentInput {
+            components: vec![CellPlanComponentInput {
                 id: "mint".into(),
                 implementation: "cdk-ldk".into(),
                 version: None,
@@ -11161,24 +11168,24 @@ mod tests {
                 config: BTreeMap::new(),
             }],
             connections: vec![],
-            runtime_requirements: vec![LabPlanRuntimeRequirement {
+            runtime_requirements: vec![CellPlanRuntimeRequirement {
                 component: "mint".into(),
                 endpoint: "ldk-node".into(),
                 controls: BTreeSet::from(["channel_open".into(), "peer_connect".into()]),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
             idempotency_key: "embedded-ldk-control-plan-once".into(),
         };
-        let error = compile_lab_plan(&request)
+        let error = compile_cell_plan(&request)
             .expect_err("an embedded endpoint without a control driver must fail closed");
         let message = error.message.to_string();
         assert!(message.contains("channel_open"));
         assert!(message.contains("peer_connect"));
         assert!(message.contains("no plan was stored"));
-        assert!(message.contains("[lab_plan_runtime_control_unsupported]"));
+        assert!(message.contains("[cell_plan_runtime_control_unsupported]"));
         assert!(message.contains("Recovery:"));
         let data = error.data.expect("structured runtime feasibility error");
-        assert_eq!(data["code"], "lab_plan_runtime_control_unsupported");
+        assert_eq!(data["code"], "cell_plan_runtime_control_unsupported");
         assert_eq!(data["endpoint"]["kind"], "lightning");
         assert!(
             data["endpoint"]["limitations"]
@@ -11190,7 +11197,7 @@ mod tests {
     #[test]
     fn evidence_pointer_error_is_self_correcting_without_structured_error_data() {
         let error = evidence_pointer(
-            serde_json::json!({"lab": {}, "components": []}),
+            serde_json::json!({"cell": {}, "components": []}),
             "/missing",
             "lock",
         )
@@ -11200,7 +11207,7 @@ mod tests {
         assert!(message.contains("no changes were made"));
         assert!(message.contains("Recovery:"));
         assert!(message.contains("/components"));
-        assert!(message.contains("/lab"));
+        assert!(message.contains("/cell"));
     }
 
     #[test]
@@ -11211,7 +11218,7 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "cdk-ldk")
             .expect("CDK-LDK catalog entry");
-        let authored = LabSpec {
+        let authored = CellSpec {
             api_version: API_VERSION.into(),
             name: "runtime-admission".into(),
             components: vec![ComponentSpec {
@@ -11224,15 +11231,15 @@ mod tests {
                 config: BTreeMap::new(),
             }],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lab = proofstorm_core::resolve_effective_lab(&authored, catalog)
+        let cell = proofstorm_core::resolve_effective_cell(&authored, catalog)
             .expect("effective runtime-admission fixture");
-        let lock = proofstorm_core::resolve_lock(&lab, catalog).expect("fixture lock");
+        let lock = proofstorm_core::resolve_lock(&cell, catalog).expect("fixture lock");
         let revision = PublishedRevision {
             workspace_id: "alpha".into(),
-            digest: digest_json(&(&lab, &lock)),
-            lab,
+            digest: digest_json(&(&cell, &lock)),
+            cell,
             lock,
         };
 
@@ -11261,7 +11268,7 @@ mod tests {
 
     #[test]
     fn generic_plan_connections_name_endpoint_roles_in_the_wire_schema() {
-        let encoded = serde_json::to_string(&schemars::schema_for!(LabPlanConnectionInput))
+        let encoded = serde_json::to_string(&schemars::schema_for!(CellPlanConnectionInput))
             .expect("plan connection schema");
         for role_name in [
             "node_a",
@@ -11287,24 +11294,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generic_lab_plan_is_durable_and_apply_rejects_a_digest_mismatch_before_mutation() {
+    async fn generic_cell_plan_is_durable_and_apply_rejects_a_digest_mismatch_before_mutation() {
         let store = seeded_store();
         for capability in [
             Capability::CatalogRead,
-            Capability::LabCreate,
-            Capability::LabRead,
-            Capability::LabPublish,
-            Capability::LabMaterialize,
+            Capability::CellCreate,
+            Capability::CellRead,
+            Capability::CellPublish,
+            Capability::CellMaterialize,
         ] {
             store
                 .grant("alpha", "designer", capability)
                 .expect("generic planner grant");
         }
         let service = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("service");
-        let request = LabPlanRequest {
+        let request = CellPlanRequest {
             update: None,
             plan_id: "durable-plan".into(),
-            components: vec![LabPlanComponentInput {
+            components: vec![CellPlanComponentInput {
                 id: "chain".into(),
                 implementation: "bitcoin-core".into(),
                 version: None,
@@ -11313,41 +11320,41 @@ mod tests {
             }],
             connections: vec![],
             runtime_requirements: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
             idempotency_key: "durable-plan-once".into(),
         };
         let first = service
-            .proofstorm_lab_plan(Parameters(request.clone()))
+            .proofstorm_cell_plan(Parameters(request.clone()))
             .expect("plan stored")
             .0;
         let replay = service
-            .proofstorm_lab_plan(Parameters(request.clone()))
+            .proofstorm_cell_plan(Parameters(request.clone()))
             .expect("plan replay")
             .0;
         assert_eq!(first, replay);
         let mut changed = request.clone();
         changed.components[0].id = "changed-chain".into();
         changed.idempotency_key = "changed-plan-once".into();
-        let Err(error) = service.proofstorm_lab_plan(Parameters(changed.clone())) else {
+        let Err(error) = service.proofstorm_cell_plan(Parameters(changed.clone())) else {
             panic!("a changed plan cannot overwrite the original");
         };
         let data = error.data.expect("actionable conflict data");
-        assert_eq!(data["code"], "lab_plan_id_conflict");
+        assert_eq!(data["code"], "cell_plan_id_conflict");
         assert_eq!(data["plan_id"], request.plan_id);
         assert_eq!(data["mutation_disposition"], "existing_plan_unchanged");
         changed.plan_id = "changed-plan".into();
         let corrected = service
-            .proofstorm_lab_plan(Parameters(changed))
+            .proofstorm_cell_plan(Parameters(changed))
             .expect("new identity permits a corrected plan")
             .0;
         assert_eq!(corrected.components[0].id, "changed-chain");
         let stored = store
             .read_draft("alpha", "designer", "durable-plan")
             .expect("durable plan can be read");
-        assert_eq!(digest_json(&stored.lab), first.plan_digest);
+        assert_eq!(digest_json(&stored.cell), first.plan_digest);
 
         let result = service
-            .proofstorm_lab_apply(Parameters(LabApplyRequest {
+            .proofstorm_cell_apply(Parameters(CellApplyRequest {
                 plan_id: "durable-plan".into(),
                 expected_plan_digest: "not-the-plan".into(),
                 instance_id: "must-not-exist".into(),
@@ -11359,7 +11366,7 @@ mod tests {
         };
         assert_eq!(
             error.data.expect("digest mismatch data")["code"],
-            "lab_plan_digest_mismatch"
+            "cell_plan_digest_mismatch"
         );
         assert!(
             store
@@ -11371,12 +11378,12 @@ mod tests {
 
     #[test]
     fn recipe_fee_matrix_derives_bounded_kebab_case_child_operation_ids() {
-        let request = LabRecipeFeeMatrixRequest {
+        let request = CellRecipeFeeMatrixRequest {
             instance_id: "instance-with-a-long-but-valid-identifier-01234567890123456789".into(),
             experiment_id: "experiment-with-a-long-but-valid-identifier-012345678901234567".into(),
             session_id: "session-with-a-long-but-valid-identifier-01234567890123456789012".into(),
             matrix_id: "matrix-with-a-long-but-valid-identifier-0123456789012345678901".into(),
-            recipe: LabRecipe::NutshellLndClnRoutingFees,
+            recipe: CellRecipe::NutshellLndClnRoutingFees,
             idempotency_key: "once".into(),
         };
         let prefix = recipe_fee_matrix_operation_prefix(&request);
@@ -11465,7 +11472,7 @@ mod tests {
         );
 
         let bulk = serde_json::json!({
-            "lab": {
+            "cell": {
                 "api_version": API_VERSION,
                 "name": "strict-bulk",
                 "components": [],
@@ -11478,8 +11485,8 @@ mod tests {
                 "policy": {"allow": [], "limits": {}}
             }
         });
-        let error = serde_json::from_value::<ValidateLabRequest>(bulk)
-            .expect_err("bulk lab backend links must require flat binding fields");
+        let error = serde_json::from_value::<ValidateCellRequest>(bulk)
+            .expect_err("bulk cell backend links must require flat binding fields");
         assert!(
             error.to_string().contains("network"),
             "unexpected diagnostic: {error}"
@@ -11528,22 +11535,22 @@ mod tests {
         }
         for capability in [
             Capability::CatalogRead,
-            Capability::LabRead,
-            Capability::LabCreate,
-            Capability::LabEdit,
-            Capability::LabClone,
-            Capability::LabValidate,
-            Capability::LabPublish,
-            Capability::LabMaterialize,
-            Capability::LabStatus,
-            Capability::LabClose,
+            Capability::CellRead,
+            Capability::CellCreate,
+            Capability::CellEdit,
+            Capability::CellClone,
+            Capability::CellValidate,
+            Capability::CellPublish,
+            Capability::CellMaterialize,
+            Capability::CellStatus,
+            Capability::CellClose,
         ] {
             store
                 .grant("alpha", "designer", capability)
                 .expect("designer grant");
         }
         store
-            .grant("alpha", "reader", Capability::LabRead)
+            .grant("alpha", "reader", Capability::CellRead)
             .expect("reader grant");
         store
     }
@@ -11553,11 +11560,11 @@ mod tests {
         clippy::too_many_lines,
         reason = "exercise admission, failure, replay, supersession and closing through the MCP route"
     )]
-    async fn accepted_lab_apply_reports_pending_reconciliation_and_preserves_replay() {
+    async fn accepted_cell_apply_reports_pending_reconciliation_and_preserves_replay() {
         let store = seeded_store();
-        let mut spec: LabSpec = serde_json::from_value(serde_json::json!({
+        let mut spec: CellSpec = serde_json::from_value(serde_json::json!({
             "api_version":"proofstorm/v1alpha1", "name":"edit-recovery", "links":[],
-            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}}]
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
         })).unwrap();
         store
             .create_draft("alpha", "designer", "initial", &spec, "initial-draft")
@@ -11587,7 +11594,7 @@ mod tests {
             .plan_update(
                 "alpha",
                 "designer",
-                proofstorm_core::LabUpdateTarget {
+                proofstorm_core::CellUpdateTarget {
                     instance_id: "edit-recovery".into(),
                     expected_generation: 1,
                     delete_data: false,
@@ -11610,7 +11617,7 @@ mod tests {
         let service = ProofstormMcp::new(store.clone(), "alpha", "designer")
             .unwrap()
             .with_kubernetes(client, "system");
-        let request = || LabApplyRequest {
+        let request = || CellApplyRequest {
             instance_id: "edit-recovery".into(),
             plan_id: "changed".into(),
             expected_plan_digest: plan.digest.clone(),
@@ -11620,7 +11627,7 @@ mod tests {
         mismatch.expected_plan_digest = "wrong".into();
         assert!(
             service
-                .proofstorm_lab_apply(Parameters(mismatch))
+                .proofstorm_cell_apply(Parameters(mismatch))
                 .await
                 .is_err()
         );
@@ -11632,7 +11639,7 @@ mod tests {
             1
         );
         let receipt = service
-            .proofstorm_lab_apply(Parameters(request()))
+            .proofstorm_cell_apply(Parameters(request()))
             .await
             .unwrap()
             .0;
@@ -11640,7 +11647,7 @@ mod tests {
         assert_eq!(receipt.phase, InstancePhase::Pending);
         assert!(!receipt.superseded);
         let detail = receipt.reconciliation_error.as_ref().unwrap();
-        assert_eq!(detail.code, "lab_update_runtime");
+        assert_eq!(detail.code, "cell_update_runtime");
         assert!(detail.recovery.contains("edit was accepted"));
         assert!(detail.recovery.contains("same plan_id and idempotency_key"));
         assert_eq!(
@@ -11651,7 +11658,7 @@ mod tests {
             2
         );
         let replay = service
-            .proofstorm_lab_apply(Parameters(request()))
+            .proofstorm_cell_apply(Parameters(request()))
             .await
             .unwrap()
             .0;
@@ -11669,7 +11676,7 @@ mod tests {
             .plan_update(
                 "alpha",
                 "designer",
-                proofstorm_core::LabUpdateTarget {
+                proofstorm_core::CellUpdateTarget {
                     instance_id: "edit-recovery".into(),
                     expected_generation: 2,
                     delete_data: false,
@@ -11682,7 +11689,7 @@ mod tests {
             .accept_update("alpha", "designer", &newer_plan, "newer-accept")
             .unwrap();
         let superseded = service
-            .proofstorm_lab_apply(Parameters(request()))
+            .proofstorm_cell_apply(Parameters(request()))
             .await
             .unwrap()
             .0;
@@ -11696,7 +11703,7 @@ mod tests {
             .begin_instance_close("alpha", "designer", "edit-recovery")
             .unwrap();
         let closing = service
-            .proofstorm_lab_apply(Parameters(request()))
+            .proofstorm_cell_apply(Parameters(request()))
             .await
             .unwrap()
             .0;
@@ -11711,13 +11718,13 @@ mod tests {
         store
             .grant("alpha", "designer", Capability::ExperimentRead)
             .unwrap();
-        let _lab = store
-            .reserve_lab("alpha", "designer", "pending", "digest")
+        let _cell = store
+            .reserve_cell("alpha", "designer", "pending", "digest")
             .unwrap();
         let client = kube::Client::new(
             tower::service_fn(|_: http::Request<kube::client::Body>| {
                 std::future::ready(Ok::<_, std::io::Error>(http::Response::new(kube::client::Body::from(
-                    serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormLabList","metadata":{},"items":[]}).to_string().into_bytes()
+                    serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":[]}).to_string().into_bytes()
                 ))))
             }),
             "system",
@@ -11738,13 +11745,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            result.structured_content.as_ref().unwrap()["labs"]["items"],
+            result.structured_content.as_ref().unwrap()["cells"]["items"],
             serde_json::json!([])
         );
         assert_environment_text_matches_structured(&result);
         assert!(serde_json::to_vec(&result).unwrap().len() < MAX_AGENT_RESPONSE_BYTES);
         store
-            .replace_grants("alpha", "designer", [Capability::LabRead])
+            .replace_grants("alpha", "designer", [Capability::CellRead])
             .unwrap();
         assert!(
             service
@@ -11773,7 +11780,7 @@ mod tests {
             "scope":"test workspace", "observation_started_at_unix":1,"observation_finished_at_unix":2,
             "coverage":{"topology":"declared", "activity":"cached", "resource_demand":"desired",
                 "resource_usage":"not collected", "protocol_traffic":"not collected", "attached_clients":"not tracked"},
-            "labs":{"next_cursor":null,"items":[{
+            "cells":{"next_cursor":null,"items":[{
                 "id":"vm-alpha-smoke", "handle":null, "revision_digest":null,
                 "journal_read_at_unix":1,"last_recorded_activity_at_unix":null,
                 "runtime":{"state":"available","fetched_at_unix":1,"source_updated_at_unix":null,
@@ -11787,17 +11794,17 @@ mod tests {
     }
 
     #[test]
-    fn environment_text_only_clients_receive_ready_lab_facts() {
+    fn environment_text_only_clients_receive_ready_cell_facts() {
         let result = environment_result(environment_response_fixture()).unwrap();
         let visible = assert_environment_text_matches_structured(&result);
-        assert_eq!(visible["labs"]["items"][0]["id"], "vm-alpha-smoke");
-        assert_eq!(visible["labs"]["items"][0]["runtime"]["phase"], "ready");
+        assert_eq!(visible["cells"]["items"][0]["id"], "vm-alpha-smoke");
+        assert_eq!(visible["cells"]["items"][0]["runtime"]["phase"], "ready");
         assert_eq!(
-            visible["labs"]["items"][0]["components"]["items"][0]["version"],
+            visible["cells"]["items"][0]["components"]["items"][0]["version"],
             "31.1"
         );
         assert_eq!(
-            visible["labs"]["items"][0]["components"]["items"][0]["ready"],
+            visible["cells"]["items"][0]["components"]["items"][0]["ready"],
             true
         );
     }
@@ -11805,28 +11812,31 @@ mod tests {
     #[test]
     fn environment_dual_content_pages_keep_cursors_and_fit_with_escaped_text() {
         let mut view = environment_response_fixture();
-        let mut lab = view.labs.items[0].clone();
-        lab.runtime.message = Some("\"\\\n".repeat(250));
-        view.labs.items = (0..24)
+        let mut cell = view.cells.items[0].clone();
+        cell.runtime.message = Some("\"\\\n".repeat(250));
+        view.cells.items = (0..24)
             .map(|n| {
-                let mut item = lab.clone();
-                item.id = format!("lab-{n:02}");
+                let mut item = cell.clone();
+                item.id = format!("cell-{n:02}");
                 item
             })
             .collect();
         let result = environment_result(view).unwrap();
         let visible = assert_environment_text_matches_structured(&result);
-        let items = visible["labs"]["items"].as_array().unwrap();
+        let items = visible["cells"]["items"].as_array().unwrap();
         assert!(!items.is_empty() && items.len() < 24);
-        assert_eq!(visible["labs"]["next_cursor"], items.last().unwrap()["id"]);
-        assert_eq!(items[0]["runtime"]["message"], lab.runtime.message.unwrap());
+        assert_eq!(visible["cells"]["next_cursor"], items.last().unwrap()["id"]);
+        assert_eq!(
+            items[0]["runtime"]["message"],
+            cell.runtime.message.unwrap()
+        );
     }
 
     #[test]
     fn environment_dual_content_keeps_component_continuation_and_rejects_oversized_items() {
         let mut view = environment_response_fixture();
-        let component = view.labs.items[0].components.items[0].clone();
-        view.labs.items[0].components.items = (0..64)
+        let component = view.cells.items[0].components.items[0].clone();
+        view.cells.items[0].components.items = (0..64)
             .map(|n| {
                 let mut item = component.clone();
                 item.id = format!("chain-{n:02}");
@@ -11835,12 +11845,12 @@ mod tests {
             .collect();
         let result = environment_result(view).unwrap();
         let visible = assert_environment_text_matches_structured(&result);
-        let components = &visible["labs"]["items"][0]["components"];
+        let components = &visible["cells"]["items"][0]["components"];
         let items = components["items"].as_array().unwrap();
         assert!(!items.is_empty() && items.len() < 64);
         assert_eq!(components["next_cursor"], items.last().unwrap()["id"]);
         let mut oversized = environment_response_fixture();
-        oversized.labs.items[0].runtime.message = Some("x".repeat(MAX_AGENT_RESPONSE_BYTES));
+        oversized.cells.items[0].runtime.message = Some("x".repeat(MAX_AGENT_RESPONSE_BYTES));
         assert!(environment_result(oversized).is_err());
     }
 
@@ -11851,8 +11861,8 @@ mod tests {
             ProofstormMcp::new(store.clone(), "alpha", "designer").expect("designer session");
         let reader = ProofstormMcp::new(store, "alpha", "reader").expect("reader session");
         assert_eq!(designer.tool_names().len(), 20);
-        assert!(!designer.tool_names().contains(&"lab_edit".to_owned()));
-        assert!(designer.tool_names().contains(&"lab_wait".to_owned()));
+        assert!(!designer.tool_names().contains(&"cell_edit".to_owned()));
+        assert!(designer.tool_names().contains(&"cell_wait".to_owned()));
         let backend = designer
             .proofstorm_network_capabilities()
             .expect("network backend discovery")
@@ -11924,7 +11934,7 @@ mod tests {
         assert_nutshell_support(catalog);
         assert_eq!(
             reader.tool_names(),
-            vec!["lab_diff", "lab_read", "workspace_read",]
+            vec!["cell_diff", "cell_read", "workspace_read",]
         );
     }
 
@@ -12136,11 +12146,11 @@ mod tests {
         clippy::too_many_lines,
         reason = "raw requests and a mock cluster verify automatic admission, unready logs and replay end to end"
     )]
-    async fn raw_native_requests_admit_without_experiment_setup_even_when_lab_is_unready() {
+    async fn raw_native_requests_admit_without_experiment_setup_even_when_cell_is_unready() {
         let store = seeded_store();
         let spec = serde_json::from_value(serde_json::json!({
             "api_version":"proofstorm/v1alpha1", "name":"automatic", "links":[],
-            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}}]
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
         })).unwrap();
         store
             .create_draft("alpha", "designer", "automatic", &spec, "draft")
@@ -12154,7 +12164,7 @@ mod tests {
         for capability in [
             Capability::ComponentLogs,
             Capability::ComponentExecLive,
-            Capability::LabOperate,
+            Capability::CellOperate,
             Capability::ExperimentRead,
         ] {
             store.grant("alpha", "designer", capability).unwrap();
@@ -12165,27 +12175,27 @@ mod tests {
                 .unwrap()
                 .contains(&Capability::ExperimentCreate)
         );
-        let resource = proofstorm_kube::ProofstormLab::new(
+        let resource = proofstorm_kube::ProofstormCell::new(
             &instance.resource_name,
-            proofstorm_kube::ProofstormLabSpec {
+            proofstorm_kube::ProofstormCellSpec {
                 workspace_id: "alpha".into(),
                 instance_id: instance.id,
                 instance_key: instance.instance_key,
                 revision_digest: revision.digest,
                 lock: revision.lock,
-                lab: revision.lab,
+                cell: revision.cell,
             },
         ); // No Ready status: diagnosis must still work.
-        let lab_json = serde_json::to_vec(&resource).unwrap();
+        let cell_json = serde_json::to_vec(&resource).unwrap();
         let submissions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = submissions.clone();
         let client = kube::Client::new(
             tower::service_fn(move |request: http::Request<kube::client::Body>| {
-                let lab_json = lab_json.clone();
+                let cell_json = cell_json.clone();
                 let count = count.clone();
                 async move {
-                    let response = if request.uri().path().contains("/proofstormlabs/") {
-                        http::Response::new(kube::client::Body::from(lab_json))
+                    let response = if request.uri().path().contains("/proofstormcells/") {
+                        http::Response::new(kube::client::Body::from(cell_json))
                     } else if request.method() == http::Method::GET {
                         http::Response::builder().status(404).body(kube::client::Body::from(r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"missing","code":404}"#.as_bytes().to_vec())).unwrap()
                     } else {
@@ -12344,9 +12354,9 @@ mod tests {
     fn draft_mutations_return_compact_receipts() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
         let receipt = service
-            .proofstorm_lab_create(Parameters(CreateDraftRequest {
+            .proofstorm_cell_create(Parameters(CreateDraftRequest {
                 draft_id: "compact-draft".into(),
-                lab: authored_lab("compact-draft"),
+                cell: authored_cell("compact-draft"),
                 idempotency_key: "create-compact-draft".into(),
             }))
             .expect("create draft")
@@ -12368,16 +12378,16 @@ mod tests {
         assert!(serialized_size(&receipt).expect("receipt size") < 1024);
 
         let draft = service
-            .proofstorm_lab_read(Parameters(ReadDraftRequest {
+            .proofstorm_cell_read(Parameters(ReadDraftRequest {
                 instance_id: None,
                 draft_id: "compact-draft".into(),
             }))
             .expect("explicit full draft")
             .0;
-        assert_eq!(draft.lab.name, "compact-draft");
+        assert_eq!(draft.cell.name, "compact-draft");
 
         let published = service
-            .proofstorm_lab_publish(Parameters(PublishDraftRequest {
+            .proofstorm_cell_publish(Parameters(PublishDraftRequest {
                 draft_id: "compact-draft".into(),
                 expected_version: 1,
                 idempotency_key: "publish-compact-draft".into(),
@@ -12386,7 +12396,7 @@ mod tests {
             .expect("publish receipt")
             .0;
         assert!(!published.revision_included);
-        assert!(published.lab.is_none());
+        assert!(published.cell.is_none());
         assert!(published.lock.is_none());
         assert!(published.digest.starts_with("sha256:"));
         assert!(published.lock_digest.starts_with("sha256:"));
@@ -12395,7 +12405,7 @@ mod tests {
 
     #[test]
     fn topology_receipts_expose_stable_identities_and_binding_coverage() {
-        let mut authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+        let mut authored = serde_json::from_value::<CellSpec>(serde_json::json!({
             "api_version": API_VERSION,
             "name": "receipt-topology",
             "components": [
@@ -12414,7 +12424,7 @@ mod tests {
                     "implementation": "bitcoin-core",
                     "version": "31.1",
                     "config_version": "bitcoin-core/31/v1",
-                    "control": "laboratory",
+                    "control": "cell",
                     "config": {}
                 }
             ],
@@ -12427,8 +12437,8 @@ mod tests {
             }],
             "policy": {}
         }))
-        .expect("typed lab");
-        let first = lab_validation_result(&authored);
+        .expect("typed cell");
+        let first = cell_validation_result(&authored);
         assert_eq!(first.component_ids, ["chain", "lnd"]);
         assert_eq!(first.link_ids, ["lnd-chain"]);
         assert!(first.warnings.is_empty());
@@ -12436,25 +12446,25 @@ mod tests {
         let first_digest = topology_summary(&authored).topology_digest;
         authored.components.reverse();
         authored.links.reverse();
-        let reordered = lab_validation_result(&authored);
+        let reordered = cell_validation_result(&authored);
         assert_eq!(first.component_ids, reordered.component_ids);
         assert_eq!(first_digest, topology_summary(&authored).topology_digest);
     }
 
     #[test]
     fn wallet_funding_rejects_the_mints_own_payment_backend_with_alternatives() {
-        let authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+        let authored = serde_json::from_value::<CellSpec>(serde_json::json!({
             "api_version": API_VERSION,
             "name": "funding-admission",
             "components": [
                 {"id":"mint","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                {"id":"backend-lnd","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-                {"id":"router-lnd","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}}
+                {"id":"backend-lnd","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"cell","config":{}},
+                {"id":"router-lnd","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"cell","config":{}}
             ],
             "links": [{"id":"pay","kind":"payment_backend","from":"mint","to":"backend-lnd","binding":{"type":"payment","method":"bolt11","unit":"sat"}}],
             "policy": {}
         }))
-        .expect("typed lab");
+        .expect("typed cell");
 
         let error = validate_wallet_fund_payer(&authored, "mint", "backend-lnd")
             .expect_err("a backend cannot pay its own invoice");
@@ -12475,7 +12485,7 @@ mod tests {
                          sequence: u64,
                          kind: OperationKind,
                          request: serde_json::Value,
-                         artifact: serde_json::Value| LabOperation {
+                         artifact: serde_json::Value| CellOperation {
             revision_digest: String::new(),
             id: id.into(),
             workspace_id: "alpha".into(),
@@ -12612,15 +12622,15 @@ mod tests {
 
     #[test]
     fn topology_receipt_warns_when_a_direct_backend_link_bypasses_a_router() {
-        let authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+        let authored = serde_json::from_value::<CellSpec>(serde_json::json!({
             "api_version": API_VERSION,
             "name": "routing-hazard",
             "components": [
                 {"id":"mint-a","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
                 {"id":"mint-b","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                {"id":"backend-a","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-                {"id":"backend-b","kind":"lightning","implementation":"cln","version":"26.06","config_version":"cln/26.06/v1","control":"laboratory","config":{}},
-                {"id":"router","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"laboratory","config":{}}
+                {"id":"backend-a","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"cell","config":{}},
+                {"id":"backend-b","kind":"lightning","implementation":"cln","version":"26.06","config_version":"cln/26.06/v1","control":"cell","config":{}},
+                {"id":"router","kind":"lightning","implementation":"lnd","version":"0.20","config_version":"lnd/0.20/v1","control":"cell","config":{}}
             ],
             "links": [
                 {"id":"pay-a","kind":"payment_backend","from":"mint-a","to":"backend-a","binding":{"type":"payment","method":"bolt11","unit":"sat"}},
@@ -12629,7 +12639,7 @@ mod tests {
             ],
             "policy": {}
         }))
-        .expect("typed lab");
+        .expect("typed cell");
         let summary = topology_summary(&authored);
         assert!(
             summary
@@ -12641,18 +12651,18 @@ mod tests {
 
     #[test]
     fn topology_receipt_warns_when_cross_mint_work_has_only_one_wallet() {
-        let authored = serde_json::from_value::<LabSpec>(serde_json::json!({
+        let authored = serde_json::from_value::<CellSpec>(serde_json::json!({
             "api_version": API_VERSION,
             "name": "wallet-hazard",
             "components": [
                 {"id":"mint-a","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
                 {"id":"mint-b","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                {"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.20.3","config_version":"nutshell-wallet/0.20/v1","control":"laboratory","config":{}}
+                {"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.20.3","config_version":"nutshell-wallet/0.20/v1","control":"cell","config":{}}
             ],
             "links": [],
             "policy": {}
         }))
-        .expect("typed lab");
+        .expect("typed cell");
         let summary = topology_summary(&authored);
         assert!(summary.warnings.iter().any(|warning| {
             warning.starts_with("distinct_payment_wallets_required:")
@@ -12713,7 +12723,7 @@ mod tests {
         assert_optional_tracking(&service);
 
         assert!(
-            !service.tool_names().contains(&"lab_edit".to_owned()),
+            !service.tool_names().contains(&"cell_edit".to_owned()),
             "whole-document replacement is not an agent tool"
         );
         assert!(
@@ -12803,7 +12813,7 @@ mod tests {
             "network_capabilities",
             "network_heal",
             "artifact_export",
-            "lab_close",
+            "cell_close",
         ] {
             assert!(native.tool_names().contains(&required.to_owned()));
         }
@@ -12888,8 +12898,8 @@ mod tests {
             "candidate_wait",
             "candidate_list",
             "candidate_cancel",
-            "lab_plan",
-            "lab_apply",
+            "cell_plan",
+            "cell_apply",
             "liquidity_bootstrap",
             "channel_open",
             "channel_policy_set",
@@ -12901,7 +12911,7 @@ mod tests {
             "authentication_replay",
             "operation_wait_many",
             "artifact_export",
-            "lab_close",
+            "cell_close",
         ] {
             assert!(
                 experiment_tool(required),
@@ -12909,15 +12919,15 @@ mod tests {
             );
         }
         for recipe_specific_or_unbounded in [
-            "lab_create",
-            "lab_validate",
+            "cell_create",
+            "cell_validate",
             "proofstorm_component_exec",
-            "lab_recipe_create",
-            "lab_recipe_bootstrap",
-            "lab_recipe_route_channel_open",
-            "lab_recipe_fee_matrix_run",
+            "cell_recipe_create",
+            "cell_recipe_bootstrap",
+            "cell_recipe_route_channel_open",
+            "cell_recipe_fee_matrix_run",
             "wallet_round_trip",
-            "lab_clone",
+            "cell_clone",
         ] {
             assert!(
                 !experiment_tool(recipe_specific_or_unbounded),
@@ -13077,9 +13087,9 @@ mod tests {
             .expect("batch wait schema");
         assert!(schema.contains("\"minItems\":1"));
         assert!(schema.contains("\"maxItems\":8"));
-        assert!(!proofstorm_app::lab::wait_terminal(InstancePhase::Ready));
-        assert!(proofstorm_app::lab::wait_terminal(InstancePhase::Closed));
-        assert!(proofstorm_app::lab::wait_terminal(
+        assert!(!proofstorm_app::cell::wait_terminal(InstancePhase::Ready));
+        assert!(proofstorm_app::cell::wait_terminal(InstancePhase::Closed));
+        assert!(proofstorm_app::cell::wait_terminal(
             InstancePhase::CleanupBlocked
         ));
         assert!(!operation_terminal(OperationPhase::Running));
@@ -13117,13 +13127,13 @@ mod tests {
     }
 
     #[test]
-    fn lab_status_receipt_and_page_cursors_are_compact_and_snapshot_bound() {
-        let status = LabInstanceStatus {
+    fn cell_status_receipt_and_page_cursors_are_compact_and_snapshot_bound() {
+        let status = CellInstanceStatus {
             observed_generation: 1,
             observed_revision_digest: String::new(),
             last_converged_revision: None,
             retained_storage: BTreeMap::new(),
-            instance: LabInstance {
+            instance: CellInstance {
                 generation: 1,
                 id: "instance-one".into(),
                 workspace_id: "alpha".into(),
@@ -13144,7 +13154,7 @@ mod tests {
             teardown_receipt: None,
             message: None,
         };
-        let receipt = compact_lab_status(status.clone());
+        let receipt = compact_cell_status(status.clone());
         assert_eq!(receipt.total_components, 0);
         assert_eq!(receipt.inventory_count, 1);
         assert!(receipt.inventory_digest.starts_with("sha256:"));
@@ -13157,7 +13167,7 @@ mod tests {
         assert_eq!(receipt.instance_key, "i0123456789abcdef0123");
         assert!(serialized_size(&receipt).expect("status size") < 1024);
 
-        let close_receipt = compact_lab_wait(status, InstancePhase::Closed, false, false);
+        let close_receipt = compact_cell_wait(status, InstancePhase::Closed, false, false);
         assert_eq!(close_receipt.phase, InstancePhase::Ready);
         assert_eq!(close_receipt.target_phase, InstancePhase::Closed);
         assert!(!close_receipt.reached);
@@ -13195,14 +13205,14 @@ mod tests {
         clippy::too_many_lines,
         reason = "one complete startup blocker fixture exercises the wait contract"
     )]
-    async fn lab_wait_returns_startup_blockers_without_waiting_for_timeout() {
+    async fn cell_wait_returns_startup_blockers_without_waiting_for_timeout() {
         use proofstorm_core::{
             ComponentCondition, ComponentConditionReason as Reason, ComponentConditionState,
             ComponentConditionType,
         };
         let store = seeded_store();
         store
-            .create_draft("alpha", "designer", "blocked", &lab("blocked"), "create")
+            .create_draft("alpha", "designer", "blocked", &cell("blocked"), "create")
             .unwrap();
         let revision = store
             .publish("alpha", "designer", "blocked", 1, "publish")
@@ -13227,18 +13237,18 @@ mod tests {
                 last_transition_unix: 1,
             }],
         };
-        let mut resource = proofstorm_kube::ProofstormLab::new(
+        let mut resource = proofstorm_kube::ProofstormCell::new(
             &instance.resource_name,
-            proofstorm_kube::ProofstormLabSpec {
+            proofstorm_kube::ProofstormCellSpec {
                 workspace_id: "alpha".into(),
                 instance_id: instance.id.clone(),
                 instance_key: instance.instance_key,
                 revision_digest: revision.digest.clone(),
                 lock: revision.lock,
-                lab: revision.lab,
+                cell: revision.cell,
             },
         );
-        resource.status = Some(proofstorm_kube::ProofstormLabStatus {
+        resource.status = Some(proofstorm_kube::ProofstormCellStatus {
             components: vec![component],
             observed_revision_digest: revision.digest,
             ..Default::default()
@@ -13257,7 +13267,7 @@ mod tests {
             .with_kubernetes(client, "system");
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            service.proofstorm_lab_wait(Parameters(LabWaitRequest {
+            service.proofstorm_cell_wait(Parameters(CellWaitRequest {
                 expected_instance_key: None,
                 expected_generation: None,
                 instance_id: "blocked".into(),
@@ -13277,7 +13287,7 @@ mod tests {
         let message = result.message.as_deref().unwrap();
         assert!(message.contains("startup is blocked"));
         let summary = service
-            .proofstorm_lab_status(Parameters(InstanceRequest {
+            .proofstorm_cell_status(Parameters(InstanceRequest {
                 instance_id: "blocked".into(),
             }))
             .await
@@ -13285,7 +13295,7 @@ mod tests {
             .0;
         assert_eq!(summary.blockers.len(), 1);
         let detail = service
-            .proofstorm_lab_component_status_list(Parameters(LabComponentStatusListRequest {
+            .proofstorm_cell_component_status_list(Parameters(CellComponentStatusListRequest {
                 instance_id: "blocked".into(),
                 limit: 20,
                 cursor: None,
@@ -13313,13 +13323,13 @@ mod tests {
     fn handler_rechecks_authority_after_discovery() {
         let store = seeded_store();
         let session = ProofstormMcp::new(store.clone(), "alpha", "designer").expect("session");
-        assert!(session.tool_names().contains(&"lab_create".to_owned()));
+        assert!(session.tool_names().contains(&"cell_create".to_owned()));
         store
-            .revoke("alpha", "designer", Capability::LabCreate)
+            .revoke("alpha", "designer", Capability::CellCreate)
             .expect("revoke");
-        let result = session.proofstorm_lab_create(Parameters(CreateDraftRequest {
+        let result = session.proofstorm_cell_create(Parameters(CreateDraftRequest {
             draft_id: "refused".into(),
-            lab: authored_lab("refused"),
+            cell: authored_cell("refused"),
             idempotency_key: "create-refused".into(),
         }));
         let Err(error) = result else {
@@ -13409,7 +13419,7 @@ mod tests {
         for capability in [
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
-            Capability::LabOperate,
+            Capability::CellOperate,
             Capability::WalletFund,
         ] {
             store
@@ -13420,13 +13430,19 @@ mod tests {
             .create_draft(
                 "alpha",
                 "designer",
-                "runtime-lab",
-                &lab("runtime-lab"),
-                "create-runtime-lab",
+                "runtime-cell",
+                &cell("runtime-cell"),
+                "create-runtime-cell",
             )
             .expect("draft");
         let revision = store
-            .publish("alpha", "designer", "runtime-lab", 1, "publish-runtime-lab")
+            .publish(
+                "alpha",
+                "designer",
+                "runtime-cell",
+                1,
+                "publish-runtime-cell",
+            )
             .expect("revision");
         store
             .materialize(
@@ -13434,7 +13450,7 @@ mod tests {
                 "designer",
                 "runtime-instance",
                 &revision.digest,
-                "materialize-runtime-lab",
+                "materialize-runtime-cell",
             )
             .expect("instance");
         store
@@ -13547,7 +13563,7 @@ mod tests {
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
             Capability::ExperimentClose,
-            Capability::LabOperate,
+            Capability::CellOperate,
             Capability::ExperimentRead,
             Capability::WalletControl,
         ] {
@@ -13559,18 +13575,18 @@ mod tests {
             .create_draft(
                 "alpha",
                 "designer",
-                "finalization-lab",
-                &lab("finalization-lab"),
-                "create-finalization-lab",
+                "finalization-cell",
+                &cell("finalization-cell"),
+                "create-finalization-cell",
             )
             .expect("draft");
         let revision = store
             .publish(
                 "alpha",
                 "designer",
-                "finalization-lab",
+                "finalization-cell",
                 1,
-                "publish-finalization-lab",
+                "publish-finalization-cell",
             )
             .expect("revision");
         store
@@ -13579,7 +13595,7 @@ mod tests {
                 "designer",
                 "finalization-instance",
                 &revision.digest,
-                "materialize-finalization-lab",
+                "materialize-finalization-cell",
             )
             .expect("instance");
         store
@@ -13692,7 +13708,7 @@ mod tests {
         let store = seeded_store();
         for capability in [
             Capability::ExperimentCreate,
-            Capability::LabOperate,
+            Capability::CellOperate,
             Capability::WalletControl,
         ] {
             store
@@ -13703,18 +13719,18 @@ mod tests {
             .create_draft(
                 "alpha",
                 "designer",
-                "artifact-contract-lab",
-                &lab("artifact-contract-lab"),
-                "create-artifact-contract-lab",
+                "artifact-contract-cell",
+                &cell("artifact-contract-cell"),
+                "create-artifact-contract-cell",
             )
             .expect("draft");
         let revision = store
             .publish(
                 "alpha",
                 "designer",
-                "artifact-contract-lab",
+                "artifact-contract-cell",
                 1,
-                "publish-artifact-contract-lab",
+                "publish-artifact-contract-cell",
             )
             .expect("revision");
         store
@@ -13723,7 +13739,7 @@ mod tests {
                 "designer",
                 "artifact-contract-instance",
                 &revision.digest,
-                "materialize-artifact-contract-lab",
+                "materialize-artifact-contract-cell",
             )
             .expect("instance");
         store
@@ -13953,7 +13969,7 @@ mod tests {
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
             Capability::ExperimentClose,
-            Capability::LabOperate,
+            Capability::CellOperate,
             Capability::ExperimentRead,
             Capability::OracleRun,
             Capability::ArtifactRead,
@@ -13966,18 +13982,18 @@ mod tests {
             .create_draft(
                 "alpha",
                 "designer",
-                "evidence-lab",
-                &lab("evidence-lab"),
-                "create-evidence-lab",
+                "evidence-cell",
+                &cell("evidence-cell"),
+                "create-evidence-cell",
             )
             .expect("draft");
         let revision = store
             .publish(
                 "alpha",
                 "designer",
-                "evidence-lab",
+                "evidence-cell",
                 1,
-                "publish-evidence-lab",
+                "publish-evidence-cell",
             )
             .expect("revision");
         store
@@ -13986,7 +14002,7 @@ mod tests {
                 "designer",
                 "evidence-instance",
                 &revision.digest,
-                "materialize-evidence-lab",
+                "materialize-evidence-cell",
             )
             .expect("instance");
         store

@@ -9,7 +9,7 @@
     "coverage": {
       "$ref": "#/$defs/Coverage"
     },
-    "labs": {
+    "cells": {
       "$ref": "#/$defs/Page"
     },
     "observation_finished_at_unix": {
@@ -33,7 +33,7 @@
     "scope",
     "observation_started_at_unix",
     "observation_finished_at_unix",
-    "labs",
+    "cells",
     "coverage"
   ],
   "$defs": {
@@ -453,7 +453,7 @@
         "access_context"
       ]
     },
-    "EnvironmentLab": {
+    "EnvironmentCell": {
       "type": "object",
       "properties": {
         "activity": {
@@ -474,7 +474,7 @@
         "handle": {
           "anyOf": [
             {
-              "$ref": "#/$defs/LabHandle"
+              "$ref": "#/$defs/CellHandle"
             },
             {
               "type": "null"
@@ -503,7 +503,7 @@
           "format": "int64"
         },
         "layout_id": {
-          "description": "Stable workspace and lab incarnation identity for browser-local layouts.",
+          "description": "Stable workspace and cell incarnation identity for browser-local layouts.",
           "type": [
             "string",
             "null"
@@ -514,7 +514,7 @@
           "$ref": "#/$defs/Page3"
         },
         "read_error": {
-          "description": "A retained lab could not be decoded; empty sections are unavailable, not empty history.",
+          "description": "A retained cell could not be decoded; empty sections are unavailable, not empty history.",
           "type": [
             "string",
             "null"
@@ -570,7 +570,7 @@
         "cleanup_blocked"
       ]
     },
-    "LabHandle": {
+    "CellHandle": {
       "type": "object",
       "properties": {
         "config_digest": {
@@ -591,7 +591,7 @@
           "type": "string"
         },
         "phase": {
-          "$ref": "#/$defs/LabHandlePhase"
+          "$ref": "#/$defs/CellHandlePhase"
         }
       },
       "required": [
@@ -603,7 +603,7 @@
         "instance_id"
       ]
     },
-    "LabHandlePhase": {
+    "CellHandlePhase": {
       "type": "string",
       "enum": [
         "open",
@@ -712,7 +712,7 @@
         "items": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/EnvironmentLab"
+            "$ref": "#/$defs/EnvironmentCell"
           }
         },
         "next_cursor": {

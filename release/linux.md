@@ -32,7 +32,7 @@ Linux readiness until these checks pass:
   images as needed. Do not retag ARM images as AMD64 or change existing digest
   meanings. Linux wallet pins are updated; existing ARM pins are unchanged.
 - Test the downloaded archive in a fresh Linux VM, including full setup, an
-  agent's MCP discovery, lab creation/read/teardown, interruption, and reinstall.
+  agent's MCP discovery, cell creation/read/teardown, interruption, and reinstall.
 - Validate a distribution/glibc baseline before claiming broad Linux support.
 
 The release builder retains these maturity limitations in alpha metadata without
@@ -117,12 +117,12 @@ mounts, and no capabilities.
 It exercises the real `install.sh` local-artifact route twice, executes the
 installed CLI/MCP, compares their metadata, and checks that no runtime or agent
 configuration was created. A successful report explicitly leaves GitHub download
-and runtime verification **false**. This is not an end-to-end cluster/lab test.
+and runtime verification **false**. This is not an end-to-end cluster/cell test.
 
 Both commands remove only their exact UUID-named test containers, including on
 failure. Source snapshots, artifacts, logs, and run receipts remain in the chosen
 work directory; the toolchain image remains cached. Neither command publishes
-images, starts Docker-in-Docker, changes a Docker context, or touches existing labs.
+images, starts Docker-in-Docker, changes a Docker context, or touches existing cells.
 
 The smoke command now tests normal installation without a development override.
 To rerun one of the historical `-dev-...` archives below, add its maintainer-only
@@ -186,7 +186,7 @@ runtime or publication gates.
 Both missing AMD64 wallet images also built successfully under separate local
 test tags. CDK's version check passed offline/read-only. Cocod reported its version
 during the build; a separate restricted runtime check still needs completion.
-No published image, catalog digest, installed runtime, or existing lab was changed.
+No published image, catalog digest, installed runtime, or existing cell was changed.
 
 The source-free install/reinstall command initially could not start because the
 host's automatic Docker permission review timed out. The user subsequently ran
@@ -246,7 +246,7 @@ push and verification. If a later step fails, inspect that receipt before taking
 further action: an uploaded image is not necessarily anonymously verified.
 Use a new work directory for a new publication attempt and retain earlier receipts.
 The command does not change existing ARM digests, catalog/controller pins, running
-labs, or GitHub release assets, and it does not claim full release readiness.
+cells, or GitHub release assets, and it does not claim full release readiness.
 
 ## Catalog wiring and final bundle order
 
@@ -266,12 +266,12 @@ Refresh artifacts in this order (steps 1 through 3 are complete):
 3. Rebuild the Linux host bundle and repeat the source-free install test. Packaging
    now refuses a present controller whose version, architecture, or runtime contract
    does not match, even in development mode.
-4. Proceed to isolated full setup, agent MCP discovery, and lab lifecycle testing.
+4. Proceed to isolated full setup, agent MCP discovery, and cell lifecycle testing.
 
 The catalog changes passed 53 core tests on macOS, including explicit checks of
 both wallet architectures' pins/provenance, and the existing Mac controller still
 matches its compiled runtime contract. These checks do not substitute for the
-new Linux controller/bundle build or a lab lifecycle test.
+new Linux controller/bundle build or a cell lifecycle test.
 
 The follow-up controller build completed with the updated wallet catalog and
 runtime contract `4a9dd781b53436818582ceb20744454755728bceaa3908bb24b7f35f635ac93e`.
@@ -313,5 +313,5 @@ exported `install.sh`; the saved report matches both checksums. Installation and
 reinstallation passed, and CLI/MCP metadata agrees, with no source checkout,
 build tools, or network access in the test container. This is new evidence for
 this archive, not an inherited result from the older bundle.
-Runtime setup, agent MCP discovery, lab lifecycle, and GitHub download remain
+Runtime setup, agent MCP discovery, cell lifecycle, and GitHub download remain
 untested; the development/debug/dirty-source release blockers remain intentional.

@@ -6,16 +6,16 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, json as expect, lab};
+use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, json as expect};
 
 const INSTANCE: &str = "cdk-cln-instance";
 const DRAFT: &str = "cdk-cln";
 const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "cdk-cln-live-lab",
+        "name": "cdk-cln-live-cell",
         "components": [
             {
                 "id": "chain",
@@ -23,7 +23,7 @@ fn lab_document() -> Value {
                 "implementation": "bitcoin-core",
                 "version": "31.1",
                 "config_version": "bitcoin-core/31/v1",
-                "control": "laboratory",
+                "control": "cell",
                 "config": {"txindex": true, "fallback_fee": 0.0002}
             },
             {
@@ -32,7 +32,7 @@ fn lab_document() -> Value {
                 "implementation": "cln",
                 "version": "26.06.7",
                 "config_version": "cln/26.06/v1",
-                "control": "laboratory",
+                "control": "cell",
                 "config": {"alias": "proofstorm-mint-cln"}
             },
             {
@@ -44,7 +44,7 @@ fn lab_document() -> Value {
                 "control": "target",
                 "config": {
                     "name": "Proofstorm CDK CLN",
-                    "description": "Native CDK and CLN lab"
+                    "description": "Native CDK and CLN cell"
                 }
             }
         ],
@@ -75,16 +75,16 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("cdk-cln-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "lab_create",
+        "cell_create",
         json!({
             "draft_id": DRAFT,
-            "lab": lab_document(),
+            "cell": cell_document(),
             "idempotency_key": "create-cdk-cln"
         }),
     )?;
 
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({
             "draft_id": DRAFT,
             "expected_version": 1,
@@ -93,12 +93,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         }),
     )?;
 
-    let entry = lab::lock_entry(&published, "cdk")?;
+    let entry = cell::lock_entry(&published, "cdk")?;
     expect::equals(entry, "/version", &Value::from("0.18.0"))?;
     expect::equals(entry, "/image", &Value::from(IMAGE))?;
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({
             "instance_id": INSTANCE,
             "revision_digest": expect::string(&published, "/digest")?,
@@ -106,7 +106,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         }),
     )?;
 
-    let ready = lab::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let config = context.kubectl.exec(
@@ -124,7 +124,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
     }
     if config.contains("[lnd]") {
-        bail!("CLN lab rendered an LND stanza: {config}");
+        bail!("CLN cell rendered an LND stanza: {config}");
     }
 
     let version =
@@ -135,8 +135,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_closed(&mut client, INSTANCE)?;
 
     println!(
         "CDK 0.18.0 + CLN MCP materialization, database-backed configuration, native socket configuration, readiness, and teardown passed"

@@ -37,7 +37,7 @@ def coordination_packet(run_id, reference):
     if not isinstance(reference, str) or not re.fullmatch(r'payload-[0-9a-f]{64}', reference):
         raise ValueError('invalid opaque reference')
     return {
-        'instance_id': run_id + '-lab', 'experiment_id': run_id + '-experiment',
+        'instance_id': run_id + '-cell', 'experiment_id': run_id + '-experiment',
         'source_session_id': run_id + '-session', 'recipient_grant_id': run_id + '-recipient',
         'source_principal_id': 'benchmark-source', 'recipient_principal_id': 'benchmark-recipient',
         'source_wallet': 'wallet-a', 'component': 'wallet-b', 'mint': 'mint',
@@ -81,7 +81,7 @@ def proposal(output, run_id):
         'transfer': {'direction': 'cocod-to-cdk', 'amount_sat': 70, 'maximum_bytes': 65536,
                      'initial_balances': [5000, 0], 'final_balances': [4930, 70],
                      'receive': RECEIVE},
-        'scope_limit': 'Source is trusted lab owner; no mutual wallet isolation claim.',
+        'scope_limit': 'Source is trusted cell owner; no mutual wallet isolation claim.',
     }
     return contract, configs
 
@@ -98,7 +98,7 @@ def main():
     for role, config in configs.items():
         (args.output/f'{role}.opencode.disabled.json').write_text(json.dumps(config, indent=2)+'\n')
     print(json.dumps({'status': contract['status'], 'output': str(args.output.resolve()),
-                      'models_started': 0, 'mcp_started': 0, 'labs_created': 0}))
+                      'models_started': 0, 'mcp_started': 0, 'cells_created': 0}))
 
 
 if __name__ == '__main__':

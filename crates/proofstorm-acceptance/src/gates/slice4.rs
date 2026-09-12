@@ -6,15 +6,15 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, json as expect, lab};
+use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, json as expect};
 
 const INSTANCE: &str = "slice4-instance";
 const DRAFT: &str = "slice4";
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "slice4-static-lab",
+        "name": "slice4-static-cell",
         "components": [
             {
                 "id": "chain",
@@ -22,7 +22,7 @@ fn lab_document() -> Value {
                 "implementation": "bitcoin-core",
                 "version": "31.1",
                 "config_version": "bitcoin-core/31/v1",
-                "control": "laboratory",
+                "control": "cell",
                 "config": {"txindex": true, "fallback_fee": 0.0002}
             },
             {
@@ -31,7 +31,7 @@ fn lab_document() -> Value {
                 "implementation": "lnd",
                 "version": "0.21.3-beta",
                 "config_version": "lnd/0.20/v1",
-                "control": "laboratory",
+                "control": "cell",
                 "config": {"alias": "proofstorm-lightning"}
             },
             {
@@ -43,7 +43,7 @@ fn lab_document() -> Value {
                 "control": "target",
                 "config": {
                     "name": "Proofstorm Slice 4",
-                    "description": "MCP-created static lab"
+                    "description": "MCP-created static cell"
                 }
             }
         ],
@@ -74,16 +74,16 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("slice4-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "lab_create",
+        "cell_create",
         json!({
             "draft_id": DRAFT,
-            "lab": lab_document(),
+            "cell": cell_document(),
             "idempotency_key": "create-slice4"
         }),
     )?;
 
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({
             "draft_id": DRAFT,
             "expected_version": 1,
@@ -100,7 +100,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({
             "instance_id": INSTANCE,
             "revision_digest": expect::string(&published, "/digest")?,
@@ -108,10 +108,10 @@ pub fn run(context: &GateContext) -> Result<()> {
         }),
     )?;
 
-    let ready = lab::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready(&mut client, INSTANCE)?;
 
     let components = client.call(
-        "lab_component_status_list",
+        "cell_component_status_list",
         json!({"instance_id": INSTANCE, "limit": 50}),
     )?;
     let mut ready_ids = Vec::new();
@@ -130,8 +130,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("sanitized status leaked a credential");
     }
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
 
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {
         bail!("teardown receipt did not record verified absence: {closed}");

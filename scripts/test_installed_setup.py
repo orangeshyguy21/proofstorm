@@ -30,7 +30,7 @@ def interrupted_helper_download(result):
             and "curl failed (exit status: 18)" in result.stderr)
 
 
-def mcp_up(prefix, env, work, lab, entry=None, tool="lab_up"):
+def mcp_up(prefix, env, work, cell, entry=None, tool="cell_up"):
     """A real installed stdio client, not a harness-discovery assertion."""
     with (work / "mcp.stderr.log").open("w") as errors:
         command = [entry["command"], *entry["args"]] if entry else [prefix / "bin/proofstorm-mcp"]
@@ -74,8 +74,8 @@ def mcp_up(prefix, env, work, lab, entry=None, tool="lab_up"):
             assert initialized["serverInfo"]["name"] == "proofstorm-mcp"
             send(dict(method="notifications/initialized"))
             listed = request(2, "tools/list", {})
-            assert "lab_up" in {tool["name"] for tool in listed["tools"]}
-            result = request(3, "tools/call", {"name":tool, "arguments":{"name":lab["name"], "lab":lab} if tool == "lab_up" else {}})
+            assert "cell_up" in {tool["name"] for tool in listed["tools"]}
+            result = request(3, "tools/call", {"name":tool, "arguments":{"name":cell["name"], "cell":cell} if tool == "cell_up" else {}})
             assert not result.get("isError", False), result
             return result
         finally:
@@ -227,7 +227,7 @@ def main():
             def repositories():
                 with urllib.request.urlopen(f'http://127.0.0.1:{installation["registry_port"]}/v2/_catalog', timeout=10) as response:
                     return set(json.load(response)["repositories"])
-            assert not repositories(), "default setup fetched lab images before any lab was selected"
+            assert not repositories(), "default setup fetched cell images before any cell was selected"
             assert json.loads((work / "last-setup.json").read_text())["image_policy"] == "on_demand"
             report["checks"].append("setup_skips_catalog_downloads")
             pins = json.loads((prefix / "lib/proofstorm/current/release-info.json").read_text())["bootstrap_tools"]["tools"]
@@ -239,21 +239,21 @@ def main():
             assert first_database == isolation.file_digest(home / "proofstorm.sqlite3")
             assert first_runtime == isolation.development_snapshot(kubectl, context, home / "kubeconfig", env)
             report["checks"].extend(["runtime_setup", "doctor_ready", "setup_retry_preserves_controller_and_permissions"])
-            example = json.loads((ROOT / "examples/developer-lab.json").read_text())
+            example = json.loads((ROOT / "examples/developer-cell.json").read_text())
             bitcoin = dict(example, name="bitcoin-only", components=example["components"][:1], links=[])
             bitcoin_path = work / "bitcoin-only.json"
             bitcoin_path.write_text(json.dumps(bitcoin))
-            first_lab = json.loads(cli("up", bitcoin_path, "--wait", "120").stdout)
-            assert first_lab["runtime"]["phase"] == "ready"
+            first_cell = json.loads(cli("up", bitcoin_path, "--wait", "120").stdout)
+            assert first_cell["runtime"]["phase"] == "ready"
             assert repositories() == {"bitcoin-core", "upstream/docker.io/library/busybox"}
             report["checks"].append("cli_fetches_only_selected_images")
             report["mcp_result"] = mcp_up(prefix, env, work, example)
             assert len(repositories()) == 3, repositories()
             report["checks"].append("mcp_fetches_only_new_selected_images")
-            result = json.loads(cli("up", ROOT / "examples/developer-lab.json", "--wait", "120").stdout)
+            result = json.loads(cli("up", ROOT / "examples/developer-cell.json", "--wait", "120").stdout)
             assert result["runtime"]["phase"] == "ready"
-            report["lab_result"] = result
-            report["checks"].append("example_lab_up_returned_success")
+            report["cell_result"] = result
+            report["checks"].append("example_cell_up_returned_success")
             if args.test_codex_attachment:
                 project = work / "app project with spaces"
                 project.mkdir()
@@ -294,10 +294,10 @@ def main():
                 verified = mcp_up(prefix, poison, work, example, entry, "environment_read")
                 assert not verified.get("isError", False) and not (work / "must-not-create.sqlite3").exists()
                 with sqlite3.connect(actor_db) as connection:
-                    connection.execute("DELETE FROM grants WHERE principal_id=? AND capability='lab.materialize'", (first["actor"],))
+                    connection.execute("DELETE FROM grants WHERE principal_id=? AND capability='cell.materialize'", (first["actor"],))
                 attach("attach", "codex", project, "--allow-development", expect=1)
                 with sqlite3.connect(actor_db) as connection:
-                    assert connection.execute("SELECT COUNT(*) FROM grants WHERE principal_id=? AND capability='lab.materialize'", (first["actor"],)).fetchone()[0] == 0
+                    assert connection.execute("SELECT COUNT(*) FROM grants WHERE principal_id=? AND capability='cell.materialize'", (first["actor"],)).fetchone()[0] == 0
                 assert project_config.read_bytes() == configured
                 launch = json.loads(attach("open", "codex", "--allow-development", "--dry-run").stdout)
                 assert launch["launch"]["interface"] == "desktop" and launch["launch"]["arguments"] == ["app", str(project.resolve())]
@@ -316,7 +316,7 @@ def main():
                 before_gui = isolation.development_snapshot(kubectl, context, home / "kubeconfig", env)
                 report["gui"] = test_managed_gui.run(prefix, env, work, args.gui_browser, args.gui_chrome)
                 assert before_gui == isolation.development_snapshot(kubectl, context, home / "kubeconfig", env)
-                report["gui"]["gui_stop_preserved_running_labs"] = True
+                report["gui"]["gui_stop_preserved_running_cells"] = True
                 report["checks"].append("managed_gui_project_attachment_and_lifecycle")
         report["test_completed"] = True
     finally:
@@ -329,7 +329,7 @@ def main():
         report["docker_networks_and_volumes_restored"] = resources == isolation.docker_resources(env)
         report["preexisting_containers_unchanged"] = states == isolation.container_state(original, env)
         report["user_kubeconfig_unchanged"] = config_sha == isolation.file_digest(config)
-        report["development_controller_and_labs_unchanged"] = development == isolation.development_snapshot(
+        report["development_controller_and_cells_unchanged"] = development == isolation.development_snapshot(
             ROOT / ".tools/bin/kubectl", "k3d-proofstorm", config, env)
         (work / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         print("Smoke report:", work / "report.json", flush=True)

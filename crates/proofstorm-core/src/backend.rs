@@ -749,7 +749,7 @@ fn require_mint_management_image(input: &ComponentPlanInput) -> Result<(), Strin
         .contains(&crate::CatalogFeature::MintManagementRpc)
     {
         return Err(format!(
-            "mint_management_image_required: component {:?} uses a lock from before native management RPC support; resolve a new lab revision (and rebuild old candidates) before upgrading this mint",
+            "mint_management_image_required: component {:?} uses a lock from before native management RPC support; resolve a new cell revision (and rebuild old candidates) before upgrading this mint",
             input.component.id
         ));
     }
@@ -2276,7 +2276,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "rpc_allow_policy".into(),
-                string("Disposable-lab RPC allow policy", Policy),
+                string("Disposable-cell RPC allow policy", Policy),
             ),
             (
                 "rpc_bind".into(),
@@ -2633,7 +2633,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "tor".into(),
-                string("Disabled in the isolated regtest laboratory", Policy),
+                string("Disabled in the isolated regtest cell", Policy),
             ),
             (
                 "unit".into(),
@@ -2730,7 +2730,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "tls_mode".into(),
-                string("Isolated-lab transport policy", Policy),
+                string("Isolated-cell transport policy", Policy),
             ),
         ]),
         "redis" => BTreeMap::from([
@@ -2776,7 +2776,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "realm".into(),
-                string("Fixed disposable-lab OIDC realm proofstorm", Policy),
+                string("Fixed disposable-cell OIDC realm proofstorm", Policy),
             ),
             (
                 "realm_import".into(),
@@ -3362,7 +3362,7 @@ mod tests {
                 _ => panic!("unknown test implementation {implementation:?}"),
             }
             .into(),
-            control: ControlClass::Laboratory,
+            control: ControlClass::Cell,
             config: BTreeMap::new(),
         }
     }
@@ -3781,14 +3781,14 @@ mod tests {
     #[test]
     fn compiled_contract_uses_current_lock_rollout_identity() {
         let component = component("chain", "bitcoin-core", ComponentKind::Bitcoin);
-        let lab = crate::LabSpec {
+        let cell = crate::CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "compile-contract".into(),
             components: vec![component.clone()],
             links: vec![],
-            policy: crate::LabPolicy::default(),
+            policy: crate::CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, crate::default_catalog()).expect("resolve current lock");
+        let lock = resolve_lock(&cell, crate::default_catalog()).expect("resolve current lock");
         assert_eq!(lock.api_version, LOCK_API_VERSION);
         let entry = lock.entries[0].clone();
         let expected = entry.rollout_digest.clone();
@@ -3817,14 +3817,14 @@ mod tests {
     fn compiled_contract_refuses_a_lock_from_an_older_backend_config_contract() {
         let mut component = component("mint", "cdk", ComponentKind::Mint);
         component.control = ControlClass::Target;
-        let lab = crate::LabSpec {
+        let cell = crate::CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "stale-cdk-lock".into(),
             components: vec![component.clone()],
             links: vec![],
-            policy: crate::LabPolicy::default(),
+            policy: crate::CellPolicy::default(),
         };
-        let mut lock = resolve_lock(&lab, crate::default_catalog()).expect("resolve current lock");
+        let mut lock = resolve_lock(&cell, crate::default_catalog()).expect("resolve current lock");
         lock.entries[0].config_version = "cdk-mintd/0.17/v1".into();
 
         let error = default_backend_registry()
@@ -3848,14 +3848,14 @@ mod tests {
     fn management_upgrade_refuses_old_images_before_compiling_workloads() {
         let mut component = component("mint", "cdk", ComponentKind::Mint);
         component.control = ControlClass::Target;
-        let lab = crate::LabSpec {
+        let cell = crate::CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "old-mint-image".into(),
             components: vec![component.clone()],
             links: vec![],
-            policy: crate::LabPolicy::default(),
+            policy: crate::CellPolicy::default(),
         };
-        let mut lock = resolve_lock(&lab, crate::default_catalog()).unwrap();
+        let mut lock = resolve_lock(&cell, crate::default_catalog()).unwrap();
         lock.entries[0]
             .features
             .remove(&crate::CatalogFeature::MintManagementRpc);
@@ -3952,14 +3952,14 @@ mod tests {
                 unit: "sat".into(),
             }),
         };
-        let lab = crate::LabSpec {
+        let cell = crate::CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "storage-cardinality".into(),
             components: vec![mint.clone(), lightning],
             links: vec![link.clone()],
-            policy: crate::LabPolicy::default(),
+            policy: crate::CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, crate::default_catalog()).expect("lock");
+        let lock = resolve_lock(&cell, crate::default_catalog()).expect("lock");
         let error = default_backend_registry()
             .compile_contract(&ComponentPlanInput {
                 instance_key: "instance-key".into(),
@@ -4007,14 +4007,14 @@ mod tests {
         let mut executor = component("attacker", "attacker-workspace", ComponentKind::Attacker);
         executor.control = crate::ControlClass::Attacker;
         let target = component("chain", "bitcoin-core", ComponentKind::Bitcoin);
-        let lab = crate::LabSpec {
+        let cell = crate::CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "cross-target-contract".into(),
             components: vec![executor.clone(), target.clone()],
             links: vec![],
-            policy: crate::LabPolicy::default(),
+            policy: crate::CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, crate::default_catalog()).expect("resolve lock");
+        let lock = resolve_lock(&cell, crate::default_catalog()).expect("resolve lock");
         let compile = |component: ComponentSpec| {
             let entry = lock
                 .entries

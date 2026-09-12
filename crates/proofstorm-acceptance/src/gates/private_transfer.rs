@@ -6,7 +6,7 @@
 use super::cocod_wallet::{
     balance, native, operation, private, python, relay_invoice, restart, start_session,
 };
-use crate::{GateContext, McpClient, lab};
+use crate::{GateContext, McpClient, cell};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -390,7 +390,7 @@ pub fn exercise(
             json!({"transferMethod":"release","component":source,"reference":reference}),
         )?;
     }
-    lab::wait_ready(client, "cocod-wallet-instance")?;
+    cell::wait_ready(client, "cocod-wallet-instance")?;
     Ok(())
 }
 

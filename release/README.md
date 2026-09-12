@@ -162,7 +162,7 @@ For checksum verification and extraction without running bundled binaries, use
 `just release-extract ARCHIVE.tar.gz NEW_DESTINATION` instead of the smoke test.
 
 Checksums detect damage or changed files; they are **not publisher signatures**.
-This smoke test does not validate Gatekeeper/quarantine, a working lab, or a
+This smoke test does not validate Gatekeeper/quarantine, a working cell, or a
 first install on a clean Mac. Identical payload inputs yield identical archives;
 full reproducibility of Rust/WASM compilation across machines is not claimed.
 
@@ -207,8 +207,8 @@ check passed. Dated evidence is in `installed-setup-verification.json`.
 This does not certify a clean Mac or a downloaded public release.
 
 The subsequent on-demand gate also passed: default setup left the catalog
-registry empty; a Bitcoin-only CLI lab fetched two images and reached Ready;
-installed stdio MCP added only the mint image for the Bitcoin/Cashu lab, whose
+registry empty; a Bitcoin-only CLI cell fetched two images and reached Ready;
+installed stdio MCP added only the mint image for the Bitcoin/Cashu cell, whose
 readiness was verified via CLI. Setup retry and all development-preservation
 checks passed, and the disposable runtime was removed. See
 `on-demand-images-verification.json`. This exercises MCP directly, not discovery
@@ -218,7 +218,7 @@ The project-scoped native Codex attachment gate has now been observed on this
 Mac. Running `proofstorm agent open codex --allow-development` from a disposable
 project configured that directory and launched the native app. A user-started
 Codex task successfully called `proofstorm.environment_read` and reported both
-sample labs Ready. Attachment also passed configuration/backup preservation,
+sample cells Ready. Attachment also passed configuration/backup preservation,
 repeatability, ambient-override isolation, and revoked-grant checks. The owned
 runtime was removed; every development-preservation check passed. See
 `codex-attachment-verification.json`.
@@ -227,7 +227,7 @@ The native handoff runner itself exited with a timeout: permission review timed
 out while saving its completion marker. Native success was verified separately
 from Codex task history, and the timeout cleanup completed successfully. Keep
 these results distinct; this is not an all-green unattended harness run or a
-native-agent lab lifecycle test. No public-release or clean-Mac claim is made.
+native-agent cell lifecycle test. No public-release or clean-Mac claim is made.
 
 After installing a matching development bundle, use its printed absolute command:
 
@@ -247,7 +247,7 @@ it creates no cluster, registry, controller, or developer grants.
 Full setup downloads the pinned prebuilt controller, verifies its embedded
 metadata, creates an isolated two-node k3d cluster, exports a private kubeconfig,
 applies matching CRDs, and deploys the controller by digest. Default setup does
-not download the lab catalog. Explicit CLI/MCP lab creation and accepted updates
+not download the cell catalog. Explicit CLI/MCP cell creation and accepted updates
 prepare only their locked component images plus the shared probe, preserving
 digests and verifying pulls on both nodes. The Bitcoin/Cashu example selects 3
 images rather than all 16. First use may take longer while these download; repeat
@@ -281,7 +281,7 @@ not claim MCP handshake, harness discovery, or a fresh full image pull.
 
 Remaining alpha limitations: no product reset command yet; a creation interrupted
 before its ownership receipt, or a stopped/replaced container, needs inspection
-rather than automatic adoption/deletion. Minimum lab resources are not yet a
+rather than automatic adoption/deletion. Minimum cell resources are not yet a
 measured contract. Bootstrap container images still need a full digest audit, and
 clean-Mac download/signing validation and coherent release-build gates remain open.
 
@@ -295,7 +295,7 @@ python3 scripts/test_installed_setup.py --archive /path/to/bundle.tar.gz \
 Omit `--start-runtime` to test only prebuilt installation, doctor non-initialization,
 helper downloads, and prepare idempotency. Reports and installed test files remain
 in the specified directory. The live mode additionally checks existing Docker
-resources, the development controller/labs, and the user's kubeconfig afterward.
+resources, the development controller/cells, and the user's kubeconfig afterward.
 
 ## Managed GUI (development preview)
 
@@ -303,7 +303,7 @@ The local packaged GUI gate passed on 2026-09-09 after startup fixes and a retry
 of the timed-out permission review. Chrome's extension exercised the actual
 project dialog and Codex launch without desktop screenshots. All six GUI
 regression tests, source-denied package checks, repeat attachment, restart/session
-checks, and owned-runtime cleanup passed. Existing labs survived GUI stop; the
+checks, and owned-runtime cleanup passed. Existing cells survived GUI stop; the
 development runtime and default kubeconfig were preserved. See
 `gui-verification.json` for the exact candidate and limits. This is not a public
 release or clean-Mac certification, and the GUI gate does not claim an actual
@@ -349,7 +349,7 @@ prevent activation, in which case Proofstorm opens the URL through macOS's defau
 browser handler; that can create another tab. No browser-specific automation
 permission is requested. Exact cross-browser tab activation is not guaranteed.
 
-`proofstorm gui stop` stops only this installation's GUI; labs continue running.
+`proofstorm gui stop` stops only this installation's GUI; cells continue running.
 `gui start` starts/reuses the server without opening a browser for diagnostics.
 An authenticated health check and a lifetime lock protect ownership: a stale PID
 or occupied port never authorizes killing another process. A stopped/restarted
@@ -371,7 +371,7 @@ python3 scripts/test_installed_setup.py --archive /path/to/bundle.tar.gz \
 Run in an interactive terminal. At the browser checkpoint, inspect the dialog,
 confirm its temporary project, and press Enter in the test terminal after the
 GUI reports success. The gate then checks repeat attachment, server reuse,
-stop/restart, stale-record recovery, old-session rejection, unchanged labs, and
+stop/restart, stale-record recovery, old-session rejection, unchanged cells, and
 development preservation before removing only its owned runtime. Omit
 `--gui-browser` for the API-only variant; it must not be reported as a browser test.
 For extension-driven Chrome testing, add `--gui-chrome`. This also opens the test

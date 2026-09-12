@@ -1,12 +1,12 @@
 //! One lifecycle implementation for every component workload. Workload annotations
-//! persist intent; optimistic concurrency fences both actions and lab rendering.
+//! persist intent; optimistic concurrency fences both actions and cell rendering.
 use super::{
-    Action, ActionPhase, Api, BACKEND_ID_ANNOTATION, BTreeSet, COMPONENT_LABEL,
+    Action, ActionPhase, Api, BACKEND_ID_ANNOTATION, BTreeSet, COMPONENT_LABEL, CellAction,
     ComponentObservationResources, Context, Deployment, Duration,
     EXECUTION_STATE_CONTRACT_ANNOTATION, Error, LIFECYCLE_RESTART_ANNOTATION,
-    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LabAction, ListParams, Patch,
-    PatchParams, Pod, ProofstormLab, ProofstormLabAction, ProofstormLabActionStatus, ResourceExt,
-    StatefulSet, WorkloadControllerKind, compile_component_plans, instance_namespace, now_unix,
+    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, ListParams, Patch, PatchParams, Pod,
+    ProofstormCell, ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, StatefulSet,
+    WorkloadControllerKind, compile_component_plans, instance_namespace, now_unix,
     patch_action_failure, patch_action_status, patch_invalid_action, status_object,
 };
 use k8s_openapi::{api::core::v1::PodTemplateSpec, apimachinery::pkg::apis::meta::v1::ObjectMeta};
@@ -20,18 +20,18 @@ enum Control {
 }
 
 pub(super) async fn reconcile(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     context: &Context,
 ) -> Result<Action, Error> {
     use proofstorm_core::{Capability, ComponentKind};
     let (request, control, capability) = match &action.spec.action {
-        LabAction::NodeStart(r) => (r, Control::Start, Capability::NodeControl),
-        LabAction::NodeStop(r) => (r, Control::Stop, Capability::NodeControl),
-        LabAction::NodeRestart(r) => (r, Control::Restart, Capability::NodeControl),
-        LabAction::ComponentStart(r) => (r, Control::Start, Capability::ComponentControl),
-        LabAction::ComponentStop(r) => (r, Control::Stop, Capability::ComponentControl),
-        LabAction::ComponentRestart(r) => (r, Control::Restart, Capability::ComponentControl),
+        CellAction::NodeStart(r) => (r, Control::Start, Capability::NodeControl),
+        CellAction::NodeStop(r) => (r, Control::Stop, Capability::NodeControl),
+        CellAction::NodeRestart(r) => (r, Control::Restart, Capability::NodeControl),
+        CellAction::ComponentStart(r) => (r, Control::Start, Capability::ComponentControl),
+        CellAction::ComponentStop(r) => (r, Control::Stop, Capability::ComponentControl),
+        CellAction::ComponentRestart(r) => (r, Control::Restart, Capability::ComponentControl),
         _ => {
             return Err(Error::ControllerInvariant(
                 "expected component lifecycle action",
@@ -43,13 +43,14 @@ pub(super) async fn reconcile(
             .await;
     }
     let plans = compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
+        &cell.spec.instance_key,
+        &cell.spec.revision_digest,
+        &cell.spec.cell,
+        &cell.spec.lock,
     )?;
     let Some(plan) = plans.iter().find(|p| p.component_id == request.component) else {
-        return patch_invalid_action(action, context, "component is not in the accepted lab").await;
+        return patch_invalid_action(action, context, "component is not in the accepted cell")
+            .await;
     };
     if capability == Capability::NodeControl
         && !matches!(plan.kind, ComponentKind::Bitcoin | ComponentKind::Lightning)
@@ -65,7 +66,7 @@ pub(super) async fn reconcile(
         patch_action_status(
             action,
             context,
-            ProofstormLabActionStatus {
+            ProofstormCellActionStatus {
                 phase: ActionPhase::Running,
                 observed_generation: action.metadata.generation,
                 started_at_unix: Some(now_unix()),
@@ -106,7 +107,7 @@ pub(super) async fn reconcile(
 )]
 async fn reconcile_workload<K: LifecycleWorkload>(
     api: &Api<K>,
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     plan: &proofstorm_core::ComponentPlanContract,
     control: Control,
     context: &Context,
@@ -200,7 +201,7 @@ async fn reconcile_workload<K: LifecycleWorkload>(
             return Ok(Action::requeue(Duration::from_secs(1)));
         }
     }
-    patch_action_status(action, context, ProofstormLabActionStatus {
+    patch_action_status(action, context, ProofstormCellActionStatus {
         phase: ActionPhase::Succeeded, observed_generation: action.metadata.generation,
         started_at_unix: action.status.as_ref().and_then(|s| s.started_at_unix), completed_at_unix: Some(now_unix()),
         artifact: Some(status_object(serde_json::json!({"component": plan.component_id, "kind": plan.kind, "workload_kind": plan.workload.kind, "state": state, "restarted": control == Control::Restart, "sequence": action.spec.sequence}))),
@@ -293,7 +294,7 @@ fn preserve_observed<K: LifecycleWorkload>(existing: &K, desired: &K) -> K {
     if compatible && annotation(existing.meta(), LIFECYCLE_STATE_ANNOTATION).is_some() {
         desired.set_replicas(existing.replicas());
     }
-    // Preserve restart markers even during unrelated lab edits, avoiding a second rollout.
+    // Preserve restart markers even during unrelated cell edits, avoiding a second rollout.
     if let Some(token) = existing
         .template()
         .and_then(|t| t.metadata.as_ref())

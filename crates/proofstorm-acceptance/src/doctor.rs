@@ -2,7 +2,7 @@
 //!
 //! `doctor` performs the real capability-filtered MCP handshake an agent would,
 //! using the operator's own OpenCode configuration, and `cluster_schema`
-//! verifies that any lab already on the cluster still deserializes with the
+//! verifies that any cell already on the cluster still deserializes with the
 //! current API types.
 //!
 //! Both replace Python: `tools/proofstorm-doctor.py` and the inline schema
@@ -26,8 +26,8 @@ const REQUIRED_TOOLS: &[&str] = &[
     "component_restart",
     "conservation_oracle",
     "evidence_section_read",
-    "lab_close",
-    "lab_component_status_list",
+    "cell_close",
+    "cell_component_status_list",
     "network_heal",
     "network_partition",
     "node_restart",
@@ -41,18 +41,18 @@ const REQUIRED_TOOLS: &[&str] = &[
     "wallet_pay",
 ];
 
-/// Ordinary lab workflow, without exposing manual run/session coordination.
+/// Ordinary cell workflow, without exposing manual run/session coordination.
 const REQUIRED_DEVELOPER_TOOLS: &[&str] = &[
     "catalog_list",
     "catalog_entry_read",
     "catalog_config_schema_read",
-    "lab_up",
-    "lab_inspect",
+    "cell_up",
+    "cell_inspect",
     "session_list",
-    "lab_exec",
-    "lab_sync",
-    "lab_finish",
-    "lab_component_status_list",
+    "cell_exec",
+    "cell_sync",
+    "cell_finish",
+    "cell_component_status_list",
     "operation_status",
     "operation_wait_many",
     "action_cancel",
@@ -65,10 +65,10 @@ const REQUIRED_NATIVE_TOOLS: &[&str] = &[
     "candidate_build",
     "candidate_wait",
     "network_capabilities",
-    "lab_plan",
-    "lab_apply",
-    "lab_wait",
-    "lab_close",
+    "cell_plan",
+    "cell_apply",
+    "cell_wait",
+    "cell_close",
     "experiment_create",
     "experiment_close",
     "session_start",
@@ -148,14 +148,14 @@ pub fn run(mcp_binary: &Path, config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Refuse to upgrade a controller against labs written by an older alpha schema.
+/// Refuse to upgrade a controller against cells written by an older alpha schema.
 ///
-/// Every lab already on the cluster is deserialized with the current
-/// `ProofstormLabSpec`, so this check can never drift from the real types the
+/// Every cell already on the cluster is deserialized with the current
+/// `ProofstormCellSpec`, so this check can never drift from the real types the
 /// way the hand-written Python predicate could.
 pub fn cluster_schema(kubectl: &Kubectl) -> Result<()> {
-    let labs = kubectl.get_json(&["get", "proofstormlabs.proofstorm.dev", "--all-namespaces"])?;
-    let items = expect::array(&labs, "/items")?;
+    let cells = kubectl.get_json(&["get", "proofstormcells.proofstorm.dev", "--all-namespaces"])?;
+    let items = expect::array(&cells, "/items")?;
     for item in items {
         let name = item
             .pointer("/metadata/name")
@@ -163,20 +163,20 @@ pub fn cluster_schema(kubectl: &Kubectl) -> Result<()> {
             .unwrap_or("<unnamed>");
         let spec = item
             .get("spec")
-            .ok_or_else(|| anyhow::anyhow!("lab {name} has no spec"))?;
+            .ok_or_else(|| anyhow::anyhow!("cell {name} has no spec"))?;
         if let Err(error) =
-            serde_json::from_value::<proofstorm_kube::ProofstormLabSpec>(spec.clone())
+            serde_json::from_value::<proofstorm_kube::ProofstormCellSpec>(spec.clone())
         {
             bail!(
-                "existing Proofstorm lab {name} uses an incompatible alpha schema: {error}\n\
-                 labs are not migrated or deleted automatically; reset the disposable developer cluster:\n\
+                "existing Proofstorm cell {name} uses an incompatible alpha schema: {error}\n\
+                 cells are not migrated or deleted automatically; reset the disposable developer cluster:\n\
                  \x20 just down\n\
                  \x20 just setup"
             );
         }
     }
     println!(
-        "cluster schema check passed for {} existing lab(s) in {CONTROL_NAMESPACE}",
+        "cluster schema check passed for {} existing cell(s) in {CONTROL_NAMESPACE}",
         items.len()
     );
     Ok(())

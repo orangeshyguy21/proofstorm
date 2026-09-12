@@ -4,8 +4,8 @@
     reason = "query validation returns a static explanation"
 )]
 use proofstorm_core::{
-    ComponentConditionReason, ComponentConditionState, ComponentConditionType, ComponentKind,
-    InstancePhase, LabOperation, LinkKind, OperationKind, OperationPhase, Session,
+    CellOperation, ComponentConditionReason, ComponentConditionState, ComponentConditionType,
+    ComponentKind, InstancePhase, LinkKind, OperationKind, OperationPhase, Session,
 };
 mod display;
 pub use display::*;
@@ -67,7 +67,7 @@ impl EnvironmentQuery {
             || (self.instance_id.is_some() && !self.cursor.is_empty())
         {
             return Err(
-                "section cursors require instance_id; the lab cursor requires an environment page",
+                "section cursors require instance_id; the cell cursor requires an environment page",
             );
         }
         Ok(())
@@ -85,7 +85,7 @@ pub struct EnvironmentView {
     pub scope: String,
     pub observation_started_at_unix: i64,
     pub observation_finished_at_unix: i64,
-    pub labs: Page<EnvironmentLab>,
+    pub cells: Page<EnvironmentCell>,
     pub coverage: Coverage,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -98,8 +98,8 @@ pub struct Coverage {
     pub attached_clients: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct EnvironmentLab {
-    /// Stable workspace and lab incarnation identity for browser-local layouts.
+pub struct EnvironmentCell {
+    /// Stable workspace and cell incarnation identity for browser-local layouts.
     #[serde(default)]
     pub layout_id: Option<String>,
     #[serde(default)]
@@ -107,8 +107,8 @@ pub struct EnvironmentLab {
     #[serde(default)]
     pub last_converged_revision: Option<String>,
     pub id: String,
-    pub handle: Option<LabHandle>,
-    /// A retained lab could not be decoded; empty sections are unavailable, not empty history.
+    pub handle: Option<CellHandle>,
+    /// A retained cell could not be decoded; empty sections are unavailable, not empty history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_error: Option<String>,
     pub revision_digest: Option<String>,
@@ -265,19 +265,19 @@ pub struct StorageDemand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum LabHandlePhase {
+pub enum CellHandlePhase {
     Open,
     Closing,
     Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct LabHandle {
+pub struct CellHandle {
     pub name: String,
     pub generation: u32,
     pub owner: String,
     pub config_digest: String,
-    pub phase: LabHandlePhase,
+    pub phase: CellHandlePhase,
     pub instance_id: String,
 }
 
@@ -307,8 +307,8 @@ pub struct Activity {
     pub principal_id: String,
     pub components: Vec<String>,
 }
-impl From<LabOperation> for Activity {
-    fn from(op: LabOperation) -> Self {
+impl From<CellOperation> for Activity {
+    fn from(op: CellOperation) -> Self {
         Self {
             revision_digest: op.revision_digest,
             run_id: op.experiment_id,

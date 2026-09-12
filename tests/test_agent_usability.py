@@ -44,7 +44,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(self.evaluate(cluster={})['proficiency'], 'failed')
 
     def test_operator_cleanup_cannot_rescue_agent_pass(self):
-        self.assertEqual(self.evaluate(review=self.review, operator_cleanup=[{'name': 'lab'}])['proficiency'], 'failed')
+        self.assertEqual(self.evaluate(review=self.review, operator_cleanup=[{'name': 'cell'}])['proficiency'], 'failed')
 
     def test_typed_only_contract_still_restricts_exec(self):
         self.manifest['execution_surface'] = 'typed-contract'

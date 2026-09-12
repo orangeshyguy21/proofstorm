@@ -1,5 +1,5 @@
 use super::common::{action_kinds, assert_handle, scoped};
-use crate::{GateContext, McpClient, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
@@ -33,7 +33,7 @@ pub(super) fn bootstrap(
         sleep(Duration::from_secs(1));
     }
     if !created {
-        bail!("controller-owned ProofstormLabAction was not created");
+        bail!("controller-owned ProofstormCellAction was not created");
     }
     let entries = expect::array(&items, "/items")?;
     if entries.len() != 1
@@ -63,8 +63,8 @@ pub(super) fn bootstrap(
     if expect::array(&jobs, "/items")?.len() != 1 {
         bail!("caller retry or controller restart duplicated the bootstrap Job");
     }
-    let bootstrap = lab::wait_operation(client, "bootstrap", 120)?;
-    let bootstrap_content = lab::artifact_content(&bootstrap)?;
+    let bootstrap = cell::wait_operation(client, "bootstrap", 120)?;
+    let bootstrap_content = cell::artifact_content(&bootstrap)?;
     if !expect::boolean(bootstrap_content, "/ready")? {
         bail!("bootstrap artifact is invalid: {bootstrap}");
     }

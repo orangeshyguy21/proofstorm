@@ -1,7 +1,7 @@
 //! Evidence-based canvas relationships. Declared peer links do not imply channels.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 use proofstorm_core::{ComponentKind, LinkKind};
-use proofstorm_view::{EnvironmentLab, LabUsage};
+use proofstorm_view::{CellUsage, EnvironmentCell};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,16 +30,16 @@ pub struct Edge {
     clippy::too_many_lines,
     reason = "single projection reconciles declared links and two independently sampled relationship kinds"
 )]
-pub fn edges(lab: &EnvironmentLab, usage: Option<&LabUsage>, now: i64) -> Vec<Edge> {
+pub fn edges(cell: &EnvironmentCell, usage: Option<&CellUsage>, now: i64) -> Vec<Edge> {
     let kind = |id: &str| {
-        lab.components
+        cell.components
             .items
             .iter()
             .find(|c| c.id == id)
             .map(|c| c.kind)
     };
-    let resource_parents = crate::canvas_model::resource_parents(lab);
-    let mut result = lab
+    let resource_parents = crate::canvas_model::resource_parents(cell);
+    let mut result = cell
         .links
         .items
         .iter()
@@ -64,11 +64,11 @@ pub fn edges(lab: &EnvironmentLab, usage: Option<&LabUsage>, now: i64) -> Vec<Ed
             lane: 0,
         })
         .collect::<Vec<_>>();
-    let Some(usage) = usage.filter(|u| lab.layout_id.as_deref() == Some(u.incarnation.as_str()))
+    let Some(usage) = usage.filter(|u| cell.layout_id.as_deref() == Some(u.incarnation.as_str()))
     else {
         return result;
     };
-    // Ambiguous node identities must never connect the wrong lab components.
+    // Ambiguous node identities must never connect the wrong cell components.
     let mut identities = BTreeMap::<&str, Vec<&str>>::new();
     for balance in &usage.balances {
         if kind(&balance.component) == Some(ComponentKind::Lightning) {
@@ -291,9 +291,9 @@ mod tests {
         ObservedChannel,
     };
     use serde_json::json;
-    fn lab() -> EnvironmentLab {
+    fn cell() -> EnvironmentCell {
         let component = |id, kind| json!({"id":id,"kind":kind,"implementation":"test","conditions":[],"endpoints":[]});
-        serde_json::from_value(json!({"id":"lab","layout_id":"lab:one","journal_read_at_unix":10,
+        serde_json::from_value(json!({"id":"cell","layout_id":"cell:one","journal_read_at_unix":10,
             "runtime":{"state":"available","fetched_at_unix":10},
             "components":{"items":[component("alice","lightning"),component("bob","lightning"),component("wallet","wallet"),component("mint","mint")]},
             "links":{"items":[{"id":"peer","from":"alice","to":"bob","kind":"lightning_peer"},{"id":"declared-wallet","from":"wallet","to":"mint","kind":"network_path"}]},
@@ -311,7 +311,7 @@ mod tests {
             holdings: None,
         }
     }
-    fn usage() -> LabUsage {
+    fn usage() -> CellUsage {
         let channel = |point: &str, peer: &str, local, remote| ObservedChannel {
             funding_outpoint: point.into(),
             peer_pubkey: peer.into(),
@@ -360,17 +360,17 @@ mod tests {
                 ],
             }],
         });
-        LabUsage {
-            incarnation: "lab:one".into(),
+        CellUsage {
+            incarnation: "cell:one".into(),
             balances: vec![bob, wallet, alice],
             ..Default::default()
         }
     }
     #[test]
     fn peer_links_do_not_create_channels_and_observed_channels_are_deduplicated() {
-        let lab = lab();
-        assert!(edges(&lab, None, 10).is_empty());
-        let result = edges(&lab, Some(&usage()), 10);
+        let cell = cell();
+        assert!(edges(&cell, None, 10).is_empty());
+        let result = edges(&cell, Some(&usage()), 10);
         assert_eq!(result.len(), 3);
         assert_eq!(
             result
@@ -407,7 +407,7 @@ mod tests {
             .unwrap();
         wallet.holdings.as_mut().unwrap().error = Some("failed".into());
         assert!(
-            edges(&lab(), Some(&usage), 10)
+            edges(&cell(), Some(&usage), 10)
                 .iter()
                 .any(|e| e.id.starts_with("holding:") && e.stale)
         );
@@ -422,12 +422,12 @@ mod tests {
         held.error = None;
         held.mints[0].amounts.retain(|a| a.label == "Pending");
         assert!(
-            edges(&lab(), Some(&usage), 10)
+            edges(&cell(), Some(&usage), 10)
                 .iter()
                 .all(|e| !matches!(e.kind, EdgeKind::Holding { .. }))
         );
-        usage.incarnation = "lab:new".into();
-        assert!(edges(&lab(), Some(&usage), 10).is_empty());
+        usage.incarnation = "cell:new".into();
+        assert!(edges(&cell(), Some(&usage), 10).is_empty());
     }
     #[test]
     fn parallel_channels_have_separate_paths() {
@@ -447,7 +447,7 @@ mod tests {
             }
         }
         assert!(
-            edges(&lab(), Some(&usage), 10)
+            edges(&cell(), Some(&usage), 10)
                 .iter()
                 .all(|e| !matches!(e.kind, EdgeKind::Channel { .. }))
         );

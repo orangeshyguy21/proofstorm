@@ -71,13 +71,13 @@ impl Store {
         let digest = proofstorm_core::digest_json(&(workspace, &key, principal));
         if id != format!("run-{}", &digest[7..39]) {
             return Err(StoreError::Validation(
-                "lab incarnation changed during run admission; read current lab and retry".into(),
+                "cell incarnation changed during run admission; read current cell and retry".into(),
             ));
         }
-        let closing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM lab_handles WHERE workspace_id=?1 AND instance_id=?2 AND phase!='\"open\"') OR EXISTS(SELECT 1 FROM lab_update_state WHERE workspace_id=?1 AND instance_id=?2 AND closing=1)",params![workspace,instance],|r|r.get(0))?;
+        let closing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM cell_handles WHERE workspace_id=?1 AND instance_id=?2 AND phase!='\"open\"') OR EXISTS(SELECT 1 FROM cell_update_state WHERE workspace_id=?1 AND instance_id=?2 AND closing=1)",params![workspace,instance],|r|r.get(0))?;
         if closing {
             return Err(StoreError::Validation(
-                "lab is closing; new actions are not admitted".into(),
+                "cell is closing; new actions are not admitted".into(),
             ));
         }
         tx.execute(

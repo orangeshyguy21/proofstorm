@@ -31,7 +31,7 @@ on loopback; use an SSH tunnel rather than exposing it to the internet.
 ## Known limitations
 
 - The GitHub download and full runtime flow still need their fresh-VM test.
-- Full catalog/helper image coverage and lab lifecycle are not yet certified.
+- Full catalog/helper image coverage and cell lifecycle are not yet certified.
 - These host binaries use a debug build and a recorded dirty source snapshot.
 - The controller is a digest-pinned preview. Host/controller compatibility and
   bundle integrity passed; these are not claims of production readiness.

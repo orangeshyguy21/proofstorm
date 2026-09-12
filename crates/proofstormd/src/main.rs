@@ -1,8 +1,8 @@
 mod component_lifecycle;
 #[cfg(test)]
 use component_lifecycle::same_lifecycle_identity;
+mod cell_updates;
 mod component_logs;
-mod lab_updates;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -38,25 +38,25 @@ use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
     AuthenticationReplayResult, AuthenticationSessionFailureStage, BACKEND_ID_ANNOTATION,
-    CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, ComponentObservationResources,
-    EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
-    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LabAction, LabPhase,
-    MAX_PROTOCOL_PROBES_PER_LAB, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
-    PROTOCOL_PROBER_NAME, ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormLab,
-    ProofstormLabAction, ProofstormLabActionStatus, ProofstormLabStatus, action_result_container,
-    compile_component_plans, evaluate_action_admission, instance_namespace,
-    observe_component_statuses, render_candidate_build_job, render_component_network_policy,
-    render_lab, render_lab_action_cleanup_job, render_lab_action_job, render_lab_security_spine,
-    schedule_protocol_probers,
+    CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, CellAction, CellPhase,
+    ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL,
+    LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION,
+    MAX_PROTOCOL_PROBES_PER_CELL, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
+    PROTOCOL_PROBER_NAME, ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell,
+    ProofstormCellAction, ProofstormCellActionStatus, ProofstormCellStatus,
+    action_result_container, compile_component_plans, evaluate_action_admission,
+    instance_namespace, observe_component_statuses, render_candidate_build_job, render_cell,
+    render_cell_action_cleanup_job, render_cell_action_job, render_cell_security_spine,
+    render_component_network_policy, schedule_protocol_probers,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-const FINALIZER: &str = "proofstorm.dev/lab-cleanup";
+const FINALIZER: &str = "proofstorm.dev/cell-cleanup";
 const FIELD_MANAGER: &str = "proofstormd";
-const LAB_CONTROLLER_CONCURRENCY: u16 = 8;
+const CELL_CONTROLLER_CONCURRENCY: u16 = 8;
 const ACTION_CONTROLLER_CONCURRENCY: u16 = 16;
-const MAX_LAB_STATUS_BYTES: usize = 256 * 1024;
+const MAX_CELL_STATUS_BYTES: usize = 256 * 1024;
 const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
@@ -68,7 +68,7 @@ struct Context {
 enum Error {
     #[error("Kubernetes API error: {0}")]
     Kube(#[from] kube::Error),
-    #[error("ProofstormLab {0} has no namespace")]
+    #[error("ProofstormCell {0} has no namespace")]
     MissingNamespace(String),
     #[error("invalid instance key {0:?}")]
     InvalidInstanceKey(String),
@@ -121,35 +121,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("unknown argument: {argument}").into());
     }
     let client = Client::try_default().await?;
-    let labs = Api::<ProofstormLab>::all(client.clone());
-    let actions = Api::<ProofstormLabAction>::all(client.clone());
+    let cells = Api::<ProofstormCell>::all(client.clone());
+    let actions = Api::<ProofstormCellAction>::all(client.clone());
     let candidate_builds = Api::<ProofstormCandidateBuild>::all(client.clone());
     let context = Arc::new(Context { client });
-    let lab_controller = Controller::new(labs, watcher::Config::default());
-    let lab_cache = lab_controller.store();
-    let lab_controller = lab_controller
-        // Pod readiness, restarts and probe changes should refresh stable labs promptly.
+    let cell_controller = Controller::new(cells, watcher::Config::default());
+    let cell_cache = cell_controller.store();
+    let cell_controller = cell_controller
+        // Pod readiness, restarts and probe changes should refresh stable cells promptly.
         // Keep the slower periodic requeue as a fallback when the watch reconnects.
         .watches(
             Api::<Pod>::all(context.client.clone()),
             watcher::Config::default().labels(INSTANCE_LABEL),
             move |pod| {
-                lab_cache
+                cell_cache
                     .state()
                     .into_iter()
-                    .filter(|lab| pod_belongs_to_instance(&pod, &lab.spec.instance_key))
-                    .map(|lab| kube::runtime::reflector::ObjectRef::from_obj(lab.as_ref()))
+                    .filter(|cell| pod_belongs_to_instance(&pod, &cell.spec.instance_key))
+                    .map(|cell| kube::runtime::reflector::ObjectRef::from_obj(cell.as_ref()))
                     .collect::<Vec<_>>()
             },
         )
         .with_config(
-            kube::runtime::controller::Config::default().concurrency(LAB_CONTROLLER_CONCURRENCY),
+            kube::runtime::controller::Config::default().concurrency(CELL_CONTROLLER_CONCURRENCY),
         )
         .shutdown_on_signal()
         .run(reconcile, error_policy, context.clone())
         .for_each(|result| async move {
             match result {
-                Ok((object, _)) => eprintln!("reconciled ProofstormLab {object:?}"),
+                Ok((object, _)) => eprintln!("reconciled ProofstormCell {object:?}"),
                 Err(error) => eprintln!("reconciliation failed: {error}"),
             }
         });
@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .run(reconcile_action, action_error_policy, context.clone())
         .for_each(|result| async move {
             match result {
-                Ok((object, _)) => eprintln!("reconciled ProofstormLabAction {object:?}"),
+                Ok((object, _)) => eprintln!("reconciled ProofstormCellAction {object:?}"),
                 Err(error) => eprintln!("action reconciliation failed: {error}"),
             }
         });
@@ -181,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     let probe_scheduler = run_protocol_probe_scheduler(context);
     tokio::join!(
-        lab_controller,
+        cell_controller,
         action_controller,
         candidate_controller,
         probe_scheduler
@@ -443,7 +443,7 @@ async fn patch_candidate_status(
     reason = "one reconciliation pass keeps typed admission, deterministic Job identity, and terminal observation visibly contiguous"
 )]
 async fn reconcile_action(
-    action: Arc<ProofstormLabAction>,
+    action: Arc<ProofstormCellAction>,
     context: Arc<Context>,
 ) -> Result<Action, Error> {
     let control_namespace = action
@@ -457,47 +457,48 @@ async fn reconcile_action(
         return Ok(Action::await_change());
     }
     if action.annotations().contains_key(ACTION_CANCEL_ANNOTATION) {
-        if matches!(action.spec.action, LabAction::ComponentExecLive(_))
+        if matches!(action.spec.action, CellAction::ComponentExecLive(_))
             && action
                 .status
                 .as_ref()
                 .is_some_and(|status| status.native_execution.is_some())
         {
-            let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
-            let lab = labs.get(&action.spec.lab_name).await?;
-            return native_exec::reconcile(action.as_ref(), &lab, &context).await;
+            let cells =
+                Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
+            let cell = cells.get(&action.spec.cell_name).await?;
+            return native_exec::reconcile(action.as_ref(), &cell, &context).await;
         }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
     }
-    let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
-    let lab = labs.get(&action.spec.lab_name).await?;
+    let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
+    let cell = cells.get(&action.spec.cell_name).await?;
     if action
         .annotations()
         .get("proofstorm.dev/action-revision")
         .is_none_or(String::is_empty)
-        && lab
+        && cell
             .annotations()
             .get("proofstorm.dev/desired-generation")
             .is_some_and(|g| g != "1")
     {
         return patch_invalid_action(&action, &context, "Operation does not identify its configuration revision. Reconnect the MCP server and submit a new operation.").await;
     }
-    let lab = lab_updates::action_lab(&action, lab, &context).await?;
+    let cell = cell_updates::action_cell(&action, cell, &context).await?;
     // Existing native handles only reconcile owned work; changed readiness must
     // not discard a completed native receipt or turn collection into a new start.
-    if matches!(action.spec.action, LabAction::ComponentExecLive(_))
+    if matches!(action.spec.action, CellAction::ComponentExecLive(_))
         && action
             .status
             .as_ref()
             .is_some_and(|status| status.native_execution.is_some())
     {
-        return native_exec::reconcile(action.as_ref(), &lab, &context).await;
+        return native_exec::reconcile(action.as_ref(), &cell, &context).await;
     }
     if !action
         .status
         .as_ref()
         .is_some_and(|status| status.phase == ActionPhase::Running)
-        && private_transfer::validate_delegated_action(action.as_ref(), &lab).is_err()
+        && private_transfer::validate_delegated_action(action.as_ref(), &cell).is_err()
     {
         return patch_action_failure(
             action.as_ref(),
@@ -507,16 +508,16 @@ async fn reconcile_action(
         )
         .await;
     }
-    if let Err(error) = evaluate_action_admission(action.as_ref(), &lab) {
+    if let Err(error) = evaluate_action_admission(action.as_ref(), &cell) {
         patch_action_status(
             action.as_ref(),
             &context,
-            ProofstormLabActionStatus {
+            ProofstormCellActionStatus {
                 phase: ActionPhase::Failed,
                 observed_generation: action.metadata.generation,
                 completed_at_unix: Some(now_unix()),
                 error: Some(action_admission_failure(&error)),
-                ..ProofstormLabActionStatus::default()
+                ..ProofstormCellActionStatus::default()
             },
         )
         .await?;
@@ -524,37 +525,37 @@ async fn reconcile_action(
     }
     if matches!(
         action.spec.action,
-        LabAction::NodeStart(_)
-            | LabAction::NodeStop(_)
-            | LabAction::NodeRestart(_)
-            | LabAction::ComponentStart(_)
-            | LabAction::ComponentStop(_)
-            | LabAction::ComponentRestart(_)
+        CellAction::NodeStart(_)
+            | CellAction::NodeStop(_)
+            | CellAction::NodeRestart(_)
+            | CellAction::ComponentStart(_)
+            | CellAction::ComponentStop(_)
+            | CellAction::ComponentRestart(_)
     ) {
-        return component_lifecycle::reconcile(action.as_ref(), &lab, &context).await;
+        return component_lifecycle::reconcile(action.as_ref(), &cell, &context).await;
     }
     if matches!(
         action.spec.action,
-        LabAction::NetworkPartition(_) | LabAction::NetworkHeal(_)
+        CellAction::NetworkPartition(_) | CellAction::NetworkHeal(_)
     ) {
-        return reconcile_network_fault(action.as_ref(), &lab, &context).await;
+        return reconcile_network_fault(action.as_ref(), &cell, &context).await;
     }
-    if matches!(action.spec.action, LabAction::ComponentLogs(_)) {
-        return reconcile_component_logs(action.as_ref(), &lab, &context).await;
+    if matches!(action.spec.action, CellAction::ComponentLogs(_)) {
+        return reconcile_component_logs(action.as_ref(), &cell, &context).await;
     }
-    if matches!(action.spec.action, LabAction::PrivateTransfer(_)) {
+    if matches!(action.spec.action, CellAction::PrivateTransfer(_)) {
         return private_transfer::reconcile(action.as_ref(), &context).await;
     }
-    if matches!(action.spec.action, LabAction::ComponentExecLive(_)) {
-        return reconcile_component_exec_live(action.as_ref(), &lab, &context).await;
+    if matches!(action.spec.action, CellAction::ComponentExecLive(_)) {
+        return reconcile_component_exec_live(action.as_ref(), &cell, &context).await;
     }
-    let job = match render_lab_action_job(action.as_ref(), &lab) {
+    let job = match render_cell_action_job(action.as_ref(), &cell) {
         Ok(job) => job,
         Err(error) => {
             patch_action_status(
                 action.as_ref(),
                 &context,
-                ProofstormLabActionStatus {
+                ProofstormCellActionStatus {
                     phase: ActionPhase::Failed,
                     observed_generation: action.metadata.generation,
                     completed_at_unix: Some(now_unix()),
@@ -562,7 +563,7 @@ async fn reconcile_action(
                         "code": "invalid_action",
                         "message": error.to_string(),
                     }))),
-                    ..ProofstormLabActionStatus::default()
+                    ..ProofstormCellActionStatus::default()
                 },
             )
             .await?;
@@ -591,12 +592,12 @@ async fn reconcile_action(
         patch_action_status(
             action.as_ref(),
             &context,
-            ProofstormLabActionStatus {
+            ProofstormCellActionStatus {
                 phase: ActionPhase::Running,
                 observed_generation: action.metadata.generation,
                 job_name: Some(name),
                 started_at_unix: Some(now_unix()),
-                ..ProofstormLabActionStatus::default()
+                ..ProofstormCellActionStatus::default()
             },
         )
         .await?;
@@ -620,12 +621,12 @@ async fn reconcile_action(
         patch_action_status(
             action.as_ref(),
             &context,
-            ProofstormLabActionStatus {
+            ProofstormCellActionStatus {
                 phase: ActionPhase::Running,
                 observed_generation: action.metadata.generation,
                 job_name: Some(name),
                 started_at_unix: Some(started),
-                ..ProofstormLabActionStatus::default()
+                ..ProofstormCellActionStatus::default()
             },
         )
         .await?;
@@ -641,28 +642,28 @@ async fn reconcile_action(
         .as_ref()
         .and_then(|status| status.started_at_unix);
     let status = if failed {
-        ProofstormLabActionStatus {
+        ProofstormCellActionStatus {
             phase: ActionPhase::Failed,
             observed_generation: action.metadata.generation,
             job_name: Some(name),
             started_at_unix,
             completed_at_unix: Some(now_unix()),
             error: Some(status_object(action_failure(&job_status, &pods.items))),
-            ..ProofstormLabActionStatus::default()
+            ..ProofstormCellActionStatus::default()
         }
     } else {
-        let artifact = if matches!(action.spec.action, LabAction::ComponentForensics(_)) {
+        let artifact = if matches!(action.spec.action, CellAction::ComponentForensics(_)) {
             let endpoint_slices =
                 Api::<EndpointSlice>::namespaced(context.client.clone(), &instance_namespace);
             native_exec_artifact(&pod_api, &endpoint_slices, action.as_ref(), &pods.items).await?
-        } else if matches!(action.spec.action, LabAction::AuthenticationConformance(_)) {
+        } else if matches!(action.spec.action, CellAction::AuthenticationConformance(_)) {
             authentication_conformance_artifact(action.as_ref(), &pods.items)
         } else if matches!(
             action.spec.action,
-            LabAction::AuthenticationProtectedSpend(_)
+            CellAction::AuthenticationProtectedSpend(_)
         ) {
             authentication_protected_spend_artifact(action.as_ref(), &pods.items, &context).await?
-        } else if matches!(action.spec.action, LabAction::AuthenticationReplay(_)) {
+        } else if matches!(action.spec.action, CellAction::AuthenticationReplay(_)) {
             authentication_replay_artifact(action.as_ref(), &pods.items)
         } else {
             pods.items
@@ -673,16 +674,16 @@ async fn reconcile_action(
                 .and_then(|message| serde_json::from_str(&message).ok())
         };
         match artifact {
-            Some(artifact) => ProofstormLabActionStatus {
+            Some(artifact) => ProofstormCellActionStatus {
                 phase: ActionPhase::Succeeded,
                 observed_generation: action.metadata.generation,
                 job_name: Some(name),
                 started_at_unix,
                 completed_at_unix: Some(now_unix()),
                 artifact: Some(artifact),
-                ..ProofstormLabActionStatus::default()
+                ..ProofstormCellActionStatus::default()
             },
-            None => ProofstormLabActionStatus {
+            None => ProofstormCellActionStatus {
                 phase: ActionPhase::Failed,
                 observed_generation: action.metadata.generation,
                 job_name: Some(name),
@@ -691,7 +692,7 @@ async fn reconcile_action(
                 error: Some(status_object(
                     serde_json::json!({"code": "terminal_artifact_missing"}),
                 )),
-                ..ProofstormLabActionStatus::default()
+                ..ProofstormCellActionStatus::default()
             },
         }
     };
@@ -701,33 +702,33 @@ async fn reconcile_action(
 
 /// Read a component's startup or application logs and journal their availability.
 ///
-/// Lab workloads hold no Kubernetes credentials by design, so no Job can read
+/// Cell workloads hold no Kubernetes credentials by design, so no Job can read
 /// another Pod's log. The controller already holds that authority for native
 /// execution and uses it here, which also keeps the log readable while the
 /// component is unready or stopped.
 async fn reconcile_component_logs(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     context: &Context,
 ) -> Result<Action, Error> {
     if action.spec.capability != proofstorm_core::Capability::ComponentLogs {
         return patch_invalid_action(action, context, "component logs require component.logs")
             .await;
     }
-    let LabAction::ComponentLogs(request) = &action.spec.action else {
+    let CellAction::ComponentLogs(request) = &action.spec.action else {
         return Err(Error::ControllerInvariant("expected component logs action"));
     };
     let plans = compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
+        &cell.spec.instance_key,
+        &cell.spec.revision_digest,
+        &cell.spec.cell,
+        &cell.spec.lock,
     )?;
     if !plans
         .iter()
         .any(|plan| plan.component_id == request.component)
     {
-        return patch_invalid_action(action, context, "component is not in the immutable lab")
+        return patch_invalid_action(action, context, "component is not in the immutable cell")
             .await;
     }
 
@@ -738,7 +739,7 @@ async fn reconcile_component_logs(
     let matching = pods
         .list(&ListParams::default().labels(&format!(
             "{COMPONENT_LABEL}={},{INSTANCE_LABEL}={}",
-            request.component, lab.spec.instance_key
+            request.component, cell.spec.instance_key
         )))
         .await?;
     let artifact = component_logs::component_log_artifact(
@@ -753,13 +754,13 @@ async fn reconcile_component_logs(
     patch_action_status(
         action,
         context,
-        ProofstormLabActionStatus {
+        ProofstormCellActionStatus {
             phase: ActionPhase::Succeeded,
             observed_generation: action.metadata.generation,
             started_at_unix: Some(observed),
             completed_at_unix: Some(observed),
             artifact: Some(artifact),
-            ..ProofstormLabActionStatus::default()
+            ..ProofstormCellActionStatus::default()
         },
     )
     .await?;
@@ -772,11 +773,11 @@ mod private_transfer;
 const LIVE_EXEC_OUTPUT_LIMIT: usize = 256 * 1024;
 
 async fn reconcile_component_exec_live(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     context: &Context,
 ) -> Result<Action, Error> {
-    native_exec::reconcile(action, lab, context).await
+    native_exec::reconcile(action, cell, context).await
 }
 
 async fn read_bounded_output(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, bool), Error> {
@@ -809,39 +810,39 @@ fn exec_exit_code(status: Option<&k8s_openapi::apimachinery::pkg::apis::meta::v1
     reason = "network fault reconciliation keeps journal validation, policy application, and terminal proof contiguous"
 )]
 async fn reconcile_network_fault(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     context: &Context,
 ) -> Result<Action, Error> {
     let expected_capability = match action.spec.action {
-        LabAction::NetworkPartition(_) => proofstorm_core::Capability::NetworkPartition,
-        LabAction::NetworkHeal(_) => proofstorm_core::Capability::NetworkHeal,
+        CellAction::NetworkPartition(_) => proofstorm_core::Capability::NetworkPartition,
+        CellAction::NetworkHeal(_) => proofstorm_core::Capability::NetworkHeal,
         _ => return Err(Error::ControllerInvariant("expected network fault action")),
     };
     if action.spec.capability != expected_capability {
         return patch_invalid_action(action, context, "network fault capability mismatch").await;
     }
-    if action.spec.lab_name != lab.name_any()
-        || action.spec.workspace_id != lab.spec.workspace_id
-        || action.spec.instance_id != lab.spec.instance_id
-        || action.spec.instance_key != lab.spec.instance_key
+    if action.spec.cell_name != cell.name_any()
+        || action.spec.workspace_id != cell.spec.workspace_id
+        || action.spec.instance_id != cell.spec.instance_id
+        || action.spec.instance_key != cell.spec.instance_key
     {
         return patch_invalid_action(action, context, "network fault identity mismatch").await;
     }
 
     let actions = list_instance_actions(action, context).await?;
     let (from_component, to_component, healed) = match &action.spec.action {
-        LabAction::NetworkPartition(request) => {
+        CellAction::NetworkPartition(request) => {
             if request.from_component == request.to_component
-                || !lab
+                || !cell
                     .spec
-                    .lab
+                    .cell
                     .components
                     .iter()
                     .any(|component| component.id == request.from_component)
-                || !lab
+                || !cell
                     .spec
-                    .lab
+                    .cell
                     .components
                     .iter()
                     .any(|component| component.id == request.to_component)
@@ -849,7 +850,7 @@ async fn reconcile_network_fault(
                 return patch_invalid_action(
                     action,
                     context,
-                    "partition endpoints must be distinct components in the immutable lab",
+                    "partition endpoints must be distinct components in the immutable cell",
                 )
                 .await;
             }
@@ -859,7 +860,7 @@ async fn reconcile_network_fault(
                 false,
             )
         }
-        LabAction::NetworkHeal(request) => {
+        CellAction::NetworkHeal(request) => {
             let partition = actions.iter().find(|candidate| {
                 candidate.spec.sequence < action.spec.sequence
                     && candidate.spec.operation_id == request.partition_operation_id
@@ -867,17 +868,17 @@ async fn reconcile_network_fault(
                         .status
                         .as_ref()
                         .is_some_and(|status| status.phase == ActionPhase::Succeeded)
-                    && matches!(candidate.spec.action, LabAction::NetworkPartition(_))
+                    && matches!(candidate.spec.action, CellAction::NetworkPartition(_))
             });
             let Some(partition) = partition else {
                 return patch_invalid_action(
                     action,
                     context,
-                    "heal requires a prior succeeded partition in this lab",
+                    "heal requires a prior succeeded partition in this cell",
                 )
                 .await;
             };
-            let LabAction::NetworkPartition(partition) = &partition.spec.action else {
+            let CellAction::NetworkPartition(partition) = &partition.spec.action else {
                 unreachable!();
             };
             (
@@ -893,11 +894,11 @@ async fn reconcile_network_fault(
         patch_action_status(
             action,
             context,
-            ProofstormLabActionStatus {
+            ProofstormCellActionStatus {
                 phase: ActionPhase::Running,
                 observed_generation: action.metadata.generation,
                 started_at_unix: Some(now_unix()),
-                ..ProofstormLabActionStatus::default()
+                ..ProofstormCellActionStatus::default()
             },
         )
         .await?;
@@ -905,10 +906,10 @@ async fn reconcile_network_fault(
     }
 
     let active =
-        apply_network_fault_policies(lab, &actions, Some(action.spec.sequence), context).await?;
+        apply_network_fault_policies(cell, &actions, Some(action.spec.sequence), context).await?;
     let partition_operation_id = match &action.spec.action {
-        LabAction::NetworkPartition(_) => &action.spec.operation_id,
-        LabAction::NetworkHeal(request) => &request.partition_operation_id,
+        CellAction::NetworkPartition(_) => &action.spec.operation_id,
+        CellAction::NetworkHeal(request) => &request.partition_operation_id,
         _ => unreachable!(),
     };
     let expected_active = !healed;
@@ -924,7 +925,7 @@ async fn reconcile_network_fault(
     patch_action_status(
         action,
         context,
-        ProofstormLabActionStatus {
+        ProofstormCellActionStatus {
             phase: ActionPhase::Succeeded,
             observed_generation: action.metadata.generation,
             started_at_unix: action
@@ -941,7 +942,7 @@ async fn reconcile_network_fault(
                 "active_partition_count": active.len(),
                 "sequence": action.spec.sequence,
             }))),
-            ..ProofstormLabActionStatus::default()
+            ..ProofstormCellActionStatus::default()
         },
     )
     .await?;
@@ -949,14 +950,14 @@ async fn reconcile_network_fault(
 }
 
 async fn list_instance_actions(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
-) -> Result<Vec<ProofstormLabAction>, Error> {
+) -> Result<Vec<ProofstormCellAction>, Error> {
     let namespace = action
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
     Ok(
-        Api::<ProofstormLabAction>::namespaced(context.client.clone(), &namespace)
+        Api::<ProofstormCellAction>::namespaced(context.client.clone(), &namespace)
             .list(&ListParams::default().labels(&format!(
                 "proofstorm.dev/instance={}",
                 action.spec.instance_key
@@ -967,7 +968,7 @@ async fn list_instance_actions(
 }
 
 fn active_network_partitions(
-    actions: &[ProofstormLabAction],
+    actions: &[ProofstormCellAction],
     maximum_sequence: Option<u64>,
 ) -> BTreeMap<String, (String, String)> {
     let mut ordered = actions.iter().collect::<Vec<_>>();
@@ -982,13 +983,13 @@ fn active_network_partitions(
             continue;
         }
         match &action.spec.action {
-            LabAction::NetworkPartition(request) => {
+            CellAction::NetworkPartition(request) => {
                 active.insert(
                     action.spec.operation_id.clone(),
                     (request.from_component.clone(), request.to_component.clone()),
                 );
             }
-            LabAction::NetworkHeal(request) => {
+            CellAction::NetworkHeal(request) => {
                 active.remove(&request.partition_operation_id);
             }
             _ => {}
@@ -998,15 +999,15 @@ fn active_network_partitions(
 }
 
 async fn apply_network_fault_policies(
-    lab: &ProofstormLab,
-    actions: &[ProofstormLabAction],
+    cell: &ProofstormCell,
+    actions: &[ProofstormCellAction],
     maximum_sequence: Option<u64>,
     context: &Context,
 ) -> Result<BTreeMap<String, (String, String)>, Error> {
     let active = active_network_partitions(actions, maximum_sequence);
-    let mut exclusions = lab
+    let mut exclusions = cell
         .spec
-        .lab
+        .cell
         .components
         .iter()
         .map(|component| (component.id.clone(), BTreeSet::new()))
@@ -1019,11 +1020,11 @@ async fn apply_network_fault_policies(
             peers.insert(from.clone());
         }
     }
-    let namespace = instance_namespace(&lab.spec.instance_key);
+    let namespace = instance_namespace(&cell.spec.instance_key);
     let policies = Api::<NetworkPolicy>::namespaced(context.client.clone(), &namespace);
     for (component, peers) in exclusions {
         let peers = peers.into_iter().collect::<Vec<_>>();
-        let policy = render_component_network_policy(&lab.spec.instance_key, &component, &peers)
+        let policy = render_component_network_policy(&cell.spec.instance_key, &component, &peers)
             .map_err(|_| Error::ControllerInvariant("network policy did not serialize"))?;
         policies
             .patch(
@@ -1037,7 +1038,7 @@ async fn apply_network_fault_policies(
 }
 
 async fn patch_invalid_action(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
     message: &str,
 ) -> Result<Action, Error> {
@@ -1045,7 +1046,7 @@ async fn patch_invalid_action(
 }
 
 async fn patch_action_failure(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
     code: &str,
     message: &str,
@@ -1053,7 +1054,7 @@ async fn patch_action_failure(
     patch_action_status(
         action,
         context,
-        ProofstormLabActionStatus {
+        ProofstormCellActionStatus {
             phase: ActionPhase::Failed,
             observed_generation: action.metadata.generation,
             started_at_unix: action
@@ -1064,7 +1065,7 @@ async fn patch_action_failure(
             error: Some(status_object(
                 serde_json::json!({"code": code, "message": message}),
             )),
-            ..ProofstormLabActionStatus::default()
+            ..ProofstormCellActionStatus::default()
         },
     )
     .await?;
@@ -1078,7 +1079,7 @@ const fn is_terminal_action(phase: ActionPhase) -> bool {
     )
 }
 
-fn action_execution_started(status: Option<&ProofstormLabActionStatus>) -> bool {
+fn action_execution_started(status: Option<&ProofstormCellActionStatus>) -> bool {
     status.is_some_and(|status| {
         status.phase == ActionPhase::Running
             || status.job_name.is_some()
@@ -1087,11 +1088,11 @@ fn action_execution_started(status: Option<&ProofstormLabActionStatus>) -> bool 
 }
 
 fn lost_action_job_status(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     job_name: String,
     completed_at_unix: i64,
-) -> ProofstormLabActionStatus {
-    ProofstormLabActionStatus {
+) -> ProofstormCellActionStatus {
+    ProofstormCellActionStatus {
         phase: ActionPhase::Failed,
         observed_generation: action.metadata.generation,
         job_name: action
@@ -1108,7 +1109,7 @@ fn lost_action_job_status(
             "code": "action_job_lost",
             "message": "controller-owned Job disappeared after execution began; automatic replay refused",
         }))),
-        ..ProofstormLabActionStatus::default()
+        ..ProofstormCellActionStatus::default()
     }
 }
 
@@ -1117,20 +1118,20 @@ fn lost_action_job_status(
     reason = "cancellation reconciliation keeps primary deletion, private cleanup, and terminal proof contiguous"
 )]
 async fn reconcile_action_cancellation(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
 ) -> Result<Action, Error> {
     if matches!(
         action.spec.action,
-        LabAction::NodeStart(_)
-            | LabAction::NodeStop(_)
-            | LabAction::NodeRestart(_)
-            | LabAction::ComponentStart(_)
-            | LabAction::ComponentStop(_)
-            | LabAction::ComponentRestart(_)
-            | LabAction::ComponentExecLive(_)
-            | LabAction::NetworkPartition(_)
-            | LabAction::NetworkHeal(_)
+        CellAction::NodeStart(_)
+            | CellAction::NodeStop(_)
+            | CellAction::NodeRestart(_)
+            | CellAction::ComponentStart(_)
+            | CellAction::ComponentStop(_)
+            | CellAction::ComponentRestart(_)
+            | CellAction::ComponentExecLive(_)
+            | CellAction::NetworkPartition(_)
+            | CellAction::NetworkHeal(_)
     ) && action_execution_started(action.status.as_ref())
     {
         return patch_action_failure(
@@ -1158,9 +1159,9 @@ async fn reconcile_action_cancellation(
     let control_namespace = action
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
-    let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &control_namespace);
-    let lab = labs.get(&action.spec.lab_name).await?;
-    if let Some(cleanup) = render_lab_action_cleanup_job(action, &lab)? {
+    let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
+    let cell = cells.get(&action.spec.cell_name).await?;
+    if let Some(cleanup) = render_cell_action_cleanup_job(action, &cell)? {
         let cleanup_name = cleanup.name_any();
         let Some(observed) = jobs.get_opt(&cleanup_name).await? else {
             jobs.patch(
@@ -1185,7 +1186,7 @@ async fn reconcile_action_cancellation(
             patch_action_status(
                 action,
                 context,
-                ProofstormLabActionStatus {
+                ProofstormCellActionStatus {
                     phase: ActionPhase::Failed,
                     observed_generation: action.metadata.generation,
                     job_name: Some(cleanup_name),
@@ -1198,7 +1199,7 @@ async fn reconcile_action_cancellation(
                         "code": "cancellation_cleanup_failed",
                         "message": "private action state could not be proven absent",
                     }))),
-                    ..ProofstormLabActionStatus::default()
+                    ..ProofstormCellActionStatus::default()
                 },
             )
             .await?;
@@ -1215,7 +1216,7 @@ async fn reconcile_action_cancellation(
     patch_action_status(
         action,
         context,
-        ProofstormLabActionStatus {
+        ProofstormCellActionStatus {
             phase: ActionPhase::Cancelled,
             observed_generation: action.metadata.generation,
             job_name: action
@@ -1227,7 +1228,7 @@ async fn reconcile_action_cancellation(
             error: Some(status_object(
                 serde_json::json!({"code": "action_cancelled"}),
             )),
-            ..ProofstormLabActionStatus::default()
+            ..ProofstormCellActionStatus::default()
         },
     )
     .await?;
@@ -1285,21 +1286,21 @@ fn action_admission_failure(error: &ActionAdmissionError) -> BTreeMap<String, se
 }
 
 async fn patch_action_status(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
-    status: ProofstormLabActionStatus,
+    status: ProofstormCellActionStatus,
 ) -> Result<(), Error> {
     if action.status.as_ref() == Some(&status) {
         return Ok(());
     }
-    enforce_status_budget("ProofstormLabAction", &status, MAX_ACTION_STATUS_BYTES)?;
+    enforce_status_budget("ProofstormCellAction", &status, MAX_ACTION_STATUS_BYTES)?;
     let namespace = action
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
-    let actions = Api::<ProofstormLabAction>::namespaced(context.client.clone(), &namespace);
+    let actions = Api::<ProofstormCellAction>::namespaced(context.client.clone(), &namespace);
     let patch = serde_json::json!({
         "apiVersion": "proofstorm.dev/v1alpha1",
-        "kind": "ProofstormLabAction",
+        "kind": "ProofstormCellAction",
         "status": status,
     });
     actions
@@ -1312,30 +1313,30 @@ async fn patch_action_status(
     Ok(())
 }
 
-async fn reconcile(lab: Arc<ProofstormLab>, context: Arc<Context>) -> Result<Action, Error> {
-    let namespace = lab
+async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<Action, Error> {
+    let namespace = cell
         .namespace()
-        .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
-    let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &namespace);
-    finalizer(&labs, FINALIZER, lab, |event| async {
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+    let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace);
+    finalizer(&cells, FINALIZER, cell, |event| async {
         match event {
-            Event::Apply(lab) => {
-                let result = apply(lab.clone(), &context).await;
+            Event::Apply(cell) => {
+                let result = apply(cell.clone(), &context).await;
                 if let Err(Error::Kube(kube::Error::Api(error))) = &result {
                     if matches!(error.code, 400 | 403 | 422) {
-                        let mut status = lab.status.clone().unwrap_or_default();
-                        status.phase = LabPhase::Blocked;
+                        let mut status = cell.status.clone().unwrap_or_default();
+                        status.phase = CellPhase::Blocked;
                         status.message = Some(format!(
                             "Reconciliation blocked (Kubernetes {}): {}",
                             error.code,
                             error.message.chars().take(1024).collect::<String>()
                         ));
-                        let _ = patch_status(&lab, &context, status).await;
+                        let _ = patch_status(&cell, &context, status).await;
                     }
                 }
                 result
             }
-            Event::Cleanup(lab) => cleanup(lab, &context).await,
+            Event::Cleanup(cell) => cleanup(cell, &context).await,
         }
     })
     .await
@@ -1371,15 +1372,15 @@ async fn run_protocol_probe_scheduler(context: Arc<Context>) {
 }
 
 async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Error> {
-    let labs = Api::<ProofstormLab>::all(context.client.clone())
+    let cells = Api::<ProofstormCell>::all(context.client.clone())
         .list(&ListParams::default())
         .await?;
     let backend_registry = default_backend_registry();
     let mut candidate_counts = BTreeMap::<String, usize>::new();
-    for lab in &labs.items {
-        if protocol_probe_candidate(lab, backend_registry) {
+    for cell in &cells.items {
+        if protocol_probe_candidate(cell, backend_registry) {
             *candidate_counts
-                .entry(lab.spec.instance_key.clone())
+                .entry(cell.spec.instance_key.clone())
                 .or_default() += 1;
         }
     }
@@ -1387,17 +1388,17 @@ async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Erro
         .into_iter()
         .filter_map(|(instance_key, count)| (count == 1).then_some(instance_key));
     let schedule = schedule_protocol_probers(candidates, now_unix());
-    for lab in &labs.items {
+    for cell in &cells.items {
         let active = schedule
             .active_instance_keys
-            .contains(&lab.spec.instance_key);
+            .contains(&cell.spec.instance_key);
         if !active
-            && (protocol_probe_candidate(lab, backend_registry)
-                || lab
+            && (protocol_probe_candidate(cell, backend_registry)
+                || cell
                     .annotations()
                     .contains_key(PROTOCOL_PROBER_LEASE_ANNOTATION))
         {
-            patch_lab_protocol_probe_lease(lab, "inactive", context).await?;
+            patch_cell_protocol_probe_lease(cell, "inactive", context).await?;
         }
     }
     let deployments = Api::<Deployment>::all(context.client.clone())
@@ -1436,12 +1437,12 @@ async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Erro
             patch_protocol_prober_lease(deployment, 1, &schedule.lease_id, context).await?;
         }
     }
-    for lab in &labs.items {
+    for cell in &cells.items {
         if schedule
             .active_instance_keys
-            .contains(&lab.spec.instance_key)
+            .contains(&cell.spec.instance_key)
         {
-            patch_lab_protocol_probe_lease(lab, &schedule.lease_id, context).await?;
+            patch_cell_protocol_probe_lease(cell, &schedule.lease_id, context).await?;
         }
     }
     Ok(())
@@ -1461,24 +1462,24 @@ fn unscheduled_protocol_prober_exists(
 }
 
 fn protocol_probe_candidate(
-    lab: &ProofstormLab,
+    cell: &ProofstormCell,
     backend_registry: &BackendContractRegistry,
 ) -> bool {
-    if lab.metadata.deletion_timestamp.is_some()
-        || lab
+    if cell.metadata.deletion_timestamp.is_some()
+        || cell
             .status
             .as_ref()
-            .is_some_and(|status| status.phase == LabPhase::Closing)
+            .is_some_and(|status| status.phase == CellPhase::Closing)
     {
         return false;
     }
-    let count = lab
+    let count = cell
         .spec
-        .lab
+        .cell
         .components
         .iter()
         .try_fold(0_usize, |count, component| {
-            let lock = lab
+            let lock = cell
                 .spec
                 .lock
                 .entries
@@ -1488,7 +1489,7 @@ fn protocol_probe_candidate(
             (backend.kind == component.kind)
                 .then_some(count + usize::from(backend.protocol_probe.is_some()))
         });
-    count.is_some_and(|count| (1..=MAX_PROTOCOL_PROBES_PER_LAB).contains(&count))
+    count.is_some_and(|count| (1..=MAX_PROTOCOL_PROBES_PER_CELL).contains(&count))
 }
 
 async fn patch_protocol_prober_lease(
@@ -1541,24 +1542,24 @@ async fn patch_protocol_prober_lease(
     Ok(())
 }
 
-async fn patch_lab_protocol_probe_lease(
-    lab: &ProofstormLab,
+async fn patch_cell_protocol_probe_lease(
+    cell: &ProofstormCell,
     lease_id: &str,
     context: &Context,
 ) -> Result<(), Error> {
-    if lab
+    if cell
         .annotations()
         .get(PROTOCOL_PROBER_LEASE_ANNOTATION)
         .is_some_and(|current| current == lease_id)
     {
         return Ok(());
     }
-    let namespace = lab
+    let namespace = cell
         .namespace()
-        .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
-    Api::<ProofstormLab>::namespaced(context.client.clone(), &namespace)
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+    Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace)
         .patch(
-            &lab.name_any(),
+            &cell.name_any(),
             &PatchParams::default(),
             &Patch::Merge(serde_json::json!({
                 "metadata": {
@@ -1876,45 +1877,45 @@ async fn ensure_generated_keycloak_secret(
     clippy::too_many_lines,
     reason = "one reconciliation pass visibly applies the complete bounded instance inventory"
 )]
-async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
-    validate_instance_key(&lab.spec.instance_key)?;
-    private_transfer::expire(&lab)?;
-    let workloads = render_lab(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
+async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, Error> {
+    validate_instance_key(&cell.spec.instance_key)?;
+    private_transfer::expire(&cell)?;
+    let workloads = render_cell(
+        &cell.spec.instance_key,
+        &cell.spec.revision_digest,
+        &cell.spec.cell,
+        &cell.spec.lock,
     )?;
     // Persist the intended inventory before the first component write. If the process
     // stops halfway through, the next edit can still identify and prune partial additions.
-    let desired_generation = lab
+    let desired_generation = cell
         .annotations()
         .get("proofstorm.dev/desired-generation")
         .and_then(|g| g.parse().ok())
         .unwrap_or(1);
-    let mut lab = lab.as_ref().clone();
-    if lab.status.as_ref().is_none_or(|s| {
-        s.observed_revision_digest != lab.spec.revision_digest
+    let mut cell = cell.as_ref().clone();
+    if cell.status.as_ref().is_none_or(|s| {
+        s.observed_revision_digest != cell.spec.revision_digest
             || s.observed_desired_generation != desired_generation
     }) {
-        let mut status = lab.status.clone().unwrap_or_default();
+        let mut status = cell.status.clone().unwrap_or_default();
         for resource in workloads.inventory() {
             if !status.inventory.contains(&resource) {
                 status.inventory.push(resource);
             }
         }
-        status.phase = LabPhase::Pending;
-        patch_status(&lab, context, status.clone()).await?;
-        lab.status = Some(status);
+        status.phase = CellPhase::Pending;
+        patch_status(&cell, context, status.clone()).await?;
+        cell.status = Some(status);
     }
-    let lab = Arc::new(lab);
-    let rendered = render_lab_security_spine(
-        &lab.spec.instance_key,
-        lab.spec.lab.components.len(),
-        lab.status.as_ref().map_or(0, |s| s.retained_storage.len()),
+    let cell = Arc::new(cell);
+    let rendered = render_cell_security_spine(
+        &cell.spec.instance_key,
+        cell.spec.cell.components.len(),
+        cell.status.as_ref().map_or(0, |s| s.retained_storage.len()),
     );
     let client = context.client.clone();
-    let namespace_name = instance_namespace(&lab.spec.instance_key);
+    let namespace_name = instance_namespace(&cell.spec.instance_key);
     let patch = PatchParams::apply(FIELD_MANAGER).force();
 
     Api::<Namespace>::all(client.clone())
@@ -2058,9 +2059,9 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     }
     let policies = Api::<NetworkPolicy>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.network_policies {
-        if lab
+        if cell
             .spec
-            .lab
+            .cell
             .components
             .iter()
             .any(|component| resource.metadata.name.as_deref() == Some(&component.id))
@@ -2075,33 +2076,33 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
             )
             .await?;
     }
-    let control_namespace = lab
+    let control_namespace = cell
         .namespace()
-        .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let network_actions =
-        Api::<ProofstormLabAction>::namespaced(context.client.clone(), &control_namespace)
+        Api::<ProofstormCellAction>::namespaced(context.client.clone(), &control_namespace)
             .list(&ListParams::default().labels(&format!(
                 "proofstorm.dev/instance={}",
-                lab.spec.instance_key
+                cell.spec.instance_key
             )))
             .await?;
-    apply_network_fault_policies(&lab, &network_actions.items, None, context).await?;
+    apply_network_fault_policies(&cell, &network_actions.items, None, context).await?;
 
-    let (pruned, retained, retained_storage) = lab_updates::prune(&lab, context).await?;
+    let (pruned, retained, retained_storage) = cell_updates::prune(&cell, context).await?;
     let mut inventory = workloads.inventory();
     inventory.extend(retained);
     let inventory_digest = proofstorm_core::digest_json(&inventory);
-    let inventory_name = format!("proofstorm-inventory-{}", lab.spec.instance_key);
+    let inventory_name = format!("proofstorm-inventory-{}", cell.spec.instance_key);
     let inventory_resource = serde_json::json!({
         "apiVersion": "v1", "kind": "ConfigMap",
         "metadata": {"name": inventory_name, "namespace": namespace_name,
-            "labels": {"proofstorm.dev/instance": lab.spec.instance_key, "proofstorm.dev/inventory": "true"}},
+            "labels": {"proofstorm.dev/instance": cell.spec.instance_key, "proofstorm.dev/inventory": "true"}},
         "data": {"inventory.json": serde_json::to_string(&inventory).expect("inventory serializes"),
             "inventoryDigest": inventory_digest}
     });
     if let Some(old) = configs.get_opt(&inventory_name).await? {
         if old.immutable == Some(true)
-            && old.labels().get("proofstorm.dev/instance") == Some(&lab.spec.instance_key)
+            && old.labels().get("proofstorm.dev/instance") == Some(&cell.spec.instance_key)
         {
             configs
                 .delete(
@@ -2123,7 +2124,7 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
 
     let instance_resources = ListParams::default().labels(&format!(
         "proofstorm.dev/instance={}",
-        lab.spec.instance_key
+        cell.spec.instance_key
     ));
     let observed_deployments = deployments.list(&instance_resources).await?;
     let observed_stateful_sets = stateful_sets.list(&instance_resources).await?;
@@ -2143,10 +2144,10 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
         endpoint_slices: &endpoint_slices.items,
         pods: &observed_pods.items,
     };
-    let previous_components = lab
+    let previous_components = cell
         .status
         .as_ref()
-        .filter(|status| status.observed_revision_digest == lab.spec.revision_digest)
+        .filter(|status| status.observed_revision_digest == cell.spec.revision_digest)
         .map_or(&[][..], |status| status.components.as_slice());
     let stopped_components =
         component_lifecycle::observed_stops(&workloads.plans, &observed_resources);
@@ -2175,31 +2176,31 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     });
 
     patch_status(
-        lab.as_ref(),
+        cell.as_ref(),
         context,
-        ProofstormLabStatus {
-            observed_desired_generation: lab
+        ProofstormCellStatus {
+            observed_desired_generation: cell
                 .annotations()
                 .get("proofstorm.dev/desired-generation")
                 .and_then(|g| g.parse().ok())
                 .unwrap_or(1),
             retained_storage,
             last_converged_revision: if ready {
-                Some(lab.spec.revision_digest.clone())
+                Some(cell.spec.revision_digest.clone())
             } else {
-                lab.status
+                cell.status
                     .as_ref()
                     .and_then(|s| s.last_converged_revision.clone())
             },
             phase: if ready {
-                LabPhase::Ready
+                CellPhase::Ready
             } else {
-                LabPhase::Pending
+                CellPhase::Pending
             },
             instance_namespace: Some(namespace_name),
-            observed_generation: lab.metadata.generation,
-            observed_revision_digest: lab.spec.revision_digest.clone(),
-            observed_protocol_probe_lease: lab
+            observed_generation: cell.metadata.generation,
+            observed_revision_digest: cell.spec.revision_digest.clone(),
+            observed_protocol_probe_lease: cell
                 .annotations()
                 .get(PROTOCOL_PROBER_LEASE_ANNOTATION)
                 .cloned(),
@@ -2212,9 +2213,9 @@ async fn apply(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Err
     )
     .await?;
     Ok(if ready {
-        jittered_requeue(&lab.spec.instance_key, 30, 10)
+        jittered_requeue(&cell.spec.instance_key, 30, 10)
     } else {
-        jittered_requeue(&lab.spec.instance_key, 3, 2)
+        jittered_requeue(&cell.spec.instance_key, 3, 2)
     })
 }
 
@@ -2276,39 +2277,39 @@ fn deployment_apply_document(deployment: &Deployment) -> serde_json::Value {
     document
 }
 
-async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, Error> {
-    private_transfer::close(&lab)?;
-    let instance_namespace = instance_namespace(&lab.spec.instance_key);
+async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, Error> {
+    private_transfer::close(&cell)?;
+    let instance_namespace = instance_namespace(&cell.spec.instance_key);
     patch_status(
-        lab.as_ref(),
+        cell.as_ref(),
         context,
-        ProofstormLabStatus {
-            observed_desired_generation: lab
+        ProofstormCellStatus {
+            observed_desired_generation: cell
                 .annotations()
                 .get("proofstorm.dev/desired-generation")
                 .and_then(|g| g.parse().ok())
                 .unwrap_or(1),
             last_converged_revision: None,
             retained_storage: BTreeMap::new(),
-            phase: LabPhase::Closing,
+            phase: CellPhase::Closing,
             instance_namespace: Some(instance_namespace.clone()),
-            observed_generation: lab.metadata.generation,
-            observed_revision_digest: lab.status.as_ref().map_or_else(String::new, |status| {
+            observed_generation: cell.metadata.generation,
+            observed_revision_digest: cell.status.as_ref().map_or_else(String::new, |status| {
                 status.observed_revision_digest.clone()
             }),
-            observed_protocol_probe_lease: lab
+            observed_protocol_probe_lease: cell
                 .status
                 .as_ref()
                 .and_then(|status| status.observed_protocol_probe_lease.clone()),
-            components: lab
+            components: cell
                 .status
                 .as_ref()
                 .map_or_else(Vec::new, |status| status.components.clone()),
-            inventory: lab
+            inventory: cell
                 .status
                 .as_ref()
                 .map_or_else(Vec::new, |status| status.inventory.clone()),
-            inventory_digest: lab
+            inventory_digest: cell
                 .status
                 .as_ref()
                 .and_then(|status| status.inventory_digest.clone()),
@@ -2318,15 +2319,15 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
     )
     .await?;
 
-    let control_namespace = lab
+    let control_namespace = cell
         .namespace()
-        .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let actions =
-        Api::<ProofstormLabAction>::namespaced(context.client.clone(), &control_namespace);
+        Api::<ProofstormCellAction>::namespaced(context.client.clone(), &control_namespace);
     let runtime_actions = actions
         .list(&ListParams::default().labels(&format!(
             "proofstorm.dev/instance={}",
-            lab.spec.instance_key
+            cell.spec.instance_key
         )))
         .await?;
     if !runtime_actions.items.is_empty() {
@@ -2340,7 +2341,7 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
                 Err(error) => return Err(error.into()),
             }
         }
-        return Err(Error::ActionCleanupPending(lab.spec.instance_key.clone()));
+        return Err(Error::ActionCleanupPending(cell.spec.instance_key.clone()));
     }
 
     let namespaces = Api::<Namespace>::all(context.client.clone());
@@ -2355,37 +2356,38 @@ async fn cleanup(lab: Arc<ProofstormLab>, context: &Context) -> Result<Action, E
         }
     }
 
-    private_transfer::remove_closed(&lab)?;
-    write_teardown_receipt(lab.as_ref(), context, &instance_namespace).await?;
+    private_transfer::remove_closed(&cell)?;
+    write_teardown_receipt(cell.as_ref(), context, &instance_namespace).await?;
     Ok(Action::await_change())
 }
 
 async fn patch_status(
-    lab: &ProofstormLab,
+    cell: &ProofstormCell,
     context: &Context,
-    status: ProofstormLabStatus,
+    status: ProofstormCellStatus,
 ) -> Result<(), Error> {
-    if !lab_status_update_required(lab.status.as_ref(), &status) {
+    if !cell_status_update_required(cell.status.as_ref(), &status) {
         return Ok(());
     }
-    enforce_status_budget("ProofstormLab", &status, MAX_LAB_STATUS_BYTES)?;
-    let namespace = lab
+    enforce_status_budget("ProofstormCell", &status, MAX_CELL_STATUS_BYTES)?;
+    let namespace = cell
         .namespace()
-        .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
-    let labs = Api::<ProofstormLab>::namespaced(context.client.clone(), &namespace);
-    let patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormLab", "status": status});
-    labs.patch_status(
-        &lab.name_any(),
-        &PatchParams::apply(FIELD_MANAGER).force(),
-        &Patch::Apply(patch),
-    )
-    .await?;
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+    let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace);
+    let patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status});
+    cells
+        .patch_status(
+            &cell.name_any(),
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(patch),
+        )
+        .await?;
     Ok(())
 }
 
-fn lab_status_update_required(
-    current: Option<&ProofstormLabStatus>,
-    observed: &ProofstormLabStatus,
+fn cell_status_update_required(
+    current: Option<&ProofstormCellStatus>,
+    observed: &ProofstormCellStatus,
 ) -> bool {
     current != Some(observed)
 }
@@ -2410,15 +2412,15 @@ fn enforce_status_budget<T: serde::Serialize>(
 }
 
 async fn write_teardown_receipt(
-    lab: &ProofstormLab,
+    cell: &ProofstormCell,
     context: &Context,
     instance_namespace: &str,
 ) -> Result<(), Error> {
-    let namespace = lab
+    let namespace = cell
         .namespace()
-        .ok_or_else(|| Error::MissingNamespace(lab.name_any()))?;
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let receipts = Api::<ConfigMap>::namespaced(context.client.clone(), &namespace);
-    let name = format!("proofstorm-teardown-{}", lab.spec.instance_key);
+    let name = format!("proofstorm-teardown-{}", cell.spec.instance_key);
     let receipt = serde_json::json!({
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -2427,15 +2429,15 @@ async fn write_teardown_receipt(
             "namespace": namespace,
             "labels": {
                 "proofstorm.dev/receipt": "teardown",
-                "proofstorm.dev/instance": lab.spec.instance_key
+                "proofstorm.dev/instance": cell.spec.instance_key
             }
         },
         "data": {
-            "instanceId": lab.spec.instance_id,
-            "labName": lab.name_any(),
-            "revisionDigest": lab.spec.revision_digest,
-            "lockDigest": lab.spec.lock.digest,
-            "inventoryDigest": lab.status.as_ref().and_then(|status| status.inventory_digest.clone()).unwrap_or_default(),
+            "instanceId": cell.spec.instance_id,
+            "cellName": cell.name_any(),
+            "revisionDigest": cell.spec.revision_digest,
+            "lockDigest": cell.spec.lock.digest,
+            "inventoryDigest": cell.status.as_ref().and_then(|status| status.inventory_digest.clone()).unwrap_or_default(),
             "instanceNamespace": instance_namespace,
             "verifiedAbsent": "true"
         }
@@ -2472,9 +2474,9 @@ fn validate_instance_key(key: &str) -> Result<(), Error> {
     clippy::needless_pass_by_value,
     reason = "kube runtime requires an owned Arc in the error-policy callback signature"
 )]
-fn error_policy(lab: Arc<ProofstormLab>, error: &Error, _context: Arc<Context>) -> Action {
+fn error_policy(cell: Arc<ProofstormCell>, error: &Error, _context: Arc<Context>) -> Action {
     eprintln!("retryable controller error: {error}");
-    jittered_requeue(&lab.spec.instance_key, 5, 4)
+    jittered_requeue(&cell.spec.instance_key, 5, 4)
 }
 
 #[allow(
@@ -2482,7 +2484,7 @@ fn error_policy(lab: Arc<ProofstormLab>, error: &Error, _context: Arc<Context>) 
     reason = "kube runtime requires an owned Arc in the error-policy callback signature"
 )]
 fn action_error_policy(
-    action: Arc<ProofstormLabAction>,
+    action: Arc<ProofstormCellAction>,
     error: &Error,
     _context: Arc<Context>,
 ) -> Action {
@@ -2531,10 +2533,10 @@ fn termination_message(pod: &Pod, target: &str) -> Option<String> {
 }
 
 fn authentication_conformance_artifact(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
-    let LabAction::AuthenticationConformance(request) = &action.spec.action else {
+    let CellAction::AuthenticationConformance(request) = &action.spec.action else {
         return None;
     };
     let message = pods
@@ -2595,13 +2597,13 @@ struct PrivateAuthenticationProtectedSpendResult {
 }
 
 async fn authentication_protected_spend_artifact(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     pods: &[Pod],
     context: &Context,
 ) -> Result<Option<std::collections::BTreeMap<String, serde_json::Value>>, Error> {
     if !matches!(
         action.spec.action,
-        LabAction::AuthenticationProtectedSpend(_)
+        CellAction::AuthenticationProtectedSpend(_)
     ) {
         return Ok(None);
     }
@@ -2625,10 +2627,10 @@ async fn authentication_protected_spend_artifact(
 }
 
 fn validate_authentication_protected_spend_result(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     message: &str,
 ) -> Option<(AuthenticationProtectedSpendResult, Option<String>)> {
-    let LabAction::AuthenticationProtectedSpend(request) = &action.spec.action else {
+    let CellAction::AuthenticationProtectedSpend(request) = &action.spec.action else {
         return None;
     };
     let result = serde_json::from_str::<PrivateAuthenticationProtectedSpendResult>(message).ok()?;
@@ -2679,7 +2681,7 @@ fn validate_authentication_protected_spend_result(
 }
 
 async fn persist_authentication_session(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     spent_bat: &str,
     context: &Context,
 ) -> Result<(), Error> {
@@ -2729,10 +2731,10 @@ async fn persist_authentication_session(
 }
 
 fn authentication_replay_artifact(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
-    let LabAction::AuthenticationReplay(request) = &action.spec.action else {
+    let CellAction::AuthenticationReplay(request) = &action.spec.action else {
         return None;
     };
     let message = pods
@@ -2836,13 +2838,13 @@ async fn native_exec_target_readiness(
 async fn native_exec_artifact(
     pods: &Api<Pod>,
     endpoint_slices: &Api<EndpointSlice>,
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     observed: &[Pod],
 ) -> Result<Option<std::collections::BTreeMap<String, serde_json::Value>>, kube::Error> {
     const LOG_LIMIT_BYTES: i64 = 20 * 1024;
     const ARTIFACT_TARGET_BYTES: usize = 30 * 1024;
 
-    let LabAction::ComponentForensics(request) = &action.spec.action else {
+    let CellAction::ComponentForensics(request) = &action.spec.action else {
         return Ok(None);
     };
     let Some((pod, metadata)) = observed.iter().find_map(|pod| {
@@ -3058,12 +3060,12 @@ mod tests {
         })
     }
 
-    fn protected_spend_action() -> ProofstormLabAction {
-        ProofstormLabAction::new(
+    fn protected_spend_action() -> ProofstormCellAction {
+        ProofstormCellAction::new(
             "op-auth-spend-resource",
-            proofstorm_kube::ProofstormLabActionSpec {
+            proofstorm_kube::ProofstormCellActionSpec {
                 access_scope: None,
-                lab_name: "lab-auth".into(),
+                cell_name: "cell-auth".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
@@ -3075,7 +3077,7 @@ mod tests {
                 request_digest: "sha256:request".into(),
                 capability: proofstorm_core::Capability::AuthenticationTest,
                 accepted_at_unix: 1,
-                action: LabAction::AuthenticationProtectedSpend(
+                action: CellAction::AuthenticationProtectedSpend(
                     proofstorm_kube::AuthenticationProtectedSpendAction {
                         mint: "mint".into(),
                         identity_provider: "identity".into(),
@@ -3432,14 +3434,14 @@ mod tests {
     fn execution_evidence_fences_missing_job_replay() {
         assert!(!action_execution_started(None));
         assert!(!action_execution_started(Some(
-            &ProofstormLabActionStatus::default()
+            &ProofstormCellActionStatus::default()
         )));
 
-        let running = ProofstormLabActionStatus {
+        let running = ProofstormCellActionStatus {
             phase: ActionPhase::Running,
             job_name: Some("action-1".into()),
             started_at_unix: Some(42),
-            ..ProofstormLabActionStatus::default()
+            ..ProofstormCellActionStatus::default()
         };
         assert!(action_execution_started(Some(&running)));
     }
@@ -3459,7 +3461,7 @@ mod tests {
 
     #[test]
     fn controller_policy_is_bounded_deterministic_and_desynchronized() {
-        assert_eq!(LAB_CONTROLLER_CONCURRENCY, 8);
+        assert_eq!(CELL_CONTROLLER_CONCURRENCY, 8);
         assert_eq!(ACTION_CONTROLLER_CONCURRENCY, 16);
         let first = deterministic_jitter_seconds("instance-one", 10);
         assert_eq!(first, deterministic_jitter_seconds("instance-one", 10));
@@ -3467,11 +3469,11 @@ mod tests {
         let offsets = (0..32)
             .map(|index| deterministic_jitter_seconds(&format!("instance-{index}"), 10))
             .collect::<BTreeSet<_>>();
-        assert!(offsets.len() > 1, "lab requeues must not synchronize");
+        assert!(offsets.len() > 1, "cell requeues must not synchronize");
     }
 
     #[test]
-    fn probe_rotation_drains_old_labs_before_activation() {
+    fn probe_rotation_drains_old_cells_before_activation() {
         let pod = |instance: &str| {
             let mut pod = Pod::default();
             pod.metadata.labels = Some(BTreeMap::from([
@@ -3496,7 +3498,7 @@ mod tests {
     }
 
     #[test]
-    fn lab_status_writes_are_semantic_and_budgeted_at_supported_scale() {
+    fn cell_status_writes_are_semantic_and_budgeted_at_supported_scale() {
         use proofstorm_core::{
             ComponentCondition, ComponentConditionReason, ComponentConditionState,
             ComponentConditionType, ComponentKind, ComponentStatus, InventoryEntry,
@@ -3544,11 +3546,11 @@ mod tests {
                 })
             })
             .collect();
-        let status = ProofstormLabStatus {
+        let status = ProofstormCellStatus {
             observed_desired_generation: 1,
             last_converged_revision: None,
             retained_storage: BTreeMap::new(),
-            phase: LabPhase::Pending,
+            phase: CellPhase::Pending,
             instance_namespace: Some("proofstorm-i0123456789012345678".into()),
             observed_generation: Some(1),
             observed_revision_digest: "sha256:revision".into(),
@@ -3557,19 +3559,19 @@ mod tests {
             inventory,
             inventory_digest: Some(format!("sha256:{}", "a".repeat(64))),
             message: Some("waiting for protocol component readiness".into()),
-            ..ProofstormLabStatus::default()
+            ..ProofstormCellStatus::default()
         };
 
-        enforce_status_budget("ProofstormLab", &status, MAX_LAB_STATUS_BYTES)
+        enforce_status_budget("ProofstormCell", &status, MAX_CELL_STATUS_BYTES)
             .expect("maximum supported status remains within budget");
-        assert!(!lab_status_update_required(Some(&status), &status));
+        assert!(!cell_status_update_required(Some(&status), &status));
         let mut changed = status.clone();
-        changed.phase = LabPhase::Ready;
-        assert!(lab_status_update_required(Some(&status), &changed));
+        changed.phase = CellPhase::Ready;
+        assert!(cell_status_update_required(Some(&status), &changed));
 
-        let oversized = "x".repeat(MAX_LAB_STATUS_BYTES);
+        let oversized = "x".repeat(MAX_CELL_STATUS_BYTES);
         assert!(matches!(
-            enforce_status_budget("ProofstormLab", &oversized, MAX_LAB_STATUS_BYTES),
+            enforce_status_budget("ProofstormCell", &oversized, MAX_CELL_STATUS_BYTES),
             Err(Error::StatusBudgetExceeded { .. })
         ));
     }
@@ -3641,19 +3643,19 @@ mod tests {
     fn network_action(
         sequence: u64,
         operation_id: &str,
-        action: LabAction,
+        action: CellAction,
         phase: ActionPhase,
-    ) -> ProofstormLabAction {
+    ) -> ProofstormCellAction {
         let capability = match action {
-            LabAction::NetworkPartition(_) => proofstorm_core::Capability::NetworkPartition,
-            LabAction::NetworkHeal(_) => proofstorm_core::Capability::NetworkHeal,
+            CellAction::NetworkPartition(_) => proofstorm_core::Capability::NetworkPartition,
+            CellAction::NetworkHeal(_) => proofstorm_core::Capability::NetworkHeal,
             _ => panic!("network action"),
         };
-        let mut resource = ProofstormLabAction::new(
+        let mut resource = ProofstormCellAction::new(
             &format!("action-{sequence}"),
-            proofstorm_kube::ProofstormLabActionSpec {
+            proofstorm_kube::ProofstormCellActionSpec {
                 access_scope: None,
-                lab_name: "lab-1".into(),
+                cell_name: "cell-1".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
@@ -3668,9 +3670,9 @@ mod tests {
                 action,
             },
         );
-        resource.status = Some(ProofstormLabActionStatus {
+        resource.status = Some(ProofstormCellActionStatus {
             phase,
-            ..ProofstormLabActionStatus::default()
+            ..ProofstormCellActionStatus::default()
         });
         resource
     }
@@ -3681,7 +3683,7 @@ mod tests {
             network_action(
                 3,
                 "partition-two",
-                LabAction::NetworkPartition(proofstorm_kube::NetworkPartitionAction {
+                CellAction::NetworkPartition(proofstorm_kube::NetworkPartitionAction {
                     from_component: "mint".into(),
                     to_component: "wallet".into(),
                 }),
@@ -3690,7 +3692,7 @@ mod tests {
             network_action(
                 1,
                 "partition-one",
-                LabAction::NetworkPartition(proofstorm_kube::NetworkPartitionAction {
+                CellAction::NetworkPartition(proofstorm_kube::NetworkPartitionAction {
                     from_component: "mint".into(),
                     to_component: "lightning".into(),
                 }),
@@ -3699,7 +3701,7 @@ mod tests {
             network_action(
                 2,
                 "cancelled-partition",
-                LabAction::NetworkPartition(proofstorm_kube::NetworkPartitionAction {
+                CellAction::NetworkPartition(proofstorm_kube::NetworkPartitionAction {
                     from_component: "chain".into(),
                     to_component: "lightning".into(),
                 }),
@@ -3708,7 +3710,7 @@ mod tests {
             network_action(
                 4,
                 "heal-one",
-                LabAction::NetworkHeal(proofstorm_kube::NetworkHealAction {
+                CellAction::NetworkHeal(proofstorm_kube::NetworkHealAction {
                     partition_operation_id: "partition-one".into(),
                 }),
                 ActionPhase::Succeeded,

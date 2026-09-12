@@ -88,10 +88,10 @@ pub fn render_security_spine(instance_key: &str) -> RenderedSecuritySpine {
     }
 }
 
-/// Grow the namespace allowance with the lab instead of silently stopping at twelve volumes.
+/// Grow the namespace allowance with the cell instead of silently stopping at twelve volumes.
 /// This is a namespace ceiling, not a claim that the cluster can schedule the demand.
 #[must_use]
-pub fn render_lab_security_spine(
+pub fn render_cell_security_spine(
     instance_key: &str,
     components: usize,
     retained_volumes: usize,

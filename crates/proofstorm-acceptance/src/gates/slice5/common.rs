@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
 use super::Scenario;
-use crate::{GateContext, McpClient, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 pub(super) const INSTANCE: &str = "slice5-instance";
 pub(super) const EXPERIMENT: &str = "slice5-experiment";
@@ -18,18 +18,18 @@ pub(super) const HANDLE_LENGTH: usize = 67;
 
 pub(super) const CAPABILITIES: &[&str] = &[
     "catalog.read",
-    "lab.read",
-    "lab.create",
-    "lab.edit",
-    "lab.validate",
-    "lab.publish",
-    "lab.materialize",
-    "lab.status",
-    "lab.close",
+    "cell.read",
+    "cell.create",
+    "cell.edit",
+    "cell.validate",
+    "cell.publish",
+    "cell.materialize",
+    "cell.status",
+    "cell.close",
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lab.operate",
+    "cell.operate",
     "action.cancel",
     "topology.mutate",
     "node.control",
@@ -53,13 +53,13 @@ pub(super) const CAPABILITIES: &[&str] = &[
 
 pub(super) fn components(scenario: Scenario) -> Vec<Value> {
     let mut components = vec![
-        json!({"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}}),
-        json!({"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-mint"}}),
-        json!({"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-payer"}}),
+        json!({"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}}),
+        json!({"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-mint"}}),
+        json!({"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-payer"}}),
         json!({"id": "attacker-cln", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "attacker", "config": {"alias": "proofstorm-attacker"}}),
-        json!({"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm Slice 5", "description": "Agent-created Cashu lab"}}),
-        json!({"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}),
-        json!({"id": "receiver-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}),
+        json!({"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm Slice 5", "description": "Agent-created Cashu cell"}}),
+        json!({"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}),
+        json!({"id": "receiver-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}),
     ];
     if matches!(scenario, Scenario::Smoke) {
         // The Nutshell wallet's authoritative fee reader understands Nutshell's
@@ -83,7 +83,7 @@ pub(super) fn links() -> Vec<Value> {
 }
 
 /// An empty draft the composer then fills one mutation at a time.
-pub(super) fn empty_lab() -> Value {
+pub(super) fn empty_cell() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
         "name": "slice5-cashu-round-trip",
@@ -219,8 +219,8 @@ pub(super) fn observe_mint_reachability(
             }),
         ),
     )?;
-    let observed = lab::wait_operation(client, operation, 120)?;
-    let content = lab::artifact_content(&observed)?;
+    let observed = cell::wait_operation(client, operation, 120)?;
+    let content = cell::artifact_content(&observed)?;
     let attempts = expect::integer(content, "/attempts")?;
     if expect::string(content, "/from_component")? != component
         || expect::string(content, "/to_component")? != "mint"
@@ -239,7 +239,7 @@ pub(super) fn observe_mint_reachability(
 pub(super) fn action_kinds(context: &GateContext, instance_key: &str) -> Result<Value> {
     context.kubectl.get_json(&[
         "get",
-        "proofstormlabactions.proofstorm.dev",
+        "proofstormcellactions.proofstorm.dev",
         "-n",
         CONTROL_NAMESPACE,
         "-l",

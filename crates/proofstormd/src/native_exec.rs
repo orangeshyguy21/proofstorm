@@ -1,8 +1,8 @@
 //! Durable supervisor handles. Reconciliation polls receipts; it never replays starts.
 use super::{
-    ACTION_CANCEL_ANNOTATION, Action, ActionPhase, Api, AttachParams, COMPONENT_LABEL, Context,
-    Duration, Error, INSTANCE_LABEL, LabAction, ListParams, Pod, ProofstormLab,
-    ProofstormLabAction, ProofstormLabActionStatus, ResourceExt, compile_component_plans,
+    ACTION_CANCEL_ANNOTATION, Action, ActionPhase, Api, AttachParams, COMPONENT_LABEL, CellAction,
+    Context, Duration, Error, INSTANCE_LABEL, ListParams, Pod, ProofstormCell,
+    ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, compile_component_plans,
     exec_exit_code, instance_namespace, now_unix, patch_action_failure, patch_action_status,
     patch_invalid_action, read_bounded_output, status_object,
 };
@@ -140,11 +140,11 @@ fn helper_args(reference: &NativeExecutionRef, mode: &str) -> Vec<String> {
     reason = "installation and replay fence must precede the single native start"
 )]
 pub async fn reconcile(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     context: &Context,
 ) -> Result<Action, Error> {
-    let LabAction::ComponentExecLive(request) = &action.spec.action else {
+    let CellAction::ComponentExecLive(request) = &action.spec.action else {
         return Err(Error::ControllerInvariant("native action expected"));
     };
     if action.spec.capability != proofstorm_core::Capability::ComponentExecLive {
@@ -161,16 +161,17 @@ pub async fn reconcile(
         return patch_invalid_action(action, context, message).await;
     }
     let plans = compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
+        &cell.spec.instance_key,
+        &cell.spec.revision_digest,
+        &cell.spec.cell,
+        &cell.spec.lock,
     )?;
     let Some(component) = plans
         .iter()
         .find(|plan| plan.component_id == request.component)
     else {
-        return patch_invalid_action(action, context, "component missing from immutable lab").await;
+        return patch_invalid_action(action, context, "component missing from immutable cell")
+            .await;
     };
     let pods = Api::<Pod>::namespaced(
         context.client.clone(),
@@ -260,12 +261,12 @@ pub async fn reconcile(
                         patch_action_status(
                             action,
                             context,
-                            ProofstormLabActionStatus {
+                            ProofstormCellActionStatus {
                                 phase: ActionPhase::Running,
                                 native_execution: Some(reference.clone()),
                                 started_at_unix: Some(started),
                                 artifact: Some(status_object(cap_public_streams(receipt))),
-                                ..ProofstormLabActionStatus::default()
+                                ..ProofstormCellActionStatus::default()
                             },
                         )
                         .await?;
@@ -284,7 +285,7 @@ pub async fn reconcile(
                     patch_action_status(
                         action,
                         context,
-                        ProofstormLabActionStatus {
+                        ProofstormCellActionStatus {
                             phase: if !clean || custody_pending {
                                 ActionPhase::Failed
                             } else if cancelled {
@@ -303,14 +304,14 @@ pub async fn reconcile(
                             error: (!clean).then(|| {
                                 status_object(json!({"code":"native_cleanup_unverified"}))
                             }),
-                            ..ProofstormLabActionStatus::default()
+                            ..ProofstormCellActionStatus::default()
                         },
                     )
                     .await?;
                     return Ok(Action::await_change());
                 }
                 if receipt.get("runner_error").is_some() {
-                    return patch_action_failure(action, context, "native_runner_failed", "supervisor did not establish verified process cleanup; inspect the lab before retrying").await;
+                    return patch_action_failure(action, context, "native_runner_failed", "supervisor did not establish verified process cleanup; inspect the cell before retrying").await;
                 }
             }
         }
@@ -427,7 +428,7 @@ pub async fn reconcile(
     let namespace = action.namespace().ok_or(Error::ControllerInvariant(
         "native action namespace missing",
     ))?;
-    let actions = Api::<ProofstormLabAction>::namespaced(context.client.clone(), &namespace);
+    let actions = Api::<ProofstormCellAction>::namespaced(context.client.clone(), &namespace);
     // A conditional status write is the global start fence. Overlapping
     // controllers or a concurrent cancellation invalidate a stale start claim.
     // No command is launched unless this exact observed version wins the claim.
@@ -437,13 +438,13 @@ pub async fn reconcile(
             &PatchParams::default(),
             &Patch::Merge(json!({
                 "metadata":{"resourceVersion":version},
-                "status":ProofstormLabActionStatus {
+                "status":ProofstormCellActionStatus {
                     phase: ActionPhase::Running,
                     observed_generation: action.metadata.generation,
                     native_execution: Some(reference.clone()),
                     job_name: Some("live-exec-started".into()),
                     started_at_unix: Some(now_unix()),
-                    ..ProofstormLabActionStatus::default()
+                    ..ProofstormCellActionStatus::default()
                 }
             })),
         )

@@ -106,9 +106,9 @@ fn operation_listing_uses_recorded_state_and_requires_read_access() {
     let root = tempfile::tempdir().unwrap();
     let database = root.path().join("history.sqlite3");
     let store = proofstorm_store::Store::open(&database).unwrap();
-    proofstorm_app::developer::configure(&store, "local-lab", "developer").unwrap();
+    proofstorm_app::developer::configure(&store, "local-cell", "developer").unwrap();
     store
-        .reserve_lab("local-lab", "developer", "demo", "fixture")
+        .reserve_cell("local-cell", "developer", "demo", "fixture")
         .unwrap();
     let read = || {
         cli()
@@ -122,9 +122,9 @@ fn operation_listing_uses_recorded_state_and_requires_read_access() {
     };
     store
         .replace_grants(
-            "local-lab",
+            "local-cell",
             "developer",
-            [Capability::LabStatus, Capability::ExperimentRead],
+            [Capability::CellStatus, Capability::ExperimentRead],
         )
         .unwrap();
     let output = read();
@@ -137,7 +137,7 @@ fn operation_listing_uses_recorded_state_and_requires_read_access() {
     assert_eq!(page["items"], serde_json::json!([]));
     assert!(page["next_cursor"].is_null());
     store
-        .replace_grants("local-lab", "developer", [Capability::LabStatus])
+        .replace_grants("local-cell", "developer", [Capability::CellStatus])
         .unwrap();
     assert!(!read().status.success());
     assert!(!root.path().join("missing-kubeconfig").exists());

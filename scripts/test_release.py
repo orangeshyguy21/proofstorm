@@ -150,7 +150,7 @@ class PackagingTests(unittest.TestCase):
             self.package()
         self.info["web_assets"] = [{"path": name, "sha256": "c" * 64, "size": 1}
                                    for name in ["index.html", "app.js", "app.wasm", "style.css"]]
-        (self.source / "charts/proofstorm/crds/proofstorm.dev_proofstormlabs.yaml").unlink()
+        (self.source / "charts/proofstorm/crds/proofstorm.dev_proofstormcells.yaml").unlink()
         with self.assertRaisesRegex(ValueError, "missing payload"):
             self.package()
         self.assertFalse(list((self.root / "output").glob("*.tar.gz")))

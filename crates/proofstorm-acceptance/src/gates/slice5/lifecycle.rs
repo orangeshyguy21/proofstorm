@@ -1,5 +1,5 @@
 use super::common::{INSTANCE, scoped, submit_idempotent};
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
@@ -22,8 +22,8 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         node_scoped("payer-stop", "payer-stop-slice5"),
         "node stop",
     )?;
-    let stopped = lab::wait_operation(client, "payer-stop", 120)?;
-    if expect::string(lab::artifact_content(&stopped)?, "/state")? != "stopped" {
+    let stopped = cell::wait_operation(client, "payer-stop", 120)?;
+    if expect::string(cell::artifact_content(&stopped)?, "/state")? != "stopped" {
         bail!("node stop artifact is invalid: {stopped}");
     }
     let stateful = kubectl.get_json(&["get", "statefulset/payer-lnd", "-n", namespace])?;
@@ -32,16 +32,16 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
     }
     let mut degraded_ok = false;
     for _ in 0..60 {
-        let stopped_lab = client.call("lab_status", json!({"instance_id": INSTANCE}))?;
+        let stopped_cell = client.call("cell_status", json!({"instance_id": INSTANCE}))?;
         let stopped_components = client.call(
-            "lab_component_status_list",
+            "cell_component_status_list",
             json!({"instance_id": INSTANCE, "limit": 50}),
         )?;
         let payer = expect::array(&stopped_components, "/components")?
             .iter()
             .find(|component| component.get("id").and_then(Value::as_str) == Some("payer-lnd"))
             .ok_or_else(|| anyhow::anyhow!("payer-lnd is missing from component status"))?;
-        if expect::string(&stopped_lab, "/phase")? == "ready" && !expect::boolean(payer, "/ready")?
+        if expect::string(&stopped_cell, "/phase")? == "ready" && !expect::boolean(payer, "/ready")?
         {
             degraded_ok = true;
             break;
@@ -49,15 +49,15 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         sleep(Duration::from_secs(1));
     }
     if !degraded_ok {
-        bail!("intentionally stopped node corrupted lab readiness");
+        bail!("intentionally stopped node corrupted cell readiness");
     }
 
     client.call(
         "node_start",
         node_scoped("payer-start", "payer-start-slice5"),
     )?;
-    let started = lab::wait_operation(client, "payer-start", 120)?;
-    if expect::string(lab::artifact_content(&started)?, "/state")? != "running" {
+    let started = cell::wait_operation(client, "payer-start", 120)?;
+    if expect::string(cell::artifact_content(&started)?, "/state")? != "running" {
         bail!("node start artifact is invalid: {started}");
     }
     let pod_before = kubectl.run(&[
@@ -72,8 +72,8 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         "node_restart",
         node_scoped("payer-restart", "payer-restart-slice5"),
     )?;
-    let restarted = lab::wait_operation(client, "payer-restart", 120)?;
-    if !expect::boolean(lab::artifact_content(&restarted)?, "/restarted")? {
+    let restarted = cell::wait_operation(client, "payer-restart", 120)?;
+    if !expect::boolean(cell::artifact_content(&restarted)?, "/restarted")? {
         bail!("node restart artifact is invalid: {restarted}");
     }
     let pod_after = kubectl.run(&[

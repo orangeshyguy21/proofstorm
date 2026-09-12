@@ -10,10 +10,10 @@ use thiserror::Error;
 
 use crate::{
     AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
-    AuthenticationReplayAction, BootstrapLiquidityAction, ChannelCloseAction, ChannelOpenAction,
-    ChannelPolicySetAction, ChannelRebalanceAction, ComponentForensicsAction,
-    ConservationOracleAction, LabAction, PeerConnectAction, PeerDisconnectAction, ProofstormLab,
-    ProofstormLabAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
+    AuthenticationReplayAction, BootstrapLiquidityAction, CellAction, ChannelCloseAction,
+    ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction, ComponentForensicsAction,
+    ConservationOracleAction, PeerConnectAction, PeerDisconnectAction, ProofstormCell,
+    ProofstormCellAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
     WalletInitializeAction, WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction,
     WalletQuoteClaimAction, WalletRoundTripAction, component_ports, instance_namespace,
 };
@@ -247,7 +247,7 @@ pub struct AuthenticationReplayJobSpec<'a> {
 
 #[derive(Debug, Error)]
 pub enum ActionRenderError {
-    #[error("action identity does not match referenced lab: {0}")]
+    #[error("action identity does not match referenced cell: {0}")]
     Identity(&'static str),
     #[error("action capability is invalid for its typed request")]
     Capability,
@@ -261,7 +261,7 @@ pub enum ActionRenderError {
     },
     #[error("component {0:?} has no immutable lock entry")]
     MissingLock(String),
-    #[error("component {0:?} is not present in the immutable lab revision")]
+    #[error("component {0:?} is not present in the immutable cell revision")]
     UnknownComponent(String),
     #[error("component {component:?} does not advertise logical service {service:?}")]
     UnknownService { component: String, service: String },
@@ -275,8 +275,8 @@ pub enum ActionRenderError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ActionAdmissionError {
-    #[error("lab is closing; new actions are not admitted")]
-    LabClosing,
+    #[error("cell is closing; new actions are not admitted")]
+    CellClosing,
     #[error("action identity is invalid: {0}")]
     Identity(&'static str),
     #[error("component plan is invalid: {0}")]
@@ -301,7 +301,7 @@ impl ActionAdmissionError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::LabClosing => "lab_closing",
+            Self::CellClosing => "cell_closing",
             Self::Identity(_) => "action_identity_invalid",
             Self::InvalidPlan(_) => "action_plan_invalid",
             Self::MissingContract { .. } => "action_admission_contract_missing",
@@ -321,32 +321,32 @@ impl ActionAdmissionError {
 /// Returns a stable failure when identity, compiled admission contracts, or an
 /// applicable runtime readiness prerequisite is unavailable.
 pub fn evaluate_action_admission(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
 ) -> Result<(), ActionAdmissionError> {
-    require_open_lab(lab)?;
-    validate_action_identity(action, lab).map_err(|error| match error {
+    require_open_cell(cell)?;
+    validate_action_identity(action, cell).map_err(|error| match error {
         ActionRenderError::Identity(field) => ActionAdmissionError::Identity(field),
         _ => ActionAdmissionError::InvalidPlan(error.to_string()),
     })?;
     let plans = crate::compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
+        &cell.spec.instance_key,
+        &cell.spec.revision_digest,
+        &cell.spec.cell,
+        &cell.spec.lock,
     )
     .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
-    let statuses = lab
+    let statuses = cell
         .status
         .as_ref()
-        .filter(|status| status.observed_revision_digest == lab.spec.revision_digest)
+        .filter(|status| status.observed_revision_digest == cell.spec.revision_digest)
         .map_or(&[][..], |status| status.components.as_slice());
-    let protocol_lease_current = lab
+    let protocol_lease_current = cell
         .annotations()
         .get(crate::PROTOCOL_PROBER_LEASE_ANNOTATION)
         .is_some_and(|session| {
             session != "inactive"
-                && lab.status.as_ref().is_some_and(|status| {
+                && cell.status.as_ref().is_some_and(|status| {
                     status.observed_protocol_probe_lease.as_ref() == Some(session)
                 })
         });
@@ -387,22 +387,22 @@ pub fn evaluate_action_admission(
     Ok(())
 }
 
-/// Admit work on a live lab independently of aggregate component health.
+/// Admit work on a live cell independently of aggregate component health.
 /// Operation-specific readiness is evaluated separately. Existing execution
 /// receipts may still be collected during teardown.
 ///
 /// # Errors
-/// Returns `LabClosing` when deletion or cleanup has begun.
-pub fn require_open_lab(lab: &ProofstormLab) -> Result<(), ActionAdmissionError> {
-    if lab.metadata.deletion_timestamp.is_some()
-        || lab.status.as_ref().is_some_and(|status| {
+/// Returns `CellClosing` when deletion or cleanup has begun.
+pub fn require_open_cell(cell: &ProofstormCell) -> Result<(), ActionAdmissionError> {
+    if cell.metadata.deletion_timestamp.is_some()
+        || cell.status.as_ref().is_some_and(|status| {
             matches!(
                 status.phase,
-                crate::LabPhase::Closing | crate::LabPhase::CleanupBlocked
+                crate::CellPhase::Closing | crate::CellPhase::CleanupBlocked
             )
         })
     {
-        return Err(ActionAdmissionError::LabClosing);
+        return Err(ActionAdmissionError::CellClosing);
     }
     Ok(())
 }
@@ -536,12 +536,12 @@ fn unsatisfied(
     }
 }
 
-fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
+fn action_execution_target(action: &CellAction) -> Option<(&str, &str)> {
     match action {
-        LabAction::ComponentForensics(request) => {
+        CellAction::ComponentForensics(request) => {
             Some((&request.component, &request.target_component))
         }
-        LabAction::ReachabilityOracle(request) => {
+        CellAction::ReachabilityOracle(request) => {
             Some((&request.from_component, &request.to_component))
         }
         _ => None,
@@ -552,115 +552,115 @@ fn action_execution_target(action: &LabAction) -> Option<(&str, &str)> {
     clippy::too_many_lines,
     reason = "the exhaustive action-to-participant contract is clearest in one match"
 )]
-fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
+fn action_participants(action: &CellAction) -> Vec<(&str, OperationClass)> {
     use OperationClass as Operation;
     match action {
-        LabAction::NodeStart(request) | LabAction::ComponentStart(request) => {
+        CellAction::NodeStart(request) | CellAction::ComponentStart(request) => {
             vec![(&request.component, Operation::Start)]
         }
-        LabAction::NodeStop(request) | LabAction::ComponentStop(request) => {
+        CellAction::NodeStop(request) | CellAction::ComponentStop(request) => {
             vec![(&request.component, Operation::Stop)]
         }
-        LabAction::NodeRestart(request) | LabAction::ComponentRestart(request) => {
+        CellAction::NodeRestart(request) | CellAction::ComponentRestart(request) => {
             vec![(&request.component, Operation::Restart)]
         }
-        LabAction::BootstrapLiquidity(request) => vec![
+        CellAction::BootstrapLiquidity(request) => vec![
             (&request.chain, Operation::PeerChannelMutation),
             (&request.mint_lightning, Operation::PeerChannelMutation),
             (&request.payer_lightning, Operation::PeerChannelMutation),
         ],
-        LabAction::PeerConnect(request) => vec![
+        CellAction::PeerConnect(request) => vec![
             (&request.from_lightning, Operation::PeerChannelMutation),
             (&request.to_lightning, Operation::PeerChannelMutation),
         ],
-        LabAction::PeerDisconnect(request) => vec![
+        CellAction::PeerDisconnect(request) => vec![
             (&request.from_lightning, Operation::PeerChannelMutation),
             (&request.to_lightning, Operation::PeerChannelMutation),
         ],
-        LabAction::ChannelOpen(request) => vec![
+        CellAction::ChannelOpen(request) => vec![
             (&request.chain, Operation::PeerChannelMutation),
             (&request.from_lightning, Operation::PeerChannelMutation),
             (&request.to_lightning, Operation::PeerChannelMutation),
         ],
-        LabAction::ChannelPolicySet(request) => vec![
+        CellAction::ChannelPolicySet(request) => vec![
             (&request.from_lightning, Operation::PeerChannelMutation),
             (&request.to_lightning, Operation::PeerChannelMutation),
         ],
-        LabAction::ChannelClose(request) | LabAction::ChannelForceClose(request) => vec![
+        CellAction::ChannelClose(request) | CellAction::ChannelForceClose(request) => vec![
             (&request.chain, Operation::PeerChannelMutation),
             (&request.from_lightning, Operation::PeerChannelMutation),
             (&request.to_lightning, Operation::PeerChannelMutation),
         ],
-        LabAction::ChannelRebalance(request) => {
+        CellAction::ChannelRebalance(request) => {
             vec![(&request.lightning, Operation::PeerChannelMutation)]
         }
-        LabAction::NetworkPartition(request) => vec![
+        CellAction::NetworkPartition(request) => vec![
             (&request.from_component, Operation::Inspect),
             (&request.to_component, Operation::Inspect),
         ],
         // Neither healing a fault nor reading a log has a component readiness
         // prerequisite. For a log that is deliberate: an unready,
         // crash-looping, or stopped component is when its log matters most.
-        LabAction::NetworkHeal(_) | LabAction::ComponentLogs(_) => Vec::new(),
-        LabAction::WalletInitialize(request) => vec![
+        CellAction::NetworkHeal(_) | CellAction::ComponentLogs(_) => Vec::new(),
+        CellAction::WalletInitialize(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
         ],
-        LabAction::WalletBalance(request) => vec![
+        CellAction::WalletBalance(request) => vec![
             (&request.wallet, Operation::Inspect),
             (&request.mint, Operation::Inspect),
         ],
-        LabAction::WalletFund(request) => vec![
+        CellAction::WalletFund(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
             (&request.payer_lightning, Operation::WalletPayment),
         ],
-        LabAction::WalletInvoice(request) => vec![
+        CellAction::WalletInvoice(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
         ],
-        LabAction::WalletPay(request) => vec![
+        CellAction::WalletPay(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
             (&request.recipient_wallet, Operation::WalletPayment),
             (&request.recipient_mint, Operation::WalletPayment),
         ],
-        LabAction::WalletQuoteClaim(request) => vec![
+        CellAction::WalletQuoteClaim(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
         ],
-        LabAction::WalletMeltQuoteRefresh(request) => vec![
+        CellAction::WalletMeltQuoteRefresh(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
         ],
-        LabAction::WalletRoundTrip(request) => vec![
+        CellAction::WalletRoundTrip(request) => vec![
             (&request.wallet, Operation::WalletPayment),
             (&request.mint, Operation::WalletPayment),
             (&request.payer_lightning, Operation::WalletPayment),
         ],
-        LabAction::ConservationOracle(request) => vec![
+        CellAction::ConservationOracle(request) => vec![
             (&request.wallet, Operation::Inspect),
             (&request.mint, Operation::Inspect),
         ],
-        LabAction::ReachabilityOracle(request) => {
+        CellAction::ReachabilityOracle(request) => {
             vec![(&request.from_component, Operation::NativeExec)]
         }
-        LabAction::ComponentForensics(request) => {
+        CellAction::ComponentForensics(request) => {
             vec![(&request.component, Operation::NativeExec)]
         }
-        LabAction::PrivateTransfer(_) => vec![],
-        LabAction::ComponentExecLive(request) => {
+        CellAction::PrivateTransfer(_) => vec![],
+        CellAction::ComponentExecLive(request) => {
             vec![(&request.component, Operation::NativeExec)]
         }
-        LabAction::AuthenticationConformance(request) => vec![
+        CellAction::AuthenticationConformance(request) => vec![
             (&request.mint, Operation::Authentication),
             (&request.identity_provider, Operation::Authentication),
         ],
-        LabAction::AuthenticationProtectedSpend(request) => vec![
+        CellAction::AuthenticationProtectedSpend(request) => vec![
             (&request.mint, Operation::Authentication),
             (&request.identity_provider, Operation::Authentication),
         ],
-        LabAction::AuthenticationReplay(request) => vec![
+        CellAction::AuthenticationReplay(request) => vec![
             (&request.mint, Operation::Authentication),
             (&request.identity_provider, Operation::Authentication),
         ],
@@ -668,115 +668,119 @@ fn action_participants(action: &LabAction) -> Vec<(&str, OperationClass)> {
 }
 
 #[must_use]
-pub const fn action_result_container(action: &LabAction) -> &'static str {
+pub const fn action_result_container(action: &CellAction) -> &'static str {
     match action {
-        LabAction::NodeStart(_)
-        | LabAction::NodeStop(_)
-        | LabAction::NodeRestart(_)
-        | LabAction::ComponentStart(_)
-        | LabAction::ComponentStop(_)
-        | LabAction::ComponentRestart(_)
-        | LabAction::NetworkPartition(_)
-        | LabAction::NetworkHeal(_)
-        | LabAction::BootstrapLiquidity(_)
-        | LabAction::PeerConnect(_)
-        | LabAction::PeerDisconnect(_)
-        | LabAction::ChannelOpen(_)
-        | LabAction::ChannelPolicySet(_)
-        | LabAction::ChannelClose(_)
-        | LabAction::ChannelForceClose(_)
-        | LabAction::ChannelRebalance(_) => "result",
-        LabAction::WalletInitialize(_)
-        | LabAction::WalletBalance(_)
-        | LabAction::WalletFund(_)
-        | LabAction::WalletInvoice(_)
-        | LabAction::WalletPay(_)
-        | LabAction::WalletQuoteClaim(_)
-        | LabAction::WalletMeltQuoteRefresh(_)
-        | LabAction::WalletRoundTrip(_) => "wallet",
-        LabAction::ConservationOracle(_) | LabAction::ReachabilityOracle(_) => "oracle",
-        LabAction::ComponentForensics(_) => "forensics",
-        LabAction::AuthenticationConformance(_)
-        | LabAction::AuthenticationProtectedSpend(_)
-        | LabAction::AuthenticationReplay(_) => "authentication",
+        CellAction::NodeStart(_)
+        | CellAction::NodeStop(_)
+        | CellAction::NodeRestart(_)
+        | CellAction::ComponentStart(_)
+        | CellAction::ComponentStop(_)
+        | CellAction::ComponentRestart(_)
+        | CellAction::NetworkPartition(_)
+        | CellAction::NetworkHeal(_)
+        | CellAction::BootstrapLiquidity(_)
+        | CellAction::PeerConnect(_)
+        | CellAction::PeerDisconnect(_)
+        | CellAction::ChannelOpen(_)
+        | CellAction::ChannelPolicySet(_)
+        | CellAction::ChannelClose(_)
+        | CellAction::ChannelForceClose(_)
+        | CellAction::ChannelRebalance(_) => "result",
+        CellAction::WalletInitialize(_)
+        | CellAction::WalletBalance(_)
+        | CellAction::WalletFund(_)
+        | CellAction::WalletInvoice(_)
+        | CellAction::WalletPay(_)
+        | CellAction::WalletQuoteClaim(_)
+        | CellAction::WalletMeltQuoteRefresh(_)
+        | CellAction::WalletRoundTrip(_) => "wallet",
+        CellAction::ConservationOracle(_) | CellAction::ReachabilityOracle(_) => "oracle",
+        CellAction::ComponentForensics(_) => "forensics",
+        CellAction::AuthenticationConformance(_)
+        | CellAction::AuthenticationProtectedSpend(_)
+        | CellAction::AuthenticationReplay(_) => "authentication",
         // Never rendered as a Job; the controller reads the log itself.
-        LabAction::ComponentLogs(_)
-        | LabAction::ComponentExecLive(_)
-        | LabAction::PrivateTransfer(_) => "",
+        CellAction::ComponentLogs(_)
+        | CellAction::ComponentExecLive(_)
+        | CellAction::PrivateTransfer(_) => "",
     }
 }
 
-/// Validate a typed action against its immutable lab and render its deterministic Job.
+/// Validate a typed action against its immutable cell and render its deterministic Job.
 ///
 /// # Errors
 ///
 /// Returns an error for identity drift, unsupported components, values outside
 /// policy bounds, or an invalid internal Kubernetes resource.
-pub fn render_lab_action_job(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+pub fn render_cell_action_job(
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
 ) -> Result<Job, ActionRenderError> {
-    validate_action_identity(action, lab)?;
+    validate_action_identity(action, cell)?;
     let mut job = match &action.spec.action {
-        LabAction::NodeStart(_)
-        | LabAction::NodeStop(_)
-        | LabAction::NodeRestart(_)
-        | LabAction::ComponentStart(_)
-        | LabAction::ComponentStop(_)
-        | LabAction::ComponentRestart(_)
-        | LabAction::ComponentExecLive(_)
-        | LabAction::PrivateTransfer(_)
-        | LabAction::NetworkPartition(_)
-        | LabAction::NetworkHeal(_) => {
+        CellAction::NodeStart(_)
+        | CellAction::NodeStop(_)
+        | CellAction::NodeRestart(_)
+        | CellAction::ComponentStart(_)
+        | CellAction::ComponentStop(_)
+        | CellAction::ComponentRestart(_)
+        | CellAction::ComponentExecLive(_)
+        | CellAction::PrivateTransfer(_)
+        | CellAction::NetworkPartition(_)
+        | CellAction::NetworkHeal(_) => {
             return Err(ActionRenderError::Bounds(
                 "direct controller actions do not render Jobs",
             ));
         }
-        LabAction::BootstrapLiquidity(request) => render_bootstrap_action(action, lab, request)?,
-        LabAction::PeerConnect(request) => render_peer_connect_action(action, lab, request)?,
-        LabAction::PeerDisconnect(request) => render_peer_disconnect_action(action, lab, request)?,
-        LabAction::ChannelOpen(request) => render_channel_open_action(action, lab, request)?,
-        LabAction::ChannelPolicySet(request) => {
-            render_channel_policy_set_action(action, lab, request)?
+        CellAction::BootstrapLiquidity(request) => render_bootstrap_action(action, cell, request)?,
+        CellAction::PeerConnect(request) => render_peer_connect_action(action, cell, request)?,
+        CellAction::PeerDisconnect(request) => {
+            render_peer_disconnect_action(action, cell, request)?
         }
-        LabAction::ChannelClose(request) => {
-            render_channel_close_action(action, lab, request, false)?
+        CellAction::ChannelOpen(request) => render_channel_open_action(action, cell, request)?,
+        CellAction::ChannelPolicySet(request) => {
+            render_channel_policy_set_action(action, cell, request)?
         }
-        LabAction::ChannelForceClose(request) => {
-            render_channel_close_action(action, lab, request, true)?
+        CellAction::ChannelClose(request) => {
+            render_channel_close_action(action, cell, request, false)?
         }
-        LabAction::ChannelRebalance(request) => {
-            render_channel_rebalance_action(action, lab, request)?
+        CellAction::ChannelForceClose(request) => {
+            render_channel_close_action(action, cell, request, true)?
         }
-        LabAction::WalletInitialize(request) => {
-            render_wallet_initialize_action(action, lab, request)?
+        CellAction::ChannelRebalance(request) => {
+            render_channel_rebalance_action(action, cell, request)?
         }
-        LabAction::WalletBalance(request) => render_wallet_balance_action(action, lab, request)?,
-        LabAction::WalletFund(request) => render_wallet_fund_action(action, lab, request)?,
-        LabAction::WalletInvoice(request) => render_wallet_invoice_action(action, lab, request)?,
-        LabAction::WalletPay(request) => render_wallet_pay_action(action, lab, request)?,
-        LabAction::WalletQuoteClaim(request) => {
-            render_wallet_quote_claim_action(action, lab, request)?
+        CellAction::WalletInitialize(request) => {
+            render_wallet_initialize_action(action, cell, request)?
         }
-        LabAction::WalletMeltQuoteRefresh(request) => {
-            render_wallet_melt_quote_refresh_action(action, lab, request)?
+        CellAction::WalletBalance(request) => render_wallet_balance_action(action, cell, request)?,
+        CellAction::WalletFund(request) => render_wallet_fund_action(action, cell, request)?,
+        CellAction::WalletInvoice(request) => render_wallet_invoice_action(action, cell, request)?,
+        CellAction::WalletPay(request) => render_wallet_pay_action(action, cell, request)?,
+        CellAction::WalletQuoteClaim(request) => {
+            render_wallet_quote_claim_action(action, cell, request)?
         }
-        LabAction::WalletRoundTrip(request) => render_wallet_action(action, lab, request)?,
-        LabAction::ConservationOracle(request) => render_oracle_action(action, lab, request)?,
-        LabAction::ReachabilityOracle(request) => {
-            render_reachability_oracle_action(action, lab, request)?
+        CellAction::WalletMeltQuoteRefresh(request) => {
+            render_wallet_melt_quote_refresh_action(action, cell, request)?
         }
-        LabAction::ComponentForensics(request) => render_native_exec_action(action, lab, request)?,
-        LabAction::AuthenticationConformance(request) => {
-            render_authentication_conformance_action(action, lab, request)?
+        CellAction::WalletRoundTrip(request) => render_wallet_action(action, cell, request)?,
+        CellAction::ConservationOracle(request) => render_oracle_action(action, cell, request)?,
+        CellAction::ReachabilityOracle(request) => {
+            render_reachability_oracle_action(action, cell, request)?
         }
-        LabAction::AuthenticationProtectedSpend(request) => {
-            render_authentication_protected_spend_action(action, lab, request)?
+        CellAction::ComponentForensics(request) => {
+            render_native_exec_action(action, cell, request)?
         }
-        LabAction::AuthenticationReplay(request) => {
-            render_authentication_replay_action(action, lab, request)?
+        CellAction::AuthenticationConformance(request) => {
+            render_authentication_conformance_action(action, cell, request)?
         }
-        LabAction::ComponentLogs(_) => {
+        CellAction::AuthenticationProtectedSpend(request) => {
+            render_authentication_protected_spend_action(action, cell, request)?
+        }
+        CellAction::AuthenticationReplay(request) => {
+            render_authentication_replay_action(action, cell, request)?
+        }
+        CellAction::ComponentLogs(_) => {
             return Err(ActionRenderError::InvalidPlan(
                 "component logs are fulfilled by the controller, not by a Job".to_owned(),
             ));
@@ -787,14 +791,14 @@ pub fn render_lab_action_job(
 }
 
 fn render_authentication_conformance_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &AuthenticationConformanceAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
         return Err(ActionRenderError::Capability);
     }
-    let mint_image = authentication_components(lab, &request.mint, &request.identity_provider)?;
+    let mint_image = authentication_components(cell, &request.mint, &request.identity_provider)?;
     render_authentication_conformance_job(&AuthenticationConformanceJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -806,14 +810,14 @@ fn render_authentication_conformance_action(
 }
 
 fn render_authentication_protected_spend_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &AuthenticationProtectedSpendAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
         return Err(ActionRenderError::Capability);
     }
-    let mint_image = authentication_components(lab, &request.mint, &request.identity_provider)?;
+    let mint_image = authentication_components(cell, &request.mint, &request.identity_provider)?;
     render_authentication_protected_spend_job(&AuthenticationProtectedSpendJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -825,14 +829,14 @@ fn render_authentication_protected_spend_action(
 }
 
 fn render_authentication_replay_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &AuthenticationReplayAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
         return Err(ActionRenderError::Capability);
     }
-    let mint_image = authentication_components(lab, &request.mint, &request.identity_provider)?;
+    let mint_image = authentication_components(cell, &request.mint, &request.identity_provider)?;
     render_authentication_replay_job(&AuthenticationReplayJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -846,20 +850,20 @@ fn render_authentication_replay_action(
 }
 
 fn authentication_components<'a>(
-    lab: &'a ProofstormLab,
+    cell: &'a ProofstormCell,
     mint: &str,
     identity_provider: &str,
 ) -> Result<&'a str, ActionRenderError> {
-    let mint_image = locked_component_image(lab, mint, ComponentKind::Mint, "nutshell")?;
+    let mint_image = locked_component_image(cell, mint, ComponentKind::Mint, "nutshell")?;
     locked_component_image(
-        lab,
+        cell,
         identity_provider,
         ComponentKind::IdentityProvider,
         "keycloak",
     )?;
-    let links = lab
+    let links = cell
         .spec
-        .lab
+        .cell
         .links
         .iter()
         .filter(|link| {
@@ -883,8 +887,8 @@ fn authentication_components<'a>(
 }
 
 fn render_native_exec_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &ComponentForensicsAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::ComponentForensics {
@@ -902,10 +906,10 @@ fn render_native_exec_action(
     }
 
     let plans = crate::compile_component_plans(
-        &lab.spec.instance_key,
-        &lab.spec.revision_digest,
-        &lab.spec.lab,
-        &lab.spec.lock,
+        &cell.spec.instance_key,
+        &cell.spec.revision_digest,
+        &cell.spec.cell,
+        &cell.spec.lock,
     )
     .map_err(|error| ActionRenderError::InvalidPlan(error.to_string()))?;
     let component = plans
@@ -1183,26 +1187,26 @@ fn native_exec_target_environment(
 ///
 /// # Errors
 ///
-/// Returns an error when the original action is invalid for its immutable lab
+/// Returns an error when the original action is invalid for its immutable cell
 /// or the fixed cleanup resource contract cannot be rendered.
-pub fn render_lab_action_cleanup_job(
-    _action: &ProofstormLabAction,
-    _lab: &ProofstormLab,
+pub fn render_cell_action_cleanup_job(
+    _action: &ProofstormCellAction,
+    _cell: &ProofstormCell,
 ) -> Result<Option<Job>, ActionRenderError> {
     Ok(None)
 }
 
 fn render_peer_connect_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &PeerConnectAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::PeerConnect {
         return Err(ActionRenderError::Capability);
     }
     validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
-    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
     render_peer_connect_job(&PeerConnectJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1217,16 +1221,16 @@ fn render_peer_connect_action(
 }
 
 fn render_peer_disconnect_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &PeerDisconnectAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::PeerDisconnect {
         return Err(ActionRenderError::Capability);
     }
     validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
-    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
     render_peer_disconnect_job(&PeerDisconnectJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1241,8 +1245,8 @@ fn render_peer_disconnect_action(
 }
 
 fn render_channel_open_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &ChannelOpenAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::ChannelOpen {
@@ -1251,9 +1255,9 @@ fn render_channel_open_action(
     validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
     validate_channel_bounds(request.channel_sat, request.push_sat)?;
     let bitcoin_image =
-        locked_component_image(lab, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
-    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+        locked_component_image(cell, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
+    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
     render_channel_open_job(&ChannelOpenJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1272,8 +1276,8 @@ fn render_channel_open_action(
 }
 
 fn render_channel_policy_set_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &ChannelPolicySetAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::ChannelOpen {
@@ -1290,8 +1294,8 @@ fn render_channel_policy_set_action(
             "fee_rate_ppm must be in 0..=1000000",
         ));
     }
-    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
     render_channel_policy_set_job(&ChannelPolicySetJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1308,8 +1312,8 @@ fn render_channel_policy_set_action(
 }
 
 fn render_channel_close_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &ChannelCloseAction,
     force: bool,
 ) -> Result<Job, ActionRenderError> {
@@ -1324,9 +1328,9 @@ fn render_channel_close_action(
     validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
     validate_channel_id(&request.channel_id)?;
     let bitcoin_image =
-        locked_component_image(lab, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
-    let (from_adapter, from_image) = locked_lightning(lab, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(lab, &request.to_lightning)?;
+        locked_component_image(cell, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
+    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
+    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
     render_channel_close_job(&ChannelCloseJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1345,8 +1349,8 @@ fn render_channel_close_action(
 }
 
 fn render_channel_rebalance_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &ChannelRebalanceAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::ChannelRebalance {
@@ -1355,7 +1359,7 @@ fn render_channel_rebalance_action(
     validate_channel_id(&request.outgoing_channel_id)?;
     validate_channel_id(&request.incoming_channel_id)?;
     validate_rebalance_bounds(request)?;
-    let (adapter, lightning_image) = locked_lightning(lab, &request.lightning)?;
+    let (adapter, lightning_image) = locked_lightning(cell, &request.lightning)?;
     if adapter != LightningAdapter::Lnd {
         return Err(ActionRenderError::UnsupportedAdapter {
             component: request.lightning.clone(),
@@ -1376,8 +1380,8 @@ fn render_channel_rebalance_action(
 }
 
 fn render_bootstrap_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &BootstrapLiquidityAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletFund {
@@ -1385,15 +1389,15 @@ fn render_bootstrap_action(
     }
     validate_bootstrap_action(request)?;
     let bitcoin_image =
-        locked_component_image(lab, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
+        locked_component_image(cell, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
     let mint_lnd_image = locked_component_image(
-        lab,
+        cell,
         &request.mint_lightning,
         ComponentKind::Lightning,
         "lnd",
     )?;
     let payer_lnd_image = locked_component_image(
-        lab,
+        cell,
         &request.payer_lightning,
         ComponentKind::Lightning,
         "lnd",
@@ -1419,15 +1423,15 @@ fn render_bootstrap_action(
 }
 
 fn render_wallet_initialize_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletInitializeAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletCreate {
         return Err(ActionRenderError::Capability);
     }
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     render_wallet_initialize_job(&WalletJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1439,16 +1443,16 @@ fn render_wallet_initialize_action(
 }
 
 fn render_wallet_balance_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletBalanceAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletControl {
         return Err(ActionRenderError::Capability);
     }
     let (implementation, wallet_image) =
-        locked_component(lab, &request.wallet, ComponentKind::Wallet)?;
-    let locked_version = lab
+        locked_component(cell, &request.wallet, ComponentKind::Wallet)?;
+    let locked_version = cell
         .spec
         .lock
         .entries
@@ -1464,7 +1468,7 @@ fn render_wallet_balance_action(
             component: request.wallet.clone(),
             adapter: implementation.into(),
         })?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     (adapter.balance)(&WalletJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1566,18 +1570,18 @@ fn render_cocod_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serd
 }
 
 fn render_wallet_fund_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletFundAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletFund {
         return Err(ActionRenderError::Capability);
     }
     validate_wallet_amount(request.amount_sat)?;
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     let lightning_image = locked_component_image(
-        lab,
+        cell,
         &request.payer_lightning,
         ComponentKind::Lightning,
         "lnd",
@@ -1596,8 +1600,8 @@ fn render_wallet_fund_action(
 }
 
 fn render_wallet_invoice_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletInvoiceAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletFund {
@@ -1609,8 +1613,8 @@ fn render_wallet_invoice_action(
             "timeout_seconds must be in 30..=600",
         ));
     }
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     render_wallet_invoice_job(&WalletInvoiceJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1624,8 +1628,8 @@ fn render_wallet_invoice_action(
 }
 
 fn render_wallet_pay_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletPayAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletControl {
@@ -1637,10 +1641,10 @@ fn render_wallet_pay_action(
             "payer and recipient wallets must differ",
         ));
     }
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    nutshell_wallet_image(lab, &request.recipient_wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
-    locked_component(lab, &request.recipient_mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    nutshell_wallet_image(cell, &request.recipient_wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
+    locked_component(cell, &request.recipient_mint, ComponentKind::Mint)?;
     render_wallet_pay_job(&WalletPayJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1655,8 +1659,8 @@ fn render_wallet_pay_action(
 }
 
 fn render_wallet_quote_claim_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletQuoteClaimAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletControl {
@@ -1668,8 +1672,8 @@ fn render_wallet_quote_claim_action(
             "timeout_seconds must be in 1..=120",
         ));
     }
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     render_wallet_quote_claim_job(&WalletQuoteClaimJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1683,8 +1687,8 @@ fn render_wallet_quote_claim_action(
 }
 
 fn render_wallet_melt_quote_refresh_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletMeltQuoteRefreshAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletControl {
@@ -1696,8 +1700,8 @@ fn render_wallet_melt_quote_refresh_action(
             "timeout_seconds must be in 1..=120",
         ));
     }
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     render_wallet_melt_quote_refresh_job(&WalletMeltQuoteRefreshJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1711,18 +1715,18 @@ fn render_wallet_melt_quote_refresh_action(
 }
 
 fn render_wallet_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &WalletRoundTripAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::WalletControl {
         return Err(ActionRenderError::Capability);
     }
     validate_wallet_round_trip_action(request)?;
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     let lnd_image = locked_component_image(
-        lab,
+        cell,
         &request.payer_lightning,
         ComponentKind::Lightning,
         "lnd",
@@ -1742,16 +1746,16 @@ fn render_wallet_action(
 }
 
 fn render_oracle_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &ConservationOracleAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::OracleRun {
         return Err(ActionRenderError::Capability);
     }
     validate_conservation_oracle_action(request)?;
-    let wallet_image = nutshell_wallet_image(lab, &request.wallet)?;
-    locked_component(lab, &request.mint, ComponentKind::Mint)?;
+    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
+    locked_component(cell, &request.mint, ComponentKind::Mint)?;
     render_conservation_oracle_job(&ConservationOracleJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
@@ -1767,24 +1771,24 @@ fn render_oracle_action(
 }
 
 fn render_reachability_oracle_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     request: &ReachabilityOracleAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::OracleRun {
         return Err(ActionRenderError::Capability);
     }
     validate_reachability_oracle_action(request)?;
-    let source = lab
+    let source = cell
         .spec
-        .lab
+        .cell
         .components
         .iter()
         .find(|component| component.id == request.from_component)
         .ok_or_else(|| ActionRenderError::UnknownComponent(request.from_component.clone()))?;
-    let destination = lab
+    let destination = cell
         .spec
-        .lab
+        .cell
         .components
         .iter()
         .find(|component| component.id == request.to_component)
@@ -1825,7 +1829,7 @@ fn render_reachability_oracle_action(
         .and_then(|metadata| metadata.labels.as_mut())
         .expect("internally rendered probe pod has labels");
     // The Pod must not match the controller-action firewall exception. Giving it
-    // the source component identity makes the lab's actual source policy govern
+    // the source component identity makes the cell's actual source policy govern
     // this observation, including any active partitions.
     labels.remove("proofstorm.dev/operation");
     labels.insert(
@@ -1836,10 +1840,10 @@ fn render_reachability_oracle_action(
 }
 
 fn nutshell_wallet_image<'a>(
-    lab: &'a ProofstormLab,
+    cell: &'a ProofstormCell,
     wallet: &str,
 ) -> Result<&'a str, ActionRenderError> {
-    let (adapter, image) = locked_component(lab, wallet, ComponentKind::Wallet)?;
+    let (adapter, image) = locked_component(cell, wallet, ComponentKind::Wallet)?;
     if adapter != "nutshell-wallet" {
         return Err(ActionRenderError::UnsupportedAdapter {
             component: wallet.to_owned(),
@@ -1850,21 +1854,21 @@ fn nutshell_wallet_image<'a>(
 }
 
 fn validate_action_identity(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
 ) -> Result<(), ActionRenderError> {
     for (matches, field) in [
-        (action.spec.lab_name == lab.name_any(), "lab_name"),
+        (action.spec.cell_name == cell.name_any(), "cell_name"),
         (
-            action.spec.workspace_id == lab.spec.workspace_id,
+            action.spec.workspace_id == cell.spec.workspace_id,
             "workspace_id",
         ),
         (
-            action.spec.instance_id == lab.spec.instance_id,
+            action.spec.instance_id == cell.spec.instance_id,
             "instance_id",
         ),
         (
-            action.spec.instance_key == lab.spec.instance_key,
+            action.spec.instance_key == cell.spec.instance_key,
             "instance_key",
         ),
     ] {
@@ -2031,13 +2035,13 @@ fn validate_reachability_oracle_action(
 }
 
 fn locked_component<'a>(
-    lab: &'a ProofstormLab,
+    cell: &'a ProofstormCell,
     id: &str,
     kind: ComponentKind,
 ) -> Result<(&'a str, &'a str), ActionRenderError> {
-    let component = lab
+    let component = cell
         .spec
-        .lab
+        .cell
         .components
         .iter()
         .find(|component| component.id == id && component.kind == kind)
@@ -2046,7 +2050,7 @@ fn locked_component<'a>(
             implementation: "installed",
             kind,
         })?;
-    let lock = lab
+    let lock = cell
         .spec
         .lock
         .entries
@@ -2057,10 +2061,10 @@ fn locked_component<'a>(
 }
 
 fn locked_lightning<'a>(
-    lab: &'a ProofstormLab,
+    cell: &'a ProofstormCell,
     id: &str,
 ) -> Result<(LightningAdapter, &'a str), ActionRenderError> {
-    let (implementation, image) = locked_component(lab, id, ComponentKind::Lightning)?;
+    let (implementation, image) = locked_component(cell, id, ComponentKind::Lightning)?;
     let adapter = LightningAdapter::from_implementation(implementation).ok_or_else(|| {
         ActionRenderError::UnsupportedAdapter {
             component: id.to_owned(),
@@ -2071,12 +2075,12 @@ fn locked_lightning<'a>(
 }
 
 fn locked_component_image<'a>(
-    lab: &'a ProofstormLab,
+    cell: &'a ProofstormCell,
     id: &str,
     kind: ComponentKind,
     implementation: &'static str,
 ) -> Result<&'a str, ActionRenderError> {
-    let valid = lab.spec.lab.components.iter().any(|component| {
+    let valid = cell.spec.cell.components.iter().any(|component| {
         component.id == id && component.kind == kind && component.implementation == implementation
     });
     if !valid {
@@ -2086,7 +2090,7 @@ fn locked_component_image<'a>(
             kind,
         });
     }
-    lab.spec
+    cell.spec
         .lock
         .entries
         .iter()
@@ -3559,8 +3563,8 @@ mod tests {
     use std::process::Command;
 
     use proofstorm_core::{
-        API_VERSION, ComponentCondition, ComponentSpec, ComponentStatus, ControlClass, LabPolicy,
-        LabSpec, default_catalog, resolve_lock,
+        API_VERSION, CellPolicy, CellSpec, ComponentCondition, ComponentSpec, ComponentStatus,
+        ControlClass, default_catalog, resolve_lock,
     };
 
     use super::*;
@@ -3576,7 +3580,7 @@ mod tests {
         );
     }
 
-    fn typed_bootstrap() -> (ProofstormLab, ProofstormLabAction) {
+    fn typed_bootstrap() -> (ProofstormCell, ProofstormCellAction) {
         let component = |id: &str, kind: ComponentKind, implementation: &str| ComponentSpec {
             id: id.into(),
             kind,
@@ -3594,13 +3598,13 @@ mod tests {
             control: if kind == ComponentKind::Mint {
                 ControlClass::Target
             } else {
-                ControlClass::Laboratory
+                ControlClass::Cell
             },
             config: BTreeMap::new(),
         };
-        let lab_spec = LabSpec {
+        let cell_spec = CellSpec {
             api_version: API_VERSION.into(),
-            name: "action-lab".into(),
+            name: "action-cell".into(),
             components: vec![
                 component("chain", ComponentKind::Bitcoin, "bitcoin-core"),
                 component("chain-b", ComponentKind::Bitcoin, "bitcoin-core"),
@@ -3620,25 +3624,25 @@ mod tests {
                     unit: "sat".into(),
                 }),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab_spec, default_catalog()).expect("lock");
-        let lab = ProofstormLab::new(
-            "lab-resource",
-            crate::ProofstormLabSpec {
+        let lock = resolve_lock(&cell_spec, default_catalog()).expect("lock");
+        let cell = ProofstormCell::new(
+            "cell-resource",
+            crate::ProofstormCellSpec {
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
                 revision_digest: "sha256:revision".into(),
                 lock,
-                lab: lab_spec,
+                cell: cell_spec,
             },
         );
-        let action = ProofstormLabAction::new(
+        let action = ProofstormCellAction::new(
             "action-123",
-            crate::ProofstormLabActionSpec {
+            crate::ProofstormCellActionSpec {
                 access_scope: None,
-                lab_name: "lab-resource".into(),
+                cell_name: "cell-resource".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "i0123456789012345678".into(),
@@ -3650,7 +3654,7 @@ mod tests {
                 request_digest: "sha256:request".into(),
                 capability: Capability::WalletFund,
                 accepted_at_unix: 1,
-                action: LabAction::BootstrapLiquidity(BootstrapLiquidityAction {
+                action: CellAction::BootstrapLiquidity(BootstrapLiquidityAction {
                     chain: "chain".into(),
                     mint_lightning: "mint-lnd".into(),
                     payer_lightning: "payer-lnd".into(),
@@ -3660,19 +3664,19 @@ mod tests {
                 }),
             },
         );
-        (lab, action)
+        (cell, action)
     }
 
-    fn ready_admission_status(lab: &mut ProofstormLab) {
-        lab.metadata.annotations.get_or_insert_default().insert(
+    fn ready_admission_status(cell: &mut ProofstormCell) {
+        cell.metadata.annotations.get_or_insert_default().insert(
             crate::PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
             "lease-current".into(),
         );
         let plans = crate::compile_component_plans(
-            &lab.spec.instance_key,
-            &lab.spec.revision_digest,
-            &lab.spec.lab,
-            &lab.spec.lock,
+            &cell.spec.instance_key,
+            &cell.spec.revision_digest,
+            &cell.spec.cell,
+            &cell.spec.lock,
         )
         .expect("plans");
         let components = plans
@@ -3723,23 +3727,23 @@ mod tests {
                 ports: plan.target_descriptor.ports.clone(),
             })
             .collect();
-        lab.status = Some(crate::ProofstormLabStatus {
-            phase: crate::LabPhase::Ready,
-            observed_revision_digest: lab.spec.revision_digest.clone(),
+        cell.status = Some(crate::ProofstormCellStatus {
+            phase: crate::CellPhase::Ready,
+            observed_revision_digest: cell.spec.revision_digest.clone(),
             observed_protocol_probe_lease: Some("lease-current".into()),
             components,
-            ..crate::ProofstormLabStatus::default()
+            ..crate::ProofstormCellStatus::default()
         });
     }
 
     fn set_condition(
-        lab: &mut ProofstormLab,
+        cell: &mut ProofstormCell,
         component: &str,
         condition_type: ComponentConditionType,
         state: ComponentConditionState,
         reason: ComponentConditionReason,
     ) {
-        let condition = lab
+        let condition = cell
             .status
             .as_mut()
             .expect("status")
@@ -3756,66 +3760,66 @@ mod tests {
     }
 
     #[test]
-    fn closing_labs_refuse_new_work_even_when_components_are_ready() {
-        let (mut lab, action) = typed_bootstrap();
-        ready_admission_status(&mut lab);
-        for phase in [crate::LabPhase::Closing, crate::LabPhase::CleanupBlocked] {
-            lab.status.as_mut().expect("status").phase = phase;
+    fn closing_cells_refuse_new_work_even_when_components_are_ready() {
+        let (mut cell, action) = typed_bootstrap();
+        ready_admission_status(&mut cell);
+        for phase in [crate::CellPhase::Closing, crate::CellPhase::CleanupBlocked] {
+            cell.status.as_mut().expect("status").phase = phase;
             assert_eq!(
-                evaluate_action_admission(&action, &lab),
-                Err(ActionAdmissionError::LabClosing)
+                evaluate_action_admission(&action, &cell),
+                Err(ActionAdmissionError::CellClosing)
             );
         }
-        lab.status.as_mut().expect("status").phase = crate::LabPhase::Ready;
-        lab.metadata.deletion_timestamp =
+        cell.status.as_mut().expect("status").phase = crate::CellPhase::Ready;
+        cell.metadata.deletion_timestamp =
             Some(serde_json::from_value(json!("2026-09-06T00:00:00Z")).expect("timestamp"));
         assert_eq!(
-            evaluate_action_admission(&action, &lab),
-            Err(ActionAdmissionError::LabClosing)
+            evaluate_action_admission(&action, &cell),
+            Err(ActionAdmissionError::CellClosing)
         );
     }
 
     #[test]
-    fn admission_uses_operation_prerequisites_instead_of_lab_ready() {
-        let (mut lab, mut action) = typed_bootstrap();
+    fn admission_uses_operation_prerequisites_instead_of_cell_ready() {
+        let (mut cell, mut action) = typed_bootstrap();
 
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "mint-lnd".into(),
             script: "bitcoin-cli -help".into(),
             timeout_seconds: 30,
         });
         assert!(
-            evaluate_action_admission(&action, &lab).is_ok(),
-            "immutable execution and target contracts do not require lab readiness"
+            evaluate_action_admission(&action, &cell).is_ok(),
+            "immutable execution and target contracts do not require cell readiness"
         );
 
-        ready_admission_status(&mut lab);
-        lab.status.as_mut().expect("status").phase = crate::LabPhase::Pending;
+        ready_admission_status(&mut cell);
+        cell.status.as_mut().expect("status").phase = crate::CellPhase::Pending;
         set_condition(
-            &mut lab,
+            &mut cell,
             "chain",
             ComponentConditionType::ProtocolReady,
             ComponentConditionState::False,
             ComponentConditionReason::ProtocolProbeFailed,
         );
-        action.spec.action = LabAction::NodeStart(crate::ComponentControlAction {
+        action.spec.action = CellAction::NodeStart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(
-            evaluate_action_admission(&action, &lab).is_ok(),
-            "start depends on storage, not protocol or aggregate lab phase"
+            evaluate_action_admission(&action, &cell).is_ok(),
+            "start depends on storage, not protocol or aggregate cell phase"
         );
 
         set_condition(
-            &mut lab,
+            &mut cell,
             "chain",
             ComponentConditionType::StorageReady,
             ComponentConditionState::False,
             ComponentConditionReason::StoragePending,
         );
         assert!(matches!(
-            evaluate_action_admission(&action, &lab),
+            evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 prerequisite: ReadinessPrerequisite::Storage,
                 ..
@@ -3825,34 +3829,34 @@ mod tests {
 
     #[test]
     fn admission_allows_stopped_recovery_and_rejects_unhealthy_mutation() {
-        let (mut lab, mut action) = typed_bootstrap();
-        ready_admission_status(&mut lab);
+        let (mut cell, mut action) = typed_bootstrap();
+        ready_admission_status(&mut cell);
         set_condition(
-            &mut lab,
+            &mut cell,
             "mint-lnd",
             ComponentConditionType::WorkloadReady,
             ComponentConditionState::False,
             ComponentConditionReason::IntentionallyStopped,
         );
         set_condition(
-            &mut lab,
+            &mut cell,
             "mint-lnd",
             ComponentConditionType::ProtocolReady,
             ComponentConditionState::False,
             ComponentConditionReason::IntentionallyStopped,
         );
 
-        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
+        action.spec.action = CellAction::NodeRestart(crate::ComponentControlAction {
             component: "mint-lnd".into(),
         });
-        assert!(evaluate_action_admission(&action, &lab).is_ok());
+        assert!(evaluate_action_admission(&action, &cell).is_ok());
 
-        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
         });
         assert_eq!(
-            evaluate_action_admission(&action, &lab),
+            evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 component: "mint-lnd".into(),
                 operation: OperationClass::PeerChannelMutation,
@@ -3866,9 +3870,9 @@ mod tests {
 
     #[test]
     fn workload_identity_rejects_stale_status_but_network_control_does_not() {
-        let (mut lab, mut action) = typed_bootstrap();
-        ready_admission_status(&mut lab);
-        lab.status
+        let (mut cell, mut action) = typed_bootstrap();
+        ready_admission_status(&mut cell);
+        cell.status
             .as_mut()
             .expect("status")
             .components
@@ -3877,50 +3881,50 @@ mod tests {
             .expect("chain")
             .observed_rollout_digest = "sha256:stale".into();
 
-        action.spec.action = LabAction::NodeStop(crate::ComponentControlAction {
+        action.spec.action = CellAction::NodeStop(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(matches!(
-            evaluate_action_admission(&action, &lab),
+            evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 prerequisite: ReadinessPrerequisite::WorkloadIdentity,
                 ..
             })
         ));
 
-        action.spec.action = LabAction::NetworkPartition(crate::NetworkPartitionAction {
+        action.spec.action = CellAction::NetworkPartition(crate::NetworkPartitionAction {
             from_component: "chain".into(),
             to_component: "mint-lnd".into(),
         });
-        assert!(evaluate_action_admission(&action, &lab).is_ok());
+        assert!(evaluate_action_admission(&action, &cell).is_ok());
     }
 
     #[test]
     fn read_only_wallet_inspection_survives_mint_protocol_failure() {
-        let (mut lab, mut action) = typed_bootstrap();
-        ready_admission_status(&mut lab);
+        let (mut cell, mut action) = typed_bootstrap();
+        ready_admission_status(&mut cell);
         set_condition(
-            &mut lab,
+            &mut cell,
             "mint",
             ComponentConditionType::ProtocolReady,
             ComponentConditionState::False,
             ComponentConditionReason::ProtocolProbeFailed,
         );
 
-        action.spec.action = LabAction::WalletBalance(crate::WalletBalanceAction {
+        action.spec.action = CellAction::WalletBalance(crate::WalletBalanceAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
         });
-        assert!(evaluate_action_admission(&action, &lab).is_ok());
+        assert!(evaluate_action_admission(&action, &cell).is_ok());
 
-        action.spec.action = LabAction::WalletFund(crate::WalletFundAction {
+        action.spec.action = CellAction::WalletFund(crate::WalletFundAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
             payer_lightning: "payer-lnd".into(),
             amount_sat: 100,
         });
         assert_eq!(
-            evaluate_action_admission(&action, &lab),
+            evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 component: "mint".into(),
                 operation: OperationClass::WalletPayment,
@@ -3933,19 +3937,19 @@ mod tests {
     }
 
     #[test]
-    fn stale_lab_revision_fences_runtime_admission_only() {
-        let (mut lab, mut action) = typed_bootstrap();
-        ready_admission_status(&mut lab);
-        lab.status
+    fn stale_cell_revision_fences_runtime_admission_only() {
+        let (mut cell, mut action) = typed_bootstrap();
+        ready_admission_status(&mut cell);
+        cell.status
             .as_mut()
             .expect("status")
             .observed_revision_digest = "sha256:previous-revision".into();
 
-        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
+        action.spec.action = CellAction::NodeRestart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         assert!(matches!(
-            evaluate_action_admission(&action, &lab),
+            evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 prerequisite: ReadinessPrerequisite::WorkloadIdentity,
                 state: None,
@@ -3954,23 +3958,23 @@ mod tests {
             })
         ));
 
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain-b".into(),
             script: "bitcoin-cli -help".into(),
             timeout_seconds: 30,
         });
         assert!(
-            evaluate_action_admission(&action, &lab).is_ok(),
+            evaluate_action_admission(&action, &cell).is_ok(),
             "a newly compiled immutable execution contract does not consume stale status"
         );
     }
 
     #[test]
     fn scheduler_lease_fences_protocol_admission_without_blocking_recovery() {
-        let (mut lab, mut action) = typed_bootstrap();
-        ready_admission_status(&mut lab);
-        lab.metadata
+        let (mut cell, mut action) = typed_bootstrap();
+        ready_admission_status(&mut cell);
+        cell.metadata
             .annotations
             .as_mut()
             .expect("annotations")
@@ -3979,12 +3983,12 @@ mod tests {
                 "inactive".into(),
             );
 
-        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
         });
         assert!(matches!(
-            evaluate_action_admission(&action, &lab),
+            evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 prerequisite: ReadinessPrerequisite::Dependencies | ReadinessPrerequisite::Protocol,
                 state: None,
@@ -3993,17 +3997,17 @@ mod tests {
             })
         ));
 
-        action.spec.action = LabAction::NodeStart(crate::ComponentControlAction {
+        action.spec.action = CellAction::NodeStart(crate::ComponentControlAction {
             component: "mint-lnd".into(),
         });
-        assert!(evaluate_action_admission(&action, &lab).is_ok());
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+        assert!(evaluate_action_admission(&action, &cell).is_ok());
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "mint-lnd".into(),
             target_component: "payer-lnd".into(),
             script: "lncli --help".into(),
             timeout_seconds: 30,
         });
-        assert!(evaluate_action_admission(&action, &lab).is_ok());
+        assert!(evaluate_action_admission(&action, &cell).is_ok());
     }
 
     #[test]
@@ -4265,8 +4269,8 @@ mod tests {
 
     #[test]
     fn native_exec_uses_locked_component_image_data_and_uninterpolated_script() {
-        let (lab, mut action) = typed_bootstrap();
-        let locked_bitcoin = lab
+        let (cell, mut action) = typed_bootstrap();
+        let locked_bitcoin = cell
             .spec
             .lock
             .entries
@@ -4277,14 +4281,14 @@ mod tests {
             .clone();
         let script = "bitcoin-cli --help; printf '%s' '$NOT_EXPANDED_BY_RENDERER'";
         action.spec.capability = Capability::ComponentForensics;
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain".into(),
             script: script.into(),
             timeout_seconds: 30,
         });
 
-        let job = render_lab_action_job(&action, &lab).expect("native exec job");
+        let job = render_cell_action_job(&action, &cell).expect("native exec job");
         let spec = job.spec.as_ref().expect("job spec");
         assert_eq!(spec.active_deadline_seconds, Some(40));
         let pod = spec.template.spec.as_ref().expect("pod");
@@ -4329,16 +4333,16 @@ mod tests {
 
     #[test]
     fn native_exec_can_target_a_distinct_bitcoin_component() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::ComponentForensics;
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
             target_component: "chain-b".into(),
             script: "bitcoin-cli getblockchaininfo".into(),
             timeout_seconds: 30,
         });
 
-        let job = render_lab_action_job(&action, &lab).expect("targeted native exec job");
+        let job = render_cell_action_job(&action, &cell).expect("targeted native exec job");
         let pod = job
             .spec
             .as_ref()
@@ -4386,16 +4390,16 @@ mod tests {
 
     #[test]
     fn native_exec_mounts_are_compiled_from_the_executor_plan() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::ComponentForensics;
-        action.spec.action = LabAction::ComponentForensics(ComponentForensicsAction {
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "mint".into(),
             target_component: "chain-b".into(),
             script: "cdk-mintd --help".into(),
             timeout_seconds: 30,
         });
 
-        let job = render_lab_action_job(&action, &lab).expect("mint native exec");
+        let job = render_cell_action_job(&action, &cell).expect("mint native exec");
         let pod = job
             .spec
             .as_ref()
@@ -4433,10 +4437,10 @@ mod tests {
         assert_eq!(mounts[2].read_only, Some(true));
 
         let mut plans = crate::compile_component_plans(
-            &lab.spec.instance_key,
-            &lab.spec.revision_digest,
-            &lab.spec.lab,
-            &lab.spec.lock,
+            &cell.spec.instance_key,
+            &cell.spec.revision_digest,
+            &cell.spec.cell,
+            &cell.spec.lock,
         )
         .expect("compiled plans");
         let mint = plans
@@ -4453,8 +4457,8 @@ mod tests {
 
     #[test]
     fn typed_peer_and_channel_actions_are_bounded_and_adapter_locked() {
-        let (lab, mut action) = typed_bootstrap();
-        let locked_lnd = lab
+        let (cell, mut action) = typed_bootstrap();
+        let locked_lnd = cell
             .spec
             .lock
             .entries
@@ -4465,11 +4469,11 @@ mod tests {
             .clone();
 
         action.spec.capability = Capability::PeerConnect;
-        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
         });
-        let peer = render_lab_action_job(&action, &lab).expect("peer job");
+        let peer = render_cell_action_job(&action, &cell).expect("peer job");
         assert_eq!(
             peer.spec
                 .as_ref()
@@ -4489,14 +4493,14 @@ mod tests {
         );
 
         action.spec.capability = Capability::ChannelOpen;
-        action.spec.action = LabAction::ChannelOpen(ChannelOpenAction {
+        action.spec.action = CellAction::ChannelOpen(ChannelOpenAction {
             chain: "chain".into(),
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
             channel_sat: 2_000_000,
             push_sat: 0,
         });
-        let channel = render_lab_action_job(&action, &lab).expect("channel job");
+        let channel = render_cell_action_job(&action, &cell).expect("channel job");
         assert_eq!(
             channel
                 .spec
@@ -4518,13 +4522,13 @@ mod tests {
         assert!(channel_open.contains("channel endpoint peer connection did not become ready"));
         assert!(channel_open.contains("/shared/channel-open.log"));
 
-        action.spec.action = LabAction::ChannelPolicySet(ChannelPolicySetAction {
+        action.spec.action = CellAction::ChannelPolicySet(ChannelPolicySetAction {
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
             base_fee_msat: 100_000,
             fee_rate_ppm: 250,
         });
-        let policy = render_lab_action_job(&action, &lab).expect("channel policy job");
+        let policy = render_cell_action_job(&action, &cell).expect("channel policy job");
         assert_eq!(
             policy
                 .spec
@@ -4545,7 +4549,7 @@ mod tests {
         assert!(policy_script.contains("--fee_rate_ppm=250"));
         assert!(policy_script.contains("--chan_point=\"$point\""));
 
-        action.spec.action = LabAction::ChannelOpen(ChannelOpenAction {
+        action.spec.action = CellAction::ChannelOpen(ChannelOpenAction {
             chain: "chain".into(),
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
@@ -4553,20 +4557,20 @@ mod tests {
             push_sat: 2_000_000,
         });
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
     }
 
     #[test]
     fn typed_peer_and_channel_teardown_uses_opaque_handles() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::PeerDisconnect;
-        action.spec.action = LabAction::PeerDisconnect(PeerDisconnectAction {
+        action.spec.action = CellAction::PeerDisconnect(PeerDisconnectAction {
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
         });
-        let disconnect = render_lab_action_job(&action, &lab).expect("peer disconnect job");
+        let disconnect = render_cell_action_job(&action, &cell).expect("peer disconnect job");
         let disconnect_pod = disconnect
             .spec
             .expect("disconnect spec")
@@ -4585,13 +4589,13 @@ mod tests {
 
         let channel_id = format!("ch-{}", "a".repeat(64));
         action.spec.capability = Capability::ChannelClose;
-        action.spec.action = LabAction::ChannelClose(ChannelCloseAction {
+        action.spec.action = CellAction::ChannelClose(ChannelCloseAction {
             chain: "chain".into(),
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
             channel_id: channel_id.clone(),
         });
-        let close = render_lab_action_job(&action, &lab).expect("channel close job");
+        let close = render_cell_action_job(&action, &cell).expect("channel close job");
         let close_script = close
             .spec
             .expect("close spec")
@@ -4608,13 +4612,13 @@ mod tests {
         assert!(!close_script.contains("closechannel --force"));
 
         action.spec.capability = Capability::ChannelForceClose;
-        action.spec.action = LabAction::ChannelForceClose(ChannelCloseAction {
+        action.spec.action = CellAction::ChannelForceClose(ChannelCloseAction {
             chain: "chain".into(),
             from_lightning: "mint-lnd".into(),
             to_lightning: "payer-lnd".into(),
             channel_id,
         });
-        let force_close = render_lab_action_job(&action, &lab).expect("force close job");
+        let force_close = render_cell_action_job(&action, &cell).expect("force close job");
         let force_script = force_close
             .spec
             .expect("force close spec")
@@ -4629,12 +4633,12 @@ mod tests {
             .clone();
         assert!(force_script.contains("closechannel --force"));
 
-        let LabAction::ChannelForceClose(request) = &mut action.spec.action else {
+        let CellAction::ChannelForceClose(request) = &mut action.spec.action else {
             panic!("force close action");
         };
         request.channel_id = "raw-channel-point".into();
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
     }
@@ -4645,13 +4649,13 @@ mod tests {
         reason = "one adapter-parity test keeps peer, open, policy, and close scripts comparable"
     )]
     fn cln_and_lnd_peer_channel_jobs_use_endpoint_specific_adapters() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::PeerConnect;
-        action.spec.action = LabAction::PeerConnect(PeerConnectAction {
+        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
             from_lightning: "attacker-cln".into(),
             to_lightning: "mint-lnd".into(),
         });
-        let peer = render_lab_action_job(&action, &lab).expect("CLN to LND peer job");
+        let peer = render_cell_action_job(&action, &cell).expect("CLN to LND peer job");
         let peer_pod = peer
             .spec
             .expect("peer spec")
@@ -4674,14 +4678,14 @@ mod tests {
         assert!(connect.contains("connect \"$pk\" \"mint-lnd\" 9735"));
 
         action.spec.capability = Capability::ChannelOpen;
-        action.spec.action = LabAction::ChannelOpen(ChannelOpenAction {
+        action.spec.action = CellAction::ChannelOpen(ChannelOpenAction {
             chain: "chain".into(),
             from_lightning: "attacker-cln".into(),
             to_lightning: "mint-lnd".into(),
             channel_sat: 1_000_000,
             push_sat: 0,
         });
-        let channel = render_lab_action_job(&action, &lab).expect("CLN channel job");
+        let channel = render_cell_action_job(&action, &cell).expect("CLN channel job");
         let channel_pod = channel
             .spec
             .expect("channel spec")
@@ -4696,13 +4700,13 @@ mod tests {
         assert!(open.contains("for attempt in $(seq 1 60)"));
         assert_ne!(init[0].image, init[1].image);
 
-        action.spec.action = LabAction::ChannelPolicySet(ChannelPolicySetAction {
+        action.spec.action = CellAction::ChannelPolicySet(ChannelPolicySetAction {
             from_lightning: "attacker-cln".into(),
             to_lightning: "mint-lnd".into(),
             base_fee_msat: 25_000,
             fee_rate_ppm: 500,
         });
-        let policy = render_lab_action_job(&action, &lab).expect("CLN policy job");
+        let policy = render_cell_action_job(&action, &cell).expect("CLN policy job");
         let policy_pod = policy
             .spec
             .expect("policy spec")
@@ -4719,13 +4723,13 @@ mod tests {
         assert!(policy_script.contains("feeppm=500"));
 
         action.spec.capability = Capability::ChannelClose;
-        action.spec.action = LabAction::ChannelClose(ChannelCloseAction {
+        action.spec.action = CellAction::ChannelClose(ChannelCloseAction {
             chain: "chain".into(),
             from_lightning: "attacker-cln".into(),
             to_lightning: "mint-lnd".into(),
             channel_id: format!("ch-{}", "a".repeat(64)),
         });
-        let close = render_lab_action_job(&action, &lab).expect("CLN close job");
+        let close = render_cell_action_job(&action, &cell).expect("CLN close job");
         let close_pod = close
             .spec
             .expect("close spec")
@@ -4766,18 +4770,18 @@ mod tests {
 
     #[test]
     fn typed_rebalance_uses_opaque_handles_and_rejects_unsupported_adapters() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         let outgoing = format!("ch-{}", "a".repeat(64));
         let incoming = format!("ch-{}", "b".repeat(64));
         action.spec.capability = Capability::ChannelRebalance;
-        action.spec.action = LabAction::ChannelRebalance(ChannelRebalanceAction {
+        action.spec.action = CellAction::ChannelRebalance(ChannelRebalanceAction {
             lightning: "mint-lnd".into(),
             outgoing_channel_id: outgoing.clone(),
             incoming_channel_id: incoming.clone(),
             amount_sat: 100_000,
             max_fee_sat: 100,
         });
-        let rebalance = render_lab_action_job(&action, &lab).expect("rebalance job");
+        let rebalance = render_cell_action_job(&action, &cell).expect("rebalance job");
         let spec = rebalance.spec.expect("job spec");
         assert_eq!(spec.active_deadline_seconds, Some(120));
         let pod = spec.template.spec.expect("rebalance pod");
@@ -4806,29 +4810,29 @@ mod tests {
         assert!(script.contains("outgoing_local_before_sat"));
         assert!(!script.contains("payment_request\":\""));
 
-        if let LabAction::ChannelRebalance(request) = &mut action.spec.action {
+        if let CellAction::ChannelRebalance(request) = &mut action.spec.action {
             request.incoming_channel_id.clone_from(&outgoing);
         } else {
             panic!("rebalance action");
         }
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
-        if let LabAction::ChannelRebalance(request) = &mut action.spec.action {
+        if let CellAction::ChannelRebalance(request) = &mut action.spec.action {
             request.incoming_channel_id = incoming;
             request.lightning = "attacker-cln".into();
         }
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::UnsupportedAdapter { .. })
         ));
     }
 
     #[test]
     fn wallet_initialize_and_balance_use_the_locked_adapter_and_snapshot_reads() {
-        let (lab, mut action) = typed_bootstrap();
-        let wallet_image = lab
+        let (cell, mut action) = typed_bootstrap();
+        let wallet_image = cell
             .spec
             .lock
             .entries
@@ -4838,11 +4842,11 @@ mod tests {
             .image
             .clone();
         action.spec.capability = Capability::WalletCreate;
-        action.spec.action = LabAction::WalletInitialize(WalletInitializeAction {
+        action.spec.action = CellAction::WalletInitialize(WalletInitializeAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
         });
-        let initialize = render_lab_action_job(&action, &lab).expect("initialize job");
+        let initialize = render_cell_action_job(&action, &cell).expect("initialize job");
         assert_eq!(
             initialize
                 .spec
@@ -4857,11 +4861,11 @@ mod tests {
         );
 
         action.spec.capability = Capability::WalletControl;
-        action.spec.action = LabAction::WalletBalance(WalletBalanceAction {
+        action.spec.action = CellAction::WalletBalance(WalletBalanceAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
         });
-        let balance = render_lab_action_job(&action, &lab).expect("balance job");
+        let balance = render_cell_action_job(&action, &cell).expect("balance job");
         let snapshot = &balance
             .spec
             .expect("spec")
@@ -4879,10 +4883,10 @@ mod tests {
 
     #[test]
     fn cdk_observation_is_version_locked_and_never_starts_the_wallet() {
-        let (mut lab, mut action) = typed_bootstrap();
-        let wallet = lab
+        let (mut cell, mut action) = typed_bootstrap();
+        let wallet = cell
             .spec
-            .lab
+            .cell
             .components
             .iter_mut()
             .find(|component| component.id == "wallet")
@@ -4890,13 +4894,13 @@ mod tests {
         wallet.implementation = "cdk-cli-wallet".into();
         wallet.config_version = "cdk-cli-wallet/0.18/v1".into();
         wallet.version = Some("0.18.0".into());
-        lab.spec.lock = resolve_lock(&lab.spec.lab, default_catalog()).expect("CDK lock");
+        cell.spec.lock = resolve_lock(&cell.spec.cell, default_catalog()).expect("CDK lock");
         action.spec.capability = Capability::WalletControl;
-        action.spec.action = LabAction::WalletBalance(WalletBalanceAction {
+        action.spec.action = CellAction::WalletBalance(WalletBalanceAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
         });
-        let job = render_lab_action_job(&action, &lab).expect("passive observation");
+        let job = render_cell_action_job(&action, &cell).expect("passive observation");
         let spec = job.spec.expect("job");
         assert_eq!(spec.active_deadline_seconds, Some(30));
         let pod = spec.template.spec.expect("pod");
@@ -4914,33 +4918,33 @@ mod tests {
         assert!(script.contains("mode=ro"));
         assert!(!script.contains("subprocess"));
         assert!(!script.contains("cp -R"));
-        lab.spec
+        cell.spec
             .lock
             .entries
             .iter_mut()
             .find(|entry| entry.component_id == "wallet")
             .expect("wallet lock")
             .protocol_action_adapter_version = Some("uninstalled-version".into());
-        assert!(render_lab_action_job(&action, &lab).is_err());
+        assert!(render_cell_action_job(&action, &cell).is_err());
         action.spec.capability = Capability::WalletCreate;
-        action.spec.action = LabAction::WalletInitialize(WalletInitializeAction {
+        action.spec.action = CellAction::WalletInitialize(WalletInitializeAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
         });
-        assert!(render_lab_action_job(&action, &lab).is_err());
+        assert!(render_cell_action_job(&action, &cell).is_err());
     }
 
     #[test]
     fn wallet_fund_is_bounded_and_uses_locked_wallet_and_payer_adapters() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::WalletFund;
-        action.spec.action = LabAction::WalletFund(WalletFundAction {
+        action.spec.action = CellAction::WalletFund(WalletFundAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
             payer_lightning: "payer-lnd".into(),
             amount_sat: 1_000,
         });
-        let funded = render_lab_action_job(&action, &lab).expect("fund job");
+        let funded = render_cell_action_job(&action, &cell).expect("fund job");
         let funded_spec = funded.spec.expect("spec");
         assert_eq!(funded_spec.active_deadline_seconds, Some(180));
         let pod = funded_spec.template.spec.expect("pod");
@@ -4975,27 +4979,27 @@ mod tests {
         assert!(payer_script.contains("ln(bcrt|bc|tb|tbs)"));
         #[cfg(unix)]
         assert_shell_syntax(payer_script);
-        let LabAction::WalletFund(request) = &mut action.spec.action else {
+        let CellAction::WalletFund(request) = &mut action.spec.action else {
             panic!("fund action");
         };
         request.amount_sat = 500_001;
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
     }
 
     #[test]
     fn wallet_invoice_and_pay_keep_payment_material_in_private_volumes() {
-        let (lab, mut invoice_action) = typed_bootstrap();
+        let (cell, mut invoice_action) = typed_bootstrap();
         invoice_action.spec.capability = Capability::WalletFund;
-        invoice_action.spec.action = LabAction::WalletInvoice(WalletInvoiceAction {
+        invoice_action.spec.action = CellAction::WalletInvoice(WalletInvoiceAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
             amount_sat: 100,
             timeout_seconds: 300,
         });
-        let invoice = render_lab_action_job(&invoice_action, &lab).expect("invoice job");
+        let invoice = render_cell_action_job(&invoice_action, &cell).expect("invoice job");
         let invoice_spec = invoice.spec.expect("invoice spec");
         assert_eq!(invoice_spec.active_deadline_seconds, Some(330));
         let invoice_pod = invoice_spec.template.spec.expect("invoice pod");
@@ -5010,23 +5014,23 @@ mod tests {
         assert!(invoice_script.contains("trap cleanup EXIT"));
         assert!(!invoice_script.contains("lnbcrt1"));
         assert!(
-            render_lab_action_cleanup_job(&invoice_action, &lab)
+            render_cell_action_cleanup_job(&invoice_action, &cell)
                 .expect("cleanup render")
                 .is_none()
         );
 
-        let mut pay_lab = lab;
-        let mut receiver = pay_lab
+        let mut pay_cell = cell;
+        let mut receiver = pay_cell
             .spec
-            .lab
+            .cell
             .components
             .iter()
             .find(|component| component.id == "wallet")
             .expect("wallet")
             .clone();
         receiver.id = "receiver-wallet".into();
-        pay_lab.spec.lab.components.push(receiver);
-        let mut receiver_lock = pay_lab
+        pay_cell.spec.cell.components.push(receiver);
+        let mut receiver_lock = pay_cell
             .spec
             .lock
             .entries
@@ -5035,17 +5039,17 @@ mod tests {
             .expect("wallet lock")
             .clone();
         receiver_lock.component_id = "receiver-wallet".into();
-        pay_lab.spec.lock.entries.push(receiver_lock);
+        pay_cell.spec.lock.entries.push(receiver_lock);
         let mut pay_action = invoice_action;
         pay_action.spec.capability = Capability::WalletControl;
-        pay_action.spec.action = LabAction::WalletPay(WalletPayAction {
+        pay_action.spec.action = CellAction::WalletPay(WalletPayAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
             recipient_wallet: "receiver-wallet".into(),
             recipient_mint: "mint".into(),
             mint_quote_id: "quote-one".into(),
         });
-        let pay = render_lab_action_job(&pay_action, &pay_lab).expect("pay job");
+        let pay = render_cell_action_job(&pay_action, &pay_cell).expect("pay job");
         let pod = pay.spec.expect("pay spec").template.spec.expect("pay pod");
         let recipient_mount = pod.containers[0]
             .volume_mounts
@@ -5056,12 +5060,12 @@ mod tests {
             .expect("recipient mount");
         assert_eq!(recipient_mount.read_only, Some(false));
 
-        let LabAction::WalletPay(request) = &mut pay_action.spec.action else {
+        let CellAction::WalletPay(request) = &mut pay_action.spec.action else {
             panic!("pay action");
         };
         request.recipient_wallet = "wallet".into();
         assert!(matches!(
-            render_lab_action_job(&pay_action, &pay_lab),
+            render_cell_action_job(&pay_action, &pay_cell),
             Err(ActionRenderError::Bounds(_))
         ));
     }
@@ -5147,8 +5151,8 @@ mod tests {
 
     #[test]
     fn typed_bootstrap_is_identity_checked_and_controller_owned() {
-        let (lab, mut action) = typed_bootstrap();
-        let job = render_lab_action_job(&action, &lab).expect("typed job");
+        let (cell, mut action) = typed_bootstrap();
+        let job = render_cell_action_job(&action, &cell).expect("typed job");
         assert_eq!(job.metadata.name.as_deref(), Some("action-123"));
         assert_eq!(
             job.metadata
@@ -5160,40 +5164,40 @@ mod tests {
         );
         action.spec.instance_id = "another-instance".into();
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Identity("instance_id"))
         ));
     }
 
     #[test]
     fn typed_bootstrap_refuses_out_of_bounds_and_unknown_fields() {
-        let (lab, mut action) = typed_bootstrap();
-        let LabAction::BootstrapLiquidity(request) = &mut action.spec.action else {
+        let (cell, mut action) = typed_bootstrap();
+        let CellAction::BootstrapLiquidity(request) = &mut action.spec.action else {
             panic!("expected bootstrap action");
         };
         request.push_sat = request.channel_sat;
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
 
         let mut document = serde_json::to_value(&action.spec).expect("serialize action");
         document["action"]["parameters"]["command"] = json!("arbitrary shell");
-        assert!(serde_json::from_value::<crate::ProofstormLabActionSpec>(document).is_err());
+        assert!(serde_json::from_value::<crate::ProofstormCellActionSpec>(document).is_err());
     }
 
     #[test]
     fn node_lifecycle_is_typed_and_never_renders_a_privileged_job() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::NodeControl;
-        action.spec.action = LabAction::NodeRestart(crate::ComponentControlAction {
+        action.spec.action = CellAction::NodeRestart(crate::ComponentControlAction {
             component: "chain".into(),
         });
         let serialized = serde_json::to_value(&action.spec.action).expect("serialize action");
         assert_eq!(serialized["kind"], "node_restart");
         assert_eq!(serialized["parameters"]["component"], "chain");
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
         assert_eq!(action_result_container(&action.spec.action), "result");
@@ -5201,9 +5205,9 @@ mod tests {
 
     #[test]
     fn typed_wallet_round_trip_uses_the_locked_wallet_adapter_image() {
-        let (mut lab, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = typed_bootstrap();
         let locked_image = "registry.example/nutshell@sha256:locked-wallet-image";
-        lab.spec
+        cell.spec
             .lock
             .entries
             .iter_mut()
@@ -5211,7 +5215,7 @@ mod tests {
             .expect("wallet lock entry")
             .image = locked_image.into();
         action.spec.capability = Capability::WalletControl;
-        action.spec.action = LabAction::WalletRoundTrip(WalletRoundTripAction {
+        action.spec.action = CellAction::WalletRoundTrip(WalletRoundTripAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
             payer_lightning: "payer-lnd".into(),
@@ -5219,7 +5223,7 @@ mod tests {
             tolerance_sat: 100,
         });
 
-        let job = render_lab_action_job(&action, &lab).expect("typed wallet job");
+        let job = render_cell_action_job(&action, &cell).expect("typed wallet job");
         let pod = job.spec.expect("job spec").template.spec.expect("pod spec");
         let wallet = pod
             .containers
@@ -5232,9 +5236,9 @@ mod tests {
 
     #[test]
     fn typed_conservation_oracle_snapshots_with_the_locked_wallet_image() {
-        let (mut lab, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = typed_bootstrap();
         let locked_image = "registry.example/nutshell@sha256:locked-oracle-image";
-        lab.spec
+        cell.spec
             .lock
             .entries
             .iter_mut()
@@ -5242,7 +5246,7 @@ mod tests {
             .expect("wallet lock entry")
             .image = locked_image.into();
         action.spec.capability = Capability::OracleRun;
-        action.spec.action = LabAction::ConservationOracle(ConservationOracleAction {
+        action.spec.action = CellAction::ConservationOracle(ConservationOracleAction {
             wallet: "wallet".into(),
             mint: "mint".into(),
             baseline_operation_id: "balance-before".into(),
@@ -5251,7 +5255,7 @@ mod tests {
             tolerance_sat: 0,
         });
 
-        let job = render_lab_action_job(&action, &lab).expect("typed oracle job");
+        let job = render_cell_action_job(&action, &cell).expect("typed oracle job");
         let pod = job.spec.expect("job spec").template.spec.expect("pod spec");
         let snapshot = pod.init_containers.expect("snapshot container");
         assert_eq!(snapshot[0].image.as_deref(), Some(locked_image));
@@ -5267,19 +5271,19 @@ mod tests {
 
         action.spec.capability = Capability::WalletControl;
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Capability)
         ));
 
         action.spec.capability = Capability::OracleRun;
-        lab.spec
-            .lab
+        cell.spec
+            .cell
             .components
             .iter_mut()
             .find(|component| component.id == "wallet")
             .expect("wallet component")
             .implementation = "cocod-wallet".into();
-        lab.spec
+        cell.spec
             .lock
             .entries
             .iter_mut()
@@ -5287,7 +5291,7 @@ mod tests {
             .expect("wallet lock entry")
             .catalog_id = "cocod-wallet".into();
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::UnsupportedAdapter { adapter, .. })
                 if adapter == "cocod-wallet"
         ));
@@ -5295,9 +5299,9 @@ mod tests {
 
     #[test]
     fn reachability_oracle_uses_source_firewall_identity_and_advertised_service() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::OracleRun;
-        action.spec.action = LabAction::ReachabilityOracle(ReachabilityOracleAction {
+        action.spec.action = CellAction::ReachabilityOracle(ReachabilityOracleAction {
             from_component: "wallet".into(),
             to_component: "mint".into(),
             service: "http".into(),
@@ -5305,7 +5309,7 @@ mod tests {
             attempts: 3,
         });
 
-        let job = render_lab_action_job(&action, &lab).expect("reachability job");
+        let job = render_cell_action_job(&action, &cell).expect("reachability job");
         assert!(
             job.metadata
                 .labels
@@ -5338,9 +5342,9 @@ mod tests {
 
     #[test]
     fn reachability_oracle_refuses_unknown_services_and_unbounded_probes() {
-        let (lab, mut action) = typed_bootstrap();
+        let (cell, mut action) = typed_bootstrap();
         action.spec.capability = Capability::OracleRun;
-        action.spec.action = LabAction::ReachabilityOracle(ReachabilityOracleAction {
+        action.spec.action = CellAction::ReachabilityOracle(ReachabilityOracleAction {
             from_component: "wallet".into(),
             to_component: "mint".into(),
             service: "ssh".into(),
@@ -5348,17 +5352,17 @@ mod tests {
             attempts: 3,
         });
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::UnknownService { .. })
         ));
 
-        let LabAction::ReachabilityOracle(request) = &mut action.spec.action else {
+        let CellAction::ReachabilityOracle(request) = &mut action.spec.action else {
             unreachable!()
         };
         request.service = "http".into();
         request.attempts = 6;
         assert!(matches!(
-            render_lab_action_job(&action, &lab),
+            render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
     }

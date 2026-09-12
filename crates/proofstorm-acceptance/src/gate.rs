@@ -14,7 +14,7 @@ use crate::{McpClient, kubectl::Kubectl};
 pub const CONTROL_NAMESPACE: &str = "proofstorm-system";
 
 /// Everything a gate needs: where the server is, a private database, and a
-/// kubectl bound to the lab cluster.
+/// kubectl bound to the cell cluster.
 pub struct GateContext {
     pub root: PathBuf,
     pub mcp_binary: PathBuf,
@@ -85,17 +85,17 @@ impl GateContext {
 /// The capability set an experiment-driving gate needs on top of the lifecycle.
 pub const EXPERIMENT_CAPABILITIES: &[&str] = &[
     "catalog.read",
-    "lab.read",
-    "lab.create",
-    "lab.validate",
-    "lab.publish",
-    "lab.materialize",
-    "lab.status",
-    "lab.close",
+    "cell.read",
+    "cell.create",
+    "cell.validate",
+    "cell.publish",
+    "cell.materialize",
+    "cell.status",
+    "cell.close",
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lab.operate",
+    "cell.operate",
     "wallet.create",
     "wallet.control",
     "wallet.fund",
@@ -109,11 +109,11 @@ pub const EXPERIMENT_CAPABILITIES: &[&str] = &[
 /// The capability set a full lifecycle gate needs.
 pub const LIFECYCLE_CAPABILITIES: &[&str] = &[
     "catalog.read",
-    "lab.read",
-    "lab.create",
-    "lab.validate",
-    "lab.publish",
-    "lab.materialize",
-    "lab.status",
-    "lab.close",
+    "cell.read",
+    "cell.create",
+    "cell.validate",
+    "cell.publish",
+    "cell.materialize",
+    "cell.status",
+    "cell.close",
 ];

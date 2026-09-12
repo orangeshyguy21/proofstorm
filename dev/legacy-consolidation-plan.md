@@ -12,7 +12,7 @@ installation homes; they must not borrow the developer's running cluster.
 
 Delete superseded workflows rather than translating every old script. Preserve
 useful assertions, not historical command compatibility. No migration of old
-labs, benchmark runs, or experimental workflows is required.
+cells, benchmark runs, or experimental workflows is required.
 
 This plan does not authorize further machine cleanup, image publication, model
 sessions, or Git history rewriting. The old local `proofstorm` cluster and its
@@ -95,7 +95,7 @@ Scope: C and the shared lifecycle needed by I.
 
 Acceptance: hermetic tests refuse wrong/missing homes, foreign/replaced resource
 IDs, changed kubeconfig, collisions, and inherited overrides. A disposable live
-smoke must create/read/delete one lab and remove only its own runtime. Existing
+smoke must create/read/delete one cell and remove only its own runtime. Existing
 dev containers, configuration, and storage remain unchanged. Interrupted setup
 and cleanup retain accurate failure evidence and are safely retryable.
 

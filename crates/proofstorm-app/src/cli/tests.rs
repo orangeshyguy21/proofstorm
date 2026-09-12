@@ -147,7 +147,7 @@ fn help_is_concise_and_advanced_options_are_discoverable() {
         "{advanced}"
     );
     let nested = parse(&["help", "gui", "stop"]).err().unwrap().to_string();
-    assert!(nested.contains("storm gui stop") && nested.contains("labs keep running"));
+    assert!(nested.contains("storm gui stop") && nested.contains("cells keep running"));
     assert_eq!(
         nested,
         parse(&["gui", "stop", "--help"]).err().unwrap().to_string()

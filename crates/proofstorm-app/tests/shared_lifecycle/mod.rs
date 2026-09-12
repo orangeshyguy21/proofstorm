@@ -2,23 +2,25 @@
 use super::*;
 use proofstorm_core::InstancePhase;
 
-async fn native(labs: &Labs, id: &str) -> proofstorm_app::lab::AppliedLab {
+async fn native(cells: &Cells, id: &str) -> proofstorm_app::cell::AppliedCell {
     let plan = format!("{id}-plan");
     let spec = spec();
-    labs.store
+    cells
+        .store
         .create_draft("local", "developer", &plan, &spec, &plan)
         .unwrap();
-    labs.apply_plan(
-        id,
-        &plan,
-        &proofstorm_core::digest_json(&spec),
-        &format!("{id}-apply"),
-    )
-    .await
-    .unwrap()
+    cells
+        .apply_plan(
+            id,
+            &plan,
+            &proofstorm_core::digest_json(&spec),
+            &format!("{id}-apply"),
+        )
+        .await
+        .unwrap()
 }
 
-fn connection_target(cluster: &Arc<Mutex<Cluster>>, instance: &proofstorm_core::LabInstance) {
+fn connection_target(cluster: &Arc<Mutex<Cluster>>, instance: &proofstorm_core::CellInstance) {
     let ns = proofstorm_kube::instance_namespace(&instance.instance_key);
     let mut api = cluster.lock().unwrap();
     api.objects.insert(format!("/api/v1/namespaces/{ns}/services/chain"), json!({
@@ -28,35 +30,38 @@ fn connection_target(cluster: &Arc<Mutex<Cluster>>, instance: &proofstorm_core::
 }
 
 #[tokio::test]
-async fn native_lab_supports_named_inspection_edit_connection_and_close_without_adoption() {
+async fn native_cell_supports_named_inspection_edit_connection_and_close_without_adoption() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let applied = native(&labs, "native-lab").await;
+    let cells = service(store.clone(), cluster.clone());
+    let applied = native(&cells, "native-cell").await;
     assert!(
         store
-            .lab_handle("local", "developer", "native-lab")
+            .cell_handle("local", "developer", "native-cell")
             .is_err()
     );
-    let inspected = labs.inspect("native-lab", 0).await.unwrap();
+    let inspected = cells.inspect("native-cell", 0).await.unwrap();
     assert_eq!(inspected.runtime.unwrap().instance, applied.instance);
     assert!(inspected.run.is_none());
     assert!(
         store
-            .lab_handle("local", "developer", "native-lab")
+            .cell_handle("local", "developer", "native-cell")
             .is_err(),
         "reads never create an alias or run"
     );
     connection_target(&cluster, &applied.instance);
-    let connection = labs.connect("native-lab", "chain", "rpc", 0).await.unwrap();
-    assert_eq!(connection.descriptor.lab, "native-lab");
+    let connection = cells
+        .connect("native-cell", "chain", "rpc", 0)
+        .await
+        .unwrap();
+    assert_eq!(connection.descriptor.cell, "native-cell");
     drop(connection);
     let mut changed = spec();
     changed.components[0]
         .config
         .insert("txindex".into(), json!(false));
-    let edited = labs.up("native-lab", &changed).await.unwrap();
+    let edited = cells.up("native-cell", &changed).await.unwrap();
     let instance = edited.runtime.unwrap().instance;
     assert_eq!(instance.instance_key, applied.instance.instance_key);
     assert_eq!(instance.generation, 2);
@@ -66,11 +71,11 @@ async fn native_lab_supports_named_inspection_edit_connection_and_close_without_
             .unwrap()
             .objects
             .values()
-            .filter(|v| v["kind"] == "ProofstormLab")
+            .filter(|v| v["kind"] == "ProofstormCell")
             .count(),
         1
     );
-    let closed = labs.down("native-lab", 2).await.unwrap();
+    let closed = cells.down("native-cell", 2).await.unwrap();
     assert!(
         closed
             .runtime
@@ -79,40 +84,42 @@ async fn native_lab_supports_named_inspection_edit_connection_and_close_without_
             .unwrap()
             .verified_absent
     );
-    assert!(store.instance("local", "developer", "native-lab").is_err());
+    assert!(store.instance("local", "developer", "native-cell").is_err());
 }
 
 #[tokio::test]
-async fn named_lab_accepts_native_apply_and_close_with_incarnation_fencing() {
+async fn named_cell_accepts_native_apply_and_close_with_incarnation_fencing() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster);
-    let initial = labs
-        .up("named-lab", &spec())
+    let cells = service(store, cluster);
+    let initial = cells
+        .up("named-cell", &spec())
         .await
         .unwrap()
         .runtime
         .unwrap()
         .instance;
-    assert_eq!(labs.status("named-lab").await.unwrap().instance, initial);
-    assert_eq!(labs.status(&initial.id).await.unwrap().instance, initial);
+    assert_eq!(cells.status("named-cell").await.unwrap().instance, initial);
+    assert_eq!(cells.status(&initial.id).await.unwrap().instance, initial);
     let mut changed = spec();
     changed.components[0]
         .config
         .insert("txindex".into(), json!(false));
-    let plan = labs.plan_edit("named-lab", &changed, false, &[]).unwrap();
-    labs.store
+    let plan = cells.plan_edit("named-cell", &changed, false, &[]).unwrap();
+    cells
+        .store
         .save_update_plan("local", "developer", "native-edit", &plan)
         .unwrap();
-    let edit = labs
-        .apply_plan("named-lab", "native-edit", &plan.digest, "native-edit")
+    let edit = cells
+        .apply_plan("named-cell", "native-edit", &plan.digest, "native-edit")
         .await
         .unwrap();
     assert_eq!(edit.instance.generation, 2);
     assert_eq!(edit.instance.instance_key, initial.instance_key);
     assert_eq!(
-        labs.close("named-lab", "wrong-key")
+        cells
+            .close("named-cell", "wrong-key")
             .await
             .unwrap_err()
             .details
@@ -120,17 +127,18 @@ async fn named_lab_accepts_native_apply_and_close_with_incarnation_fencing() {
         "stale_incarnation"
     );
     assert!(
-        !labs
+        !cells
             .store
             .update_state("local", "developer", &initial.id)
             .unwrap()
             .closing
     );
-    labs.close("named-lab", &initial.instance_key)
+    cells
+        .close("named-cell", &initial.instance_key)
         .await
         .unwrap();
-    let closed = labs
-        .wait(proofstorm_app::lab::WaitRequest {
+    let closed = cells
+        .wait(proofstorm_app::cell::WaitRequest {
             reference: &initial.id,
             expected_instance_key: Some(&initial.instance_key),
             expected_generation: None,
@@ -141,19 +149,21 @@ async fn named_lab_accepts_native_apply_and_close_with_incarnation_fencing() {
         .unwrap();
     assert!(closed.reached);
     assert!(
-        labs.store
-            .lab_handle("local", "developer", "named-lab")
+        cells
+            .store
+            .cell_handle("local", "developer", "named-cell")
             .is_err()
     );
-    let replacement = labs
-        .up("named-lab", &spec())
+    let replacement = cells
+        .up("named-cell", &spec())
         .await
         .unwrap()
         .runtime
         .unwrap()
         .instance;
     assert_eq!(
-        labs.close("named-lab", &initial.instance_key)
+        cells
+            .close("named-cell", &initial.instance_key)
             .await
             .unwrap_err()
             .details
@@ -161,7 +171,8 @@ async fn named_lab_accepts_native_apply_and_close_with_incarnation_fencing() {
         "stale_incarnation"
     );
     assert_eq!(
-        labs.status("named-lab")
+        cells
+            .status("named-cell")
             .await
             .unwrap()
             .instance
@@ -175,10 +186,10 @@ async fn shutdown_uses_workspace_authority_and_collects_other_actors_results() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let instance = native(&labs, "shared-lab").await.instance;
-    let op = labs
-        .exec("shared-lab", "chain", command(), "actor-work")
+    let cells = service(store.clone(), cluster.clone());
+    let instance = native(&cells, "shared-cell").await.instance;
+    let op = cells
+        .exec("shared-cell", "chain", command(), "actor-work")
         .await
         .unwrap();
     let action = cluster
@@ -186,38 +197,38 @@ async fn shutdown_uses_workspace_authority_and_collects_other_actors_results() {
         .unwrap()
         .objects
         .keys()
-        .find(|p| p.contains("/proofstormlabactions/"))
+        .find(|p| p.contains("/proofstormcellactions/"))
         .unwrap()
         .clone();
     cluster.lock().unwrap().objects.get_mut(&action).unwrap()["status"] =
         json!({"phase":"Succeeded","artifact":{"exit_code":0,"cleanup_verified":true}});
     store.put_principal("closer").unwrap();
     store
-        .grant("local", "closer", Capability::LabStatus)
+        .grant("local", "closer", Capability::CellStatus)
         .unwrap();
-    let closer = Labs::new(
+    let closer = Cells::new(
         store.clone(),
-        labs.runtime.clone(),
+        cells.runtime.clone(),
         "local".into(),
         "closer".into(),
     );
     assert!(
         closer
-            .close("shared-lab", &instance.instance_key)
+            .close("shared-cell", &instance.instance_key)
             .await
             .is_err()
     );
     assert!(
         !store
-            .update_state("local", "developer", "shared-lab")
+            .update_state("local", "developer", "shared-cell")
             .unwrap()
             .closing
     );
     store
-        .grant("local", "closer", Capability::LabClose)
+        .grant("local", "closer", Capability::CellClose)
         .unwrap();
     closer
-        .close("shared-lab", &instance.instance_key)
+        .close("shared-cell", &instance.instance_key)
         .await
         .unwrap();
     assert_eq!(
@@ -232,30 +243,31 @@ async fn shutdown_uses_workspace_authority_and_collects_other_actors_results() {
         proofstorm_core::SessionPhase::Finished
     );
     assert!(
-        labs.exec("shared-lab", "chain", command(), "late-work")
+        cells
+            .exec("shared-cell", "chain", command(), "late-work")
             .await
             .is_err()
     );
     closer
-        .close("shared-lab", &instance.instance_key)
+        .close("shared-cell", &instance.instance_key)
         .await
         .unwrap();
 }
 
 #[tokio::test]
-async fn wrong_cluster_never_latches_closing_or_deletes_the_lab() {
+async fn wrong_cluster_never_latches_closing_or_deletes_the_cell() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let instance = native(&labs, "cluster-bound").await.instance;
+    let cells = service(store.clone(), cluster.clone());
+    let instance = native(&cells, "cluster-bound").await.instance;
     let other = Arc::new(Mutex::new(Cluster::default()));
     other.lock().unwrap().objects.insert("/api/v1/namespaces/kube-system".into(), json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":"kube-system","uid":"another-cluster"}}));
     let error = service(store.clone(), other.clone())
         .close("cluster-bound", &instance.instance_key)
         .await
         .unwrap_err();
-    assert_eq!(error.details.unwrap()["code"], "lab_cluster_mismatch");
+    assert_eq!(error.details.unwrap()["code"], "cell_cluster_mismatch");
     assert!(
         !store
             .update_state("local", "developer", "cluster-bound")
@@ -277,19 +289,19 @@ async fn a_reused_native_name_cannot_be_closed_with_an_old_inspection() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster);
-    let original = native(&labs, "reused-native").await.instance;
-    labs.down("reused-native", 2).await.unwrap();
-    let replacement = native(&labs, "reused-native").await.instance;
+    let cells = service(store, cluster);
+    let original = native(&cells, "reused-native").await.instance;
+    cells.down("reused-native", 2).await.unwrap();
+    let replacement = native(&cells, "reused-native").await.instance;
     assert_eq!(original.id, replacement.id);
     assert_ne!(original.instance_key, replacement.instance_key);
-    let error = labs
+    let error = cells
         .down_checked("reused-native", 2, Some(&original.instance_key))
         .await
         .unwrap_err();
     assert_eq!(error.details.unwrap()["code"], "stale_incarnation");
     assert!(
-        !labs
+        !cells
             .store
             .update_state("local", "developer", &replacement.id)
             .unwrap()
@@ -302,8 +314,8 @@ async fn accepted_edit_during_outage_reports_admission_and_recovers_without_anot
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster.clone());
-    let initial = labs
+    let cells = service(store, cluster.clone());
+    let initial = cells
         .up("interrupted-edit", &spec())
         .await
         .unwrap()
@@ -315,7 +327,7 @@ async fn accepted_edit_during_outage_reports_admission_and_recovers_without_anot
         .config
         .insert("txindex".into(), json!(false));
     cluster.lock().unwrap().fail_reads = true;
-    let error = labs
+    let error = cells
         .edit("interrupted-edit", &changed, false, &[])
         .await
         .unwrap_err();
@@ -324,7 +336,7 @@ async fn accepted_edit_during_outage_reports_admission_and_recovers_without_anot
     assert_eq!(details["accepted"], true);
     assert_eq!(details["generation"], 2);
     cluster.lock().unwrap().fail_reads = false;
-    let recovered = labs
+    let recovered = cells
         .up("interrupted-edit", &changed)
         .await
         .unwrap()
@@ -336,12 +348,12 @@ async fn accepted_edit_during_outage_reports_admission_and_recovers_without_anot
 }
 
 #[tokio::test]
-async fn ambiguous_names_fail_without_selecting_or_mutating_either_lab() {
+async fn ambiguous_names_fail_without_selecting_or_mutating_either_cell() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let named = labs
+    let cells = service(store.clone(), cluster.clone());
+    let named = cells
         .up("ambiguous", &spec())
         .await
         .unwrap()
@@ -360,11 +372,11 @@ async fn ambiguous_names_fail_without_selecting_or_mutating_either_lab() {
         .unwrap();
     assert_ne!(other.id, named.id);
     let before = cluster.lock().unwrap().requests.len();
-    let error = labs
+    let error = cells
         .close("ambiguous", &other.instance_key)
         .await
         .unwrap_err();
-    assert_eq!(error.details.unwrap()["code"], "lab_reference_ambiguous");
+    assert_eq!(error.details.unwrap()["code"], "cell_reference_ambiguous");
     assert_eq!(cluster.lock().unwrap().requests.len(), before);
     assert!(
         !store

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Capability, Experiment, LabOperation, OperationArtifact, OperationKind, OperationPhase,
+    Capability, CellOperation, Experiment, OperationArtifact, OperationKind, OperationPhase,
     PublishedRevision, digest_json,
 };
 
@@ -13,7 +13,7 @@ pub const EVIDENCE_MEDIA_TYPE: &str = "application/vnd.proofstorm.evidence.v1alp
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceBundleContent {
-    /// Immutable configurations actually used by the journal, including earlier lab generations.
+    /// Immutable configurations actually used by the journal, including earlier cell generations.
     #[serde(default)]
     pub revisions: Vec<PublishedRevision>,
     pub api_version: String,
@@ -62,8 +62,8 @@ pub struct EvidenceAction {
     pub artifact_byte_length: Option<u32>,
 }
 
-impl From<&LabOperation> for EvidenceAction {
-    fn from(operation: &LabOperation) -> Self {
+impl From<&CellOperation> for EvidenceAction {
+    fn from(operation: &CellOperation) -> Self {
         Self {
             revision_digest: operation.revision_digest.clone(),
             id: operation.id.clone(),

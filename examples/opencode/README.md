@@ -38,13 +38,13 @@ posting the full output.
 
 Rules shared by all three profiles:
 
-- Use MCP for lab operations so Proofstorm can track them. These profiles do not
+- Use MCP for cell operations so Proofstorm can track them. These profiles do not
   enforce MCP-only execution. Acceptance runs that require it must state that
   requirement in their prompt and verify the recorded tool calls.
   Pull-request candidate images can be built through Proofstorm MCP by a durable
   controller-owned Job.
 - "Internet" means two different things. Host web access follows your OpenCode
-  settings. Network access from inside lab pods is a lab property and stays
+  settings. Network access from inside cell pods is a cell property and stays
   default-deny except for cluster DNS; both native component execution modes
   run in-cluster and cannot reach the internet under any profile.
 - `PROOFSTORM_DB` is relative to the process working directory;
@@ -55,22 +55,22 @@ Host permissions and the MCP toolset are independent. These profiles default
 `PROOFSTORM_TOOLSET` to `native`, a slim experiment surface that uses the real
 component CLIs for funding, payments, peers, and channels. Keep `experiment` for
 typed-contract comparisons. Native commands run through `pst_component_exec_live`
-inside a lab component; the host `bash` permission can remain denied.
+inside a cell component; the host `bash` permission can remain denied.
 
-## Growing an existing lab
+## Growing an existing cell
 
-Reconnect MCP after upgrading Proofstorm. Use `pst_lab_read` with the
+Reconnect MCP after upgrading Proofstorm. Use `pst_cell_read` with the
 instance ID to get complete configuration and its generation, then plan the full
 updated topology with `update.instance_id` and `update.expected_generation`. Apply
 the returned digest. Unchanged components keep their state; inspect the restart
-and removal lists before applying. Use `expected_generation` in `pst_lab_wait` and
+and removal lists before applying. Use `expected_generation` in `pst_cell_wait` and
 handle `superseded` or startup blockers explicitly.
 
 ## Starting work without experiment setup
 
-Plan and apply the lab, then inspect status, logs or execute native commands.
+Plan and apply the cell, then inspect status, logs or execute native commands.
 Ordinary native requests can omit `experiment_id` and `session_id`; attribution
-is automatic per actor and lab incarnation. Keep the operation ID and idempotency
+is automatic per actor and cell incarnation. Keep the operation ID and idempotency
 key when retrying. Explicit experiments are optional grouping for evidence work.
-Export any desired evidence before closing the lab: confirmed deletion removes
+Export any desired evidence before closing the cell: confirmed deletion removes
 its local history and releases its name. No leases or run budgets are required.

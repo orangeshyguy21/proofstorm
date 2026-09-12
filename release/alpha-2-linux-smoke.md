@@ -8,10 +8,10 @@ that report, not an independent rerun; raw VM logs are not checked into this rep
 | Anonymous public install | Passed in about 3.5 seconds; CLI and MCP version `0.1.0-alpha.2`; no compilation, checkout, or bypass flags |
 | Setup and doctor | Passed in 63 seconds as normal user `ubuntu`; anonymous controller download |
 | Codex MCP | Codex 0.154.0 / gpt-6-astra created and read `vm-alpha-smoke`; Bitcoin Core 31.1 regtest, 1/1 ready, responding protocol probe |
-| OpenCode MCP | OpenCode 1.18.30 / Big Pickle read the existing lab; component data matched CLI |
+| OpenCode MCP | OpenCode 1.18.30 / Big Pickle read the existing cell; component data matched CLI |
 | GUI | HTTP 200 on loopback; stopped successfully; no visual test |
-| Reinstall | Passed in about 3.3 seconds; versions, healthy runtime, and existing lab preserved |
-| Cleanup | Passed in 32 seconds; lab, namespace, workloads, and lab storage absent afterward |
+| Reinstall | Passed in about 3.3 seconds; versions, healthy runtime, and existing cell preserved |
+| Cleanup | Passed in 32 seconds; cell, namespace, workloads, and cell storage absent afterward |
 
 ## Follow-up
 
@@ -30,7 +30,7 @@ not been replaced.
 - OpenCode called the prober a transient job. That description was not supported
   by Kubernetes evidence: it is a Deployment.
 
-This validates the installation and single-Bitcoin-lab workflow, not the full
+This validates the installation and single-Bitcoin-cell workflow, not the full
 catalog, transaction operations, native GUI launches, or macOS installation.
 After testing, the healthy private runtime, installed tools, images, configuration,
-and evidence remained. The GUI, agent sessions, and test lab were stopped/removed.
+and evidence remained. The GUI, agent sessions, and test cell were stopped/removed.

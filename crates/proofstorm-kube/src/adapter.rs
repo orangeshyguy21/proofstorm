@@ -11,11 +11,11 @@ use k8s_openapi::api::{
     networking::v1::NetworkPolicy,
 };
 use proofstorm_core::{
-    AuthenticationProtocol, CdkMintConfig, ComponentCondition, ComponentConditionReason,
+    AuthenticationProtocol, CdkMintConfig, CellSpec, ComponentCondition, ComponentConditionReason,
     ComponentConditionState, ComponentConditionType, ComponentKind, ComponentPlanContract,
     ComponentPlanInput, ComponentSpec, ComponentStatus, CredentialObservationContract,
     DatabaseRole, DependencyBinding, EffectiveComponentConfig, ExecutionMountContract,
-    ExecutionStorageSource, InventoryEntry, KeycloakConfig, LabSpec, LinkKind,
+    ExecutionStorageSource, InventoryEntry, KeycloakConfig, LinkKind,
     LinkedStateObservationContract, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES,
     NutshellMintConfig, ProtocolProbePlan, RedisConfig, ResolvedLock, TargetDescriptorContract,
     WorkloadControllerKind, default_backend_registry,
@@ -86,7 +86,7 @@ pub enum AdapterError {
 }
 
 #[derive(Debug, Default)]
-pub struct RenderedLab {
+pub struct RenderedCell {
     pub plans: Vec<ComponentPlanContract>,
     pub config_maps: Vec<ConfigMap>,
     pub secrets: Vec<Secret>,
@@ -118,7 +118,7 @@ pub struct ComponentObservationResources<'a> {
     pub pods: &'a [Pod],
 }
 
-impl RenderedLab {
+impl RenderedCell {
     #[must_use]
     pub fn inventory(&self) -> Vec<InventoryEntry> {
         let mut inventory = Vec::new();
@@ -176,7 +176,7 @@ impl RenderedLab {
     }
 }
 
-/// Compile one immutable, cluster-free plan per effective lab component.
+/// Compile one immutable, cluster-free plan per effective cell component.
 ///
 /// # Errors
 ///
@@ -185,11 +185,11 @@ impl RenderedLab {
 pub fn compile_component_plans(
     instance_key: &str,
     revision_digest: &str,
-    lab: &LabSpec,
+    cell: &CellSpec,
     lock: &ResolvedLock,
 ) -> Result<Vec<ComponentPlanContract>, AdapterError> {
     let registry = default_backend_registry();
-    let mut plans = lab
+    let mut plans = cell
         .components
         .iter()
         .map(|component| {
@@ -200,7 +200,7 @@ pub fn compile_component_plans(
                 .ok_or_else(|| AdapterError::MissingLock {
                     component: component.id.clone(),
                 })?;
-            let relevant_links = lab
+            let relevant_links = cell
                 .links
                 .iter()
                 .filter(|link| link.from == component.id)
@@ -209,7 +209,7 @@ pub fn compile_component_plans(
             let mut linked_targets = BTreeMap::new();
             let mut linked_state = BTreeMap::new();
             for link in &relevant_links {
-                let target = lab
+                let target = cell
                     .components
                     .iter()
                     .find(|target| target.id == link.to)
@@ -267,24 +267,24 @@ pub fn compile_component_plans(
     Ok(plans)
 }
 
-/// Render a resolved lab into bounded Kubernetes protocol workloads.
+/// Render a resolved cell into bounded Kubernetes protocol workloads.
 ///
 /// # Errors
 ///
 /// Returns an error when a component is unresolved, an adapter is unsupported,
 /// a required topology link is absent, or an internal resource contract is
 /// invalid.
-pub fn render_lab(
+pub fn render_cell(
     instance_key: &str,
     revision_digest: &str,
-    lab: &LabSpec,
+    cell: &CellSpec,
     lock: &ResolvedLock,
-) -> Result<RenderedLab, AdapterError> {
+) -> Result<RenderedCell, AdapterError> {
     let namespace = instance_namespace(instance_key);
-    let plans = compile_component_plans(instance_key, revision_digest, lab, lock)?;
-    let mut rendered = RenderedLab {
+    let plans = compile_component_plans(instance_key, revision_digest, cell, lock)?;
+    let mut rendered = RenderedCell {
         plans: plans.clone(),
-        ..RenderedLab::default()
+        ..RenderedCell::default()
     };
     rendered
         .network_policies
@@ -312,7 +312,7 @@ pub fn render_lab(
     Ok(rendered)
 }
 
-/// Render one bounded, credential-free protocol prober for the complete lab.
+/// Render one bounded, credential-free protocol prober for the complete cell.
 ///
 /// # Errors
 ///
@@ -327,10 +327,10 @@ pub fn render_protocol_prober(
         .iter()
         .filter(|plan| plan.protocol_probe.is_some())
         .count();
-    if probe_count > crate::MAX_PROTOCOL_PROBES_PER_LAB {
+    if probe_count > crate::MAX_PROTOCOL_PROBES_PER_CELL {
         return Err(AdapterError::InvalidPlan(format!(
-            "protocol probe count {probe_count} exceeds per-lab maximum {}",
-            crate::MAX_PROTOCOL_PROBES_PER_LAB
+            "protocol probe count {probe_count} exceeds per-cell maximum {}",
+            crate::MAX_PROTOCOL_PROBES_PER_CELL
         )));
     }
     let namespace = instance_namespace(&first.instance_key);
@@ -870,7 +870,7 @@ fn pod_startup_failure(
                 )),
                 Some("InvalidImageName") => Some((
                     Reason::InvalidImageName,
-                    "Invalid container image reference. Correct the image in the component catalog and republish the lab.",
+                    "Invalid container image reference. Correct the image in the component catalog and republish the cell.",
                 )),
                 Some("CreateContainerConfigError") => Some((
                     Reason::ContainerConfigError,
@@ -3426,7 +3426,7 @@ pub fn component_ports(component: &ComponentSpec) -> BTreeMap<String, u16> {
 #[cfg(test)]
 mod tests {
     use proofstorm_core::{
-        API_VERSION, BitcoinNetwork, ComponentSpec, ControlClass, DependencyBinding, LabPolicy,
+        API_VERSION, BitcoinNetwork, CellPolicy, ComponentSpec, ControlClass, DependencyBinding,
         LinkSpec, PaymentMethod, default_catalog, resolve_lock,
     };
 
@@ -3462,8 +3462,8 @@ mod tests {
 
     type LightningRenderer = fn(&ComponentPlanContract) -> Result<RenderedComponent, AdapterError>;
 
-    fn lightning_lab() -> LabSpec {
-        LabSpec {
+    fn lightning_cell() -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
             name: "lightning-plans".into(),
             components: vec![
@@ -3471,26 +3471,16 @@ mod tests {
                     "chain-a",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "chain-b",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
-                component(
-                    "alice",
-                    ComponentKind::Lightning,
-                    "lnd",
-                    ControlClass::Laboratory,
-                ),
-                component(
-                    "bob",
-                    ComponentKind::Lightning,
-                    "cln",
-                    ControlClass::Laboratory,
-                ),
+                component("alice", ComponentKind::Lightning, "lnd", ControlClass::Cell),
+                component("bob", ComponentKind::Lightning, "cln", ControlClass::Cell),
             ],
             links: vec![
                 LinkSpec {
@@ -3512,12 +3502,12 @@ mod tests {
                     }),
                 },
             ],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
-    fn cdk_lab() -> LabSpec {
-        LabSpec {
+    fn cdk_cell() -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
             name: "cdk-plan".into(),
             components: vec![
@@ -3525,13 +3515,13 @@ mod tests {
                     "mint-lnd-a",
                     ComponentKind::Lightning,
                     "lnd",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "mint-lnd-b",
                     ComponentKind::Lightning,
                     "lnd",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
             ],
@@ -3545,12 +3535,12 @@ mod tests {
                     unit: "sat".into(),
                 }),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
-    fn cdk_cln_lab() -> LabSpec {
-        LabSpec {
+    fn cdk_cln_cell() -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
             name: "cdk-cln-plan".into(),
             components: vec![
@@ -3558,13 +3548,13 @@ mod tests {
                     "chain",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "mint-cln",
                     ComponentKind::Lightning,
                     "cln",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
             ],
@@ -3589,12 +3579,12 @@ mod tests {
                     }),
                 },
             ],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
-    fn cdk_ldk_lab() -> LabSpec {
-        LabSpec {
+    fn cdk_ldk_cell() -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
             name: "cdk-ldk-plan".into(),
             components: vec![
@@ -3602,7 +3592,7 @@ mod tests {
                     "chain",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component("mint", ComponentKind::Mint, "cdk-ldk", ControlClass::Target),
             ],
@@ -3615,12 +3605,12 @@ mod tests {
                     network: BitcoinNetwork::Regtest,
                 }),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
-    fn workspace_lab() -> LabSpec {
-        LabSpec {
+    fn workspace_cell() -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
             name: "workspace-plans".into(),
             components: vec![
@@ -3628,13 +3618,13 @@ mod tests {
                     "wallet-a",
                     ComponentKind::Wallet,
                     "nutshell-wallet",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "wallet-b",
                     ComponentKind::Wallet,
                     "nutshell-wallet",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "attacker",
@@ -3644,7 +3634,7 @@ mod tests {
                 ),
             ],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
@@ -3698,21 +3688,22 @@ mod tests {
     }
 
     fn chain_observation_fixture() -> ChainObservationFixture {
-        let lab = LabSpec {
+        let cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "observed-chain".into(),
             components: vec![component(
                 "chain",
                 ComponentKind::Bitcoin,
                 "bitcoin-core",
-                ControlClass::Laboratory,
+                ControlClass::Cell,
             )],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("plans");
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("plans");
         let rendered = render_bitcoin_component(&plans[0]).expect("render chain");
         let mut workload = rendered.stateful_sets[0].clone();
         workload.metadata.generation = Some(2);
@@ -3904,29 +3895,29 @@ mod tests {
     }
 
     #[test]
-    fn renders_pinned_three_component_lab_and_stable_inventory() {
-        let lab = LabSpec {
+    fn renders_pinned_three_component_cell_and_stable_inventory() {
+        let cell = CellSpec {
             api_version: API_VERSION.into(),
-            name: "static-lab".into(),
+            name: "static-cell".into(),
             components: vec![
                 component(
                     "chain",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "lightning",
                     ComponentKind::Lightning,
                     "lnd",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
                 component(
                     "wallet",
                     ComponentKind::Wallet,
                     "nutshell-wallet",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
             ],
             links: vec![
@@ -3950,11 +3941,11 @@ mod tests {
                     }),
                 },
             ],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
         let rendered =
-            render_lab("i0123456789012345678", "sha256:revision", &lab, &lock).expect("render");
+            render_cell("i0123456789012345678", "sha256:revision", &cell, &lock).expect("render");
         assert_eq!(rendered.services.len(), 3);
         assert_eq!(rendered.stateful_sets.len(), 2);
         assert_eq!(rendered.deployments.len(), 3);
@@ -3962,7 +3953,7 @@ mod tests {
             deployment.metadata.name.as_deref() == Some("proofstorm-protocol-prober")
         }));
         assert_eq!(rendered.persistent_volume_claims.len(), 2);
-        assert_eq!(rendered.network_policies.len(), lab.components.len() + 1);
+        assert_eq!(rendered.network_policies.len(), cell.components.len() + 1);
         assert!(
             rendered.network_policies.iter().any(|policy| {
                 policy.metadata.name.as_deref() == Some("allow-controller-actions")
@@ -3978,23 +3969,27 @@ mod tests {
 
     #[test]
     fn bitcoin_plan_rendering_is_pure_and_rollout_scoped() {
-        let lab = LabSpec {
+        let cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "bitcoin-plan".into(),
             components: vec![component(
                 "chain",
                 ComponentKind::Bitcoin,
                 "bitcoin-core",
-                ControlClass::Laboratory,
+                ControlClass::Cell,
             )],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
-        let first_plan =
-            compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
-                .expect("compile first plan")
-                .remove(0);
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
+        let first_plan = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:first-revision",
+            &cell,
+            &lock,
+        )
+        .expect("compile first plan")
+        .remove(0);
         assert!(matches!(
             first_plan.effective_config,
             EffectiveComponentConfig::BitcoinCore(ref config) if config.txindex
@@ -4054,7 +4049,7 @@ mod tests {
         let revised_plan = compile_component_plans(
             "i0123456789012345678",
             "sha256:metadata-only-revision",
-            &lab,
+            &cell,
             &lock,
         )
         .expect("compile revised plan")
@@ -4076,12 +4071,16 @@ mod tests {
 
     #[test]
     fn lightning_plans_are_dependency_complete_and_rollout_scoped() {
-        let lab = lightning_lab();
+        let cell = lightning_cell();
         let catalog = default_catalog();
-        let lock = resolve_lock(&lab, catalog).expect("initial lock");
-        let plans =
-            compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
-                .expect("initial plans");
+        let lock = resolve_lock(&cell, catalog).expect("initial lock");
+        let plans = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:first-revision",
+            &cell,
+            &lock,
+        )
+        .expect("initial plans");
         let plan = |id: &str| {
             plans
                 .iter()
@@ -4152,7 +4151,7 @@ mod tests {
         let revised_plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:metadata-only-revision",
-            &lab,
+            &cell,
             &lock,
         )
         .expect("revised plans");
@@ -4175,27 +4174,28 @@ mod tests {
 
     #[test]
     fn lightning_relinking_is_component_scoped_and_missing_links_refuse() {
-        let mut lab = lightning_lab();
+        let mut cell = lightning_cell();
         let catalog = default_catalog();
-        let lock = resolve_lock(&lab, catalog).expect("initial lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("initial plans");
+        let lock = resolve_lock(&cell, catalog).expect("initial lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("initial plans");
         let plan = |id: &str| {
             plans
                 .iter()
                 .find(|plan| plan.component_id == id)
                 .expect("component plan")
         };
-        lab.links
+        cell.links
             .iter_mut()
             .find(|link| link.from == "alice")
             .expect("alice chain link")
             .to = "chain-b".into();
-        let relinked_lock = resolve_lock(&lab, catalog).expect("relinked lock");
+        let relinked_lock = resolve_lock(&cell, catalog).expect("relinked lock");
         let relinked_plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:relinked-revision",
-            &lab,
+            &cell,
             &relinked_lock,
         )
         .expect("relinked plans");
@@ -4251,11 +4251,11 @@ mod tests {
 
     #[test]
     fn cdk_plan_rendering_is_deterministic_private_and_rollout_scoped() {
-        let lab = cdk_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("CDK lock");
-        let plans =
-            compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
-                .expect("CDK plans");
+        let cell = cdk_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("CDK lock");
+        let instance_key = "i0123456789012345678";
+        let plans = compile_component_plans(instance_key, "sha256:first-revision", &cell, &lock)
+            .expect("CDK plans");
         let plan = plans
             .iter()
             .find(|plan| plan.component_id == "mint")
@@ -4330,13 +4330,9 @@ mod tests {
         assert_eq!(deployment["spec"]["strategy"]["type"], "Recreate");
         assert_cdk_018_config_contract(config);
 
-        let revised_plans = compile_component_plans(
-            "i0123456789012345678",
-            "sha256:metadata-only-revision",
-            &lab,
-            &lock,
-        )
-        .expect("revised CDK plans");
+        let revised_plans =
+            compile_component_plans(instance_key, "sha256:metadata-only-revision", &cell, &lock)
+                .expect("revised CDK plans");
         let revised_plan = revised_plans
             .iter()
             .find(|plan| plan.component_id == "mint")
@@ -4356,12 +4352,12 @@ mod tests {
 
     #[test]
     fn cdk_cln_plan_uses_the_compiled_socket_and_disables_bolt12() {
-        let lab = cdk_cln_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("CDK+CLN lock");
+        let cell = cdk_cln_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("CDK+CLN lock");
         let plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:cdk-cln-revision",
-            &lab,
+            &cell,
             &lock,
         )
         .expect("CDK+CLN plans");
@@ -4398,8 +4394,8 @@ mod tests {
 
     #[test]
     fn cdk_ldk_plan_uses_embedded_state_and_direct_chain_binding() {
-        let mut lab = cdk_ldk_lab();
-        let authored = lab
+        let mut cell = cdk_ldk_cell();
+        let authored = cell
             .components
             .iter_mut()
             .find(|component| component.id == "mint")
@@ -4408,7 +4404,7 @@ mod tests {
         authored.config.insert("use_keyset_v2".into(), json!(false));
         authored
             .config
-            .insert("description_long".into(), json!("Long-form lab metadata"));
+            .insert("description_long".into(), json!("Long-form cell metadata"));
         authored
             .config
             .insert("motd".into(), json!("Agents welcome"));
@@ -4425,11 +4421,11 @@ mod tests {
             .config
             .insert("mint_quote_ttl_seconds".into(), json!(777));
         authored.config.insert("max_mint_sat".into(), json!(42_000));
-        let lock = resolve_lock(&lab, default_catalog()).expect("CDK+LDK lock");
+        let lock = resolve_lock(&cell, default_catalog()).expect("CDK+LDK lock");
         let plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:cdk-ldk-revision",
-            &lab,
+            &cell,
             &lock,
         )
         .expect("CDK+LDK plans");
@@ -4453,7 +4449,7 @@ mod tests {
             "use_keyset_v2 = false",
             "mint_ttl = 777",
             "ttl = 90",
-            "description_long = \"Long-form lab metadata\"",
+            "description_long = \"Long-form cell metadata\"",
             "motd = \"Agents welcome\"",
             "icon_url = \"https://proofstorm.invalid/mint.png\"",
             "max_inputs = 64",
@@ -4500,8 +4496,8 @@ mod tests {
 
     #[test]
     fn named_bindings_do_not_collide_and_unselected_multiplicity_refuses() {
-        let mut lab = cdk_lab();
-        lab.links.push(LinkSpec {
+        let mut cell = cdk_cell();
+        cell.links.push(LinkSpec {
             id: "mint-bolt11-secondary".into(),
             kind: LinkKind::PaymentBackend,
             from: "mint".into(),
@@ -4511,11 +4507,11 @@ mod tests {
                 unit: "sat".into(),
             }),
         });
-        let lock = resolve_lock(&lab, default_catalog()).expect("both bindings lock exactly");
+        let lock = resolve_lock(&cell, default_catalog()).expect("both bindings lock exactly");
         let error = compile_component_plans(
             "i0123456789012345678",
             "sha256:ambiguous-revision",
-            &lab,
+            &cell,
             &lock,
         )
         .expect_err("current CDK adapter must select one named binding");
@@ -4525,12 +4521,12 @@ mod tests {
                 .contains("backend_execution_binding_ambiguous")
         );
 
-        lab.links.pop();
-        let lock = resolve_lock(&lab, default_catalog()).expect("single binding lock");
+        cell.links.pop();
+        let lock = resolve_lock(&cell, default_catalog()).expect("single binding lock");
         let plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:single-revision",
-            &lab,
+            &cell,
             &lock,
         )
         .expect("single binding compiles");
@@ -4556,12 +4552,12 @@ mod tests {
 
     #[test]
     fn cdk_renderer_consumes_the_compiled_payment_binding_identity() {
-        let lab = cdk_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("supported payment lock");
+        let cell = cdk_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("supported payment lock");
         let mut plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:payment-selection",
-            &lab,
+            &cell,
             &lock,
         )
         .expect("payment plans");
@@ -4605,11 +4601,12 @@ mod tests {
 
     #[test]
     fn cdk_relinking_updates_only_the_mint_and_incomplete_plans_refuse() {
-        let mut lab = cdk_lab();
+        let mut cell = cdk_cell();
         let catalog = default_catalog();
-        let lock = resolve_lock(&lab, catalog).expect("initial CDK lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("initial CDK plans");
+        let lock = resolve_lock(&cell, catalog).expect("initial CDK lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("initial CDK plans");
         let plan = |id: &str| {
             plans
                 .iter()
@@ -4617,12 +4614,12 @@ mod tests {
                 .expect("component plan")
         };
 
-        lab.links[0].to = "mint-lnd-b".into();
-        let relinked_lock = resolve_lock(&lab, catalog).expect("relinked CDK lock");
+        cell.links[0].to = "mint-lnd-b".into();
+        let relinked_lock = resolve_lock(&cell, catalog).expect("relinked CDK lock");
         let relinked_plans = compile_component_plans(
             "i0123456789012345678",
             "sha256:relinked-revision",
-            &lab,
+            &cell,
             &relinked_lock,
         )
         .expect("relinked CDK plans");
@@ -4675,11 +4672,15 @@ mod tests {
 
     #[test]
     fn wallet_plans_are_deterministic_persistent_and_multi_wallet_isolated() {
-        let lab = workspace_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
-        let plans =
-            compile_component_plans("i0123456789012345678", "sha256:first-revision", &lab, &lock)
-                .expect("workspace plans");
+        let cell = workspace_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
+        let plans = compile_component_plans(
+            "i0123456789012345678",
+            "sha256:first-revision",
+            &cell,
+            &lock,
+        )
+        .expect("workspace plans");
         for id in ["wallet-a", "wallet-b"] {
             let plan = plans
                 .iter()
@@ -4727,10 +4728,10 @@ mod tests {
 
     #[test]
     fn wallet_and_attacker_metadata_revisions_do_not_churn_pods() {
-        let lab = workspace_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
+        let cell = workspace_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
         let compile = |revision| {
-            compile_component_plans("i0123456789012345678", revision, &lab, &lock)
+            compile_component_plans("i0123456789012345678", revision, &cell, &lock)
                 .expect("workspace plans")
         };
         let first = compile("sha256:first-revision");
@@ -4772,10 +4773,11 @@ mod tests {
 
     #[test]
     fn attacker_plan_is_disposable_locked_and_restricted() {
-        let lab = workspace_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("workspace plans");
+        let cell = workspace_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("workspace plans");
         let plan = plans
             .iter()
             .find(|plan| plan.component_id == "attacker")
@@ -4803,8 +4805,8 @@ mod tests {
     }
 
     #[test]
-    fn component_plans_and_resource_order_ignore_lab_component_order() {
-        let mut lab = LabSpec {
+    fn component_plans_and_resource_order_ignore_cell_component_order() {
+        let mut cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "ordered-plans".into(),
             components: vec![
@@ -4812,23 +4814,23 @@ mod tests {
                     "chain-b",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "chain-a",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
             ],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
-        let first = render_lab("i0123456789012345678", "sha256:revision", &lab, &lock)
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
+        let first = render_cell("i0123456789012345678", "sha256:revision", &cell, &lock)
             .expect("first render");
-        lab.components.reverse();
-        let second = render_lab("i0123456789012345678", "sha256:revision", &lab, &lock)
+        cell.components.reverse();
+        let second = render_cell("i0123456789012345678", "sha256:revision", &cell, &lock)
             .expect("second render");
         assert_eq!(
             serde_json::to_value(&first.stateful_sets).expect("first resources"),
@@ -4839,7 +4841,7 @@ mod tests {
             second.inventory(),
             "inventory order must be canonical"
         );
-        assert_eq!(first.plans.len(), lab.components.len());
+        assert_eq!(first.plans.len(), cell.components.len());
         assert!(first.plans.iter().all(|plan| {
             first.inventory().iter().any(|entry| {
                 entry.name == plan.component_id || entry.name.starts_with(&plan.component_id)
@@ -4849,9 +4851,9 @@ mod tests {
 
     #[test]
     fn deployment_readiness_waits_for_current_rollout_and_preserves_startup_errors() {
-        let lab = workspace_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:new", &lab, &lock)
+        let cell = workspace_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
+        let plans = compile_component_plans("i0123456789012345678", "sha256:new", &cell, &lock)
             .expect("plans");
         let plan = plans
             .iter()
@@ -4959,10 +4961,11 @@ mod tests {
 
     #[test]
     fn observation_requires_the_compiled_rollout_identity() {
-        let lab = workspace_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("workspace plans");
+        let cell = workspace_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("workspace plans");
         let wallet = plans
             .iter()
             .find(|plan| plan.component_id == "wallet-a")
@@ -5064,10 +5067,11 @@ mod tests {
 
     #[test]
     fn compatibility_ready_is_derived_only_from_component_ready() {
-        let lab = workspace_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("workspace lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("workspace plans");
+        let cell = workspace_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("workspace plans");
         let attacker = plans
             .iter()
             .find(|plan| plan.component_id == "attacker")
@@ -5222,10 +5226,11 @@ mod tests {
 
     #[test]
     fn protocol_prober_is_single_bounded_and_credential_free() {
-        let lab = lightning_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("plans");
+        let cell = lightning_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("plans");
         let prober = render_protocol_prober(&plans)
             .expect("prober render")
             .expect("applicable probes");
@@ -5263,7 +5268,7 @@ mod tests {
 
     #[test]
     fn protocol_prober_is_bounded_at_the_maximum_component_count() {
-        let lab = LabSpec {
+        let cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "max-probes".into(),
             components: (0..64)
@@ -5272,16 +5277,17 @@ mod tests {
                         &format!("chain-{index}"),
                         ComponentKind::Bitcoin,
                         "bitcoin-core",
-                        ControlClass::Laboratory,
+                        ControlClass::Cell,
                     )
                 })
                 .collect(),
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("max lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("max plans");
+        let lock = resolve_lock(&cell, default_catalog()).expect("max lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("max plans");
         let prober = render_protocol_prober(&plans)
             .expect("prober render")
             .expect("applicable probes");
@@ -5324,42 +5330,43 @@ mod tests {
     }
 
     #[test]
-    fn protocol_prober_refuses_more_than_the_per_lab_concurrency_limit() {
-        let lab = LabSpec {
+    fn protocol_prober_refuses_more_than_the_per_cell_concurrency_limit() {
+        let cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "too-many-probes".into(),
-            components: (0..=crate::MAX_PROTOCOL_PROBES_PER_LAB)
+            components: (0..=crate::MAX_PROTOCOL_PROBES_PER_CELL)
                 .map(|index| {
                     component(
                         &format!("chain-{index}"),
                         ComponentKind::Bitcoin,
                         "bitcoin-core",
-                        ControlClass::Laboratory,
+                        ControlClass::Cell,
                     )
                 })
                 .collect(),
             links: vec![],
-            policy: LabPolicy {
-                limits: proofstorm_core::LabLimits {
+            policy: CellPolicy {
+                limits: proofstorm_core::CellLimits {
                     max_components: 128,
-                    ..proofstorm_core::LabLimits::default()
+                    ..proofstorm_core::CellLimits::default()
                 },
-                ..LabPolicy::default()
+                ..CellPolicy::default()
             },
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("plans");
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("plans");
         assert!(matches!(
             render_protocol_prober(&plans),
             Err(AdapterError::InvalidPlan(message))
-                if message.contains("exceeds per-lab maximum")
+                if message.contains("exceeds per-cell maximum")
         ));
     }
 
     #[test]
     fn component_status_shape_is_bounded_at_supported_scale() {
-        let lab = LabSpec {
+        let cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "max-status".into(),
             components: (0..64)
@@ -5368,16 +5375,17 @@ mod tests {
                         &format!("chain-{index}"),
                         ComponentKind::Bitcoin,
                         "bitcoin-core",
-                        ControlClass::Laboratory,
+                        ControlClass::Cell,
                     )
                 })
                 .collect(),
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("max lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("max plans");
+        let lock = resolve_lock(&cell, default_catalog()).expect("max lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("max plans");
         let resources = ComponentObservationResources {
             deployments: &[],
             stateful_sets: &[],
@@ -5517,10 +5525,11 @@ mod tests {
 
     #[test]
     fn credential_observation_validates_the_linked_state_projection() {
-        let lab = cdk_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("CDK lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("CDK plans");
+        let cell = cdk_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("CDK lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("CDK plans");
         let mint = plans
             .iter()
             .find(|plan| plan.component_id == "mint")
@@ -5600,10 +5609,11 @@ mod tests {
 
     #[test]
     fn dependency_readiness_is_transitive_and_component_order_independent() {
-        let lab = cdk_lab();
-        let lock = resolve_lock(&lab, default_catalog()).expect("CDK lock");
-        let plans = compile_component_plans("i0123456789012345678", "sha256:revision", &lab, &lock)
-            .expect("CDK plans");
+        let cell = cdk_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("CDK lock");
+        let plans =
+            compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
+                .expect("CDK plans");
         let empty = ComponentObservationResources {
             deployments: &[],
             stateful_sets: &[],
@@ -5690,15 +5700,15 @@ mod tests {
 
     #[test]
     fn renders_cln_with_private_rpc_and_versioned_pinned_adapter() {
-        let lab = LabSpec {
+        let cell = CellSpec {
             api_version: API_VERSION.into(),
-            name: "cln-lab".into(),
+            name: "cln-cell".into(),
             components: vec![
                 component(
                     "chain",
                     ComponentKind::Bitcoin,
                     "bitcoin-core",
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
                 component(
                     "attacker-cln",
@@ -5716,11 +5726,11 @@ mod tests {
                     network: BitcoinNetwork::Regtest,
                 }),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("CLN lock");
-        let rendered =
-            render_lab("i0123456789012345678", "sha256:revision", &lab, &lock).expect("CLN render");
+        let lock = resolve_lock(&cell, default_catalog()).expect("CLN lock");
+        let rendered = render_cell("i0123456789012345678", "sha256:revision", &cell, &lock)
+            .expect("CLN render");
         let cln = rendered
             .stateful_sets
             .iter()
@@ -5739,7 +5749,7 @@ mod tests {
         assert!(args.contains(&"--bitcoin-rpcconnect=chain".to_owned()));
         assert_eq!(
             component_ports(
-                lab.components
+                cell.components
                     .iter()
                     .find(|component| component.id == "attacker-cln")
                     .expect("CLN component")

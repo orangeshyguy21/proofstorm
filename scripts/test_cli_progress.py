@@ -2,7 +2,7 @@
 """Opt-in terminal UX gate against a selected, already-ready installation.
 
 Reconciles setup, opens/reuses the GUI without a browser, and checks doctor.
-Creates no labs or agent connections. Stops the GUI only if this test started it.
+Creates no cells or agent connections. Stops the GUI only if this test started it.
 """
 import argparse
 import errno

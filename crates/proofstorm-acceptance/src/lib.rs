@@ -33,6 +33,7 @@
     clippy::too_many_lines
 )]
 
+pub mod cell;
 pub mod client;
 pub mod doctor;
 pub mod gate;
@@ -41,7 +42,6 @@ pub mod http;
 pub mod images;
 pub mod json;
 pub mod kubectl;
-pub mod lab;
 pub mod postgres;
 
 pub use client::{McpClient, PROTOCOL_VERSION};

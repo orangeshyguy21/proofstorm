@@ -1,5 +1,5 @@
 //! Local, read-only HTTP transport. Uses the same workspace/principal as the CLI.
-use crate::{Error, environment::EnvironmentQuery, lab::Labs};
+use crate::{Error, cell::Cells, environment::EnvironmentQuery};
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::Frame;
 use tokio::sync::{Semaphore, watch};
@@ -17,7 +17,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use std::{convert::Infallible, net::Ipv4Addr, time::Duration};
 use tokio::{net::TcpListener, task::JoinSet};
 
-pub async fn serve(labs: Labs, port: u16) -> Result<(), Error> {
+pub async fn serve(cells: Cells, port: u16) -> Result<(), Error> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
         .await
         .map_err(|e| Error::failure(e.to_string(), None))?;
@@ -27,23 +27,23 @@ pub async fn serve(labs: Labs, port: u16) -> Result<(), Error> {
             .local_addr()
             .map_err(|e| Error::failure(e.to_string(), None))?
     );
-    serve_listener(labs, listener).await
+    serve_listener(cells, listener).await
 }
 /// Serve an already-bound loopback listener, also used by transport contract tests.
-pub async fn serve_listener(labs: Labs, listener: TcpListener) -> Result<(), Error> {
-    serve_inner(labs, listener, None).await
+pub async fn serve_listener(cells: Cells, listener: TcpListener) -> Result<(), Error> {
+    serve_inner(cells, listener, None).await
 }
 
 pub(crate) async fn serve_managed(
-    labs: Labs,
+    cells: Cells,
     listener: TcpListener,
     session: Arc<crate::gui::Session>,
 ) -> Result<(), Error> {
-    serve_inner(labs, listener, Some(session)).await
+    serve_inner(cells, listener, Some(session)).await
 }
 
 async fn serve_inner(
-    labs: Labs,
+    cells: Cells,
     listener: TcpListener,
     managed: Option<Arc<crate::gui::Session>>,
 ) -> Result<(), Error> {
@@ -56,9 +56,9 @@ async fn serve_inner(
             "the environment API only serves local loopback addresses",
         ));
     }
-    let observer = crate::observer::Observer::start(labs.clone());
-    let events = crate::events::Events::start(labs.clone(), observer.status.clone());
-    let telemetry = crate::telemetry::Telemetry::start(labs.clone());
+    let observer = crate::observer::Observer::start(cells.clone());
+    let events = crate::events::Events::start(cells.clone(), observer.status.clone());
+    let telemetry = crate::telemetry::Telemetry::start(cells.clone());
     let streams = Arc::new(Semaphore::new(8));
     let mut tasks = JoinSet::new();
     loop {
@@ -67,7 +67,7 @@ async fn serve_inner(
             ()=async { if let Some(session)=&managed { session.shutdown.notified().await; } else { std::future::pending::<()>().await; } }=>return Ok(()),
             accepted=listener.accept(),if tasks.len()<16=> {
                 let (socket,_)=accepted.map_err(|e|Error::failure(e.to_string(),None))?;
-                let labs=labs.clone();
+                let cells=cells.clone();
                 let status=observer.status.clone();
                 let events=events.receiver.clone();
                 let telemetry=telemetry.receiver.clone();
@@ -75,7 +75,7 @@ async fn serve_inner(
                 let managed=managed.clone();
                 tasks.spawn(async move {
                     let service=service_fn(move |mut request| {
-                        let (labs,status,events,telemetry,streams,managed)=(labs.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),managed.clone());
+                        let (cells,status,events,telemetry,streams,managed)=(cells.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),managed.clone());
                         async move {
                             if let Some(session)=&managed {
                                 if let Some(mut response)=crate::gui::transport::route(&mut request,session.clone()).await {
@@ -90,7 +90,7 @@ async fn serve_inner(
                                     }
                                 }
                             }
-                            let mut response=handle(labs,status,events,telemetry,streams,request).await?;
+                            let mut response=handle(cells,status,events,telemetry,streams,request).await?;
                             if managed.is_some() { crate::gui::transport::secure(&mut response); }
                             Ok(response)
                         }
@@ -103,7 +103,7 @@ async fn serve_inner(
     }
 }
 async fn handle(
-    labs: Labs,
+    cells: Cells,
     observer: Arc<RwLock<ObserverStatus>>,
     events: watch::Receiver<u64>,
     telemetry: watch::Receiver<SystemView>,
@@ -131,23 +131,23 @@ async fn handle(
         return Ok(error(StatusCode::METHOD_NOT_ALLOWED, "read_only"));
     }
     match request.uri().path() {
-        "/v1/events" => Ok(event_stream(labs, events, telemetry, streams)),
+        "/v1/events" => Ok(event_stream(cells, events, telemetry, streams)),
         "/v1/system" => {
-            if !can_observe(&labs) {
+            if !can_observe(&cells) {
                 return Ok(error(StatusCode::FORBIDDEN, "access_denied"));
             }
             let mut snapshot = telemetry.borrow().clone();
-            if labs
+            if cells
                 .store
                 .authorize(
-                    &labs.workspace,
-                    &labs.principal,
+                    &cells.workspace,
+                    &cells.principal,
                     proofstorm_core::Capability::ComponentExecLive,
                 )
                 .is_err()
             {
-                for lab in &mut snapshot.labs {
-                    lab.balances.clear();
+                for cell in &mut snapshot.cells {
+                    cell.balances.clear();
                 }
             }
             Ok(json(StatusCode::OK, &snapshot))
@@ -158,7 +158,7 @@ async fn handle(
             ) else {
                 return Ok(error(StatusCode::BAD_REQUEST, "invalid_query"));
             };
-            match labs.environment(&query).await {
+            match cells.environment(&query).await {
                 Ok(view) => Ok(json(StatusCode::OK, &view)),
                 Err(e) => {
                     eprintln!("environment read failed: {e}");
@@ -181,11 +181,11 @@ async fn handle(
             }
         }
         "/v1/observer" => {
-            if labs
+            if cells
                 .store
                 .authorize(
-                    &labs.workspace,
-                    &labs.principal,
+                    &cells.workspace,
+                    &cells.principal,
                     proofstorm_core::Capability::ExperimentRead,
                 )
                 .is_err()
@@ -320,26 +320,27 @@ fn asset(path: &str) -> Response<Body> {
     }
 }
 
-fn can_observe(labs: &Labs) -> bool {
+fn can_observe(cells: &Cells) -> bool {
     [
-        proofstorm_core::Capability::LabRead,
-        proofstorm_core::Capability::LabStatus,
+        proofstorm_core::Capability::CellRead,
+        proofstorm_core::Capability::CellStatus,
         proofstorm_core::Capability::ExperimentRead,
     ]
     .into_iter()
     .all(|cap| {
-        labs.store
-            .authorize(&labs.workspace, &labs.principal, cap)
+        cells
+            .store
+            .authorize(&cells.workspace, &cells.principal, cap)
             .is_ok()
     })
 }
 fn event_stream(
-    labs: Labs,
+    cells: Cells,
     events: watch::Receiver<u64>,
     telemetry: watch::Receiver<SystemView>,
     streams: Arc<Semaphore>,
 ) -> Response<Body> {
-    if !can_observe(&labs) {
+    if !can_observe(&cells) {
         return error(StatusCode::FORBIDDEN, "access_denied");
     }
     let Ok(permit) = streams.try_acquire_owned() else {
@@ -348,8 +349,8 @@ fn event_stream(
     // Notifications are invalidations, not a durable event log. Always refresh on connect,
     // including reconnects carrying Last-Event-ID. No history buffer or replay required.
     let stream = futures::stream::unfold(
-        (events, telemetry, true, labs, permit),
-        |(mut events, mut telemetry, first, labs, permit)| async move {
+        (events, telemetry, true, cells, permit),
+        |(mut events, mut telemetry, first, cells, permit)| async move {
             let changed = if first {
                 1
             } else {
@@ -359,7 +360,7 @@ fn event_stream(
                     () = tokio::time::sleep(Duration::from_secs(2)) => 0,
                 }
             };
-            if !can_observe(&labs) {
+            if !can_observe(&cells) {
                 return None;
             }
             let bytes = if changed == 1 {
@@ -373,7 +374,7 @@ fn event_stream(
             };
             Some((
                 Ok::<_, Infallible>(Frame::data(Bytes::from(bytes))),
-                (events, telemetry, false, labs, permit),
+                (events, telemetry, false, cells, permit),
             ))
         },
     );

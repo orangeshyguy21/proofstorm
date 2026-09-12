@@ -168,7 +168,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:92b1fe621082fe1779d123a7e1649ec6d32edb01858da505f75d83c812b01c55",
+    "rollout_digest": "sha256:4b05e7d3b28e9378ee13482cd7e9152c5e46c0fcdad94f707990d56f960d0836",
     "storage": [],
     "target_descriptor": {
       "backend_id": "keycloak",
@@ -219,7 +219,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:92b1fe621082fe1779d123a7e1649ec6d32edb01858da505f75d83c812b01c55"
+                "proofstorm.dev/rollout-digest": "sha256:4b05e7d3b28e9378ee13482cd7e9152c5e46c0fcdad94f707990d56f960d0836"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

@@ -103,7 +103,7 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
         store.replace_grants(
             &environment.workspace,
             &environment.principal,
-            [Capability::CatalogRead, Capability::LabValidate],
+            [Capability::CatalogRead, Capability::CellValidate],
         )?;
         return Ok(
             ProofstormMcp::new(store, &environment.workspace, &environment.principal)?

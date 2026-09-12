@@ -6,7 +6,7 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{EXPERIMENT_CAPABILITIES, GateContext, json as expect, lab};
+use crate::{EXPERIMENT_CAPABILITIES, GateContext, cell, json as expect};
 
 /// Runs inside the mint image, which ships `httpx` and the rune file.
 const RUNE_PROBE: &str = include_str!("../../drivers/cln_rune_probe.py");
@@ -16,17 +16,17 @@ const EXPERIMENT: &str = "nutshell-cln-experiment";
 const LEASE: &str = "nutshell-cln-session";
 const DRAFT: &str = "nutshell-cln";
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "nutshell-cln-live-lab",
+        "name": "nutshell-cln-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
-            {"id": "seed-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-seed"}},
-            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-payer"}},
-            {"id": "mint-cln", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "laboratory", "config": {"alias": "proofstorm-cln-mint"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "seed-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cln-seed"}},
+            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cln-payer"}},
+            {"id": "mint-cln", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "cell", "config": {"alias": "proofstorm-cln-mint"}},
             {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell CLN", "description": "Core Lightning REST acceptance", "clnrest_enable_mpp": true}},
-            {"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}
+            {"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}
         ],
         "links": [
             {"id": "seed-chain", "kind": "chain_backend", "from": "seed-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -97,11 +97,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-nutshell-cln"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-nutshell-cln"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-cln", "include_revision": true}),
     )?;
 
@@ -118,10 +118,10 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-cln"}),
     )?;
-    let ready = lab::wait_phase(
+    let ready = cell::wait_phase(
         &mut client,
         INSTANCE,
         "ready",
@@ -213,13 +213,13 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"chain": "chain", "mint_lightning": "seed-lnd", "payer_lightning": "payer-lnd", "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 1_000_000, "idempotency_key": "bootstrap-nutshell-cln"}),
         ),
     )?;
-    let bootstrap = lab::wait_succeeded(&mut client, "nutshell-cln-bootstrap")?;
-    if !expect::boolean(lab::artifact_content(&bootstrap)?, "/ready")? {
+    let bootstrap = cell::wait_succeeded(&mut client, "nutshell-cln-bootstrap")?;
+    if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
         bail!("LND bootstrap failed: {bootstrap}");
     }
     // Workload restart and bootstrap can invalidate the aggregate dependency
-    // observation. Wait for the current lab before admitting the next mutation.
-    lab::wait_ready(&mut client, INSTANCE)?;
+    // observation. Wait for the current cell before admitting the next mutation.
+    cell::wait_ready(&mut client, INSTANCE)?;
 
     client.call(
         "peer_connect",
@@ -228,8 +228,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"from_lightning": "payer-lnd", "to_lightning": "mint-cln", "idempotency_key": "peer-nutshell-cln"}),
         ),
     )?;
-    let peer = lab::wait_succeeded(&mut client, "nutshell-cln-peer")?;
-    if !expect::boolean(lab::artifact_content(&peer)?, "/connected")? {
+    let peer = cell::wait_succeeded(&mut client, "nutshell-cln-peer")?;
+    if !expect::boolean(cell::artifact_content(&peer)?, "/connected")? {
         bail!("LND-to-CLN peer connection failed: {peer}");
     }
 
@@ -240,8 +240,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-cln", "channel_sat": 4_000_000, "push_sat": 1_000_000, "idempotency_key": "channel-nutshell-cln"}),
         ),
     )?;
-    let channel = lab::wait_succeeded(&mut client, "nutshell-cln-channel")?;
-    if !expect::boolean(lab::artifact_content(&channel)?, "/active")? {
+    let channel = cell::wait_succeeded(&mut client, "nutshell-cln-channel")?;
+    if !expect::boolean(cell::artifact_content(&channel)?, "/active")? {
         bail!("LND-to-CLN channel failed: {channel}");
     }
 
@@ -254,8 +254,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"idempotency_key": "initialize-nutshell-cln"}),
         ),
     )?;
-    let initialized = lab::wait_succeeded(&mut client, "nutshell-cln-initialize")?;
-    if !expect::boolean(lab::artifact_content(&initialized)?, "/initialized")? {
+    let initialized = cell::wait_succeeded(&mut client, "nutshell-cln-initialize")?;
+    if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
         bail!("Nutshell CLN wallet initialization failed: {initialized}");
     }
 
@@ -266,8 +266,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"idempotency_key": "balance-nutshell-cln"}),
         ),
     )?;
-    let balance = lab::wait_succeeded(&mut client, "nutshell-cln-balance")?;
-    if expect::integer(lab::artifact_content(&balance)?, "/balance_sat")? != 0 {
+    let balance = cell::wait_succeeded(&mut client, "nutshell-cln-balance")?;
+    if expect::integer(cell::artifact_content(&balance)?, "/balance_sat")? != 0 {
         bail!("Nutshell CLN wallet did not start empty: {balance}");
     }
 
@@ -278,8 +278,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": "fund-nutshell-cln"}),
         ),
     )?;
-    let funded = lab::wait_succeeded(&mut client, "nutshell-cln-fund")?;
-    let fund_content = lab::artifact_content(&funded)?;
+    let funded = cell::wait_succeeded(&mut client, "nutshell-cln-fund")?;
+    let fund_content = cell::artifact_content(&funded)?;
     if expect::integer(fund_content, "/funded_sat")? != 1000
         || expect::integer(fund_content, "/balance_sat")? != 1000
     {
@@ -296,8 +296,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"idempotency_key": "balance-before-round-trip-nutshell-cln"}),
         ),
     )?;
-    let baseline = lab::wait_succeeded(&mut client, "nutshell-cln-balance-before-round-trip")?;
-    if expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
+    let baseline = cell::wait_succeeded(&mut client, "nutshell-cln-balance-before-round-trip")?;
+    if expect::integer(cell::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
         bail!("Nutshell CLN wallet baseline is invalid: {baseline}");
     }
 
@@ -308,8 +308,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": "round-trip-nutshell-cln"}),
         ),
     )?;
-    let round_trip = lab::wait_succeeded(&mut client, "nutshell-cln-round-trip")?;
-    let round_content = lab::artifact_content(&round_trip)?;
+    let round_trip = cell::wait_succeeded(&mut client, "nutshell-cln-round-trip")?;
+    let round_content = cell::artifact_content(&round_trip)?;
     if expect::boolean(round_content, "/inflation")?
         || expect::integer(round_content, "/minted_sat")? != 1000
     {
@@ -341,9 +341,9 @@ pub fn run(context: &GateContext) -> Result<()> {
             json!({"idempotency_key":"balance-after-round-trip-nutshell-cln"}),
         ),
     )?;
-    let after = lab::wait_succeeded(&mut client, "nutshell-cln-balance-after-round-trip")?;
-    let balance_after = expect::integer(lab::artifact_content(&after)?, "/balance_sat")?;
-    let funded_balance = expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")?
+    let after = cell::wait_succeeded(&mut client, "nutshell-cln-balance-after-round-trip")?;
+    let balance_after = expect::integer(cell::artifact_content(&after)?, "/balance_sat")?;
+    let funded_balance = expect::integer(cell::artifact_content(&baseline)?, "/balance_sat")?
         + expect::integer(round_content, "/minted_sat")?;
     if expect::integer(round_content, "/balance_before_swap_sat")? != funded_balance
         || expect::integer(round_content, "/balance_after_swap_sat")? != balance_after
@@ -362,8 +362,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_phase(
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_phase(
         &mut client,
         INSTANCE,
         "closed",

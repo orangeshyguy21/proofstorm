@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn ignores_foreign_or_malformed_deployments() {
-        assert!(project(&deployment(), "another-lab").is_none());
+        assert!(project(&deployment(), "another-cell").is_none());
         let mut deployment = deployment();
         deployment.metadata.namespace = Some("foreign".into());
         assert!(project(&deployment, "demo").is_none());

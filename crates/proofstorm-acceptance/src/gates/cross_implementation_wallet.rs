@@ -10,7 +10,7 @@ use std::{fs, thread::sleep, time::Duration};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{EXPERIMENT_CAPABILITIES, GateContext, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{EXPERIMENT_CAPABILITIES, GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const CACHE_DRIVER: &str = include_str!("../../drivers/nutshell_redis_settings.py");
 
@@ -19,21 +19,21 @@ const EXPERIMENT: &str = "cross-mint-experiment";
 const LEASE: &str = "cross-mint-session";
 const DRAFT: &str = "cross-mint-wallet";
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "cross-mint-wallet-live-lab",
+        "name": "cross-mint-wallet-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cross-mint"}},
-            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-cross-payer"}},
-            {"id": "cache", "kind": "database", "implementation": "redis", "version": "8.10.1", "config_version": "redis/8.10/v1", "control": "laboratory", "config": {"maxmemory_mb": 64}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cross-mint"}},
+            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cross-payer"}},
+            {"id": "cache", "kind": "database", "implementation": "redis", "version": "8.10.1", "config_version": "redis/8.10/v1", "control": "cell", "config": {"maxmemory_mb": 64}},
             {"id": "cdk-mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK Cross-Parity", "description": "Cross-implementation wallet acceptance"}},
             {"id": "nutshell-mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell Cross-Parity", "description": "Cross-implementation wallet acceptance", "redis_cache_ttl_seconds": 900}},
-            {"id": "cdk-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
-            {"id": "cdk-recipient", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
-            {"id": "nutshell-recipient", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
-            {"id": "nutshell-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}
+            {"id": "cdk-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}},
+            {"id": "cdk-recipient", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}},
+            {"id": "nutshell-recipient", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}},
+            {"id": "nutshell-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}
         ],
         "links": [
             {"id": "mint-lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -88,9 +88,9 @@ pub fn run(context: &GateContext) -> Result<()> {
             &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(|error|format!("{error:#}"))}),
         )?,
     )?;
-    // A failed assertion must still retire the disposable lab through its finalizer.
-    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    // A failed assertion must still retire the disposable cell through its finalizer.
+    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
     fs::write(
         directory.join("closed.json"),
         serde_json::to_vec_pretty(&closed)?,
@@ -109,11 +109,11 @@ fn exercise(context: &GateContext) -> Result<()> {
     )?;
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-cross-mint-wallet"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-cross-mint-wallet"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cross-mint-wallet", "include_revision": true}),
     )?;
 
@@ -141,14 +141,14 @@ fn exercise(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cross-mint-wallet"}),
     )?;
-    let ready = lab::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
+    let ready = cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let components = client.call(
-        "lab_component_status_list",
+        "cell_component_status_list",
         json!({"instance_id": INSTANCE, "limit": 50}),
     )?;
     let mut actual: Vec<&str> = expect::array(&components, "/components")?
@@ -252,8 +252,8 @@ fn exercise(context: &GateContext) -> Result<()> {
             "idempotency_key": "bootstrap-cross-mint"
         }),
     )?;
-    let bootstrap = lab::wait_operation(&mut client, "cross-mint-bootstrap", 160)?;
-    if !expect::boolean(lab::artifact_content(&bootstrap)?, "/ready")? {
+    let bootstrap = cell::wait_operation(&mut client, "cross-mint-bootstrap", 160)?;
+    if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
         bail!("liquidity bootstrap artifact is invalid: {bootstrap}");
     }
 
@@ -280,8 +280,8 @@ fn exercise(context: &GateContext) -> Result<()> {
             "wallet_initialize",
             merge(json!({"operation_id": format!("{prefix}-initialize"), "idempotency_key": format!("{prefix}-initialize")})),
         )?;
-        let initialized = lab::wait_operation(&mut client, &format!("{prefix}-initialize"), 160)?;
-        if !expect::boolean(lab::artifact_content(&initialized)?, "/initialized")? {
+        let initialized = cell::wait_operation(&mut client, &format!("{prefix}-initialize"), 160)?;
+        if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
             bail!("{implementation} wallet initialization failed: {initialized}");
         }
 
@@ -289,8 +289,8 @@ fn exercise(context: &GateContext) -> Result<()> {
             "wallet_balance",
             merge(json!({"operation_id": format!("{prefix}-balance"), "idempotency_key": format!("{prefix}-balance")})),
         )?;
-        let balance = lab::wait_operation(&mut client, &format!("{prefix}-balance"), 160)?;
-        if expect::integer(lab::artifact_content(&balance)?, "/balance_sat")? != 0 {
+        let balance = cell::wait_operation(&mut client, &format!("{prefix}-balance"), 160)?;
+        if expect::integer(cell::artifact_content(&balance)?, "/balance_sat")? != 0 {
             bail!("{implementation} wallet did not start empty: {balance}");
         }
 
@@ -298,8 +298,8 @@ fn exercise(context: &GateContext) -> Result<()> {
             "wallet_fund",
             merge(json!({"operation_id": format!("{prefix}-fund"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": format!("{prefix}-fund")})),
         )?;
-        let funded = lab::wait_operation(&mut client, &format!("{prefix}-fund"), 160)?;
-        let fund_content = lab::artifact_content(&funded)?;
+        let funded = cell::wait_operation(&mut client, &format!("{prefix}-fund"), 160)?;
+        let fund_content = cell::artifact_content(&funded)?;
         if expect::integer(fund_content, "/funded_sat")? != 1000
             || expect::integer(fund_content, "/balance_sat")? != 1000
         {
@@ -311,12 +311,12 @@ fn exercise(context: &GateContext) -> Result<()> {
             "wallet_balance",
             merge(json!({"operation_id": baseline_id, "idempotency_key": format!("{prefix}-balance-before-round-trip")})),
         )?;
-        let baseline = lab::wait_operation(
+        let baseline = cell::wait_operation(
             &mut client,
             &format!("{prefix}-balance-before-round-trip"),
             160,
         )?;
-        if expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
+        if expect::integer(cell::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
             bail!("{implementation} wallet baseline is invalid: {baseline}");
         }
 
@@ -324,8 +324,8 @@ fn exercise(context: &GateContext) -> Result<()> {
             "wallet_round_trip",
             merge(json!({"operation_id": format!("{prefix}-round-trip"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": format!("{prefix}-round-trip")})),
         )?;
-        let round_trip = lab::wait_operation(&mut client, &format!("{prefix}-round-trip"), 160)?;
-        let round_content = lab::artifact_content(&round_trip)?;
+        let round_trip = cell::wait_operation(&mut client, &format!("{prefix}-round-trip"), 160)?;
+        let round_content = cell::artifact_content(&round_trip)?;
         if expect::boolean(round_content, "/inflation")?
             || expect::integer(round_content, "/minted_sat")? != 1000
         {
@@ -338,14 +338,14 @@ fn exercise(context: &GateContext) -> Result<()> {
         let recipient = format!("{implementation}-recipient");
         client.call("wallet_initialize", merge(json!({"wallet":recipient,
             "operation_id":format!("{prefix}-recipient-initialize"),"idempotency_key":format!("{prefix}-recipient-initialize")})))?;
-        lab::wait_operation(&mut client, &format!("{prefix}-recipient-initialize"), 160)?;
+        cell::wait_operation(&mut client, &format!("{prefix}-recipient-initialize"), 160)?;
         client.call("wallet_invoice",merge(json!({"wallet":recipient,"amount_sat":100,"timeout_seconds":30,
             "operation_id":format!("{prefix}-recipient-invoice"),"idempotency_key":format!("{prefix}-recipient-invoice")})))?;
         let invoice =
-            lab::wait_operation(&mut client, &format!("{prefix}-recipient-invoice"), 160)?;
-        let quote = expect::string(lab::artifact_content(&invoice)?, "/mint_quote_id")?;
+            cell::wait_operation(&mut client, &format!("{prefix}-recipient-invoice"), 160)?;
+        let quote = expect::string(cell::artifact_content(&invoice)?, "/mint_quote_id")?;
         client.call("wallet_balance",merge(json!({"operation_id":format!("{prefix}-balance-before-pay"),"idempotency_key":format!("{prefix}-balance-before-pay")})))?;
-        lab::wait_operation(&mut client, &format!("{prefix}-balance-before-pay"), 160)?;
+        cell::wait_operation(&mut client, &format!("{prefix}-balance-before-pay"), 160)?;
         client.call(
             "wallet_pay",
             merge(
@@ -353,8 +353,8 @@ fn exercise(context: &GateContext) -> Result<()> {
             "operation_id":format!("{prefix}-pay"),"idempotency_key":format!("{prefix}-pay")}),
             ),
         )?;
-        let paid = lab::wait_operation(&mut client, &format!("{prefix}-pay"), 160)?;
-        let observations = expect::array(lab::artifact_content(&paid)?, "/quote_observations")?;
+        let paid = cell::wait_operation(&mut client, &format!("{prefix}-pay"), 160)?;
+        let observations = expect::array(cell::artifact_content(&paid)?, "/quote_observations")?;
         if !observations.iter().any(|o| {
             o.get("role") == Some(&json!("payment_melt")) && o.get("state") == Some(&json!("PAID"))
         }) || !observations.iter().any(|o| {
@@ -389,8 +389,8 @@ fn exercise(context: &GateContext) -> Result<()> {
                 "reason":"authoritative_mint_fee_unavailable","conservation_claimed":false})
         } else {
             client.call("conservation_oracle", oracle_request)?;
-            let oracle = lab::wait_operation(&mut client, &format!("{prefix}-conservation"), 160)?;
-            if !expect::boolean(lab::artifact_content(&oracle)?, "/conserved")? {
+            let oracle = cell::wait_operation(&mut client, &format!("{prefix}-conservation"), 160)?;
+            if !expect::boolean(cell::artifact_content(&oracle)?, "/conserved")? {
                 bail!("{implementation} conservation check failed: {oracle}");
             }
             oracle
@@ -434,7 +434,7 @@ fn exercise(context: &GateContext) -> Result<()> {
     context
         .kubectl
         .rollout_restart(namespace, "deployment/nutshell-mint")?;
-    lab::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
+    cell::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
 
     client.call(
         "session_finish",

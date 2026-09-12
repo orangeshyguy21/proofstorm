@@ -27,7 +27,7 @@ to open the native macOS directory picker. Picking or cancelling never attaches
 an agent; cancellation keeps the previous folder.
 Opening the dialog is read-only; clicking a vendor button attaches and opens.
 There is no automatic installation or terminal fallback from the browser.
-The no-labs screen reuses the same full-width button rows, folder selection,
+The no-cells screen reuses the same full-width button rows, folder selection,
 busy state and replacement confirmation as the dialog. It does not maintain
 a second attachment flow.
 

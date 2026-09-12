@@ -1,9 +1,9 @@
 //! Explicit local application access, independent of activity sessions.
-use crate::{Error, lab::Labs};
+use crate::{Error, cell::Cells};
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::{Api, ResourceExt, api::ListParams};
-use proofstorm_core::{Capability, LabInstance, PublishedRevision};
-use proofstorm_store::LabHandlePhase;
+use proofstorm_core::{Capability, CellInstance, PublishedRevision};
+use proofstorm_store::CellHandlePhase;
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::{net::Ipv4Addr, path::Path, time::Duration};
@@ -16,7 +16,7 @@ pub use proofstorm_view::Authentication;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ConnectionDescriptor {
-    pub lab: String,
+    pub cell: String,
     pub component: String,
     pub endpoint: String,
     pub protocol: String,
@@ -31,8 +31,8 @@ pub struct ConnectionDescriptor {
 pub struct Connection {
     pub descriptor: ConnectionDescriptor,
     listener: TcpListener,
-    labs: Labs,
-    instance: LabInstance,
+    cells: Cells,
+    instance: CellInstance,
     target_port: u16,
 }
 
@@ -42,12 +42,12 @@ pub fn endpoint(
     endpoint: &str,
 ) -> Result<(u16, Authentication), Error> {
     let component = revision
-        .lab
+        .cell
         .components
         .iter()
         .find(|c| c.id == component)
         .ok_or_else(|| {
-            Error::problem("component_not_found", "component is not part of this lab")
+            Error::problem("component_not_found", "component is not part of this cell")
         })?;
     let authentication = match (component.implementation.as_str(), endpoint) {
         ("bitcoin-core", "rpc") => Authentication::Basic,
@@ -71,7 +71,7 @@ pub fn endpoint(
     Ok((port, authentication))
 }
 
-impl Labs {
+impl Cells {
     pub async fn connect(
         &self,
         name: &str,
@@ -80,19 +80,19 @@ impl Labs {
         local_port: u16,
     ) -> Result<Connection, Error> {
         self.store
-            .authorize(&self.workspace, &self.principal, Capability::LabConnect)?;
-        let lab = self.resolve(name)?;
-        if lab.phase != LabHandlePhase::Open {
+            .authorize(&self.workspace, &self.principal, Capability::CellConnect)?;
+        let cell = self.resolve(name)?;
+        if cell.phase != CellHandlePhase::Open {
             return Err(Error::problem(
                 "connection_refused",
-                "connection requires an open lab",
+                "connection requires an open cell",
             ));
         }
         let (instance, revision) = self.store.operation_context(
             &self.workspace,
             &self.principal,
-            &lab.instance_id,
-            Capability::LabConnect,
+            &cell.instance_id,
+            Capability::CellConnect,
         )?;
         let (target_port, authentication) = endpoint(&revision, component, endpoint_name)?;
         // Verify a real service and ready target before advertising a local address.
@@ -102,9 +102,9 @@ impl Labs {
             .map_err(io_error)?;
         let address = listener.local_addr().map_err(io_error)?;
         Ok(Connection {descriptor:ConnectionDescriptor {
-            lab:name.into(),component:component.into(),endpoint:endpoint_name.into(),protocol:"http".into(),url:format!("http://{address}"),authentication,
-            access:"loopback_only".into(),fault_path:"kubernetes_tunnel_bypasses_lab_network_policies".into(),lifetime:"until this connection process stops or the lab closes; existing TCP sessions may fail on component restart".into(),
-        },listener,labs:self.clone(),instance,target_port})
+            cell:name.into(),component:component.into(),endpoint:endpoint_name.into(),protocol:"http".into(),url:format!("http://{address}"),authentication,
+            access:"loopback_only".into(),fault_path:"kubernetes_tunnel_bypasses_cell_network_policies".into(),lifetime:"until this connection process stops or the cell closes; existing TCP sessions may fail on component restart".into(),
+        },listener,cells:self.clone(),instance,target_port})
     }
 }
 
@@ -147,7 +147,7 @@ impl Connection {
             tokio::select! {
                 accepted=self.listener.accept(), if tasks.len()<32 => {
                     let (socket,_)=accepted.map_err(io_error)?;
-                    let runtime=self.labs.runtime.clone();
+                    let runtime=self.cells.runtime.clone();
                     let instance=self.instance.clone();
                     let component=self.descriptor.component.clone();
                     let port=self.target_port;
@@ -159,12 +159,12 @@ impl Connection {
                     }
                 },
                 _=health.tick()=> {
-                    self.labs.store.authorize(&self.labs.workspace,&self.labs.principal,Capability::LabConnect)?;
-                    let lab=self.labs.resolve(&self.descriptor.lab)?;
-                    if lab.phase!=LabHandlePhase::Open || self.labs.resolve_instance(&self.descriptor.lab)?.instance_key!=self.instance.instance_key {return Ok(());}
-                    let labs=Api::<proofstorm_kube::ProofstormLab>::namespaced(self.labs.runtime.client.clone(),&self.labs.runtime.control_namespace);
-                    let Some(lab)=tokio::time::timeout(Duration::from_secs(5), labs.get_opt(&self.instance.resource_name)).await.map_err(|_| Error::problem("connection_health_timeout", "runtime health check timed out; connection closed"))?? else {return Ok(());};
-                    if proofstorm_kube::require_open_lab(&lab).is_err() {return Ok(());}
+                    self.cells.store.authorize(&self.cells.workspace,&self.cells.principal,Capability::CellConnect)?;
+                    let cell=self.cells.resolve(&self.descriptor.cell)?;
+                    if cell.phase!=CellHandlePhase::Open || self.cells.resolve_instance(&self.descriptor.cell)?.instance_key!=self.instance.instance_key {return Ok(());}
+                    let cells=Api::<proofstorm_kube::ProofstormCell>::namespaced(self.cells.runtime.client.clone(),&self.cells.runtime.control_namespace);
+                    let Some(cell)=tokio::time::timeout(Duration::from_secs(5), cells.get_opt(&self.instance.resource_name)).await.map_err(|_| Error::problem("connection_health_timeout", "runtime health check timed out; connection closed"))?? else {return Ok(());};
+                    if proofstorm_kube::require_open_cell(&cell).is_err() {return Ok(());}
                 }
             }
         }
@@ -173,7 +173,7 @@ impl Connection {
 
 async fn resolve_pod(
     runtime: &crate::Runtime,
-    instance: &LabInstance,
+    instance: &CellInstance,
     component: &str,
     port: u16,
 ) -> Result<String, Error> {
@@ -189,7 +189,7 @@ async fn resolve_pod(
     {
         return Err(Error::problem(
             "connection_identity_mismatch",
-            "service does not belong to the selected lab",
+            "service does not belong to the selected cell",
         ));
     }
     if !service
@@ -241,7 +241,7 @@ impl Drop for ForwardGuard {
 
 async fn forward(
     runtime: crate::Runtime,
-    instance: LabInstance,
+    instance: CellInstance,
     component: String,
     port: u16,
     mut socket: TcpStream,

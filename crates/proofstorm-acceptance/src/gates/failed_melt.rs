@@ -5,13 +5,13 @@
 //! whenever the wallet CLI exited zero, which it does even when the mint
 //! rolls a failed Lightning payment back. Proofstorm then promoted the
 //! recipient's receive quote as well, so the journal recorded a settlement
-//! that never occurred. That is the exact hazard these laboratories exist to
+//! that never occurred. That is the exact hazard these cells exist to
 //! detect in a mint, manufactured by the harness itself.
 //!
 //! The failure is structural rather than injected. The recipient mint runs on
 //! an island Lightning node that holds no channels, so its invoice has no
 //! route from anywhere and the payer's mint fails the payment every time. No
-//! component is stopped or partitioned, so nothing else in the lab becomes
+//! component is stopped or partitioned, so nothing else in the cell becomes
 //! unready and the outcome does not depend on fault-detection timing.
 
 use std::time::Duration;
@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, json as expect, lab};
+use crate::{GateContext, cell, json as expect};
 
 const INSTANCE: &str = "failed-melt-instance";
 const EXPERIMENT: &str = "failed-melt-experiment";
@@ -30,17 +30,17 @@ const INVOICE_SAT: u64 = 1_000;
 
 const CAPABILITIES: &[&str] = &[
     "catalog.read",
-    "lab.read",
-    "lab.create",
-    "lab.validate",
-    "lab.publish",
-    "lab.materialize",
-    "lab.status",
-    "lab.close",
+    "cell.read",
+    "cell.create",
+    "cell.validate",
+    "cell.publish",
+    "cell.materialize",
+    "cell.status",
+    "cell.close",
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lab.operate",
+    "cell.operate",
     "action.cancel",
     "wallet.create",
     "wallet.control",
@@ -51,21 +51,21 @@ const CAPABILITIES: &[&str] = &[
     "artifact.read",
 ];
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "failed-melt-live-lab",
+        "name": "failed-melt-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-funder"}},
-            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-payer"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-funder"}},
+            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-payer"}},
             // Deliberately channel-less: nothing can route to it, so every
             // invoice it issues is unpayable.
-            {"id": "island-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-island"}},
+            {"id": "island-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-island"}},
             {"id": "payer-mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Failed Melt Payer", "description": "Melt failure acceptance"}},
             {"id": "recipient-mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Failed Melt Recipient", "description": "Melt failure acceptance"}},
-            {"id": "payer-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
-            {"id": "recipient-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}
+            {"id": "payer-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}},
+            {"id": "recipient-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}
         ],
         "links": [
             {"id": "mint-lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -82,18 +82,18 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("failed-melt-live", "experiment-agent", CAPABILITIES)?;
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-failed-melt"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-failed-melt"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-failed-melt", "include_revision": true}),
     )?;
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-failed-melt"}),
     )?;
-    lab::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
+    cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
 
     client.call(
         "experiment_create",
@@ -116,8 +116,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "bootstrap-failed-melt"
         }),
     )?;
-    let bootstrap = lab::wait_operation(&mut client, "failed-melt-bootstrap", 160)?;
-    if !expect::boolean(lab::artifact_content(&bootstrap)?, "/ready")? {
+    let bootstrap = cell::wait_operation(&mut client, "failed-melt-bootstrap", 160)?;
+    if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
         bail!("liquidity bootstrap artifact is invalid: {bootstrap}");
     }
 
@@ -137,8 +137,8 @@ pub fn run(context: &GateContext) -> Result<()> {
                 "idempotency_key": operation
             }),
         )?;
-        let initialized = lab::wait_operation(&mut client, operation, 160)?;
-        if !expect::boolean(lab::artifact_content(&initialized)?, "/initialized")? {
+        let initialized = cell::wait_operation(&mut client, operation, 160)?;
+        if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
             bail!("{wallet} initialization failed: {initialized}");
         }
     }
@@ -155,8 +155,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "fund-failed-melt"
         }),
     )?;
-    let funded = lab::wait_operation(&mut client, "failed-melt-fund", 160)?;
-    if expect::integer(lab::artifact_content(&funded)?, "/balance_sat")? != FUNDED_SAT {
+    let funded = cell::wait_operation(&mut client, "failed-melt-fund", 160)?;
+    if expect::integer(cell::artifact_content(&funded)?, "/balance_sat")? != FUNDED_SAT {
         bail!("payer wallet was not funded: {funded}");
     }
 
@@ -168,8 +168,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "balance-before-failed-melt"
         }),
     )?;
-    let balance_before = lab::wait_operation(&mut client, "failed-melt-balance-before", 160)?;
-    let before = expect::integer(lab::artifact_content(&balance_before)?, "/balance_sat")?;
+    let balance_before = cell::wait_operation(&mut client, "failed-melt-balance-before", 160)?;
+    let before = expect::integer(cell::artifact_content(&balance_before)?, "/balance_sat")?;
 
     client.call(
         "wallet_invoice",
@@ -181,8 +181,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "invoice-failed-melt"
         }),
     )?;
-    let invoice = lab::wait_operation(&mut client, "failed-melt-invoice", 160)?;
-    let invoice_content = lab::artifact_content(&invoice)?;
+    let invoice = cell::wait_operation(&mut client, "failed-melt-invoice", 160)?;
+    let invoice_content = cell::artifact_content(&invoice)?;
     let mint_quote_id = expect::string(invoice_content, "/mint_quote_id")?.to_string();
     if expect::string(invoice_content, "/quote_observations/0/state")? != "UNPAID" {
         bail!("receive quote did not begin unpaid: {invoice}");
@@ -201,11 +201,11 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "pay-failed-melt"
         }),
     )?;
-    let paid = lab::wait_operation(&mut client, "failed-melt-pay", 200)?;
+    let paid = cell::wait_operation(&mut client, "failed-melt-pay", 200)?;
     if expect::string(&paid, "/phase")? != "succeeded" {
         bail!("an unsettled melt must still be a completed observation: {paid}");
     }
-    let content = lab::artifact_content(&paid)?.clone();
+    let content = cell::artifact_content(&paid)?.clone();
 
     if content.get("phase").is_some() {
         bail!("wallet-native observation was polluted with a Proofstorm phase: {content}");
@@ -228,8 +228,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "balance-after-failed-melt"
         }),
     )?;
-    let balance_after = lab::wait_operation(&mut client, "failed-melt-balance-after", 160)?;
-    let after = expect::integer(lab::artifact_content(&balance_after)?, "/balance_sat")?;
+    let balance_after = cell::wait_operation(&mut client, "failed-melt-balance-after", 160)?;
+    let after = expect::integer(cell::artifact_content(&balance_after)?, "/balance_sat")?;
     if before != FUNDED_SAT || after != FUNDED_SAT {
         bail!("a failed melt moved value: before={before} after={after} in {content}");
     }
@@ -278,10 +278,10 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("the exported evidence disagrees with the observation: {exported}");
     }
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    let closed = lab::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    let closed = cell::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {
-        bail!("failed melt lab teardown was not verified: {closed}");
+        bail!("failed melt cell teardown was not verified: {closed}");
     }
 
     println!(

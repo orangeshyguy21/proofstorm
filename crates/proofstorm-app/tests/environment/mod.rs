@@ -2,25 +2,25 @@ use super::*;
 use proofstorm_app::environment::{EnvironmentQuery, ObservationState};
 mod prober;
 
-fn observer(labs: &Labs) -> Labs {
-    labs.store.put_principal("viewer").unwrap();
+fn observer(cells: &Cells) -> Cells {
+    cells.store.put_principal("viewer").unwrap();
     for cap in [
-        Capability::LabRead,
-        Capability::LabStatus,
+        Capability::CellRead,
+        Capability::CellStatus,
         Capability::ExperimentRead,
     ] {
-        labs.store.grant("local", "viewer", cap).unwrap();
+        cells.store.grant("local", "viewer", cap).unwrap();
     }
-    Labs::new(
-        labs.store.clone(),
-        labs.runtime.clone(),
+    Cells::new(
+        cells.store.clone(),
+        cells.runtime.clone(),
         "local".into(),
         "viewer".into(),
     )
 }
 pub(super) fn ready(cluster: &Arc<Mutex<Cluster>>) {
     for (path, object) in &mut cluster.lock().unwrap().objects {
-        if path.contains("/proofstormlabs/") {
+        if path.contains("/proofstormcells/") {
             object["metadata"]["generation"] = json!(1);
             object["metadata"]["resourceVersion"] = json!("12");
             object["metadata"]["managedFields"] =
@@ -37,17 +37,17 @@ pub(super) fn ready(cluster: &Arc<Mutex<Cluster>>) {
     clippy::too_many_lines,
     reason = "one persisted fixture verifies partial reads, preservation, and cluster deletion"
 )]
-async fn incompatible_history_does_not_hide_current_labs_or_rewrite_records() {
+async fn incompatible_history_does_not_hide_current_cells_or_rewrite_records() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("journal.db");
     let store = Store::open(&path).unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let healthy = labs.up("healthy", &spec()).await.unwrap().lab;
+    let cells = service(store.clone(), cluster.clone());
+    let healthy = cells.up("healthy", &spec()).await.unwrap().cell;
     let mut legacy_spec = spec();
     legacy_spec.name = "legacy".into();
-    let legacy = labs.up("legacy", &legacy_spec).await.unwrap().lab;
+    let legacy = cells.up("legacy", &legacy_spec).await.unwrap().cell;
     let digest = store
         .instance("local", "developer", &legacy.instance_id)
         .unwrap()
@@ -61,7 +61,8 @@ async fn incompatible_history_does_not_hide_current_labs_or_rewrite_records() {
         )
         .unwrap();
     let mut encoded: Value = serde_json::from_str(&raw).unwrap();
-    encoded["lab"]["policy"]["allow"] = json!(["lease.acquire", "lease.release", "component.exec"]);
+    encoded["cell"]["policy"]["allow"] =
+        json!(["lease.acquire", "lease.release", "component.exec"]);
     let legacy_json = encoded.to_string();
     db.execute(
         "UPDATE revisions SET revision_json=?1 WHERE digest=?2",
@@ -70,7 +71,7 @@ async fn incompatible_history_does_not_hide_current_labs_or_rewrite_records() {
     .unwrap();
     ready(&cluster);
 
-    let viewer = observer(&labs);
+    let viewer = observer(&cells);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(proofstorm_app::http::serve_listener(
@@ -82,20 +83,20 @@ async fn incompatible_history_does_not_hide_current_labs_or_rewrite_records() {
         .unwrap();
     assert_eq!(response.status(), 200);
     let view: proofstorm_app::environment::EnvironmentView = response.json().await.unwrap();
-    assert_eq!(view.labs.items.len(), 2);
+    assert_eq!(view.cells.items.len(), 2);
     let current = view
-        .labs
+        .cells
         .items
         .iter()
-        .find(|lab| lab.id == healthy.instance_id)
+        .find(|cell| cell.id == healthy.instance_id)
         .unwrap();
     assert!(current.read_error.is_none());
     assert_eq!(current.components.items[0].ready, Some(true));
     let old = view
-        .labs
+        .cells
         .items
         .iter()
-        .find(|lab| lab.id == legacy.instance_id)
+        .find(|cell| cell.id == legacy.instance_id)
         .unwrap();
     assert_eq!(
         old.read_error.as_deref(),
@@ -110,7 +111,7 @@ async fn incompatible_history_does_not_hide_current_labs_or_rewrite_records() {
         })
         .await
         .unwrap();
-    assert_eq!(detail.labs.items[0].read_error, old.read_error);
+    assert_eq!(detail.cells.items[0].read_error, old.read_error);
     let after: String = db
         .query_row(
             "SELECT revision_json FROM revisions WHERE digest=?1",
@@ -130,8 +131,8 @@ async fn incompatible_history_does_not_hide_current_labs_or_rewrite_records() {
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
-    assert_eq!(current.labs.items.len(), 1);
-    assert_eq!(current.labs.items[0].id, healthy.instance_id);
+    assert_eq!(current.cells.items.len(), 1);
+    assert_eq!(current.cells.items[0].id, healthy.instance_id);
     assert!(
         viewer
             .environment(&EnvironmentQuery {
@@ -151,13 +152,13 @@ async fn incompatible_pending_receipts_do_not_starve_current_operations() {
     let store = Store::open(&path).unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    labs.up("demo", &spec()).await.unwrap();
-    let bad = labs
+    let cells = service(store.clone(), cluster.clone());
+    cells.up("demo", &spec()).await.unwrap();
+    let bad = cells
         .exec("demo", "chain", command(), "a-legacy")
         .await
         .unwrap();
-    let good = labs
+    let good = cells
         .exec("demo", "chain", command(), "z-current")
         .await
         .unwrap();
@@ -196,11 +197,11 @@ async fn incompatible_pending_receipts_do_not_starve_current_operations() {
     assert!(absent.operations.is_empty());
     assert_eq!(absent.incompatible_records, 0);
     for (path, object) in &mut cluster.lock().unwrap().objects {
-        if path.contains("/proofstormlabactions/") {
+        if path.contains("/proofstormcellactions/") {
             object["status"] = json!({"phase":"Succeeded", "artifact":{"exit_code":0,"cleanup_verified":true,"timed_out":false}});
         }
     }
-    let collector = proofstorm_app::observer::Observer::start(labs);
+    let collector = proofstorm_app::observer::Observer::start(cells);
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if collector.status.read().unwrap().recorded_operations == 1 {
@@ -243,12 +244,12 @@ async fn http_preserves_startup_failure_reason_and_recovery_message() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster.clone());
-    labs.up("blocked", &spec()).await.unwrap();
+    let cells = service(store, cluster.clone());
+    cells.up("blocked", &spec()).await.unwrap();
     ready(&cluster);
     let message = "Image pull is failing and backing off, not building. Operator: run just images and just doctor; verify registry access.";
     for (path, object) in &mut cluster.lock().unwrap().objects {
-        if path.contains("/proofstormlabs/") {
+        if path.contains("/proofstormcells/") {
             object["status"]["phase"] = json!("Pending");
             object["status"]["components"][0]["ready"] = json!(false);
             object["status"]["components"][0]["conditions"] = json!([{
@@ -259,13 +260,13 @@ async fn http_preserves_startup_failure_reason_and_recovery_message() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1/environment", listener.local_addr().unwrap());
     let server = tokio::spawn(proofstorm_app::http::serve_listener(
-        observer(&labs),
+        observer(&cells),
         listener,
     ));
     let response = reqwest::get(url).await.unwrap();
     assert_eq!(response.status(), 200);
     let body: Value = response.json().await.unwrap();
-    let component = &body["labs"]["items"][0]["components"]["items"][0];
+    let component = &body["cells"]["items"][0]["components"]["items"][0];
     assert_eq!(component["ready"], false);
     assert_eq!(component["conditions"][0]["reason"], "image_pull_backoff");
     assert_eq!(component["conditions"][0]["message"], message);
@@ -277,11 +278,11 @@ async fn environment_reads_are_passive_scoped_and_credential_free() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let lab = labs.up("demo", &spec()).await.unwrap().lab;
+    let cells = service(store.clone(), cluster.clone());
+    let cell = cells.up("demo", &spec()).await.unwrap().cell;
     let mut cmd = command();
     cmd.argv.push("SECRET-IN-ARGV".into());
-    let op = labs
+    let op = cells
         .exec("demo", "chain", cmd, "secret-operation")
         .await
         .unwrap();
@@ -298,7 +299,7 @@ async fn environment_reads_are_passive_scoped_and_credential_free() {
             "local",
             "developer",
             &store
-                .default_run_id("local", "developer", &lab.instance_id)
+                .default_run_id("local", "developer", &cell.instance_id)
                 .unwrap(),
             "second-session",
             "second-session",
@@ -306,15 +307,15 @@ async fn environment_reads_are_passive_scoped_and_credential_free() {
         .unwrap();
     ready(&cluster);
     let before = store
-        .sessions("local", "developer", &lab.instance_id, "", 100)
+        .sessions("local", "developer", &cell.instance_id, "", 100)
         .unwrap();
     let request_start = cluster.lock().unwrap().requests.len();
-    let view = observer(&labs)
+    let view = observer(&cells)
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
-    let item = &view.labs.items[0];
-    assert_eq!(item.id, lab.instance_id);
+    let item = &view.cells.items[0];
+    assert_eq!(item.id, cell.instance_id);
     assert!(matches!(item.runtime.state, ObservationState::Available));
     assert_eq!(item.runtime.source_updated_at_unix, Some(1_788_696_000));
     assert_eq!(item.components.items[0].ready, Some(true));
@@ -356,7 +357,7 @@ async fn environment_reads_are_passive_scoped_and_credential_free() {
     assert_eq!(
         before.sessions,
         store
-            .sessions("local", "developer", &lab.instance_id, "", 100)
+            .sessions("local", "developer", &cell.instance_id, "", 100)
             .unwrap()
             .sessions
     );
@@ -365,20 +366,20 @@ async fn environment_reads_are_passive_scoped_and_credential_free() {
             .iter()
             .all(|(method, _)| method == "GET")
     );
-    assert_workspace_isolation(&labs, &lab.instance_id).await;
+    assert_workspace_isolation(&cells, &cell.instance_id).await;
 }
 
-async fn assert_workspace_isolation(labs: &Labs, instance_id: &str) {
-    let store = &labs.store;
+async fn assert_workspace_isolation(cells: &Cells, instance_id: &str) {
+    let store = &cells.store;
     store
         .put_workspace(&Workspace {
             id: "other".into(),
             name: "other".into(),
         })
         .unwrap();
-    let other = Labs::new(
+    let other = Cells::new(
         store.clone(),
-        labs.runtime.clone(),
+        cells.runtime.clone(),
         "other".into(),
         "viewer".into(),
     );
@@ -389,8 +390,8 @@ async fn assert_workspace_isolation(labs: &Labs, instance_id: &str) {
             .is_err()
     );
     for cap in [
-        Capability::LabRead,
-        Capability::LabStatus,
+        Capability::CellRead,
+        Capability::CellStatus,
         Capability::ExperimentRead,
     ] {
         store.grant("other", "viewer", cap).unwrap();
@@ -400,7 +401,7 @@ async fn assert_workspace_isolation(labs: &Labs, instance_id: &str) {
             .environment(&EnvironmentQuery::default())
             .await
             .unwrap()
-            .labs
+            .cells
             .items
             .is_empty()
     );
@@ -416,14 +417,14 @@ async fn assert_workspace_isolation(labs: &Labs, instance_id: &str) {
 }
 
 #[tokio::test]
-async fn environment_lists_only_current_cluster_labs_without_duplicates() {
+async fn environment_lists_only_current_cluster_cells_without_duplicates() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster);
-    let old = labs.up("demo", &spec()).await.unwrap().lab;
-    labs.down("demo", 1).await.unwrap();
-    let new = labs.up("demo", &spec()).await.unwrap().lab;
+    let cells = service(store.clone(), cluster);
+    let old = cells.up("demo", &spec()).await.unwrap().cell;
+    cells.down("demo", 1).await.unwrap();
+    let new = cells.up("demo", &spec()).await.unwrap().cell;
     let instance = store
         .instance("local", "developer", &new.instance_id)
         .unwrap();
@@ -437,7 +438,7 @@ async fn environment_lists_only_current_cluster_labs_without_duplicates() {
         )
         .unwrap();
     let _pending = store
-        .reserve_lab("local", "developer", "pending", "digest")
+        .reserve_cell("local", "developer", "pending", "digest")
         .unwrap();
     let mut query = EnvironmentQuery {
         limit: 1,
@@ -445,11 +446,11 @@ async fn environment_lists_only_current_cluster_labs_without_duplicates() {
     };
     let mut ids = Vec::new();
     loop {
-        let view = labs.environment(&query).await.unwrap();
-        assert_eq!(view.labs.items.len(), 1);
-        let item = &view.labs.items[0];
+        let view = cells.environment(&query).await.unwrap();
+        assert_eq!(view.cells.items.len(), 1);
+        let item = &view.cells.items[0];
         ids.push(item.id.clone());
-        match view.labs.next_cursor {
+        match view.cells.next_cursor {
             Some(cursor) => query.cursor = cursor,
             None => break,
         }
@@ -466,17 +467,17 @@ async fn environment_paging_crosses_runs_and_preserves_unknown_outcomes() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let lab = labs.up("demo", &spec()).await.unwrap().lab;
+    let cells = service(store.clone(), cluster.clone());
+    let cell = cells.up("demo", &spec()).await.unwrap().cell;
     for id in ["op-a", "op-b", "op-c"] {
-        labs.exec("demo", "chain", command(), id).await.unwrap();
+        cells.exec("demo", "chain", command(), id).await.unwrap();
     }
     store
         .create_experiment(
             "local",
             "developer",
             "advanced-run",
-            &lab.instance_id,
+            &cell.instance_id,
             "advanced-run",
         )
         .unwrap();
@@ -484,7 +485,7 @@ async fn environment_paging_crosses_runs_and_preserves_unknown_outcomes() {
         .create_operation(
             "local",
             "developer",
-            &lab.instance_id,
+            &cell.instance_id,
             "advanced-run",
             "",
             "op-d",
@@ -495,19 +496,19 @@ async fn environment_paging_crosses_runs_and_preserves_unknown_outcomes() {
         )
         .unwrap();
     for (path, o) in &mut cluster.lock().unwrap().objects {
-        if path.contains("/proofstormlabactions/") {
+        if path.contains("/proofstormcellactions/") {
             o["status"] = json!({"phase":"Succeeded","artifact":{"exit_code":0}});
         }
     }
     let mut query = EnvironmentQuery {
-        instance_id: Some(lab.instance_id),
+        instance_id: Some(cell.instance_id),
         limit: 1,
         ..Default::default()
     };
     let mut ids = Vec::new();
     loop {
-        let view = labs.environment(&query).await.unwrap();
-        let item = &view.labs.items[0];
+        let view = cells.environment(&query).await.unwrap();
+        let item = &view.cells.items[0];
         assert_eq!(item.activity.items.len(), 1);
         let op = &item.activity.items[0];
         assert!(matches!(
@@ -523,16 +524,17 @@ async fn environment_paging_crosses_runs_and_preserves_unknown_outcomes() {
     ids.sort();
     assert_eq!(ids, vec!["op-a", "op-b", "op-c", "op-d"]);
     query.activity_cursor = "invalid".into();
-    assert!(labs.environment(&query).await.is_err());
+    assert!(cells.environment(&query).await.is_err());
     query.limit = 51;
-    assert!(labs.environment(&query).await.is_err());
+    assert!(cells.environment(&query).await.is_err());
     assert!(
-        labs.environment(&EnvironmentQuery {
-            session_cursor: "x".into(),
-            ..Default::default()
-        })
-        .await
-        .is_err()
+        cells
+            .environment(&EnvironmentQuery {
+                session_cursor: "x".into(),
+                ..Default::default()
+            })
+            .await
+            .is_err()
     );
 }
 
@@ -541,35 +543,35 @@ async fn stale_generation_keeps_unchanged_components_ready_but_rejects_wrong_ide
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster.clone());
-    labs.up("demo", &spec()).await.unwrap();
+    let cells = service(store, cluster.clone());
+    cells.up("demo", &spec()).await.unwrap();
     ready(&cluster);
     let path = cluster
         .lock()
         .unwrap()
         .objects
         .keys()
-        .find(|p| p.contains("/proofstormlabs/"))
+        .find(|p| p.contains("/proofstormcells/"))
         .unwrap()
         .clone();
     cluster.lock().unwrap().objects.get_mut(&path).unwrap()["metadata"]["generation"] = json!(2);
-    let view = labs
+    let view = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
     assert!(matches!(
-        view.labs.items[0].runtime.state,
+        view.cells.items[0].runtime.state,
         ObservationState::Stale
     ));
-    assert_eq!(view.labs.items[0].components.items[0].ready, Some(true));
-    let layout_id = view.labs.items[0].layout_id.clone();
+    assert_eq!(view.cells.items[0].components.items[0].ready, Some(true));
+    let layout_id = view.cells.items[0].layout_id.clone();
     assert!(
         layout_id
             .as_deref()
             .is_some_and(|id| id.starts_with("local:"))
     );
     assert!(
-        view.labs.items[0].components.items[0]
+        view.cells.items[0].components.items[0]
             .details
             .as_ref()
             .unwrap()
@@ -578,13 +580,13 @@ async fn stale_generation_keeps_unchanged_components_ready_but_rejects_wrong_ide
     );
     cluster.lock().unwrap().objects.get_mut(&path).unwrap()["status"]["components"][0]["observed_rollout_digest"] =
         json!("old-rollout");
-    let changed = labs
+    let changed = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
-    assert_eq!(changed.labs.items[0].layout_id, layout_id);
+    assert_eq!(changed.cells.items[0].layout_id, layout_id);
     assert_eq!(
-        changed.labs.items[0].components.items[0]
+        changed.cells.items[0].components.items[0]
             .details
             .as_ref()
             .unwrap()
@@ -592,32 +594,32 @@ async fn stale_generation_keeps_unchanged_components_ready_but_rejects_wrong_ide
         None
     );
     assert_eq!(
-        view.labs.items[0].runtime.phase,
+        view.cells.items[0].runtime.phase,
         Some(proofstorm_core::InstancePhase::Pending)
     );
     cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["workspaceId"] = json!("other");
-    let view = labs
+    let view = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
-    assert!(view.labs.items.is_empty());
+    assert!(view.cells.items.is_empty());
     cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["workspaceId"] = json!("local");
     cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["instanceKey"] =
         json!("wrong-key");
-    let mismatch = labs
+    let mismatch = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
     assert_eq!(
-        mismatch.labs.items[0].runtime.error.as_deref(),
+        mismatch.cells.items[0].runtime.error.as_deref(),
         Some("runtime_identity_mismatch")
     );
     cluster.lock().unwrap().objects.remove(&path);
-    let view = labs
+    let view = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
-    assert!(view.labs.items.is_empty());
+    assert!(view.cells.items.is_empty());
 }
 
 #[tokio::test]
@@ -625,9 +627,9 @@ async fn http_matches_shared_contract_and_refuses_writes_foreign_origins_and_rev
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster);
-    labs.up("demo", &spec()).await.unwrap();
-    let viewer = observer(&labs);
+    let cells = service(store.clone(), cluster);
+    cells.up("demo", &spec()).await.unwrap();
+    let viewer = observer(&cells);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(proofstorm_app::http::serve_listener(
@@ -648,12 +650,12 @@ async fn http_matches_shared_contract_and_refuses_writes_foreign_origins_and_rev
     )
     .unwrap();
     assert_eq!(
-        wire["labs"]["items"][0]["id"],
-        shared["labs"]["items"][0]["id"]
+        wire["cells"]["items"][0]["id"],
+        shared["cells"]["items"][0]["id"]
     );
     assert_eq!(
-        wire["labs"]["items"][0]["resources"],
-        shared["labs"]["items"][0]["resources"]
+        wire["cells"]["items"][0]["resources"],
+        shared["cells"]["items"][0]["resources"]
     );
     assert_eq!(
         client
@@ -728,10 +730,10 @@ async fn cluster_inventory_failure_is_not_reported_as_an_empty_cluster() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster.clone());
-    labs.up("demo", &spec()).await.unwrap();
+    let cells = service(store, cluster.clone());
+    cells.up("demo", &spec()).await.unwrap();
     cluster.lock().unwrap().fail_reads = true;
-    let error = labs
+    let error = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap_err();
@@ -743,7 +745,7 @@ async fn large_topology_pages_fit_the_shared_budget_without_losing_components_or
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster);
+    let cells = service(store, cluster);
     let mut spec = spec();
     spec.components = (0..64)
         .map(|n| {
@@ -761,17 +763,17 @@ async fn large_topology_pages_fit_the_shared_budget_without_losing_components_or
             binding: None,
         })
         .collect();
-    let lab = labs.up("large", &spec).await.unwrap().lab;
+    let cell = cells.up("large", &spec).await.unwrap().cell;
     let mut query = EnvironmentQuery {
-        instance_id: Some(lab.instance_id),
+        instance_id: Some(cell.instance_id),
         limit: 50,
         ..Default::default()
     };
     let mut components = Vec::new();
     loop {
-        let view = labs.environment(&query).await.unwrap();
+        let view = cells.environment(&query).await.unwrap();
         assert!(serde_json::to_vec(&view).unwrap().len() <= 24 * 1024);
-        let item = &view.labs.items[0];
+        let item = &view.cells.items[0];
         components.extend(item.components.items.iter().map(|c| c.id.clone()));
         assert!(item.resources.as_ref().unwrap().workloads.iter().all(|w| {
             w.component
@@ -789,8 +791,8 @@ async fn large_topology_pages_fit_the_shared_budget_without_losing_components_or
     assert_eq!(components.len(), 64);
     let mut links = Vec::new();
     loop {
-        let view = labs.environment(&query).await.unwrap();
-        let item = &view.labs.items[0];
+        let view = cells.environment(&query).await.unwrap();
+        let item = &view.cells.items[0];
         links.extend(item.links.items.iter().map(|l| l.id.clone()));
         match &item.links.next_cursor {
             Some(c) => query.link_cursor = c.clone(),
@@ -821,12 +823,12 @@ async fn recorded_network_faults_identify_both_components() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster);
+    let cells = service(store.clone(), cluster);
     let mut spec = spec();
     let mut second = spec.components[0].clone();
     second.id = "chain-two".into();
     spec.components.push(second);
-    let lab = labs.up("demo", &spec).await.unwrap().lab;
+    let cell = cells.up("demo", &spec).await.unwrap().cell;
     store
         .grant("local", "developer", Capability::NetworkPartition)
         .unwrap();
@@ -834,9 +836,9 @@ async fn recorded_network_faults_identify_both_components() {
         .create_operation(
             "local",
             "developer",
-            &lab.instance_id,
+            &cell.instance_id,
             &store
-                .default_run_id("local", "developer", &lab.instance_id)
+                .default_run_id("local", "developer", &cell.instance_id)
                 .unwrap(),
             "",
             "fault",
@@ -846,12 +848,12 @@ async fn recorded_network_faults_identify_both_components() {
             Capability::NetworkPartition,
         )
         .unwrap();
-    let view = labs
+    let view = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
     assert_eq!(
-        view.labs.items[0].activity.items[0].components,
+        view.cells.items[0].activity.items[0].components,
         vec!["chain", "chain-two"]
     );
 }
@@ -865,15 +867,18 @@ async fn server_collects_disconnected_agent_receipts_and_streams_changes() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let lab = labs.up("demo", &spec()).await.unwrap().lab;
-    let op = labs
+    let cells = service(store.clone(), cluster.clone());
+    let cell = cells.up("demo", &spec()).await.unwrap().cell;
+    let op = cells
         .exec("demo", "chain", command(), "background-op")
         .await
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(proofstorm_app::http::serve_listener(labs.clone(), listener));
+    let server = tokio::spawn(proofstorm_app::http::serve_listener(
+        cells.clone(),
+        listener,
+    ));
     let client = reqwest::Client::new();
     let mut stream = client.get(format!("{url}/v1/events")).send().await.unwrap();
     assert_eq!(stream.headers()["content-type"], "text/event-stream");
@@ -894,17 +899,17 @@ async fn server_collects_disconnected_agent_receipts_and_streams_changes() {
     .expect("sampler must invalidate cached measurements through SSE");
     let start = cluster.lock().unwrap().requests.len();
     for (path, object) in &mut cluster.lock().unwrap().objects {
-        if path.contains("/proofstormlabactions/") {
+        if path.contains("/proofstormcellactions/") {
             object["status"] = json!({"phase":"Succeeded", "artifact":{"exit_code":0,"cleanup_verified":true,"timed_out":false}});
         }
     }
     tokio::time::timeout(std::time::Duration::from_secs(8), async {
         loop {
-            let result = labs
+            let result = cells
                 .environment(&EnvironmentQuery::default())
                 .await
                 .unwrap();
-            if result.labs.items[0].activity.items[0].phase == OperationPhase::Succeeded {
+            if result.cells.items[0].activity.items[0].phase == OperationPhase::Succeeded {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -933,7 +938,7 @@ async fn server_collects_disconnected_agent_receipts_and_streams_changes() {
     assert_eq!(status["state"], "watching");
     assert_eq!(status["recorded_operations"], 1);
     // Re-observation uses the existing idempotent journal path and creates no work.
-    labs.sync("demo").await.unwrap();
+    cells.sync("demo").await.unwrap();
     assert_eq!(
         store.operation("local", "developer", &op.id).unwrap().phase,
         OperationPhase::Succeeded
@@ -945,7 +950,7 @@ async fn server_collects_disconnected_agent_receipts_and_streams_changes() {
     );
     assert_eq!(
         store
-            .sessions("local", "developer", &lab.instance_id, "", 100)
+            .sessions("local", "developer", &cell.instance_id, "", 100)
             .unwrap()
             .sessions
             .len(),
@@ -984,10 +989,10 @@ async fn server_collects_disconnected_agent_receipts_and_streams_changes() {
 async fn web_assets_and_same_origin_requests_are_served_safely() {
     let store = Store::memory().unwrap();
     seed(&store);
-    let labs = service(store, Arc::new(Mutex::new(Cluster::default())));
+    let cells = service(store, Arc::new(Mutex::new(Cluster::default())));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(proofstorm_app::http::serve_listener(labs, listener));
+    let server = tokio::spawn(proofstorm_app::http::serve_listener(cells, listener));
     let client = reqwest::Client::new();
     let root = client.get(&url).send().await.unwrap();
     if root.status() == 200 {
@@ -1052,8 +1057,8 @@ async fn system_measurements_are_scoped_passive_and_preserve_missing_metrics() {
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store.clone(), cluster.clone());
-    let handle = labs.up("demo", &spec()).await.unwrap().lab;
+    let cells = service(store.clone(), cluster.clone());
+    let handle = cells.up("demo", &spec()).await.unwrap().cell;
     let instance = store
         .instance("local", "developer", &handle.instance_id)
         .unwrap();
@@ -1073,19 +1078,19 @@ async fn system_measurements_are_scoped_passive_and_preserve_missing_metrics() {
         },{"metadata":{"name":"unrelated"},"containers":[{"name":"component","usage":{"cpu":"100","memory":"32Gi"}}]}]}));
         cluster.requests.clear();
     }
-    let viewer = observer(&labs);
+    let viewer = observer(&cells);
     let view = viewer.system().await.unwrap();
-    assert_eq!(view.labs.len(), 1);
+    assert_eq!(view.cells.len(), 1);
     assert_eq!(
         (view.totals.running, view.totals.ready, view.totals.sampled),
         (1, 1, 1)
     );
     assert!((view.totals.cpu_millicores.unwrap() - 125.0).abs() < 1e-9);
     assert_eq!(
-        view.labs[0].processes[0].component.as_deref(),
+        view.cells[0].processes[0].component.as_deref(),
         Some("chain")
     );
-    assert!(view.labs[0].balances.is_empty()); // Viewer cannot run even passive commands.
+    assert!(view.cells[0].balances.is_empty()); // Viewer cannot run even passive commands.
     assert!(
         cluster
             .lock()
@@ -1099,15 +1104,15 @@ async fn system_measurements_are_scoped_passive_and_preserve_missing_metrics() {
     assert_eq!(missing.totals.running, 1);
     assert_eq!(missing.totals.sampled, 0);
     assert!(missing.totals.cpu_millicores.is_none());
-    assert!(missing.labs[0].metrics_error.is_some());
-    let lab_path = format!(
-        "/apis/proofstorm.dev/v1alpha1/namespaces/system/proofstormlabs/{}",
+    assert!(missing.cells[0].metrics_error.is_some());
+    let cell_path = format!(
+        "/apis/proofstorm.dev/v1alpha1/namespaces/system/proofstormcells/{}",
         instance.resource_name
     );
-    cluster.lock().unwrap().objects.get_mut(&lab_path).unwrap()["spec"]["instanceKey"] =
+    cluster.lock().unwrap().objects.get_mut(&cell_path).unwrap()["spec"]["instanceKey"] =
         json!("wrong-key");
     let invalid = viewer.system().await.unwrap();
-    assert!(invalid.labs[0].error.is_some());
+    assert!(invalid.cells[0].error.is_some());
     assert!(invalid.totals.cpu_millicores.is_none());
     assert!(
         !cluster

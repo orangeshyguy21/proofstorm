@@ -26,8 +26,8 @@ pub(super) const REQUIRED: &[&str] = &[
     "chart/templates/serviceaccount.yaml",
     "chart/templates/rbac.yaml",
     "chart/templates/private-pvc.yaml",
-    "chart/crds/proofstorm.dev_proofstormlabs.yaml",
-    "chart/crds/proofstorm.dev_proofstormlabactions.yaml",
+    "chart/crds/proofstorm.dev_proofstormcells.yaml",
+    "chart/crds/proofstorm.dev_proofstormcellactions.yaml",
     "chart/crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
 ];
 pub(super) const MAX_FILES: usize = 10_000;

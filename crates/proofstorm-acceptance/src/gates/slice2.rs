@@ -1,5 +1,5 @@
 //! Slice 2 security spine, driven entirely through kubectl against a
-//! declaratively applied lab: restricted Pod Security admission, the
+//! declaratively applied cell: restricted Pod Security admission, the
 //! default-deny NetworkPolicy, LimitRange reconciliation after a controller
 //! restart, and a teardown that blocks until every owned object is gone.
 //!
@@ -12,18 +12,18 @@ use anyhow::{Result, bail};
 
 use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect};
 
-const LAB: &str = "slice2-security-spine";
-const NAMESPACE: &str = "proofstorm-01slice2lab00";
+const CELL: &str = "slice2-security-spine";
+const NAMESPACE: &str = "proofstorm-01slice2cell00";
 
 pub fn run(context: &GateContext) -> Result<()> {
     let kubectl = &context.kubectl;
     let manifest = |name: &str| context.root.join(name).to_string_lossy().to_string();
 
-    kubectl.run(&["apply", "-f", &manifest("examples/slice2-lab.yaml")])?;
+    kubectl.run(&["apply", "-f", &manifest("examples/slice2-cell.yaml")])?;
     kubectl.run(&[
         "wait",
         "--for=jsonpath={.status.phase}=Ready",
-        &format!("proofstormlab/{LAB}"),
+        &format!("proofstormcell/{CELL}"),
         "-n",
         CONTROL_NAMESPACE,
         "--timeout=60s",
@@ -31,7 +31,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let actual = kubectl.run(&[
         "get",
-        &format!("proofstormlab/{LAB}"),
+        &format!("proofstormcell/{CELL}"),
         "-n",
         CONTROL_NAMESPACE,
         "-o",
@@ -134,7 +134,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let after_restart = kubectl.run(&[
         "get",
-        &format!("proofstormlab/{LAB}"),
+        &format!("proofstormcell/{CELL}"),
         "-n",
         CONTROL_NAMESPACE,
         "-o",
@@ -152,7 +152,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     ])?;
     kubectl.run(&[
         "delete",
-        &format!("proofstormlab/{LAB}"),
+        &format!("proofstormcell/{CELL}"),
         "-n",
         CONTROL_NAMESPACE,
         "--wait=false",
@@ -161,14 +161,14 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let phase = kubectl.run(&[
         "get",
-        &format!("proofstormlab/{LAB}"),
+        &format!("proofstormcell/{CELL}"),
         "-n",
         CONTROL_NAMESPACE,
         "-o",
         "jsonpath={.status.phase}",
     ])?;
     if phase != "Closing" {
-        bail!("blocked teardown did not hold the lab in Closing: {phase}");
+        bail!("blocked teardown did not hold the cell in Closing: {phase}");
     }
     kubectl.run(&["get", "namespace", NAMESPACE])?;
 
@@ -190,7 +190,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     kubectl.run(&[
         "wait",
         "--for=delete",
-        &format!("proofstormlab/{LAB}"),
+        &format!("proofstormcell/{CELL}"),
         "-n",
         CONTROL_NAMESPACE,
         "--timeout=90s",
@@ -198,7 +198,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let receipt = kubectl.get_json(&[
         "get",
-        "configmap/proofstorm-teardown-01slice2lab00",
+        "configmap/proofstorm-teardown-01slice2cell00",
         "-n",
         CONTROL_NAMESPACE,
     ])?;

@@ -1,0 +1,231 @@
+{
+  "$defs": {
+    "Capability": {
+      "enum": [
+        "catalog.read",
+        "candidate.build",
+        "candidate.read",
+        "candidate.cancel",
+        "cell.read",
+        "cell.create",
+        "cell.edit",
+        "cell.clone",
+        "cell.validate",
+        "cell.publish",
+        "cell.materialize",
+        "cell.status",
+        "cell.close",
+        "cell.connect",
+        "experiment.create",
+        "experiment.read",
+        "experiment.close",
+        "cell.operate",
+        "action.cancel",
+        "topology.inspect",
+        "topology.mutate",
+        "node.add",
+        "node.remove",
+        "node.control",
+        "component.control",
+        "peer.connect",
+        "peer.disconnect",
+        "wallet.create",
+        "wallet.control",
+        "wallet.fund",
+        "channel.open",
+        "channel.close",
+        "channel.force_close",
+        "channel.rebalance",
+        "chain.mine",
+        "chain.fee",
+        "chain.reorg",
+        "network.delay",
+        "network.drop",
+        "network.partition",
+        "network.heal",
+        "component.logs",
+        "component.exec_live",
+        "component.forensics",
+        "authentication.test",
+        "traffic.capture",
+        "oracle.list",
+        "oracle.run",
+        "artifact.read",
+        "policy.read",
+        "policy.edit",
+        "snapshot.create",
+        "snapshot.restore"
+      ],
+      "type": "string"
+    },
+    "OperationArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_length": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "content": true,
+        "digest": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "digest",
+        "byte_length",
+        "content"
+      ],
+      "type": "object"
+    },
+    "OperationKind": {
+      "enum": [
+        "node_start",
+        "node_stop",
+        "node_restart",
+        "component_start",
+        "component_stop",
+        "component_restart",
+        "bootstrap_liquidity",
+        "peer_connect",
+        "peer_disconnect",
+        "channel_open",
+        "channel_policy_set",
+        "channel_close",
+        "channel_force_close",
+        "channel_rebalance",
+        "network_partition",
+        "network_delay",
+        "network_loss",
+        "network_heal",
+        "wallet_initialize",
+        "wallet_balance",
+        "wallet_fund",
+        "wallet_invoice",
+        "wallet_pay",
+        "wallet_quote_claim",
+        "wallet_melt_quote_refresh",
+        "wallet_round_trip",
+        "conservation_oracle",
+        "reachability_oracle",
+        "component_forensics",
+        "component_exec_live",
+        "private_transfer",
+        "component_logs",
+        "authentication_conformance",
+        "authentication_protected_spend",
+        "authentication_replay"
+      ],
+      "type": "string"
+    },
+    "OperationPhase": {
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted_at_unix": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "artifact": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OperationArtifact"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capability": {
+      "$ref": "#/$defs/Capability"
+    },
+    "completed_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "experiment_id": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "instance_id": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/OperationKind"
+    },
+    "phase": {
+      "$ref": "#/$defs/OperationPhase"
+    },
+    "principal_id": {
+      "type": "string"
+    },
+    "request": true,
+    "request_digest": {
+      "type": "string"
+    },
+    "resource_name": {
+      "type": "string"
+    },
+    "revision_digest": {
+      "default": "",
+      "description": "Immutable configuration captured atomically at admission.",
+      "type": "string"
+    },
+    "sequence": {
+      "description": "Monotonic across this cell, including operations from other actors and runs.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "started_at_unix": {
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "workspace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "instance_id",
+    "experiment_id",
+    "session_id",
+    "principal_id",
+    "sequence",
+    "kind",
+    "capability",
+    "resource_name",
+    "request_digest",
+    "request",
+    "phase",
+    "accepted_at_unix"
+  ],
+  "title": "CellOperation",
+  "type": "object"
+}

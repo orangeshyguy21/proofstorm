@@ -13,15 +13,15 @@ import threading
 import time
 
 CLEANUP_TOOLS = frozenset('''workspace_read
-lab_status lab_wait lab_close lab_close_wait
-lab_component_status_list lab_component_status_read
-lab_inventory_list operation_status operation_wait
+cell_status cell_wait cell_close cell_close_wait
+cell_component_status_list cell_component_status_read
+cell_inventory_list operation_status operation_wait
 operation_wait_many action_list action_cancel
 artifact_read artifact_export artifact_list
 private_access_revoke private_access_read session_list session_finish experiment_close experiment_read
 candidate_cancel candidate_read candidate_list
 candidate_wait'''.split())
-WAIT_TOOLS = frozenset('''lab_wait
+WAIT_TOOLS = frozenset('''cell_wait
 operation_wait operation_wait_many candidate_wait'''.split())
 
 CDK_PREFIX = ('cdk-cli', '--work-dir', '/wallet/cdk', '--unit', 'sat', '--non-interactive')
@@ -169,7 +169,7 @@ class CleanupGate:
                 'seconds_to_cleanup': max(0, round(self.started_at + self.seconds - now, 3)),
                 'seconds_to_hard_stop': max(0, round(self.started_at + self.max_seconds - now, 3)),
                 'instruction': ('Cancel owned operations, release session, close experiment, export evidence, '
-                                'close and verify lab absence, then report now.' if cleanup else
+                                'close and verify cell absence, then report now.' if cleanup else
                                 'Finish experimental work before cleanup; reserve time for teardown and report.')}
         if self.stage_budget:
             stage = json.loads(self.stage_budget.read_text())
@@ -193,7 +193,7 @@ class CleanupGate:
         if type(requested) is not int or not 1 <= requested <= 120:
             return message
         budget = self.budget()
-        if (budget['phase'] == 'cleanup' and params['name'] == 'lab_wait'
+        if (budget['phase'] == 'cleanup' and params['name'] == 'cell_wait'
                 and arguments.get('target_phase') == 'closed'):
             # Ordinary deletion should not burn the remaining model steps in
             # short polls. Keep a reporting margin and the server's 1s minimum
@@ -330,7 +330,7 @@ def main():
             if not allowed:
                 if 'id' in message:
                     emit(json.dumps(gate.decorate({'jsonrpc': '2.0', 'id': message['id'], 'error': {
-                        'code': -32600, 'message': 'Cleanup phase: cancel or wait for owned operations, release the session, close the experiment, export evidence, close the lab, then report. New experimental work is refused.',
+                        'code': -32600, 'message': 'Cleanup phase: cancel or wait for owned operations, release the session, close the experiment, export evidence, close the cell, then report. New experimental work is refused.',
                         'data': {'code': 'cleanup_phase_only'}}})) + '\n')
                 continue
             if message.get('method') == 'tools/call':

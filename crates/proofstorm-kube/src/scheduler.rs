@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-pub const MAX_ACTIVE_PROTOCOL_PROBER_LABS: usize = 4;
-pub const MAX_PROTOCOL_PROBES_PER_LAB: usize = 64;
+pub const MAX_ACTIVE_PROTOCOL_PROBER_CELLS: usize = 4;
+pub const MAX_PROTOCOL_PROBES_PER_CELL: usize = 64;
 pub const MAX_GLOBAL_PROTOCOL_PROBES: usize =
-    MAX_ACTIVE_PROTOCOL_PROBER_LABS * MAX_PROTOCOL_PROBES_PER_LAB;
+    MAX_ACTIVE_PROTOCOL_PROBER_CELLS * MAX_PROTOCOL_PROBES_PER_CELL;
 pub const PROTOCOL_PROBE_LEASE_SECONDS: i64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,7 +14,7 @@ pub struct ProtocolProbeSchedule {
     pub seconds_until_boundary: u64,
 }
 
-/// Select a deterministic bounded rotating window of probe-bearing labs.
+/// Select a deterministic bounded rotating window of probe-bearing cells.
 #[must_use]
 pub fn schedule_protocol_probers(
     candidate_instance_keys: impl IntoIterator<Item = String>,
@@ -31,7 +31,7 @@ pub fn schedule_protocol_probers(
     let seconds_until_boundary = u64::try_from(PROTOCOL_PROBE_LEASE_SECONDS - elapsed).unwrap_or(1);
     let mut active_instance_keys = BTreeSet::new();
     if !candidates.is_empty() {
-        let limit = MAX_ACTIVE_PROTOCOL_PROBER_LABS.min(candidates.len());
+        let limit = MAX_ACTIVE_PROTOCOL_PROBER_CELLS.min(candidates.len());
         let start = usize::try_from(
             (i128::from(epoch) * i128::try_from(limit).unwrap_or(0))
                 % i128::try_from(candidates.len()).unwrap_or(1),

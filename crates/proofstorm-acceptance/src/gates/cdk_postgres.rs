@@ -9,20 +9,20 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const INSTANCE: &str = "cdk-postgres-instance";
 const DRAFT: &str = "cdk-postgres";
 const MARKER: &str = "persistent";
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "cdk-postgres-live-lab",
+        "name": "cdk-postgres-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-postgres-lnd"}},
-            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "laboratory", "config": {"database_name": "proofstorm_mint", "storage_size": "2Gi"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-postgres-lnd"}},
+            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"database_name": "proofstorm_mint", "storage_size": "2Gi"}},
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK PostgreSQL", "description": "Secret-backed PostgreSQL persistence acceptance", "mint_quote_ttl_seconds": 601, "melt_quote_ttl_seconds": 121}}
         ],
         "links": [
@@ -85,15 +85,15 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-cdk-postgres"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-cdk-postgres"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cdk-postgres", "include_revision": true}),
     )?;
 
-    let database_lock = lab::lock_entry(&published, "postgresql")?;
+    let database_lock = cell::lock_entry(&published, "postgresql")?;
     let locked_image = expect::string(database_lock, "/image")?;
     if locked_image != expect::string(&postgres_detail, "/image")?
         || !locked_image.contains("@sha256:")
@@ -102,10 +102,10 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cdk-postgres"}),
     )?;
-    let ready = lab::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
+    let ready = cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let public_config = context.kubectl.run(&[
@@ -258,9 +258,9 @@ pub fn run(context: &GateContext) -> Result<()> {
         );
     }
 
-    lab::wait_phase(&mut client, INSTANCE, "ready", 60, Duration::from_secs(3))?;
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_phase(&mut client, INSTANCE, "closed", 60, Duration::from_secs(3))?;
+    cell::wait_phase(&mut client, INSTANCE, "ready", 60, Duration::from_secs(3))?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_phase(&mut client, INSTANCE, "closed", 60, Duration::from_secs(3))?;
 
     println!(
         "CDK 0.18.0 + PostgreSQL MCP materialization, database-backed configuration, Secret preservation, restart persistence, and teardown passed"

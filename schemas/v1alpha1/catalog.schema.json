@@ -460,7 +460,7 @@
     },
     "ControlClass": {
       "enum": [
-        "laboratory",
+        "cell",
         "target",
         "attacker",
         "oracle"

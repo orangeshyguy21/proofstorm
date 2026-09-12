@@ -4,7 +4,7 @@ use crate::{
     system::NodeBalance,
 };
 use leptos::prelude::*;
-use proofstorm_view::{EnvironmentLab, SystemView};
+use proofstorm_view::{EnvironmentCell, SystemView};
 use wasm_bindgen::JsCast;
 
 #[derive(Clone)]
@@ -21,26 +21,26 @@ struct Drag {
     reason = "canvas owns pointer gestures and persistence"
 )]
 pub fn Graph(
-    lab: RwSignal<Option<EnvironmentLab>>,
+    cell: RwSignal<Option<EnvironmentCell>>,
     selected: RwSignal<String>,
     zoom: RwSignal<f64>,
     pan: RwSignal<(f64, f64)>,
     telemetry: RwSignal<Option<SystemView>>,
 ) -> impl IntoView {
     let nodes = Memo::new(move |_| {
-        lab.get()
+        cell.get()
             .map(|l| canvas_model::nodes(&l))
             .unwrap_or_default()
     });
     let relationships = Memo::new(move |_| {
         let now = crate::freshness::now();
-        lab.get()
-            .map(|lab| {
+        cell.get()
+            .map(|cell| {
                 let system = telemetry.get();
                 let usage = system
                     .as_ref()
-                    .and_then(|s| s.labs.iter().find(|l| l.id == lab.id));
-                crate::relationships::edges(&lab, usage, now)
+                    .and_then(|s| s.cells.iter().find(|l| l.id == cell.id));
+                crate::relationships::edges(&cell, usage, now)
             })
             .unwrap_or_default()
     });
@@ -96,19 +96,19 @@ pub fn Graph(
         save_error.set(result.is_none());
     };
     Effect::new(move |_| {
-        let Some(lab) = lab.get() else {
+        let Some(cell) = cell.get() else {
             return;
         };
         let current = nodes.get();
         relationships.get();
         let sampled = telemetry.get().is_some_and(|s| {
-            s.labs
+            s.cells
                 .iter()
-                .any(|u| lab.layout_id.as_deref() == Some(u.incarnation.as_str()))
+                .any(|u| cell.layout_id.as_deref() == Some(u.incarnation.as_str()))
         });
         let key = format!(
             "proofstorm.canvas.v1:{}",
-            lab.layout_id.as_deref().unwrap_or(&lab.id)
+            cell.layout_id.as_deref().unwrap_or(&cell.id)
         );
         let changed = key != storage_key.get_untracked();
         let mut next = if changed {
@@ -156,7 +156,7 @@ pub fn Graph(
     };
     view! {
         <div class="graph" class:dragging=move ||drag.get().is_some()>
-            <svg viewBox=move ||{let (x,y,w,h)=camera.get();format!("{x} {y} {w} {h}")} aria-label="Lab component topology" role="group"
+            <svg viewBox=move ||{let (x,y,w,h)=camera.get();format!("{x} {y} {w} {h}")} aria-label="Cell component topology" role="group"
                 on:pointerdown=move |event| {
                     if event.button()!=0{return;}
                     interacted.set(true);
@@ -201,11 +201,11 @@ pub fn Graph(
                     <For each=move ||nodes.get() key=|node|node.id.clone() children=move |node| {
                         let id=node.id;
                         let data=Memo::new(move |_|nodes.get().into_iter().find(|n|n.id==id));
-                        view!{<CanvasTile data lab selected positions nodes telemetry suppress_click on_save=save />}
+                        view!{<CanvasTile data cell selected positions nodes telemetry suppress_click on_save=save />}
                     } />
                 </g>
             </svg>
-            <div class="graph-toolbar"><button aria-label="Zoom out" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z/1.2).max(0.15));}>"−"</button><span>{move ||format!("{:.0}%",zoom.get()*100.0)}</span><button aria-label="Zoom in" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z*1.2).min(6.0));}>"+"</button><button on:click=move |_|fit()>"Fit to lab"</button><button on:click=move |_|{let mut next=Positions::new();canvas_model::ensure_positions(&nodes.get_untracked(),&mut next);positions.set(next);fit();save();}>"Reset layout"</button></div>
+            <div class="graph-toolbar"><button aria-label="Zoom out" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z/1.2).max(0.15));}>"−"</button><span>{move ||format!("{:.0}%",zoom.get()*100.0)}</span><button aria-label="Zoom in" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z*1.2).min(6.0));}>"+"</button><button on:click=move |_|fit()>"Fit to cell"</button><button on:click=move |_|{let mut next=Positions::new();canvas_model::ensure_positions(&nodes.get_untracked(),&mut next);positions.set(next);fit();save();}>"Reset layout"</button></div>
             <Show when=move ||save_error.get()><div class="layout-notice" role="status">"Layout could not be saved in this browser."</div></Show>
             <div class="graph-legend"><span>"Drag to arrange · arrow keys to move selected items"</span></div>
         </div>
@@ -214,7 +214,7 @@ pub fn Graph(
 #[component]
 fn CanvasTile(
     data: Memo<Option<CanvasNode>>,
-    lab: RwSignal<Option<EnvironmentLab>>,
+    cell: RwSignal<Option<EnvironmentCell>>,
     selected: RwSignal<String>,
     positions: RwSignal<Positions>,
     nodes: Memo<Vec<CanvasNode>>,
@@ -225,7 +225,7 @@ fn CanvasTile(
     let status = move || {
         data.get()
             .and_then(|node| {
-                lab.get()
+                cell.get()
                     .and_then(|l| l.components.items.into_iter().find(|c| c.id == node.owner))
             })
             .map_or("unknown", |c| health(&c))
@@ -249,7 +249,7 @@ fn CanvasTile(
             <text class="node-name" x="17" y="52">{move ||data.get().map(|n|short(&n.name,26))}</text>
             <text class="node-impl" x="17" y="73">{move ||data.get().map(|n|if n.is_embedded(){"Embedded · shares parent process".into()}else{short(&n.implementation,30)})}</text>
             <Show when=move ||data.get().is_some_and(|n|!n.is_embedded())>
-                <NodeBalance telemetry lab data />
+                <NodeBalance telemetry cell data />
                 <text class="node-health" x="17" y="132">{status}</text><circle class=move ||format!("status-dot {}",status()) cx="241" cy="127" r="4" />
             </Show>
         </g>

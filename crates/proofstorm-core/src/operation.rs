@@ -55,7 +55,7 @@ pub enum OperationPhase {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabOperation {
+pub struct CellOperation {
     /// Immutable configuration captured atomically at admission.
     #[serde(default)]
     pub revision_digest: String,
@@ -65,7 +65,7 @@ pub struct LabOperation {
     pub experiment_id: String,
     pub session_id: String,
     pub principal_id: String,
-    /// Monotonic across this lab, including operations from other actors and runs.
+    /// Monotonic across this cell, including operations from other actors and runs.
     pub sequence: u64,
     pub kind: OperationKind,
     pub capability: crate::Capability,

@@ -21,7 +21,7 @@ def resources(kind):
 
 
 def snapshot():
-    items = resources('namespaces,proofstormlabs,proofstormlabactions,proofstormcandidatebuilds,jobs,pods,persistentvolumeclaims,persistentvolumes')
+    items = resources('namespaces,proofstormcells,proofstormcellactions,proofstormcandidatebuilds,jobs,pods,persistentvolumeclaims,persistentvolumes')
     blockers = []
     control_plane = []
     infrastructure_claims = {
@@ -47,13 +47,13 @@ def snapshot():
                                   'containers': [{'name': c['name'], 'image': c.get('image'),
                                                   'image_id': c.get('imageID'), 'ready': c.get('ready')}
                                                  for c in item.get('status', {}).get('containerStatuses', [])]})
-        is_lab_ns = kind == 'Namespace' and ('proofstorm.dev/instance' in labels or name.startswith('proofstorm-i'))
+        is_cell_ns = kind == 'Namespace' and ('proofstorm.dev/instance' in labels or name.startswith('proofstorm-i'))
         is_control_work = ns == CONTROL and (
             kind.startswith('Proofstorm') or kind in ('Job', 'PersistentVolumeClaim')
             or (kind == 'Pod' and labels.get('app.kubernetes.io/name') != 'proofstormd'))
-        is_lab_work = ns.startswith('proofstorm-i')
+        is_cell_work = ns.startswith('proofstorm-i')
         claim_ns = item.get('spec', {}).get('claimRef', {}).get('namespace', '')
-        if is_lab_ns or is_control_work or is_lab_work or claim_ns.startswith('proofstorm-i'):
+        if is_cell_ns or is_control_work or is_cell_work or claim_ns.startswith('proofstorm-i'):
             blockers.append({'kind': kind, 'namespace': ns, 'name': name,
                              'phase': item.get('status', {}).get('phase'),
                              'deleting': bool(meta.get('deletionTimestamp'))})
@@ -68,7 +68,7 @@ def retire(run, cleanup):
     records = []
     kinds = ['proofstormcandidatebuilds']
     if cleanup:
-        kinds.append('proofstormlabs')
+        kinds.append('proofstormcells')
     for kind in kinds:
         for item in resources(kind):
             if item.get('spec', {}).get('workspaceId') != workspace:

@@ -26,7 +26,7 @@ private installation. Docker is not touched by the build. Inside that shell:
 ```sh
 proofstorm setup
 proofstorm doctor
-proofstorm up examples/developer-lab.json
+proofstorm up examples/developer-cell.json
 proofstorm gui
 ```
 
@@ -61,7 +61,7 @@ after leaving the development shell. No global agent configuration is changed.
 `just dev-build` rebuilds without entering a shell. `.proofstorm-dev/bin/proofstorm`
 is the same command launcher outside that shell. `just setup`, `just doctor`,
 and `just gui` are conveniences for that launcher. No release archive, installer,
-global PATH mutation, or legacy lab migration is involved.
+global PATH mutation, or legacy cell migration is involved.
 
 ## Rebuilding
 
@@ -70,7 +70,7 @@ global PATH mutation, or legacy lab migration is involved.
   separate API proxy. Automatic browser reload is not implemented yet.
   `just web` performs a single asset rebuild through the same path.
 - Host code: run `just dev-build`; stop/reopen the GUI and reconnect agent
-  sessions afterward. Existing labs, installation identity, and grants survive.
+  sessions afterward. Existing cells, installation identity, and grants survive.
 - Chart/CRDs: rebuild, then run `proofstorm setup` to apply the new snapshot.
 - Controller/runtime-contract changes: run `just dev-build`, then `proofstorm
   setup` (or simply `just deploy`). Setup builds the recorded linux/arm64 source,
@@ -129,17 +129,17 @@ python3 scripts/test_checkout.py \
 This runs doctor, GUI reuse/authentication checks, and the same private
 OpenCode/Claude Code connection scenario used for installed releases. It starts
 no model sessions and stops its GUI afterward. Test attachment receipts and
-private test projects remain for inspection. Do not overlap it with lab creation
+private test projects remain for inspection. Do not overlap it with cell creation
 or another installation write; those operations intentionally serialize.
 
 For a controller update/reuse check, run `scripts/test_checkout_controller.py`
 with the same `--cli`, `--home`, and a new `--work-dir`. It verifies setup/doctor,
 image identity, unchanged repeated deployment, and preservation of installation,
-runtime ownership, and existing database contents. It creates no labs and
+runtime ownership, and existing database contents. It creates no cells and
 publishes nothing outside the installation's private registry.
 
 For terminal-output verification, run `scripts/test_cli_progress.py` with the same
 `--cli`, `--home`, and a new `--work-dir`. It checks immediate animated progress,
 line cleanup, readable setup/GUI summaries, and explicit JSON results against the
-ready installation. It creates no labs or agent connections, opens no browser,
+ready installation. It creates no cells or agent connections, opens no browser,
 and stops the GUI only if one was not already running when the test began.

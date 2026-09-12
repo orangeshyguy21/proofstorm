@@ -10,7 +10,7 @@ acceptance must pass before announcing a Mac download.
 | --- | --- | --- |
 | CLI, MCP server, embedded browser GUI | `aarch64-apple-darwin` | macOS |
 | Controller and execution helper | `linux/arm64` | Docker's Linux runtime |
-| Lab components and protocol prober | Pinned images with ARM64 support | The same private runtime |
+| Cell components and protocol prober | Pinned images with ARM64 support | The same private runtime |
 
 There is no macOS container image. The host bundle is native macOS; its services
 are Linux containers. A matching controller receipt must come from the exact same
@@ -105,7 +105,7 @@ the scrubbing `pending` state. Check the host and retained EBS resources afterwa
 
 1. Build the ARM64 controller from reviewed source, publish by immutable digest,
    and build the matching native Mac archive. Verify every catalog/helper image
-   needed by the smoke lab has an anonymously accessible ARM64 manifest.
+   needed by the smoke cell has an anonymously accessible ARM64 manifest.
 2. Verify the first hosted Mac build and installer run, then prepare a new alpha
    version through the shared release flow. Inspect both platform reports before
    explicitly publishing a candidate for fresh-host testing.
@@ -113,9 +113,9 @@ the scrubbing `pending` state. Check the host and retained EBS resources afterwa
    installed Rust, development flags, or cached Proofstorm state. Docker and the
    chosen agent are prerequisites, not payload build tools. No compilation should
    occur during installation or setup.
-4. Repeat Linux's install → setup/doctor → Bitcoin lab → actual MCP read →
+4. Repeat Linux's install → setup/doctor → Bitcoin cell → actual MCP read →
    reinstall → cleanup scenario. Compare prober scale and status to Kubernetes.
-   Reinstall must preserve the existing lab; cleanup must verify storage absence.
+   Reinstall must preserve the existing cell; cleanup must verify storage absence.
 5. In a desktop session, separately test default-browser opening/reuse, folder
    selection, and native agent buttons. Record permission prompts and any signing
    or Gatekeeper friction. Do not prescribe disabling macOS security checks.

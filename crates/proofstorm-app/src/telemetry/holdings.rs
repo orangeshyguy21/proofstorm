@@ -1,7 +1,7 @@
 //! Project pinned passive wallet readers into amounts per mint, without exposing URLs.
 use super::balances::{amount, integer};
 use proofstorm_core::ComponentKind;
-use proofstorm_kube::{ProofstormLab, instance_namespace};
+use proofstorm_kube::{ProofstormCell, instance_namespace};
 use proofstorm_view::{BalanceAmount, HoldingsObservation, MintHolding};
 use serde_json::Value;
 
@@ -30,7 +30,7 @@ pub(super) fn script(implementation: &str) -> String {
     )
 }
 pub(super) fn project(
-    lab: &ProofstormLab,
+    cell: &ProofstormCell,
     implementation: &str,
     data: &Value,
 ) -> Option<(Vec<BalanceAmount>, HoldingsObservation)> {
@@ -70,7 +70,7 @@ pub(super) fn project(
             .collect::<Option<Vec<_>>>()?;
         mints.push(MintHolding {
             id: proofstorm_core::digest_json(&url),
-            mint: match_mint(lab, url),
+            mint: match_mint(cell, url),
             amounts,
         });
     }
@@ -87,11 +87,11 @@ pub(super) fn project(
         },
     ))
 }
-fn match_mint(lab: &ProofstormLab, url: &str) -> Option<String> {
-    // Match only exact in-lab service aliases. Never infer an external URL by its first label.
-    let namespace = instance_namespace(&lab.spec.instance_key);
-    lab.spec
-        .lab
+fn match_mint(cell: &ProofstormCell, url: &str) -> Option<String> {
+    // Match only exact in-cell service aliases. Never infer an external URL by its first label.
+    let namespace = instance_namespace(&cell.spec.instance_key);
+    cell.spec
+        .cell
         .components
         .iter()
         .filter(|c| c.kind == ComponentKind::Mint)
@@ -113,12 +113,12 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
     use serde_json::json;
-    fn lab() -> ProofstormLab {
-        ProofstormLab::new(
-            "lab",
-            proofstorm_kube::ProofstormLabSpec {
+    fn cell() -> ProofstormCell {
+        ProofstormCell::new(
+            "cell",
+            proofstorm_kube::ProofstormCellSpec {
                 workspace_id: "workspace".into(),
-                instance_id: "lab".into(),
+                instance_id: "cell".into(),
                 instance_key: "instance".into(),
                 revision_digest: "revision".into(),
                 lock: proofstorm_core::ResolvedLock {
@@ -126,17 +126,19 @@ mod tests {
                     digest: "lock".into(),
                     entries: vec![],
                 },
-                lab: serde_json::from_str(include_str!("../../../../examples/developer-lab.json"))
-                    .unwrap(),
+                cell: serde_json::from_str(include_str!(
+                    "../../../../examples/developer-cell.json"
+                ))
+                .unwrap(),
             },
         )
     }
     #[test]
     fn mint_matching_is_exact_and_unknown_urls_stay_private() {
-        let lab = lab();
-        let ns = instance_namespace(&lab.spec.instance_key);
+        let cell = cell();
+        let ns = instance_namespace(&cell.spec.instance_key);
         assert_eq!(
-            match_mint(&lab, &format!("http://mint.{ns}.svc.cluster.local:3338/")),
+            match_mint(&cell, &format!("http://mint.{ns}.svc.cluster.local:3338/")),
             Some("mint".into())
         );
         for url in [
@@ -144,11 +146,11 @@ mod tests {
             "http://user:secret@mint:3338",
             "http://mint:3338/path",
         ] {
-            assert_eq!(match_mint(&lab, url), None);
+            assert_eq!(match_mint(&cell, url), None);
         }
         let row = |url| json!({"mint_url":url,"balance_sat":10,"reserved_sat":2,"pending_sat":3,"pending_spent_sat":4});
         let (totals, observation) = project(
-            &lab,
+            &cell,
             "cdk-cli-wallet",
             &json!({"mints":[row("http://mint:3338"),row("http://secret:token@external:3338")]}),
         )
@@ -169,7 +171,7 @@ mod tests {
         );
         assert!(
             project(
-                &lab,
+                &cell,
                 "cdk-cli-wallet",
                 &json!({"mints":[row("same"),row("same")]})
             )
@@ -177,7 +179,7 @@ mod tests {
         );
         assert!(
             project(
-                &lab,
+                &cell,
                 "cdk-cli-wallet",
                 &json!({"mints":[{"mint_url":"mint"}]})
             )
@@ -206,7 +208,7 @@ mod tests {
         let data =
             run(&script("cdk-cli-wallet")
                 .replace("/wallet/cdk/cdk-cli.sqlite", path.to_str().unwrap()));
-        let (totals, observation) = project(&lab(), "cdk-cli-wallet", &data).unwrap();
+        let (totals, observation) = project(&cell(), "cdk-cli-wallet", &data).unwrap();
         assert_eq!(
             totals.iter().map(|a| a.sat).collect::<Vec<_>>(),
             vec![39, 5, 7, 11]
@@ -229,7 +231,7 @@ mod tests {
             INSERT INTO coco_cashu_proofs VALUES ('http://mint:3338','sat','ready','10',NULL),('http://mint:3338','sat','ready','4','op'),('http://mint:3338','sat','inflight','6',NULL),('http://mint:3338','sat','spent','200',NULL),('http://other:3338','sat','ready','9',NULL);").unwrap();
         let data =
             run(&script("cocod-wallet").replace("/wallet/.cocod/coco.db", path.to_str().unwrap()));
-        let (totals, observation) = project(&lab(), "cocod-wallet", &data).unwrap();
+        let (totals, observation) = project(&cell(), "cocod-wallet", &data).unwrap();
         assert_eq!(
             totals.iter().map(|a| a.sat).collect::<Vec<_>>(),
             vec![19, 4, 6]
@@ -247,7 +249,7 @@ mod tests {
             INSERT INTO proofs VALUES ('a',12,0),('a',3,1),('b',20,0);").unwrap();
         let data =
             run(&script("nutshell-wallet").replace("/wallet/.cashu", dir.path().to_str().unwrap()));
-        let (totals, observation) = project(&lab(), "nutshell-wallet", &data).unwrap();
+        let (totals, observation) = project(&cell(), "nutshell-wallet", &data).unwrap();
         assert_eq!(
             totals.iter().map(|a| a.sat).collect::<Vec<_>>(),
             vec![32, 3]

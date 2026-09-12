@@ -14,7 +14,7 @@
   <a href="#development">Development</a>
 </p>
 
-Build a lab, connect your application, and test it through a CLI, a browser, or
+Build a cell, connect your application, and test it through a CLI, a browser, or
 your coding agent. Proofstorm runs the services in a private local Kubernetes
 runtime and downloads prebuilt images as you need them.
 
@@ -39,7 +39,7 @@ storm doctor
 
 No Rust, source checkout, or compilation required. The installer does not change
 your shell profile, start a runtime, or configure an agent. `setup` downloads the
-tools and controller, then starts the private runtime. Lab images download on
+tools and controller, then starts the private runtime. Cell images download on
 first use. Add the PATH line to your shell profile if you want it to persist.
 
 From your application's directory, launch an installed, authenticated coding agent:
@@ -50,7 +50,7 @@ storm agent open codex
 # or: storm agent open claude
 ```
 
-Ask it: “Use Proofstorm to create a lab named demo with one Bitcoin Core regtest
+Ask it: “Use Proofstorm to create a cell named demo with one Bitcoin Core regtest
 node. Wait for it to be ready, then read it back.” The MCP connection is named
 `proofstorm`. Opening an agent configures its connection; ordinary setup does not.
 
@@ -68,7 +68,7 @@ command to launch a native app instead of its CLI.
 | macOS Intel | Not supported | No host bundle |
 | Windows / WSL | Not supported yet | No validated installation flow |
 
-The Linux smoke test covered installation, setup, one Bitcoin lab through Codex
+The Linux smoke test covered installation, setup, one Bitcoin cell through Codex
 and OpenCode, headless GUI startup, reinstall, and cleanup. It did **not** cover
 every component, transactions, or visual GUI behavior. See the
 [acceptance summary](release/alpha-2-linux-smoke.md).
@@ -103,11 +103,11 @@ catalog for full configuration and compatibility details.
 
 ## CLI in a minute
 
-Download the example lab: one Bitcoin node and a CDK mint with an on-chain backend.
+Save the [example cell](examples/developer-cell.json) as `cell.json`: one Bitcoin
+node and a CDK mint with an on-chain backend.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/orangeshyguy21/proofstorm/v0.1.0-alpha.2/examples/developer-lab.json -o lab.json
-storm up lab.json --name demo
+storm up cell.json --name demo
 storm status demo
 storm ls
 ```
@@ -125,13 +125,13 @@ file is never overwritten. Use `chain rpc` instead of `mint http` for Bitcoin RP
 When you're finished:
 
 ```sh
-storm rm demo          # Deletes the lab, its data, and history
-storm gui stop         # Stops the GUI service; labs keep running
+storm rm demo          # Deletes the cell, its data, and history
+storm gui stop         # Stops the GUI service; cells keep running
 storm gui status       # Shows GUI service status
 ```
 
 Commands show progress and readable results. Add `--json` for scripts, or
-`--help` to any command for options. Labs are not automatically funded.
+`--help` to any command for options. Cells are not automatically funded.
 
 ## Development
 
