@@ -69,7 +69,7 @@ fn owns_server(checkout: &Path, cwd: &str, args: &str) -> bool {
         })
         .any(|executable| {
             args.trim()
-                .strip_prefix(&format!("{executable} serve"))
+                .strip_prefix(&format!("{executable} dev serve"))
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
         })
 }
@@ -90,23 +90,27 @@ mod tests {
             assert!(owns_server(
                 checkout,
                 cwd,
-                &format!("{executable} serve --port 8787\n")
+                &format!("{executable} dev serve --port 8787\n")
             ));
         }
         for command in [
             "python3 -m http.server 8787",
-            "target/debug/proofstorm environment",
-            "target/debug/proofstorm serve-other",
+            "target/debug/proofstorm ls",
+            "target/debug/proofstorm dev serve-other",
             "target/debug/proofstorm-mcp serve",
-            "/tmp/other/target/debug/proofstorm serve",
+            "/tmp/other/target/debug/proofstorm dev serve",
         ] {
             assert!(!owns_server(checkout, cwd, command));
         }
         assert!(!owns_server(
             checkout,
             "p123\nn/tmp/other\n",
-            "target/debug/proofstorm serve"
+            "target/debug/proofstorm dev serve"
         ));
-        assert!(!owns_server(checkout, "", "target/debug/proofstorm serve"));
+        assert!(!owns_server(
+            checkout,
+            "",
+            "target/debug/proofstorm dev serve"
+        ));
     }
 }

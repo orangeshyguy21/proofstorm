@@ -175,7 +175,7 @@ def package(source, binaries, output, provenance, development):
             shutil.copyfile(binary, root / "bin" / name)
             (root / "bin" / name).chmod(0o755)
         # Execute the copied payload from its new location, never the source binaries.
-        info = json.loads(run([root / "bin/proofstorm", "release-info"], cwd=root, capture=True))
+        info = json.loads(run([root / "bin/proofstorm", "version", "--json"], cwd=root, capture=True))
         mcp = json.loads(run([root / "bin/proofstorm-mcp", "--release-info"], cwd=root, capture=True))
         require(info == mcp, "CLI and MCP were not built from the same release inputs")
         validate_info(info)

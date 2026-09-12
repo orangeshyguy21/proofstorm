@@ -298,7 +298,7 @@ pub(super) fn resources(source: &Path) -> Result<PathBuf> {
     )?;
     let info = output(
         Command::new(target.join("debug/proofstorm"))
-            .arg("release-info")
+            .args(["version", "--json"])
             .current_dir(source),
     )?;
     serde_json::from_slice::<Value>(&info).context("invalid release-info JSON")?;
@@ -373,6 +373,22 @@ pub(super) fn launchers(source: &Path) -> Result<()> {
         );
         write_owned(&work.join("bin").join(name), text.as_bytes(), 0o755)?;
     }
+    let short = work.join("bin/storm");
+    let text = format!(
+        "{LAUNCHER_HEADER}export PROOFSTORM_CLI_NAME=storm\nexport PROOFSTORM_HOME={}\nexec {} \"$@\"\n",
+        quote(&work.join("state"))?,
+        quote(&target.join("debug/proofstorm"))?
+    );
+    if fs::symlink_metadata(&short).is_ok()
+        && (regular(&short).is_err()
+            || !fs::read_to_string(&short)?.starts_with(&format!(
+                "{LAUNCHER_HEADER}export PROOFSTORM_CLI_NAME=storm\n"
+            )))
+    {
+        eprintln!("Existing storm command kept: {}", short.display());
+        return Ok(());
+    }
+    write_owned(&short, text.as_bytes(), 0o755)?;
     Ok(())
 }
 

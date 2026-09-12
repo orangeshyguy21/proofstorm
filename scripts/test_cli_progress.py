@@ -89,24 +89,24 @@ def main():
     try:
         print("Checking setup terminal progress", flush=True)
         result, report["setup"] = terminal([*base, "setup"], env)
-        assert result == "Proofstorm is ready.\n\nRun proofstorm gui to get started.\n"
+        assert result == "Runtime ready.\nOpen the GUI: proofstorm gui\n"
         assert machine("setup")["ready"]
         print("Checking GUI terminal progress and reuse", flush=True)
-        result, report["gui"] = terminal([*base, "gui", "--no-open"], env)
-        assert result.startswith("GUI ready: http://") and "Project:" in result
+        result, report["gui"] = terminal([*base, "gui", "start"], env)
+        assert result.startswith("GUI ready: http://") and "gui stop" in result
         assert "reused_server" not in result and "{" not in result
         assert "Checking Proofstorm files" in report["gui"]["stages"]
         assert "Checking existing GUI" in report["gui"]["stages"]
-        result, report["gui_reuse"] = terminal([*base, "gui", "--no-open"], env)
+        result, report["gui_reuse"] = terminal([*base, "gui", "start"], env)
         assert result.startswith("GUI ready: http://")
         assert "Reusing running GUI" in report["gui_reuse"]["stages"]
-        assert machine("gui", "--no-open")["reused_server"]
+        assert machine("gui", "start")["reused_server"]
         assert machine("doctor")["ok"]
         report["json_results_parse"] = True
         report["passed"] = True
     finally:
         if not gui_was_running:
-            machine("stop")
+            machine("gui", "stop")
         (work / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 

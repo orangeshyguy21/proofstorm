@@ -47,8 +47,8 @@ chmod +x "$fixture/.tools/bin/git"
 cat > "$fixture/cache/debug/proofstorm" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == release-info ]]; then printf '{"version":"fixture"}\n'; exit 0; fi
-[[ "$1" == --home && "$3" == checkout-register ]]
+if [[ "$1" == version && "$2" == --json ]]; then printf '{"version":"fixture"}\n'; exit 0; fi
+[[ "$1" == --home && "$3" == internal && "$4" == checkout-register ]]
 printf '<register>\n' >> "$TRACE"
 mkdir -p "$2"
 printf '{}\n' > "$2/checkout-artifacts.json"

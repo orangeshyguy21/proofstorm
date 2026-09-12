@@ -226,7 +226,7 @@ fn verify_with_metadata(
     );
     ensure!(
         expected_info.is_none_or(|expected| info == *expected),
-        "run install-bundle using the executable inside this bundle"
+        "run internal install-bundle using this bundle’s executable"
     );
     Ok(manifest)
 }
@@ -277,6 +277,50 @@ fn launcher(managed: &Path, binary: &str) -> Result<String> {
         shell_quote(&managed.join("state"))?,
         shell_quote(&managed.join("current/bin").join(binary))?
     ))
+}
+
+fn short_launcher(managed: &Path) -> Result<String> {
+    Ok(launcher(managed, "proofstorm")?.replacen(
+        "# Proofstorm managed launcher v1\n",
+        "# Proofstorm managed launcher v1\nexport PROOFSTORM_CLI_NAME=storm\n",
+        1,
+    ))
+}
+
+fn path_directories() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default()
+}
+
+fn install_short_command(
+    managed: &Path,
+    prefix: &Path,
+    search: impl IntoIterator<Item = PathBuf>,
+) -> Result<(Option<PathBuf>, Option<PathBuf>)> {
+    let path = prefix.join("bin/storm");
+    let expected = short_launcher(managed)?;
+    for candidate in
+        std::iter::once(path.clone()).chain(search.into_iter().map(|dir| dir.join("storm")))
+    {
+        if let Ok(metadata) = fs::symlink_metadata(&candidate) {
+            if !metadata.is_file()
+                || metadata.len() != expected.len() as u64
+                || fs::read(&candidate).ok().as_deref() != Some(expected.as_bytes())
+            {
+                return Ok((None, Some(candidate)));
+            }
+        }
+    }
+    if fs::symlink_metadata(&path).is_err() {
+        if let Err(error) = write_new(&path, expected.as_bytes(), true) {
+            if fs::symlink_metadata(&path).is_ok() {
+                return Ok((None, Some(path)));
+            }
+            return Err(error);
+        }
+    }
+    Ok((Some(path), None))
 }
 
 fn write_new(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
@@ -404,8 +448,11 @@ fn install_with_metadata(
         }
     }
     activate(&managed, &id)?;
+    let (short_executable, short_command_conflict) =
+        install_short_command(&managed, &prefix, path_directories())?;
     Ok(
         json!({"installed":true,"version":manifest["version"],"prefix":prefix,"executable":prefix.join("bin/proofstorm"),
+        "short_executable":short_executable,"short_command_conflict":short_command_conflict,
         "home":managed.join("state"),"release_ready":manifest["release_ready"],"runtime_initialized":false}),
     )
 }

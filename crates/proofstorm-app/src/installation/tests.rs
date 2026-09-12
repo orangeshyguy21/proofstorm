@@ -11,7 +11,10 @@ fn new_names_are_short_branded_and_keep_full_ownership_identity() {
     assert_eq!(installation.cluster_name(), cluster);
     assert_eq!(installation.context(), format!("k3d-{cluster}"));
     assert_eq!(installation.network_name(), installation.context());
-    assert_eq!(installation.registry_name(), format!("k3d-{cluster}-registry"));
+    assert_eq!(
+        installation.registry_name(),
+        format!("k3d-{cluster}-registry")
+    );
     let config = installation.cluster_config();
     assert_eq!(config["metadata"]["name"], cluster);
     assert_eq!(
@@ -30,7 +33,7 @@ fn legacy_installations_keep_their_names_and_saved_configuration_on_retry() {
     let root = tempfile::tempdir().unwrap();
     let installation = Installation {
         format_version: 1,
-        id: "aa959e2b95e04417eebe518605779e72ab".into(),
+        id: "aa959e2b95e04417eebe518605779e72".into(),
         home: root.path().canonicalize().unwrap(),
         api_port: 42101,
         registry_port: 42102,
@@ -39,7 +42,10 @@ fn legacy_installations_keep_their_names_and_saved_configuration_on_retry() {
     assert_eq!(installation.cluster_name(), cluster);
     assert_eq!(installation.context(), format!("k3d-{cluster}"));
     assert_eq!(installation.network_name(), installation.context());
-    assert_eq!(installation.registry_name(), format!("k3d-{cluster}-registry"));
+    assert_eq!(
+        installation.registry_name(),
+        format!("k3d-{cluster}-registry")
+    );
     let manifest = serde_json::to_vec_pretty(&installation).unwrap();
     let config = serde_json::to_vec_pretty(&installation.cluster_config()).unwrap();
     fs::write(installation.home.join(MANIFEST), &manifest).unwrap();
@@ -50,8 +56,14 @@ fn legacy_installations_keep_their_names_and_saved_configuration_on_retry() {
             Installation::initialize(root.path(), None, None).unwrap(),
             installation
         );
-        assert_eq!(fs::read(installation.home.join(MANIFEST)).unwrap(), manifest);
-        assert_eq!(fs::read(installation.cluster_config_path()).unwrap(), config);
+        assert_eq!(
+            fs::read(installation.home.join(MANIFEST)).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            fs::read(installation.cluster_config_path()).unwrap(),
+            config
+        );
     }
 }
 

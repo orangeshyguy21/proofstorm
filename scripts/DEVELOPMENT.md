@@ -39,7 +39,7 @@ starting before installation checks. Setup reports its current stage. Ordinary
 results are human-readable; use `proofstorm setup --json`, `proofstorm gui --json`,
 or the global `--json` flag on another command for the full machine-readable
 result, with no spinner. Redirected output uses plain progress lines on stderr,
-not terminal animation. `release-info` and internal checkout registration retain
+not terminal animation. `version --json` and internal checkout registration retain
 their machine-readable output. This is the same CLI behavior in release bundles.
 
 GUI startup verifies artifacts once in the launcher and independently once in
@@ -54,7 +54,7 @@ application debugging and integrity checks are unchanged. This host-only build
 setting does not invalidate the controller snapshot or require rebuilding images.
 
 For agent attachment, change to the application's directory and run
-`proofstorm open codex`, `proofstorm open opencode`, or `proofstorm open claude`.
+`proofstorm agent open codex`, `proofstorm agent open opencode`, or `proofstorm agent open claude`.
 The connection is project-specific and keeps this installation selected even
 after leaving the development shell. No global agent configuration is changed.
 
@@ -110,7 +110,7 @@ product runtime.
 
 The root Makefile has been replaced by `justfile`; use `just dev`, `just check`,
 and `just gui`. Arguments are ordinary quoted CLI arguments, not Make assignments:
-`just dev-build --target-dir '/absolute/path with spaces'` or `just gui --no-open`.
+`just dev-build --target-dir '/absolute/path with spaces'` or `just gui start`.
 Legacy gates use `just e2e slice4` instead of `make e2e-slice4`.
 The old Compose harness remains available through `just compose <target>` and
 is the only recipe that still invokes Make. No runtime is migrated by this change.

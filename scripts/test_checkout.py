@@ -43,9 +43,9 @@ def main():
     try:
         print("Checkout gate: doctor and managed GUI", file=sys.stderr, flush=True)
         report["doctor"] = cli("doctor", "--json")
-        cli("gui", "--no-open")
+        cli("gui", "start")
         first_record = json.loads(record_path.read_text())
-        cli("gui", "--no-open")
+        cli("gui", "start")
         second_record = json.loads(record_path.read_text())
         assert first_record["instance"] == second_record["instance"]
         assert first_record["pid"] == second_record["pid"]
@@ -66,7 +66,7 @@ def main():
         with opener.open(request, timeout=30) as response:
             assert response.status == 200
         report["managed_auth_enforced"] = True
-        cli("stop")
+        cli("gui", "stop")
         assert not record_path.exists()
         if args.test_agents:
             print("Checkout gate: private agent connections (keep this installation idle)", file=sys.stderr, flush=True)
@@ -78,7 +78,7 @@ def main():
         print(json.dumps({"passed": True, "report": str(work / "report.json")}, indent=2))
     finally:
         if record_path.exists():
-            cli("stop")
+            cli("gui", "stop")
 
 
 if __name__ == "__main__":

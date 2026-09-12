@@ -36,7 +36,7 @@ def main():
     database = file_hash(home / "proofstorm.sqlite3")
     identity = json.loads(installation)
     context = "k3d-pst-" + identity["id"][:28]
-    info = json.loads(subprocess.check_output([cli, "release-info"], env=env, text=True))
+    info = json.loads(subprocess.check_output([cli, "version", "--json"], env=env, text=True))
     pin = next(pin for pin in info["bootstrap_tools"]["tools"] if pin["name"] == "kubectl")
     kubectl = home / "tools" / ("kubectl-" + pin["executable_sha256"])
     assert file_hash(kubectl) == pin["executable_sha256"]

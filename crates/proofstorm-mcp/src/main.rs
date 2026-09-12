@@ -126,7 +126,7 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
         anyhow::ensure!(
             store.actor_preset(&workspace, &principal)?.as_deref()
                 == Some(proofstorm_app::developer::PRESET),
-            "managed actor is not configured; run proofstorm attach with your agent name for this project"
+            "managed actor is not configured; run proofstorm agent configure with your agent name for this project"
         );
     } else if let Ok(encoded) = std::env::var("PROOFSTORM_CAPABILITIES") {
         let capabilities = encoded
@@ -145,7 +145,7 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
         store.replace_grants(&workspace, &principal, capabilities)?;
     } else if store.capabilities(&workspace, &principal)?.is_empty() {
         anyhow::bail!(
-            "identity {principal:?} has no configured grants in {workspace:?}; supply operator-owned PROOFSTORM_CAPABILITIES or configure this identity with proofstorm init --principal {principal}"
+            "identity {principal:?} has no configured grants in {workspace:?}; supply operator-owned PROOFSTORM_CAPABILITIES or configure this identity with proofstorm dev init --principal {principal}"
         );
     }
     let service = ProofstormMcp::new(store.clone(), workspace.clone(), principal.clone())?

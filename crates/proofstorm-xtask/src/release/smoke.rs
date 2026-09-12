@@ -13,7 +13,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn execute(binary: &Path, flag: &str, destination: &Path, policy: Option<&str>) -> Result<Vec<u8>> {
+fn execute(
+    binary: &Path,
+    flags: &[&str],
+    destination: &Path,
+    policy: Option<&str>,
+) -> Result<Vec<u8>> {
     let mut command = if let Some(policy) = policy {
         let mut command = Command::new("/usr/bin/sandbox-exec");
         command.args(["-p", policy]).arg(binary);
@@ -32,7 +37,7 @@ fn execute(binary: &Path, flag: &str, destination: &Path, policy: Option<&str>) 
         .collect();
     let mut output = tempfile::tempfile()?;
     let mut child = command
-        .arg(flag)
+        .args(flags)
         .current_dir(destination)
         .env_clear()
         .envs(environment)
@@ -47,7 +52,7 @@ fn execute(binary: &Path, flag: &str, destination: &Path, policy: Option<&str>) 
         if let Some(status) = child.try_wait()? {
             ensure!(
                 status.success(),
-                "relocated {} {flag} failed: {status}",
+                "relocated {} {flags:?} failed: {status}",
                 binary.display()
             );
             break;
@@ -104,12 +109,12 @@ fn smoke(archive_path: &Path, destination: &Path, deny_sources: &[PathBuf]) -> R
     );
     let expected = bundle::read_json(&root.join("release-info.json"))?;
     for (name, metadata_flag) in [
-        ("proofstorm", "release-info"),
-        ("proofstorm-mcp", "--release-info"),
+        ("proofstorm", &["version", "--json"][..]),
+        ("proofstorm-mcp", &["--release-info"][..]),
     ] {
         let binary = root.join("bin").join(name);
         for flag in ["--version", "--help"] {
-            execute(&binary, flag, &destination, policy.as_deref())?;
+            execute(&binary, &[flag], &destination, policy.as_deref())?;
         }
         let embedded: Value = serde_json::from_slice(&execute(
             &binary,

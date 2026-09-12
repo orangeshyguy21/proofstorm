@@ -53,13 +53,13 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
     actors = []
     report = {}
     try:
-        cli("gui", "--allow-development", "--no-open")
+        cli("gui", "start", "--allow-development")
         record = json.loads(record_path.read_text())
         for agent, file, key in [("opencode", "opencode.json", "mcp"), ("claude", ".mcp.json", "mcpServers")]:
             path = project / file
             original = '{\n  "' + key + '": {}\n}\n'
             path.write_text(original)
-            dry = cli("open", agent, "--dry-run", "--allow-development")
+            dry = cli("agent", "open", agent, "--dry-run", "--allow-development")
             assert dry["attachment"]["harness"] == agent and dry["launch"]["interface"] == "cli"
             assert dry["launch"]["project"] == str(project.resolve())
             assert dry["launch"]["arguments"] == [] and not dry["changes_applied"]
@@ -75,14 +75,14 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
                 message = json.load(error)["error"]["message"]
                 assert "desktop" in message or "native" in message, message
             assert path.read_text() == original and not (other / file).exists()
-            attached = cli("attach", agent, "--allow-development")
+            attached = cli("agent", "configure", agent, "--allow-development")
             assert attached["server_verified"]["environment_read"] and not attached["harness_loaded"]
             assert "app_opened" not in attached
             assert Path(attached["backup"]).read_text() == original
             assert attached["actor"].startswith(agent + "-")
             actors.append(attached["actor"])
             before = path.read_bytes()
-            repeated = cli("attach", agent, "--allow-development")
+            repeated = cli("agent", "configure", agent, "--allow-development")
             assert not repeated["configuration_changed"] and not repeated["actor_initialized"]
             assert path.read_bytes() == before and not (other / file).exists()
             # Exercise each actual installed client's native config parser and
@@ -100,7 +100,7 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
             content[key]["proofstorm"]["command"] = "manual" if agent == "claude" else ["manual"]
             path.write_text(json.dumps(content))
             modified = path.read_bytes()
-            cli("attach", agent, "--allow-development", expected=1)
+            cli("agent", "configure", agent, "--allow-development", expected=1)
             assert path.read_bytes() == modified
             # Restore only this test-owned fixture, not an operator's project.
             path.write_bytes(before)
@@ -116,4 +116,4 @@ def run(prefix, env, work, *, executable=None, installation_home=None, allow_dev
         return report
     finally:
         if record_path.exists():
-            cli("stop")
+            cli("gui", "stop")

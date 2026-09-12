@@ -355,7 +355,7 @@ pub fn setup_with_progress(
     Ok(
         json!({"ready":true,"home":home,"cluster":installation.cluster_name(),"capacity":capacity,
         "permissions_initialized":true,"image_policy":if prefetch_all {"prefetch_all"} else {"on_demand"},
-        "next":"Runtime ready. Run proofstorm gui, or proofstorm open codex, proofstorm open opencode, or proofstorm open claude from your project. Create a lab with proofstorm up FILE; its images download on first use."}),
+        "next":"Runtime ready. Run proofstorm gui, or proofstorm agent open codex, proofstorm agent open opencode, or proofstorm agent open claude from your project. Create a lab with proofstorm up FILE; its images download on first use."}),
     )
 }
 

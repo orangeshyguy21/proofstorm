@@ -150,11 +150,11 @@ Mac ARM64 setup continues requiring Linux ARM64 containers.
 
 ## Agent and browser behavior
 
-`proofstorm open codex`, `proofstorm open opencode`, and `proofstorm open claude`
+`proofstorm agent open codex`, `proofstorm agent open opencode`, and `proofstorm agent open claude`
 use the corresponding installed CLI in the current terminal. Native agent
 launch is currently macOS-only; Linux GUI agent buttons are not advertised.
 Linux desktops open Proofstorm's GUI through `xdg-open`. Headless hosts should
-use `proofstorm gui --no-open`; the server remains loopback-only. A documented,
+use `proofstorm gui start`; the server remains loopback-only. A documented,
 authenticated SSH/browser access flow still needs its VM test—do not expose the
 administrative port publicly to work around browser access.
 

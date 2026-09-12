@@ -20,7 +20,12 @@ runtime and downloads prebuilt images as you need them.
 
 **Alpha:** for local development and disposable test data—not production or real funds.
 
+The CLI is `storm`; `proofstorm` also works. The short command is skipped if it
+conflicts with an existing executable.
+
 ## Quick start
+
+These command examples require a build with the new CLI.
 
 On **Linux x86-64**, install Docker Engine with Buildx and make sure
 `docker info` works as your normal user. Then:
@@ -28,8 +33,8 @@ On **Linux x86-64**, install Docker Engine with Buildx and make sure
 ```sh
 curl -fsSL https://github.com/orangeshyguy21/proofstorm/releases/download/v0.1.0-alpha.2/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-proofstorm setup
-proofstorm doctor
+storm setup
+storm doctor
 ```
 
 No Rust, source checkout, or compilation required. The installer does not change
@@ -40,17 +45,17 @@ first use. Add the PATH line to your shell profile if you want it to persist.
 From your application's directory, launch an installed, authenticated coding agent:
 
 ```sh
-proofstorm open codex
-# or: proofstorm open opencode
-# or: proofstorm open claude
+storm agent open codex
+# or: storm agent open opencode
+# or: storm agent open claude
 ```
 
 Ask it: “Use Proofstorm to create a lab named demo with one Bitcoin Core regtest
 node. Wait for it to be ready, then read it back.” The MCP connection is named
 `proofstorm`. Opening an agent configures its connection; ordinary setup does not.
 
-Prefer a browser? Run `proofstorm gui`. It opens your default browser and offers
-launch buttons for detected native apps on macOS. Add `--gui` to an `open`
+Prefer a browser? Run `storm gui`. It opens your default browser and offers
+launch buttons for detected native apps on macOS. Add `--desktop` to an `agent open`
 command to launch a native app instead of its CLI.
 
 ## Supported environments
@@ -68,7 +73,7 @@ and OpenCode, headless GUI startup, reinstall, and cleanup. It did **not** cover
 every component, transactions, or visual GUI behavior. See the
 [acceptance summary](release/alpha-2-linux-smoke.md).
 
-On a headless host, use `proofstorm gui --no-open` and forward its loopback port
+On a headless host, use `storm gui start` and forward its loopback port
 over SSH; do not expose the GUI publicly. Native app launch is macOS-only.
 OpenCode's current desktop launch may still require selecting the project folder
 inside the app; its CLI opens in the requested directory.
@@ -102,15 +107,15 @@ Download the example lab: one Bitcoin node and a CDK mint with an on-chain backe
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/orangeshyguy21/proofstorm/v0.1.0-alpha.2/examples/developer-lab.json -o lab.json
-proofstorm up lab.json --name demo
-proofstorm status demo
-proofstorm environment
+storm up lab.json --name demo
+storm status demo
+storm ls
 ```
 
 Connect your app to the mint in another terminal:
 
 ```sh
-proofstorm connect demo mint http --config connection.json
+storm connect demo mint http --config connection.json
 ```
 
 Keep that command running. `connection.json` contains the local URL your app can
@@ -120,8 +125,9 @@ file is never overwritten. Use `chain rpc` instead of `mint http` for Bitcoin RP
 When you're finished:
 
 ```sh
-proofstorm down demo    # Removes the lab, its workloads, and its storage
-proofstorm stop         # Stops the GUI only; other labs keep running
+storm rm demo          # Deletes the lab, its data, and history
+storm gui stop         # Stops the GUI service; labs keep running
+storm gui status       # Shows GUI service status
 ```
 
 Commands show progress and readable results. Add `--json` for scripts, or
@@ -135,11 +141,11 @@ Contributors need Rust, just, and Docker. Installed users do not.
 just check-quick        # Formatting, shell checks, and command-dispatch tests
 just check             # Also runs Rust lints and hermetic tests
 just dev               # Builds the checkout and enters its private dev shell
-proofstorm setup
-proofstorm gui
+storm setup
+storm gui
 ```
 
-Development uses the same `proofstorm` commands as a release. The difference is
+Development uses the same `storm` commands as a release. The difference is
 where its binaries and controller come from: your checkout instead of a download.
 State stays under `.proofstorm-dev/`, separate from an installed release.
 

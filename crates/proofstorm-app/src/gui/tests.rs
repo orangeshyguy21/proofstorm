@@ -1,5 +1,48 @@
 use super::*;
 
+#[tokio::test]
+async fn status_does_not_create_locks_or_remove_stale_records() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = Installation::initialize(&root.path().join("home"), None, None).unwrap();
+    let files = || {
+        let mut names = std::fs::read_dir(&installation.home)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    let before = files();
+    assert_eq!(
+        status(&installation.home).await.unwrap()["state"],
+        "stopped"
+    );
+    assert_eq!(files(), before);
+    let record = Record {
+        format_version: 1,
+        installation_id: installation.id.clone(),
+        instance: "a".repeat(32),
+        token: "b".repeat(64),
+        executable: "/fixture/bin/proofstorm".into(),
+        build_sha256: None,
+        pid: 0,
+        port: 0,
+    };
+    state::save(&installation.home.join(RECORD), &record).unwrap();
+    let before = files();
+    let result = status(&installation.home).await.unwrap();
+    assert_eq!(result["state"], "unresponsive");
+    assert!(!result.to_string().contains(&record.token));
+    assert_eq!(files(), before);
+    assert_eq!(
+        state::record(&installation.home, &installation.id)
+            .unwrap()
+            .unwrap()
+            .health(),
+        record.health()
+    );
+}
+
 #[test]
 fn managed_environment_sets_operator_and_private_paths_explicitly() {
     let root = tempfile::tempdir().unwrap();

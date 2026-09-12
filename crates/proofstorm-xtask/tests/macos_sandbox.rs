@@ -111,7 +111,8 @@ set -eu
 case "$1" in
   --version) echo fixture ;;
   --help) : ;;
-  release-info|--release-info) echo '{"fixture":true}' ;;
+  version) [ "$2" = --json ]; echo '{"fixture":true}' ;;
+  --release-info) echo '{"fixture":true}' ;;
   --artifact-dir)
     [ "$#" = 6 ] && [ "$3" = --archive ] && [ "$5" = --prefix ]
     mkdir -p "$6/bin"
