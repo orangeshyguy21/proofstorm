@@ -12,7 +12,7 @@ def main():
     config_path, fixture_path, run_id = sys.argv[1:]
     config_path = Path(config_path)
     output = config_path.parent
-    config = json.loads(config_path.read_text())['mcp']['pst']
+    config = json.loads(config_path.read_text())['mcp']['storm']
     request = json.loads(Path(fixture_path).read_text())
     request.update(plan_id=run_id + '-plan', idempotency_key=run_id + '-seed')
     (output / 'seed-plan.request.json').write_text(json.dumps(request, indent=2) + '\n')

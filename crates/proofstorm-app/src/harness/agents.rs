@@ -1,4 +1,4 @@
-use super::{Harness, config, json_config};
+use super::{Harness, SERVER_NAME, config, json_config};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -78,7 +78,10 @@ pub(super) fn existing(harness: Harness, path: &Path, text: &str) -> Result<Opti
         Harness::Codex => config::value(&config::document(path, text)?)?,
         _ => json_config::value(text, harness == Harness::Opencode)?,
     };
-    Ok(value[key(harness)].get("proofstorm").cloned())
+    Ok(value[key(harness)]
+        .get(SERVER_NAME)
+        .or_else(|| value[key(harness)].get("proofstorm"))
+        .cloned())
 }
 pub(super) fn merge(
     harness: Harness,
