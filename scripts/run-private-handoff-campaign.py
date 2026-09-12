@@ -416,7 +416,7 @@ def opencode_factory(run, configs):
     run = Path(run)
     def build(stage, session, prompt, started):
         role = stage['role']; config = copy.deepcopy(configs[role])
-        server = config['mcp']['pst']; server['enabled'] = True
+        server = config['mcp']['storm']; server['enabled'] = True
         server['command'] = [sys.executable, str(ROOT/'scripts/native-execution-proxy.py'),
             '--events', str(run/'campaign.events.jsonl'), '--state', str(run/'cleanup-phase.json'),
             '--started-at', str(started), '--max-seconds', '600', '--max-steps', '50',
@@ -530,7 +530,7 @@ def dispatch(run_id):
                 # Provision recipient grants without a model. No cell mutation.
                 provision = run/'recipient-provision'; provision.mkdir()
                 Client = runpy.run_path(str(ROOT/'scripts/prepare-private-ecash-benchmark.py'))['Client']
-                client = Client(configs['recipient']['mcp']['pst'], provision)
+                client = Client(configs['recipient']['mcp']['storm'], provision)
                 try:
                     tools = client.rpc('tools/list', {})
                     names = {t['name'] for t in tools['tools']}

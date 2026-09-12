@@ -83,7 +83,7 @@ def evaluate(manifest, metrics, score, events, cluster, review=None, operator_cl
         and op['exit_code'] == 0 and op['execution_context'] == 'live_component'
         for op in native) >= expected.get('live_exec_successes_min', 0)
     gates['actual_reservation_release_observed'] = not expected.get('reservation_release_required', False) or bool(releases)
-    gates['no_host_tools_used'] = all(call['tool'].startswith('pst_') or
+    gates['no_host_tools_used'] = all(call['tool'].startswith('storm_') or
                                      call['tool'] in ('todowrite', 'todoread') for call in calls)
 
     required = list(manifest.get('manual_gates', []))

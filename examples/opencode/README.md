@@ -1,7 +1,8 @@
 # OpenCode profiles
 
 These profiles add the Proofstorm MCP server to your personal OpenCode
-configuration. From the repository root, launch:
+configuration as `storm`. OpenCode exposes its tools as `storm_<tool>`.
+From the repository root, launch:
 
 ```bash
 OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
@@ -54,16 +55,16 @@ Rules shared by all three profiles:
 Host permissions and the MCP toolset are independent. These profiles default
 `PROOFSTORM_TOOLSET` to `native`, a slim experiment surface that uses the real
 component CLIs for funding, payments, peers, and channels. Keep `experiment` for
-typed-contract comparisons. Native commands run through `pst_component_exec_live`
+typed-contract comparisons. Native commands run through `storm_component_exec_live`
 inside a cell component; the host `bash` permission can remain denied.
 
 ## Growing an existing cell
 
-Reconnect MCP after upgrading Proofstorm. Use `pst_cell_read` with the
+Reconnect MCP after upgrading Proofstorm. Use `storm_cell_read` with the
 instance ID to get complete configuration and its generation, then plan the full
 updated topology with `update.instance_id` and `update.expected_generation`. Apply
 the returned digest. Unchanged components keep their state; inspect the restart
-and removal lists before applying. Use `expected_generation` in `pst_cell_wait` and
+and removal lists before applying. Use `expected_generation` in `storm_cell_wait` and
 handle `superseded` or startup blockers explicitly.
 
 ## Starting work without experiment setup

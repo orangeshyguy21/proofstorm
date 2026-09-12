@@ -106,7 +106,7 @@ def main():
     output = path.parent
     setup = output / 'setup'
     setup.mkdir()
-    config = json.loads(path.read_text())['mcp']['pst']
+    config = json.loads(path.read_text())['mcp']['storm']
     workspace = config['environment']['PROOFSTORM_WORKSPACE']
     # Enables existing owned-workspace finalizer if preparation fails before the model manifest.
     (output / 'manifest.json').write_text(json.dumps({'workspace': workspace, 'run_id': run_id,

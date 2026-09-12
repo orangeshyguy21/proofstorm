@@ -408,10 +408,10 @@ fn AgentLauncher() -> impl IntoView {
                 <div class="gui-check" aria-live="polite">
                     <Show when=move ||context.get().is_none() && error.get().is_none()><p class="gui-muted">"Looking for installed apps…"</p></Show>
                     <Show when=move ||context.get().is_some_and(|ctx|ctx["agents"].as_array().is_some_and(Vec::is_empty))><p class="gui-muted">"No supported native apps found. Install Codex, OpenCode or Claude in Applications, then reopen this page."</p></Show>
-                    <Show when=move ||busy.get()><p class="gui-muted"><span class="gui-connecting" aria-hidden="true"></span>{move ||if picking.get() {"Choose a folder in the macOS dialog…"} else {"Connecting proofstorm and opening your project…"}}</p></Show>
+                    <Show when=move ||busy.get()><p class="gui-muted"><span class="gui-connecting" aria-hidden="true"></span>{move ||if picking.get() {"Choose a folder in the macOS dialog…"} else {"Connecting storm and opening your project…"}}</p></Show>
                     {move ||conflict.get().map(|existing|view! {
                         <div class="gui-conflict">
-                            <p>"Replace the old “"{existing["name"].as_str().unwrap_or_default().to_owned()}"” connection with proofstorm?"</p>
+                            <p>"Replace the old “"{existing["name"].as_str().unwrap_or_default().to_owned()}"” connection with storm?"</p>
                             <p class="gui-muted">"A backup will be saved. Other connections and settings stay unchanged."</p>
                             <code>{existing["config"].as_str().unwrap_or_default().to_owned()}</code>
                             <button class="gui-primary" disabled=move ||busy.get() on:click=move |_| {

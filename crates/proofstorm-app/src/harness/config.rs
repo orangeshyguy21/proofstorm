@@ -1,3 +1,4 @@
+use super::SERVER_NAME;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use std::{
@@ -70,12 +71,7 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<()> {
 }
 
 fn proofstorm_server(name: &str, value: &Value) -> bool {
-    name == "proofstorm"
-        || value["command"].as_str().is_some_and(|s| {
-            Path::new(s)
-                .file_name()
-                .is_some_and(|name| name == "proofstorm-mcp")
-        })
+    super::json_config::is_proofstorm(name, value)
 }
 
 pub(super) fn inherited(project: &Path, codex_home: &Path, system: &Path) -> Result<()> {
@@ -128,11 +124,11 @@ pub(super) fn merge(
     let data = value(&doc)?;
     if let Some(servers) = data["mcp_servers"].as_object() {
         for (name, server) in servers {
-            if name != "proofstorm" && proofstorm_server(name, server) {
+            if name != SERVER_NAME && proofstorm_server(name, server) {
                 bail!("another project MCP entry already starts Proofstorm; resolve it explicitly");
             }
         }
-        if let Some(existing) = servers.get("proofstorm") {
+        if let Some(existing) = servers.get(SERVER_NAME) {
             ensure!(
                 owned.contains(existing),
                 "the project Proofstorm entry is manual or was changed; refusing to overwrite it"
@@ -152,23 +148,23 @@ pub(super) fn merge(
         "mcp_servers must be a regular TOML table; no changes made"
     );
     let generated =
-        toml_edit::ser::to_string(&serde_json::json!({"mcp_servers":{"proofstorm":entry}}))?;
+        toml_edit::ser::to_string(&serde_json::json!({"mcp_servers":{(SERVER_NAME):entry}}))?;
     let generated = document(path, &generated)?;
     let position = doc["mcp_servers"]
-        .get("proofstorm")
+        .get(SERVER_NAME)
         .and_then(Item::as_table)
         .and_then(Table::position)
         .unwrap_or(usize::MAX);
-    let mut server = generated["mcp_servers"]["proofstorm"]
+    let mut server = generated["mcp_servers"][SERVER_NAME]
         .clone()
         .into_table()
         .map_err(|_| anyhow::anyhow!("generated MCP entry must be a table"))?;
     // Append new connections without reordering the user's existing sections.
     server.set_position(position);
-    doc["mcp_servers"]["proofstorm"] = Item::Table(server);
+    doc["mcp_servers"][SERVER_NAME] = Item::Table(server);
     let result = doc.to_string();
     ensure!(
-        value(&document(path, &result)?)?["mcp_servers"]["proofstorm"] == *entry,
+        value(&document(path, &result)?)?["mcp_servers"][SERVER_NAME] == *entry,
         "generated MCP configuration did not round-trip"
     );
     Ok(result)

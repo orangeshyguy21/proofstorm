@@ -31,9 +31,11 @@ The no-cells screen reuses the same full-width button rows, folder selection,
 busy state and replacement confirmation as the dialog. It does not maintain
 a second attachment flow.
 
-The MCP entry is named **proofstorm** in every client. An old alias such as `pst`,
-or a manually edited connection, gets an explicit **Replace and open** choice.
-This backs up the original config and replaces only that one project connection.
+The MCP entry is named **storm** in every client. Reconnecting renames a managed
+`proofstorm` entry to `storm` when it still matches its ownership record.
+An old alias such as `pst`, or a manually edited connection, gets an explicit
+**Replace and open** choice. Changes back up the original config and replace
+only that one project connection.
 Consent is invalidated if the file, project, agent, or proposed connection changes.
 Multiple duplicates and inherited/global connections still require manual review.
 

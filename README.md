@@ -52,7 +52,7 @@ storm agent open codex
 
 Ask it: “Use Proofstorm to create a cell named demo with one Bitcoin Core regtest
 node. Wait for it to be ready, then read it back.” The MCP connection is named
-`proofstorm`. Opening an agent configures its connection; ordinary setup does not.
+`storm`. Opening an agent configures its connection; ordinary setup does not.
 
 Prefer a browser? Run `storm gui`. It opens your default browser and offers
 launch buttons for detected native apps on macOS. Add `--desktop` to an `agent open`
