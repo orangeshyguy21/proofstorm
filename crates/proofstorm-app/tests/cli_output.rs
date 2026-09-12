@@ -74,6 +74,7 @@ fn every_public_command_accepts_global_json() {
         "agent open",
         "agent configure",
         "dev init",
+        "dev reset",
         "up",
         "rm",
         "status",

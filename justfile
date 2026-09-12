@@ -26,6 +26,10 @@ dev *args: web-tools
 dev-build *args: web-tools
     bash scripts/develop.sh "$@"
 
+# Reset only this checkout's runtime/state; keep build caches. Prompts unless --yes.
+dev-reset *args:
+    .proofstorm-dev/bin/proofstorm dev reset "$@"
+
 # Build, then set up the checkout runtime.
 setup *args: dev-build
     .proofstorm-dev/bin/proofstorm setup "$@"

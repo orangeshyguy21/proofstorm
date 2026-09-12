@@ -24,6 +24,10 @@ while [[ $# -gt 0 ]]; do
     *) usage >&2; exit 2 ;;
   esac
 done
+if [[ -e "$root/.proofstorm-dev/reset-pending.json" || -L "$root/.proofstorm-dev/reset-pending.json" ]]; then
+  printf 'Development reset is unfinished; run .proofstorm-dev/bin/storm dev reset --yes before rebuilding\n' >&2
+  exit 1
+fi
 if [[ "$mode" == --shell && ! -t 0 ]]; then
   printf 'just dev needs an interactive terminal; use just dev-build in automation\n' >&2
   exit 2

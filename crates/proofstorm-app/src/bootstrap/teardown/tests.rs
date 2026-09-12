@@ -16,6 +16,55 @@ fn receipt() -> Resources {
 }
 
 #[test]
+fn dev_reset_accepts_old_receipts_only_with_exact_saved_runtime_identities() {
+    let current = receipt();
+    let owner = serde_json::json!({"format_version":1,"installation_id":current.installation_id,
+        "containers":current.containers,"network_id":current.network_id});
+    bind_previous_owner(&owner, &current).unwrap();
+    for key in ["installation_id", "containers", "network_id"] {
+        let mut changed = owner.clone();
+        changed[key] = serde_json::json!("foreign");
+        assert!(bind_previous_owner(&changed, &current).is_err());
+    }
+    let mut absent = current;
+    absent.containers.clear();
+    assert!(bind_previous_owner(&owner, &absent).is_err());
+}
+
+#[test]
+fn old_k3d_tools_requires_pinned_image_saved_network_and_only_its_image_volume() {
+    let installation = Installation {
+        format_version: 2,
+        id: "a".repeat(32),
+        home: PathBuf::from("/fixture"),
+        api_port: 42101,
+        registry_port: 42102,
+    };
+    let mut current = receipt();
+    let tools = format!("{}-tools", installation.context());
+    current.containers.insert(tools, "tools-id".into());
+    let version = include_str!("../../../../../tools/versions.env")
+        .lines()
+        .find_map(|line| line.strip_prefix("K3D_VERSION=v"))
+        .unwrap();
+    let data = serde_json::json!({"id":"tools-id","image":format!("ghcr.io/k3d-io/k3d-tools:{version}"),"cluster":installation.cluster_name(),
+        "networks":{installation.network_name():{"NetworkID":"original-network"}},
+        "mounts":[{"Type":"volume","Name":format!("{}-images",installation.context()),"Destination":"/k3d/images"}]});
+    verify_previous_tools(&installation, &current, &data).unwrap();
+    for key in ["id", "image", "cluster", "networks", "mounts"] {
+        let mut bad = data.clone();
+        bad[key] = serde_json::json!("foreign");
+        assert!(verify_previous_tools(&installation, &current, &bad).is_err());
+    }
+    let mut bad = data.clone();
+    bad["networks"]["foreign"] = serde_json::json!({"NetworkID":"other-network"});
+    assert!(verify_previous_tools(&installation, &current, &bad).is_err());
+    let mut bad = data;
+    bad["mounts"][0]["Name"] = serde_json::json!("foreign-volume");
+    assert!(verify_previous_tools(&installation, &current, &bad).is_err());
+}
+
+#[test]
 fn replacement_or_foreign_resources_fail_closed_but_partial_cleanup_can_retry() {
     let expected = receipt();
     unchanged(&expected, &expected).unwrap();

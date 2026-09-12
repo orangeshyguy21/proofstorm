@@ -382,11 +382,51 @@ fn verify_external_pair(cli: &Path, mcp: &Path, expected: &Value) -> Result<()> 
 /// Enforce checkout identity on every selected CLI/MCP startup. Returns false for
 /// ordinary installations; it never relaxes the release bundle verifier.
 pub fn check_checkout(home: &Path) -> Result<bool> {
+    crate::dev_reset::check_pending(home)?;
     let Some(record) = read(home)? else {
         return Ok(false);
     };
     record.verify(&std::env::current_exe()?.canonicalize()?)?;
     Ok(true)
+}
+
+/// Reset accepts stale binaries, but never a release home or another checkout.
+pub(crate) fn reset_source(home: &Path) -> Result<PathBuf> {
+    Ok(read(home)?
+        .context("dev reset requires a registered checkout, not an installed release")?
+        .source)
+}
+
+pub(crate) fn restore_after_reset(
+    archive: &Path,
+    replacement: &crate::installation::Installation,
+    source: &Path,
+    previous_id: &str,
+) -> Result<()> {
+    let path = archive.join(RECORD);
+    ensure!(
+        fs::symlink_metadata(&path)?.is_file(),
+        "linked checkout registration refused"
+    );
+    let mut record: Checkout = serde_json::from_slice(&fs::read(path)?)?;
+    ensure!(
+        record.source == source && record.installation_id == previous_id,
+        "archived checkout identity changed"
+    );
+    record.installation_id.clone_from(&replacement.id);
+    let mut file = tempfile::NamedTempFile::new_in(&replacement.home)?;
+    file.write_all(&serde_json::to_vec_pretty(&record)?)?;
+    file.as_file().sync_all()?;
+    let target = replacement.home.join(RECORD);
+    if target.try_exists()? {
+        ensure!(
+            fs::read(&target)? == fs::read(file.path())?,
+            "replacement checkout registration changed"
+        );
+    } else {
+        file.persist_noclobber(target)?;
+    }
+    Ok(())
 }
 
 /// Resources for either artifact source; no assumption about checkout bin layout.

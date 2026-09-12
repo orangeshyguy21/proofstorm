@@ -109,6 +109,131 @@ fn cli(
     Ok(command)
 }
 
+fn verify_replacement(
+    context: &GateContext,
+    user: &Path,
+    project: &Path,
+    fake_bin: Option<&Path>,
+    agent: &str,
+    path: &Path,
+) -> Result<()> {
+    let manual = fs::read(path)?;
+    let database = super::onboarding::hash(context.database())?;
+    for action in ["configure", "open"] {
+        let preview = process::json(
+            cli(
+                context,
+                user,
+                project,
+                fake_bin,
+                &[
+                    "agent",
+                    action,
+                    agent,
+                    "--replace",
+                    "--dry-run",
+                    "--allow-development",
+                ],
+            )?,
+            240,
+        )?;
+        ensure!(
+            preview["changes_applied"] == false
+                && preview["attachment"]["changes_configuration"] == true
+                && fs::read(path)? == manual
+                && super::onboarding::hash(context.database())? == database,
+            "{agent} replacement preview wrote state"
+        );
+        if action == "open" {
+            verify_launch(&preview, agent, project)?;
+        }
+    }
+    let arguments = [
+        "agent",
+        "configure",
+        agent,
+        "--replace",
+        "--allow-development",
+    ];
+    let replaced = process::json(cli(context, user, project, fake_bin, &arguments)?, 240)?;
+    let backup = Path::new(
+        replaced["backup"]
+            .as_str()
+            .context("replacement backup missing")?,
+    );
+    let expected = String::from_utf8(manual.clone())?.replace("manual-mcp", "proofstorm-mcp");
+    ensure!(
+        replaced["configuration_changed"] == true
+            && replaced["actor_initialized"] == false
+            && replaced["server_verified"]["environment_read"] == true
+            && fs::read(backup)? == manual
+            && fs::metadata(backup)?.permissions().mode() & 0o777 == 0o600
+            && fs::read_to_string(path)? == expected,
+        "{agent} replacement did not preserve settings, grants, or its private backup"
+    );
+    let repeated = process::json(cli(context, user, project, fake_bin, &arguments)?, 240)?;
+    ensure!(
+        repeated["configuration_changed"] == false
+            && repeated["actor_initialized"] == false
+            && repeated["backup"].is_null()
+            && fs::read_to_string(path)? == expected,
+        "{agent} --replace is not idempotent"
+    );
+    // A surviving connection can outlive its ownership receipt after a state reset.
+    let actor = replaced["actor"]
+        .as_str()
+        .context("replacement actor missing")?;
+    fs::remove_file(
+        context
+            .installation
+            .home
+            .join("attachments")
+            .join(format!("{actor}.json")),
+    )?;
+    let ordinary = ["agent", "configure", agent, "--allow-development"];
+    let refused = process::capture(cli(context, user, project, fake_bin, &ordinary)?, 240)?;
+    ensure!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr).contains("--replace")
+            && fs::read_to_string(path)? == expected,
+        "{agent} silently adopted an unowned connection"
+    );
+    let adopted = process::json(cli(context, user, project, fake_bin, &arguments)?, 240)?;
+    let repeated = process::json(cli(context, user, project, fake_bin, &ordinary)?, 240)?;
+    ensure!(
+        adopted["configuration_changed"] == true
+            && adopted["actor_initialized"] == false
+            && repeated["configuration_changed"] == false
+            && fs::read_to_string(path)? == expected,
+        "{agent} did not record ownership of an identical replacement"
+    );
+    // Explicit replacement still refuses ambiguous duplicate connections.
+    let duplicate = if agent == "codex" {
+        format!("{expected}\n[mcp_servers.duplicate]\ncommand='/legacy/proofstorm-mcp'\n")
+    } else {
+        let mut value: serde_json::Value = serde_json::from_str(&expected)?;
+        let key = if agent == "opencode" {
+            "mcp"
+        } else {
+            "mcpServers"
+        };
+        value[key]["duplicate"] = value[key]["proofstorm"].clone();
+        serde_json::to_string_pretty(&value)?
+    };
+    fs::write(path, &duplicate)?;
+    let mut command = cli(context, user, project, fake_bin, &arguments)?;
+    command.arg("--dry-run");
+    let refused = process::capture(command, 240)?;
+    ensure!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr).contains("multiple Proofstorm connections")
+            && fs::read_to_string(path)? == duplicate,
+        "{agent} --replace accepted duplicate connections"
+    );
+    fs::write(path, expected)?;
+    Ok(())
+}
+
 pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
     let work = context.work().join(if native_clients {
         "agent-clients"
@@ -279,10 +404,10 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
                 .into_iter()
                 .filter(|cap| *cap != Capability::CellMaterialize),
         )?;
+        let mut revoked = cli(context, &user, &project, fake, &arguments)?;
+        revoked.arg("--replace");
         ensure!(
-            !process::capture(cli(context, &user, &project, fake, &arguments)?, 240)?
-                .status
-                .success(),
+            !process::capture(revoked, 240)?.status.success(),
             "attachment restored revoked grants"
         );
         ensure!(
@@ -305,7 +430,7 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
             actor,
             proofstorm_app::developer::CAPABILITIES,
         )?;
-        // Leave deliberately edited fixture bytes untouched after a refused overwrite.
+        // Deliberately edited fixture bytes require explicit replacement consent.
         fs::write(
             &path,
             String::from_utf8(configured)?.replace("proofstorm-mcp", "manual-mcp"),
@@ -318,8 +443,12 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
                 && fs::read(&path)? == manual,
             "manual edit was overwritten"
         );
+        eprintln!("Checking {agent} explicit replacement, preview, and backup...");
+        verify_replacement(context, &user, &project, fake, agent, &path)?;
         report["agents"].as_array_mut().unwrap().push(json!({"name":agent,"version":launch["launch"]["version"],
             "server_verified":true,"backup_and_repeat":true,"revocation_preserved":true,"client_added_schema":client_added_schema,
+            "replacement_preview_backup_and_repeat":true,"replacement_duplicates_refused":true,
+            "replacement_adopts_unowned_connection":true,
             "client_discovery":client_discovery,
             "client_mcp_connected":client_discovery.map(|status| status == "connected")}));
     }

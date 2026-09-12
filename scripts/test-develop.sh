@@ -97,6 +97,13 @@ if grep -Eq '<register>|<--bins>|<export_crds>' "$TRACE"; then exit 1; fi
 if FAIL_BUILD=1 run; then printf 'Build failure did not propagate\n' >&2; exit 1; fi
 if grep -q '<register>' "$TRACE"; then printf 'Registered a failed build\n' >&2; exit 1; fi
 
+# Recovery must finish before any compiler or asset writer touches the build.
+printf '{}\n' > "$fixture/.proofstorm-dev/reset-pending.json"
+if run; then printf 'Built during an unfinished reset\n' >&2; exit 1; fi
+[[ ! -s "$TRACE" ]]
+grep -q 'reset is unfinished' "$scratch/output"
+rm "$fixture/.proofstorm-dev/reset-pending.json"
+
 # Existing foreign markers must never be silently adopted.
 printf '{"source":"/foreign"}\n' > "$fixture/.proofstorm-dev/owner.json"
 if run; then exit 1; fi

@@ -100,17 +100,43 @@ pub fn plan(
     bundle: &Path,
     allow_development: bool,
 ) -> Result<AttachmentPlan> {
-    plan_for(Harness::Codex, home, project, bundle, allow_development)
+    plan_for(
+        Harness::Codex,
+        home,
+        project,
+        bundle,
+        allow_development,
+        false,
+    )
 }
 
+/// Inspect the connection, optionally consenting to one project-local replacement.
 pub fn plan_for(
     harness: Harness,
     home: &Path,
     project: &Path,
     bundle: &Path,
     allow_development: bool,
+    replace: bool,
 ) -> Result<AttachmentPlan> {
-    plan_confirmed(harness, home, project, bundle, allow_development, None)
+    match plan_confirmed(harness, home, project, bundle, allow_development, None) {
+        Err(error) if replace => {
+            let Some(conflict) = error.downcast_ref::<ConnectionConflict>() else {
+                return Err(error);
+            };
+            // Use the same content-bound approval as the GUI. Replanning rejects
+            // any change between inspection and consent; apply rechecks again.
+            plan_confirmed(
+                harness,
+                home,
+                project,
+                bundle,
+                allow_development,
+                Some(&conflict.confirmation),
+            )
+        }
+        result => result,
+    }
 }
 
 pub(crate) fn plan_confirmed(
@@ -233,7 +259,9 @@ pub async fn apply(plan: AttachmentPlan) -> Result<Value> {
     unchanged(&plan)?;
     ensure!(
         crate::bootstrap::doctor(&plan.home)["ok"] == true,
-        "installation is not ready; run proofstorm doctor and proofstorm setup before attachment"
+        "installation is not ready; run {} doctor and {} setup before attachment",
+        crate::command_name(),
+        crate::command_name()
     );
     // Database existence/type is checked separately; never create one during attachment.
     ensure!(

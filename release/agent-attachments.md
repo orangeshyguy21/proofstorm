@@ -31,8 +31,16 @@ busy state and replacement confirmation as the dialog. It does not maintain
 a second attachment flow.
 
 The MCP entry is named **proofstorm** in every client. An old alias such as `pst`,
-or a manually edited connection, gets an explicit **Replace and open** choice.
+or a manually edited connection, gets an explicit **Replace and open** choice in the GUI.
+In the terminal, add `--replace` to `agent configure` or `agent open`:
+
+```sh
+storm agent open opencode --replace
+storm agent configure opencode --replace --dry-run
+```
+
 This backs up the original config and replaces only that one project connection.
+With `--dry-run`, it only previews the replacement.
 Consent is invalidated if the file, project, agent, or proposed connection changes.
 Multiple duplicates and inherited/global connections still require manual review.
 

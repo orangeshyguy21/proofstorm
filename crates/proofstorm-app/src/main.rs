@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
         Command::Doctor { .. } => ("doctor", Some("Checking Proofstorm health")),
         Command::InstallBundle { .. } => ("install", Some("Installing Proofstorm")),
         Command::Init { .. } => ("init", Some("Configuring local permissions")),
+        Command::DevReset { .. } => ("dev-reset", None),
         Command::Up { preview: true, .. } => ("up", Some("Reviewing cell changes")),
         Command::Up { .. } => ("up", Some("Starting cell; checking images and readiness")),
         Command::Down { .. } => ("down", Some("Removing cell")),
@@ -49,6 +50,59 @@ async fn main() -> Result<()> {
         }
     };
     let mut output = cli_output::Output::new(args.json, output_kind, label);
+    if let Command::DevReset { yes } = command {
+        use std::io::{IsTerminal, Write};
+        let home = args
+            .home
+            .as_ref()
+            .context("dev reset requires a checkout; enter just dev first")?;
+        anyhow::ensure!(
+            args.context.is_none()
+                && args.kubeconfig.is_none()
+                && args.database.is_none()
+                && args.workspace == DEFAULT_WORKSPACE
+                && args.principal == "developer"
+                && args.namespace == DEFAULT_NAMESPACE,
+            "dev reset only uses the checkout's private installation; remove runtime overrides"
+        );
+        let target = proofstorm_app::dev_reset::describe(home)?;
+        if !yes {
+            anyhow::ensure!(
+                !args.json && std::io::stdin().is_terminal(),
+                "dev reset deletes all checkout cells and runtime storage; rerun with --yes to confirm"
+            );
+            eprintln!(
+                "Delete all cells and runtime storage for {}?\nBuild caches and other installations are preserved. Close coding-agent sessions first.\nType reset to confirm:",
+                home.display()
+            );
+            std::io::stderr().flush()?;
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            if answer.trim() != "reset" {
+                eprintln!("Reset cancelled. Nothing changed.");
+                return Ok(());
+            }
+        }
+        anyhow::ensure!(
+            proofstorm_app::dev_reset::describe(home)? == target,
+            "reset target changed during confirmation; retry"
+        );
+        output = cli_output::Output::new(
+            args.json,
+            "dev-reset",
+            Some("Resetting development environment"),
+        );
+        return output.show(
+            &proofstorm_app::dev_reset::run(
+                home,
+                target["installation_id"]
+                    .as_str()
+                    .context("reset identity missing")?,
+                &|label| output.update(label),
+            )
+            .await?,
+        );
+    }
     // Metadata and registration must work before a coherent checkout is selected.
     if let Command::Version { verbose } = command {
         let info = proofstorm_app::release::describe();
@@ -169,6 +223,7 @@ async fn main() -> Result<()> {
     if let Command::Attach {
         harness,
         project,
+        replace,
         dry_run,
         allow_development,
         ..
@@ -176,6 +231,7 @@ async fn main() -> Result<()> {
     | Command::Open {
         harness,
         project,
+        replace,
         dry_run,
         allow_development,
         ..
@@ -201,6 +257,7 @@ async fn main() -> Result<()> {
             project,
             &bundle,
             *allow_development,
+            *replace,
         )?;
         let launch = if let Command::Open { gui, .. } = &command {
             let launch =
@@ -385,6 +442,7 @@ async fn main() -> Result<()> {
         .with_installation(environment.installation.clone());
     match command {
         Command::Version { .. }
+        | Command::DevReset { .. }
         | Command::RuntimeDelete { .. }
         | Command::CheckoutRegister { .. }
         | Command::Gui { .. }

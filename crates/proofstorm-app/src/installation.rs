@@ -29,17 +29,28 @@ pub struct Installation {
 }
 
 /// An OS-process-lifetime `SQLite` lock. A crash releases the transaction.
-pub struct InstallationGuard(Connection);
+pub struct InstallationGuard(Connection, Option<Connection>);
 
 impl Drop for InstallationGuard {
     fn drop(&mut self) {
         let _ = self.0.execute_batch("ROLLBACK");
+        if let Some(checkout) = &self.1 {
+            let _ = checkout.execute_batch("ROLLBACK");
+        }
     }
 }
 
 impl Installation {
     /// Serialize all future setup/reset mutations using this same guard.
     pub fn lock(home: &Path) -> Result<InstallationGuard> {
+        let checkout = crate::dev_reset::checkout_guard(home, false)?;
+        Self::lock_state(home, checkout)
+    }
+
+    pub(crate) fn lock_state(
+        home: &Path,
+        checkout: Option<Connection>,
+    ) -> Result<InstallationGuard> {
         private_directory(home)?;
         let path = home.join("installation-lock.sqlite3");
         create_private_file(&path)?;
@@ -47,7 +58,7 @@ impl Installation {
         db.busy_timeout(Duration::ZERO)?;
         db.execute_batch("BEGIN IMMEDIATE")
             .context("another installation operation is running; retry when it finishes")?;
-        Ok(InstallationGuard(db))
+        Ok(InstallationGuard(db, checkout))
     }
 
     /// Initialize once. Explicit ports on retries must match the saved ports.
@@ -69,6 +80,16 @@ impl Installation {
             installation.write_runtime_config()?;
             return Ok(installation);
         }
+        let installation = Self::fresh(&home, api_port, registry_port)?;
+        installation.activate_fresh()?;
+        Ok(installation)
+    }
+
+    pub(crate) fn fresh(
+        home: &Path,
+        api_port: Option<u16>,
+        registry_port: Option<u16>,
+    ) -> Result<Self> {
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random)
             .map_err(|error| anyhow::anyhow!("installation ID: {error}"))?;
@@ -82,16 +103,25 @@ impl Installation {
         let installation = Self {
             format_version: 2,
             id,
-            home,
+            home: home.to_path_buf(),
             api_port: api.local_addr()?.port(),
             registry_port: registry.local_addr()?.port(),
         };
-        write_new_private(
-            &installation.home.join(MANIFEST),
-            &serde_json::to_vec_pretty(&installation)?,
-        )?;
-        installation.write_runtime_config()?;
         Ok(installation)
+    }
+
+    pub(crate) fn activate_fresh(&self) -> Result<()> {
+        private_directory(&self.home)?;
+        let manifest = self.home.join(MANIFEST);
+        if manifest.try_exists()? {
+            ensure!(
+                Self::load(&self.home)? == *self,
+                "replacement installation changed during reset"
+            );
+        } else {
+            write_new_private(&manifest, &serde_json::to_vec_pretty(self)?)?;
+        }
+        self.write_runtime_config()
     }
 
     /// Reading configuration never initializes an environment or adopts a cluster.
