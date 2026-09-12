@@ -13,7 +13,7 @@ fn merge_preserves_comments_other_servers_and_provider_settings() {
     let output = config::merge(path, Some(original), &entry(), &[]).unwrap();
     assert!(output.starts_with(original), "{output}");
     assert_eq!(
-        config::value(&config::document(path, &output).unwrap()).unwrap()["mcp_servers"]["storm"],
+        config::value(&config::document(path, &output).unwrap()).unwrap()["mcp_servers"]["proofstorm"],
         entry()
     );
     let again = config::merge(path, Some(&output), &entry(), &[entry()]).unwrap();
@@ -25,7 +25,7 @@ fn manual_modified_duplicate_and_malformed_entries_are_refused() {
     let path = Path::new("/fixture/config.toml");
     for text in [
         "broken = [",
-        "[mcp_servers.storm]\ncommand='manual'",
+        "[mcp_servers.proofstorm]\ncommand='manual'",
         "mcp_servers = 'wrong-type'",
         "[mcp_servers.another]\ncommand='/somewhere/proofstorm-mcp'",
     ] {
@@ -52,106 +52,6 @@ fn recorded_previous_entry_supports_an_interrupted_upgrade() {
     );
 }
 
-fn old_connection(harness: Harness, entry: &Value) -> (PathBuf, String) {
-    let path = PathBuf::from("/project/config");
-    let original = match harness {
-        Harness::Codex => "# keep\nmodel='keep'\n[mcp_servers.other]\ncommand='keep'\n",
-        Harness::Opencode => {
-            "{/* keep */\"model\":\"keep\",\"mcp\":{\"other\":{\"command\":\"keep\"}},}"
-        }
-        Harness::Claude => "{\"model\":\"keep\",\"mcpServers\":{\"other\":{\"command\":\"keep\"}}}",
-    };
-    let text = agents::merge(harness, &path, Some(original), entry, &[]).unwrap();
-    let text = match harness {
-        Harness::Codex => text.replace("[mcp_servers.storm]", "[mcp_servers.proofstorm]"),
-        _ => text.replace("\"storm\"", "\"proofstorm\""),
-    };
-    (path, text)
-}
-
-fn connection_data(harness: Harness, path: &Path, text: &str) -> Value {
-    match harness {
-        Harness::Codex => config::value(&config::document(path, text).unwrap()).unwrap(),
-        _ => json_config::value(text, harness == Harness::Opencode).unwrap(),
-    }
-}
-
-#[test]
-fn managed_connection_rename_preserves_settings_and_survives_interrupted_upgrade() {
-    for harness in [Harness::Codex, Harness::Opencode, Harness::Claude] {
-        let old = agents::entry(harness, &entry()).unwrap();
-        let (path, text) = old_connection(harness, &old);
-        assert_eq!(
-            agents::existing(harness, &path, &text).unwrap(),
-            Some(old.clone())
-        );
-        let mut normalized = entry();
-        normalized["command"] = json!("/new bundle/proofstorm-mcp");
-        let new = agents::entry(harness, &normalized).unwrap();
-        let pending = [new.clone(), old.clone()];
-        let output = replacement::merge(harness, &path, Some(&text), &new, &[old], None).unwrap();
-        // An interrupted write may leave the old config with both receipt entries.
-        assert_eq!(
-            output,
-            replacement::merge(harness, &path, Some(&text), &new, &pending, None).unwrap()
-        );
-        assert_eq!(
-            output,
-            replacement::merge(harness, &path, Some(&output), &new, &pending, None).unwrap()
-        );
-        assert_eq!(
-            output,
-            replacement::merge(harness, &path, Some(&output), &new, &[new.clone()], None).unwrap()
-        );
-        let value = connection_data(harness, &path, &output);
-        assert_eq!(value["model"], "keep");
-        let servers = &value[agents::key(harness)];
-        assert_eq!(servers["storm"], new);
-        assert_eq!(servers["other"]["command"], "keep");
-        assert_eq!(servers.as_object().unwrap().len(), 2);
-        if harness != Harness::Claude {
-            assert!(output.contains(if harness == Harness::Codex {
-                "# keep"
-            } else {
-                "/* keep */"
-            }));
-        }
-    }
-}
-
-#[test]
-fn old_manual_changed_and_duplicate_connections_are_not_auto_migrated() {
-    for harness in [Harness::Codex, Harness::Opencode, Harness::Claude] {
-        let old = agents::entry(harness, &entry()).unwrap();
-        let (path, text) = old_connection(harness, &old);
-        for (original, owned) in [
-            (text.clone(), vec![]),
-            (
-                text.replace("codex-example", "changed-actor"),
-                vec![old.clone()],
-            ),
-        ] {
-            let error = replacement::merge(harness, &path, Some(&original), &old, &owned, None)
-                .unwrap_err();
-            let conflict = error.downcast_ref::<ConnectionConflict>().unwrap();
-            assert_eq!(conflict.name, "proofstorm");
-            assert!(error.to_string().contains("'storm'"));
-        }
-        let mut duplicate = connection_data(harness, &path, &text);
-        duplicate[agents::key(harness)]["storm"] = old.clone();
-        let duplicate = if harness == Harness::Codex {
-            toml_edit::ser::to_string(&duplicate).unwrap()
-        } else {
-            serde_json::to_string(&duplicate).unwrap()
-        };
-        let error =
-            replacement::merge(harness, &path, Some(&duplicate), &old, &[old.clone()], None)
-                .unwrap_err();
-        assert!(error.downcast_ref::<ConnectionConflict>().is_none());
-        assert!(error.to_string().contains("multiple"));
-    }
-}
-
 #[test]
 fn inherited_conflicts_and_selected_profiles_fail_without_writes() {
     let root = tempfile::tempdir().unwrap();
@@ -164,7 +64,7 @@ fn inherited_conflicts_and_selected_profiles_fail_without_writes() {
     fs::write(home.join("config.toml"), "profile='custom'").unwrap();
     fs::write(
         home.join("custom.config.toml"),
-        "[mcp_servers.storm]\ncommand='manual'",
+        "[mcp_servers.proofstorm]\ncommand='manual'",
     )
     .unwrap();
     assert!(config::inherited(&project, &home, &system).is_err());
@@ -249,7 +149,7 @@ fn jsonc_preserves_comments_order_other_servers_and_idempotency() {
     let next = json_config::merge(Some(&out), "mcp", &upgraded, &[entry], true).unwrap();
     assert!(next.contains("/* keep other */"));
     assert_eq!(
-        json_config::value(&next, true).unwrap()["mcp"]["storm"],
+        json_config::value(&next, true).unwrap()["mcp"]["proofstorm"],
         upgraded
     );
 }
@@ -263,7 +163,7 @@ fn json_edits_reject_ambiguous_manual_modified_and_duplicate_entries() {
         "{\"mcpServers\":[]}",
         "{\"a\":1,\"a\":2}",
         "{\"x\":{\"a\":1,\"a\":2}}",
-        "{\"mcpServers\":{\"storm\":{}}}",
+        "{\"mcpServers\":{\"proofstorm\":{}}}",
         "{\"mcpServers\":{\"alias\":{\"command\":\"/path/proofstorm-mcp\"}}}",
         "{\"a\":1,}",
         "{/* comment */}",
@@ -306,12 +206,12 @@ fn jsonc_insertion_handles_empty_trailing_commas_escaped_keys_and_arrays() {
     ] {
         let out = json_config::merge(Some(text), "mcp", &entry, &[], true).unwrap();
         assert_eq!(
-            json_config::value(&out, true).unwrap()["mcp"]["storm"],
+            json_config::value(&out, true).unwrap()["mcp"]["proofstorm"],
             entry
         );
     }
     for text in [
-        "{\"mcp\":{\"storm\":1,\"\\u0073torm\":2}}",
+        "{\"mcp\":{\"proofstorm\":1,\"proof\\u0073torm\":2}}",
         "{/*",
         "{\"a\": [1,,]}",
         "{\"a\": \"unterminated\\",
@@ -389,11 +289,11 @@ fn json_inherited_global_local_and_aliased_servers_are_read_only_conflicts() {
     for (agent, content) in [
         (
             Harness::Claude,
-            json!({"mcpServers":{"storm":{"command":"manual"}}}),
+            json!({"mcpServers":{"proofstorm":{"command":"manual"}}}),
         ),
         (
             Harness::Claude,
-            json!({"projects":{project.to_str().unwrap():{"mcpServers":{"storm":{}}}}}),
+            json!({"projects":{project.to_str().unwrap():{"mcpServers":{"proofstorm":{}}}}}),
         ),
         (
             Harness::Opencode,
@@ -498,7 +398,7 @@ fn replacement_requires_exact_consent_and_preserves_other_toml_settings() {
         "# my model\nmodel='keep'\n[mcp_servers.other]\ncommand='keep' # keep comment\n"
     ));
     let value = config::value(&config::document(path, &output).unwrap()).unwrap();
-    assert_eq!(value["mcp_servers"]["storm"], entry());
+    assert_eq!(value["mcp_servers"]["proofstorm"], entry());
     assert!(value["mcp_servers"].get("pst").is_none());
     assert_eq!(
         replacement::merge(
@@ -574,7 +474,7 @@ fn confirmed_json_alias_rename_is_lossless_for_unrelated_content() {
         .unwrap();
         assert!(output.contains("\"other\" : {\"command\":\"keep\"}"));
         let value = json_config::value(&output, harness == Harness::Opencode).unwrap();
-        assert_eq!(value[key]["storm"], entry);
+        assert_eq!(value[key]["proofstorm"], entry);
         assert!(value[key].get("pst").is_none());
         if harness == Harness::Opencode {
             assert!(output.contains("/* my model */"));
@@ -587,7 +487,7 @@ fn confirmed_json_alias_rename_is_lossless_for_unrelated_content() {
 fn replacement_never_guesses_between_multiple_connections() {
     let path = Path::new("/project/config.toml");
     for text in [
-        "[mcp_servers.pst]\ncommand='/old/proofstorm-mcp'\n[mcp_servers.storm]\ncommand='manual'\n",
+        "[mcp_servers.pst]\ncommand='/old/proofstorm-mcp'\n[mcp_servers.proofstorm]\ncommand='manual'\n",
         "[mcp_servers.pst]\ncommand='/old/proofstorm-mcp'\n[mcp_servers.another]\ncommand='/another/proofstorm-mcp'\n",
     ] {
         let error =
@@ -604,7 +504,7 @@ fn manual_named_entry_still_needs_approval_even_if_identical() {
     let error =
         replacement::merge(Harness::Codex, path, Some(&original), &entry(), &[], None).unwrap_err();
     let conflict = error.downcast_ref::<ConnectionConflict>().unwrap();
-    assert_eq!(conflict.name, "storm");
+    assert_eq!(conflict.name, "proofstorm");
     assert_eq!(
         replacement::merge(
             Harness::Codex,

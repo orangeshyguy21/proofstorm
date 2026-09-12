@@ -58,12 +58,6 @@ class EvaluationTests(unittest.TestCase):
         event = {'type': 'tool_use', 'part': {'tool': 'bash', 'state': {'status': 'completed'}}}
         self.assertEqual(self.evaluate(events=[event], review=self.review)['proficiency'], 'failed')
 
-    def test_storm_namespace_is_recognized_as_mcp(self):
-        event = {'type': 'tool_use', 'part': {'tool': 'storm_cell_up', 'state': {'status': 'completed'}}}
-        score = self.evaluate(events=[event], review=self.review)
-        self.assertTrue(score['automated_hard_gates']['no_host_tools_used'])
-        self.assertEqual(score['proficiency'], 'passed')
-
     def test_review_requires_evidence(self):
         self.review['gates']['execution_context_appropriate']['evidence'] = []
         self.assertEqual(self.evaluate(review=self.review)['proficiency'], 'needs_review')
@@ -98,7 +92,7 @@ class EvaluationTests(unittest.TestCase):
         def event():
             op = {'operation_id': 'refresh', 'kind': 'wallet_melt_quote_refresh',
                   'phase': 'succeeded', 'artifact': {'content': content}}
-            return {'type': 'tool_use', 'part': {'tool': 'storm_operation_wait_many',
+            return {'type': 'tool_use', 'part': {'tool': 'pst_operation_wait_many',
                     'state': {'status': 'completed', 'output': json.dumps({'operations': [op]})}}}
 
         self.assertTrue(self.evaluate(events=[event()])['automated_hard_gates']['actual_reservation_release_observed'])
@@ -109,7 +103,7 @@ class EvaluationTests(unittest.TestCase):
         import json
         op = {'operation_id': 'one', 'kind': 'component_exec_live', 'phase': 'succeeded',
               'artifact': {'content': {'exit_code': 1, 'execution_context': 'live_component'}}}
-        event = {'type': 'tool_use', 'part': {'tool': 'storm_operation_wait_many',
+        event = {'type': 'tool_use', 'part': {'tool': 'pst_operation_wait_many',
                  'state': {'status': 'completed', 'output': json.dumps({'operations': [op]})}}}
         score = self.evaluate(events=[event, event], review=self.review)
         self.assertEqual(len(score['execution_surface']['native_operations']), 1)

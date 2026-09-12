@@ -4,7 +4,7 @@
     "task": "allow"
   },
   "mcp": {
-    "storm": {
+    "pst": {
       "type": "local",
       "command": [
         "./target/release/proofstorm-mcp"
