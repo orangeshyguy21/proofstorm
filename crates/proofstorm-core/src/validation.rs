@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    API_VERSION, ComponentKind, DependencyBinding, LabSpec, LinkKind, LinkSpec, PaymentMethod,
+    API_VERSION, CellSpec, ComponentKind, DependencyBinding, LinkKind, LinkSpec, PaymentMethod,
 };
 
 const HARD_MAX_COMPONENTS: usize = 128;
@@ -37,10 +37,10 @@ impl ValidationReport {
 }
 
 #[must_use]
-pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
+pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
     let mut issues = Vec::new();
 
-    if lab.api_version != API_VERSION {
+    if cell.api_version != API_VERSION {
         issue(
             &mut issues,
             "unsupported_api_version",
@@ -48,15 +48,15 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
             format!("expected {API_VERSION:?}"),
         );
     }
-    if !is_slug(&lab.name) {
+    if !is_slug(&cell.name) {
         issue(
             &mut issues,
-            "invalid_lab_name",
+            "invalid_cell_name",
             "/name",
             "must be a lowercase kebab-case identifier of 1..=63 bytes",
         );
     }
-    if lab.components.len() > HARD_MAX_COMPONENTS {
+    if cell.components.len() > HARD_MAX_COMPONENTS {
         issue(
             &mut issues,
             "too_many_components",
@@ -64,7 +64,7 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
             format!("hard maximum is {HARD_MAX_COMPONENTS}"),
         );
     }
-    if lab.links.len() > HARD_MAX_LINKS {
+    if cell.links.len() > HARD_MAX_LINKS {
         issue(
             &mut issues,
             "too_many_links",
@@ -73,25 +73,25 @@ pub fn validate_lab(lab: &LabSpec) -> ValidationReport {
         );
     }
 
-    validate_limits(lab, &mut issues);
+    validate_limits(cell, &mut issues);
 
-    let ids = validate_components(lab, &mut issues);
-    let kinds = lab
+    let ids = validate_components(cell, &mut issues);
+    let kinds = cell
         .components
         .iter()
         .map(|component| (component.id.as_str(), component.kind))
         .collect::<BTreeMap<_, _>>();
 
-    validate_links(lab, &ids, &kinds, &mut issues);
-    validate_authentication_topology(lab, &mut issues);
+    validate_links(cell, &ids, &kinds, &mut issues);
+    validate_authentication_topology(cell, &mut issues);
 
     ValidationReport::from_issues(issues)
 }
 
-fn validate_authentication_topology(lab: &LabSpec, issues: &mut Vec<ValidationIssue>) {
-    for (index, component) in lab.components.iter().enumerate() {
+fn validate_authentication_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
+    for (index, component) in cell.components.iter().enumerate() {
         if component.implementation == "keycloak" {
-            let primary_databases = lab
+            let primary_databases = cell
                 .links
                 .iter()
                 .filter(|link| {
@@ -117,7 +117,7 @@ fn validate_authentication_topology(lab: &LabSpec, issues: &mut Vec<ValidationIs
         if component.implementation != "nutshell" {
             continue;
         }
-        let authentication_links = lab
+        let authentication_links = cell
             .links
             .iter()
             .filter(|link| {
@@ -158,23 +158,23 @@ fn validate_authentication_topology(lab: &LabSpec, issues: &mut Vec<ValidationIs
                 issues,
                 "linked_oidc_client_mismatch",
                 format!("/components/{index}/config/oidc_client_id"),
-                "the in-lab Keycloak contract uses the fixed public client cashu-client",
+                "the in-cell Keycloak contract uses the fixed public client cashu-client",
             );
         }
     }
 }
 
 fn validate_links(
-    lab: &LabSpec,
+    cell: &CellSpec,
     ids: &BTreeSet<&str>,
     kinds: &BTreeMap<&str, ComponentKind>,
     issues: &mut Vec<ValidationIssue>,
 ) {
     let mut link_ids = BTreeSet::new();
-    for (index, link) in lab.links.iter().enumerate() {
+    for (index, link) in cell.links.iter().enumerate() {
         validate_link_identity(index, link, &mut link_ids, issues);
         validate_binding(index, link, issues);
-        validate_database_role(index, link, &lab.links[..index], issues);
+        validate_database_role(index, link, &cell.links[..index], issues);
         if link.from == link.to {
             issue(
                 issues,
@@ -363,11 +363,11 @@ fn validate_link_identity<'a>(
 }
 
 fn validate_components<'a>(
-    lab: &'a LabSpec,
+    cell: &'a CellSpec,
     issues: &mut Vec<ValidationIssue>,
 ) -> BTreeSet<&'a str> {
     let mut ids = BTreeSet::new();
-    for (index, component) in lab.components.iter().enumerate() {
+    for (index, component) in cell.components.iter().enumerate() {
         let path = format!("/components/{index}/id");
         if !is_slug(&component.id) {
             issue(
@@ -402,7 +402,7 @@ fn validate_components<'a>(
             );
         }
         let config_bytes = serde_json::to_vec(&component.config).map_or(usize::MAX, |v| v.len());
-        if config_bytes > usize::try_from(lab.policy.limits.max_config_bytes).unwrap_or(usize::MAX)
+        if config_bytes > usize::try_from(cell.policy.limits.max_config_bytes).unwrap_or(usize::MAX)
             || config_bytes > HARD_MAX_CONFIG_BYTES
         {
             issue(
@@ -416,8 +416,8 @@ fn validate_components<'a>(
     ids
 }
 
-fn validate_limits(lab: &LabSpec, issues: &mut Vec<ValidationIssue>) {
-    let limits = &lab.policy.limits;
+fn validate_limits(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
+    let limits = &cell.policy.limits;
     for (field, value, hard_max) in [
         (
             "max_components",
@@ -440,7 +440,7 @@ fn validate_limits(lab: &LabSpec, issues: &mut Vec<ValidationIssue>) {
             );
         }
     }
-    if lab.components.len() > usize::from(limits.max_components) {
+    if cell.components.len() > usize::from(limits.max_components) {
         issue(
             issues,
             "component_limit_exceeded",
@@ -448,7 +448,7 @@ fn validate_limits(lab: &LabSpec, issues: &mut Vec<ValidationIssue>) {
             "component count exceeds policy limit",
         );
     }
-    if lab.links.len() > usize::from(limits.max_links) {
+    if cell.links.len() > usize::from(limits.max_links) {
         issue(
             issues,
             "link_limit_exceeded",
@@ -514,14 +514,14 @@ fn is_unit_identifier(value: &str) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::{ComponentKind, ComponentSpec, ControlClass, LabPolicy, LinkKind, LinkSpec};
+    use crate::{CellPolicy, ComponentKind, ComponentSpec, ControlClass, LinkKind, LinkSpec};
 
     use super::*;
 
-    fn valid_lab() -> LabSpec {
-        LabSpec {
+    fn valid_cell() -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
-            name: "cdk-lightning-lab".into(),
+            name: "cdk-lightning-cell".into(),
             components: vec![
                 ComponentSpec {
                     id: "chain".into(),
@@ -529,7 +529,7 @@ mod tests {
                     implementation: "bitcoin-core".into(),
                     version: Some("31.1".into()),
                     config_version: "bitcoin-core/31/v1".into(),
-                    control: ControlClass::Laboratory,
+                    control: ControlClass::Cell,
                     config: BTreeMap::new(),
                 },
                 ComponentSpec {
@@ -538,7 +538,7 @@ mod tests {
                     implementation: "lnd".into(),
                     version: None,
                     config_version: "lnd/0.20/v1".into(),
-                    control: ControlClass::Laboratory,
+                    control: ControlClass::Cell,
                     config: BTreeMap::new(),
                 },
                 ComponentSpec {
@@ -572,24 +572,24 @@ mod tests {
                     }),
                 },
             ],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
     #[test]
-    fn valid_bitcoin_lnd_cdk_lab_passes() {
+    fn valid_bitcoin_lnd_cdk_cell_passes() {
         assert_eq!(
-            validate_lab(&valid_lab()),
+            validate_cell(&valid_cell()),
             ValidationReport::from_issues(vec![])
         );
     }
 
     #[test]
     fn duplicate_component_and_missing_endpoint_are_stable_issues() {
-        let mut lab = valid_lab();
-        lab.components[1].id = "chain".into();
-        lab.links[1].to = "absent".into();
-        let report = validate_lab(&lab);
+        let mut cell = valid_cell();
+        cell.components[1].id = "chain".into();
+        cell.links[1].to = "absent".into();
+        let report = validate_cell(&cell);
         assert!(!report.valid);
         assert_eq!(
             report
@@ -607,10 +607,10 @@ mod tests {
 
     #[test]
     fn binding_id_is_required_valid_and_unique() {
-        let mut lab = valid_lab();
-        lab.links[0].id = "Not Valid".into();
-        lab.links[1].id = "Not Valid".into();
-        let report = validate_lab(&lab);
+        let mut cell = valid_cell();
+        cell.links[0].id = "Not Valid".into();
+        cell.links[1].id = "Not Valid".into();
+        let report = validate_cell(&cell);
         assert!(
             report
                 .issues
@@ -627,12 +627,12 @@ mod tests {
 
     #[test]
     fn backend_bindings_are_typed_and_payment_endpoints_follow_the_method() {
-        let mut lab = valid_lab();
-        lab.links[0].binding = None;
-        lab.links[1].binding = Some(DependencyBinding::Chain {
+        let mut cell = valid_cell();
+        cell.links[0].binding = None;
+        cell.links[1].binding = Some(DependencyBinding::Chain {
             network: crate::BitcoinNetwork::Regtest,
         });
-        let report = validate_lab(&lab);
+        let report = validate_cell(&cell);
         assert!(report.issues.iter().any(|issue| {
             issue.code == "missing_dependency_binding" && issue.path == "/links/0/binding"
         }));
@@ -640,12 +640,12 @@ mod tests {
             issue.code == "incompatible_dependency_binding" && issue.path == "/links/1/binding"
         }));
 
-        let mut onchain = valid_lab();
+        let mut onchain = valid_cell();
         onchain.links[1].binding = Some(DependencyBinding::Payment {
             method: PaymentMethod::Onchain,
             unit: "SAT".into(),
         });
-        let report = validate_lab(&onchain);
+        let report = validate_cell(&onchain);
         assert!(report.issues.iter().any(|issue| {
             issue.code == "invalid_payment_unit" && issue.path == "/links/1/binding/unit"
         }));
@@ -658,15 +658,15 @@ mod tests {
 
     #[test]
     fn keycloak_requires_primary_storage_and_linked_nutshell_refuses_oidc_overrides() {
-        let mut lab = valid_lab();
-        lab.components.extend([
+        let mut cell = valid_cell();
+        cell.components.extend([
             ComponentSpec {
                 id: "identity-db".into(),
                 kind: ComponentKind::Database,
                 implementation: "postgresql".into(),
                 version: None,
                 config_version: "postgresql/17/v1".into(),
-                control: ControlClass::Laboratory,
+                control: ControlClass::Cell,
                 config: BTreeMap::new(),
             },
             ComponentSpec {
@@ -675,17 +675,17 @@ mod tests {
                 implementation: "keycloak".into(),
                 version: None,
                 config_version: "keycloak/25/v1".into(),
-                control: ControlClass::Laboratory,
+                control: ControlClass::Cell,
                 config: BTreeMap::new(),
             },
         ]);
-        lab.components[2].implementation = "nutshell".into();
-        lab.components[2].config_version = "nutshell-mint/0.20/v1".into();
-        lab.components[2].config.insert(
+        cell.components[2].implementation = "nutshell".into();
+        cell.components[2].config_version = "nutshell-mint/0.20/v1".into();
+        cell.components[2].config.insert(
             "oidc_discovery_url".into(),
             serde_json::json!("https://issuer.example/realm/.well-known/openid-configuration"),
         );
-        lab.links.push(LinkSpec {
+        cell.links.push(LinkSpec {
             id: "mint-authentication".into(),
             kind: LinkKind::AuthenticationBackend,
             from: "target".into(),
@@ -694,7 +694,7 @@ mod tests {
                 protocol: crate::AuthenticationProtocol::Oidc,
             }),
         });
-        let report = validate_lab(&lab);
+        let report = validate_cell(&cell);
         assert!(report.issues.iter().any(|issue| {
             issue.code == "keycloak_primary_database_required" && issue.path == "/components/4"
         }));
@@ -703,8 +703,8 @@ mod tests {
                 && issue.path == "/components/2/config/oidc_discovery_url"
         }));
 
-        lab.components[2].config.clear();
-        lab.links.push(LinkSpec {
+        cell.components[2].config.clear();
+        cell.links.push(LinkSpec {
             id: "identity-database".into(),
             kind: LinkKind::DatabaseBackend,
             from: "identity".into(),
@@ -713,17 +713,17 @@ mod tests {
                 role: crate::DatabaseRole::Primary,
             }),
         });
-        assert_eq!(validate_lab(&lab), ValidationReport::from_issues(vec![]));
+        assert_eq!(validate_cell(&cell), ValidationReport::from_issues(vec![]));
     }
 
     #[test]
     fn unsupported_version_and_invalid_names_refuse() {
-        let mut lab = valid_lab();
-        lab.api_version = "proofstorm/v2".into();
-        lab.name = "Not Valid".into();
-        lab.components[0].implementation = String::new();
-        lab.components[1].config_version = String::new();
-        let report = validate_lab(&lab);
+        let mut cell = valid_cell();
+        cell.api_version = "proofstorm/v2".into();
+        cell.name = "Not Valid".into();
+        cell.components[0].implementation = String::new();
+        cell.components[1].config_version = String::new();
+        let report = validate_cell(&cell);
         assert_eq!(
             report
                 .issues
@@ -732,7 +732,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "unsupported_api_version",
-                "invalid_lab_name",
+                "invalid_cell_name",
                 "invalid_implementation",
                 "invalid_config_version"
             ]
@@ -741,10 +741,10 @@ mod tests {
 
     #[test]
     fn zero_and_exceeded_limits_refuse() {
-        let mut lab = valid_lab();
-        lab.policy.limits.max_components = 0;
-        lab.policy.limits.max_links = 1;
-        let report = validate_lab(&lab);
+        let mut cell = valid_cell();
+        cell.policy.limits.max_components = 0;
+        cell.policy.limits.max_links = 1;
+        let report = validate_cell(&cell);
         assert_eq!(
             report
                 .issues

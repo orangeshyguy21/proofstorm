@@ -12,13 +12,13 @@ Give the agent this request:
 > component CLIs. Generate one unique run suffix and use it consistently in
 > every plan, instance, operation, and idempotency ID.
 > Discover compact catalog identities, read only the exact selected entries and
-> configuration schemas, then create and materialize a minimal lab
+> configuration schemas, then create and materialize a minimal cell
 > with two Bitcoin Core nodes, one LND node linked to the first Bitcoin node, a
 > CDK mint linked to LND, and a Nutshell wallet. Include `component.exec_live` in the
-> lab policy. Omit experiment_id and session_id for ordinary native commands;
+> cell policy. Omit experiment_id and session_id for ordinary native commands;
 > Proofstorm supplies attribution automatically. Use
 > `pst_component_exec_live` to run `bitcoin-cli --help`, then use the native
-> Bitcoin CLI with the lab-provided RPC environment to call
+> Bitcoin CLI with the cell-provided RPC environment to call
 > `getblockchaininfo` on each Bitcoin node. Prove explicit multi-node selection
 > by executing a command in each selected live Bitcoin component. Run
 > `lncli --help` and `lncli getinfo` in the LND component and the native
@@ -26,16 +26,16 @@ Give the agent this request:
 > artifact and report its exit code and a concise output summary. Also prove
 > the exec workload has no Kubernetes service-account token at
 > `/var/run/secrets/kubernetes.io/serviceaccount/token`; treat the expected
-> missing file as experiment data. Use `pst_lab_wait` for readiness and
+> missing file as experiment data. Use `pst_cell_wait` for readiness and
 > teardown, and use the paged component-status tool only when exact component
 > conditions are needed. Use `pst_operation_wait` for every submitted
 > command; do not tightly poll status tools. Do not print mnemonics, macaroons, proofs, or
 > private keys. Export evidence before closing
-> the lab, since verified deletion purges its local history. Read
+> the cell, since verified deletion purges its local history. Read
 > the canonical journal through `pst_action_list` and confirm its
 > object-wrapped `actions` page. Reuse an idempotency key only for an identical
-> retry. Get expected_instance_key from pst_lab_status, then pass it to pst_lab_close
-> and pst_lab_wait with target_phase=closed. Report the exported evidence digest
+> retry. Get expected_instance_key from pst_cell_status, then pass it to pst_cell_close
+> and pst_cell_wait with target_phase=closed. Report the exported evidence digest
 > and verified teardown receipt.
 
 Passing evidence:

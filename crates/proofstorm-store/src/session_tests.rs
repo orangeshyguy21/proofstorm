@@ -1,5 +1,5 @@
 use super::*;
-use proofstorm_core::{LabSpec, PrivateTransferScope, PublishedRevision, SessionPhase};
+use proofstorm_core::{CellSpec, PrivateTransferScope, PublishedRevision, SessionPhase};
 use serde_json::json;
 fn seed(store: &Store) {
     store
@@ -11,8 +11,8 @@ fn seed(store: &Store) {
     for principal in ["sender", "receiver", "stranger"] {
         store.put_principal(principal).unwrap();
         for capability in [
-            Capability::LabOperate,
-            Capability::LabClose,
+            Capability::CellOperate,
+            Capability::CellClose,
             Capability::ComponentExecLive,
             Capability::WalletControl,
             Capability::ArtifactRead,
@@ -23,16 +23,16 @@ fn seed(store: &Store) {
             store.grant("workspace", principal, capability).unwrap();
         }
     }
-    let lab: LabSpec = serde_json::from_value(json!({"api_version":proofstorm_core::API_VERSION,"name":"lab","links":[],
+    let cell: CellSpec = serde_json::from_value(json!({"api_version":proofstorm_core::API_VERSION,"name":"cell","links":[],
             "components":[
-                {"id":"wallet-a","kind":"wallet","implementation":"cocod-wallet","config_version":"test","control":"laboratory","config":{}},
-                {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","config_version":"test","control":"laboratory","config":{}},
-                {"id":"mint","kind":"mint","implementation":"cdk-mint","config_version":"test","control":"laboratory","config":{}}
+                {"id":"wallet-a","kind":"wallet","implementation":"cocod-wallet","config_version":"test","control":"cell","config":{}},
+                {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","config_version":"test","control":"cell","config":{}},
+                {"id":"mint","kind":"mint","implementation":"cdk-mint","config_version":"test","control":"cell","config":{}}
             ]})).unwrap();
     let revision = PublishedRevision {
         workspace_id: "workspace".into(),
         digest: "revision".into(),
-        lab,
+        cell,
         lock: proofstorm_core::ResolvedLock {
             api_version: proofstorm_core::API_VERSION.into(),
             digest: "lock".into(),
@@ -45,7 +45,7 @@ fn seed(store: &Store) {
         [serde_json::to_string(&revision).unwrap()],
     )
     .unwrap();
-    db.execute("INSERT INTO instances VALUES('workspace','instance','revision','lock','instance-key','lab')",[]).unwrap();
+    db.execute("INSERT INTO instances VALUES('workspace','instance','revision','lock','instance-key','cell')",[]).unwrap();
     drop(db);
     store
         .create_experiment(
@@ -58,7 +58,7 @@ fn seed(store: &Store) {
         .unwrap();
 }
 
-fn submit(store: &Store, actor: &str, session: &str, id: &str) -> LabOperation {
+fn submit(store: &Store, actor: &str, session: &str, id: &str) -> CellOperation {
     store
         .create_operation(
             "workspace",
@@ -183,7 +183,7 @@ fn private_permissions_survive_session_finish_but_explicit_revocation_still_work
     let store = Store::memory().unwrap();
     seed(&store);
     store
-        .revoke("workspace", "receiver", Capability::LabOperate)
+        .revoke("workspace", "receiver", Capability::CellOperate)
         .unwrap();
     let scope = PrivateTransferScope {
         issuer_principal_id: "sender".into(),
@@ -261,7 +261,7 @@ fn private_permissions_survive_session_finish_but_explicit_revocation_still_work
     );
 }
 
-fn implicit_submit(store: &Store, actor: &str, id: &str) -> Result<LabOperation, StoreError> {
+fn implicit_submit(store: &Store, actor: &str, id: &str) -> Result<CellOperation, StoreError> {
     store.create_operation(
         "workspace",
         actor,
@@ -395,7 +395,7 @@ fn denied_and_closed_default_runs_do_not_silently_create_a_new_group() {
 }
 
 #[test]
-fn closing_and_recreation_preserve_the_lab_incarnation_boundary() {
+fn closing_and_recreation_preserve_the_cell_incarnation_boundary() {
     let store = Store::memory().unwrap();
     seed(&store);
     let op = implicit_submit(&store, "sender", "first-incarnation").unwrap();
@@ -410,7 +410,7 @@ fn closing_and_recreation_preserve_the_lab_incarnation_boundary() {
     );
     let instance = store.instance_unchecked("workspace", "instance").unwrap();
     let _guard = store.try_lifecycle_guard().unwrap().unwrap();
-    store.purge_lab(&instance).unwrap();
+    store.purge_cell(&instance).unwrap();
     assert!(store.operation_unchecked("workspace", &op.id).is_err());
     assert!(
         store

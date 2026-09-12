@@ -7,21 +7,21 @@ use std::time::Duration;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, json as expect, lab};
+use crate::{GateContext, cell, json as expect};
 
 const CAPABILITIES: &[&str] = &[
     "catalog.read",
-    "lab.read",
-    "lab.create",
-    "lab.validate",
-    "lab.publish",
-    "lab.materialize",
-    "lab.status",
-    "lab.close",
+    "cell.read",
+    "cell.create",
+    "cell.validate",
+    "cell.publish",
+    "cell.materialize",
+    "cell.status",
+    "cell.close",
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lab.operate",
+    "cell.operate",
     "wallet.create",
     "wallet.control",
     "wallet.fund",
@@ -32,17 +32,17 @@ const CAPABILITIES: &[&str] = &[
     "artifact.read",
 ];
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
         "name": "quote-composition",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "quote-mint"}},
-            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "quote-payer"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "quote-mint"}},
+            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "quote-payer"}},
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.0", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Quote Composition Mint"}},
-            {"id": "payer-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}},
-            {"id": "recipient-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "laboratory", "config": {}}
+            {"id": "payer-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}},
+            {"id": "recipient-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}
         ],
         "links": [
             {"id": "mint-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -114,19 +114,19 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session(&workspace, "quote-agent", CAPABILITIES)?;
 
     client.call(
-        "lab_create",
-        json!({"draft_id": draft, "lab": lab_document(), "idempotency_key": format!("create-{run}")}),
+        "cell_create",
+        json!({"draft_id": draft, "cell": cell_document(), "idempotency_key": format!("create-{run}")}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": draft, "expected_version": 1, "idempotency_key": format!("publish-{run}"), "include_revision": true}),
     )?;
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": instance, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": format!("materialize-{run}")}),
     )?;
-    lab::wait_phase(&mut client, &instance, "ready", 200, Duration::from_secs(3))?;
-    let status = client.call("lab_status", json!({"instance_id": instance}))?;
+    cell::wait_phase(&mut client, &instance, "ready", 200, Duration::from_secs(3))?;
+    let status = client.call("cell_status", json!({"instance_id": instance}))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_owned();
 
     client.call(
@@ -151,7 +151,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             }),
         ),
     )?;
-    lab::wait_operation(&mut client, "bootstrap", 180)?;
+    cell::wait_operation(&mut client, "bootstrap", 180)?;
 
     for (operation, wallet) in [
         ("initialize-payer", "payer-wallet"),
@@ -163,7 +163,7 @@ pub fn run(context: &GateContext) -> Result<()> {
                 "wallet": wallet, "mint": "mint", "idempotency_key": format!("{operation}-{run}")
             })),
         )?;
-        lab::wait_operation(&mut client, operation, 120)?;
+        cell::wait_operation(&mut client, operation, 120)?;
     }
     client.call(
         "wallet_fund",
@@ -178,7 +178,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             }),
         ),
     )?;
-    lab::wait_operation(&mut client, "fund-payer", 160)?;
+    cell::wait_operation(&mut client, "fund-payer", 160)?;
 
     let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
     client.call(
@@ -188,7 +188,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             "timeout_seconds": 60, "idempotency_key": format!("compose-{run}")
         })),
     )?;
-    let composed = lab::wait_operation(&mut client, "compose-invoice", 120)?;
+    let composed = cell::wait_operation(&mut client, "compose-invoice", 120)?;
     let composed_quote = uuid_from(native_output(&composed)?)?;
 
     let pay_request = scoped(
@@ -218,8 +218,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         ),
         "quote_payment_already_claimed",
     )?;
-    let paid = lab::wait_operation(&mut client, "compose-pay", 160)?;
-    let paid_content = lab::artifact_content(&paid)?;
+    let paid = cell::wait_operation(&mut client, "compose-pay", 160)?;
+    let paid_content = cell::artifact_content(&paid)?;
     if expect::string(paid_content, "/quote_observations/0/state")? != "PAID"
         || expect::string(paid_content, "/quote_observations/1/state")? != "ISSUED"
         || expect::integer(paid_content, "/recipient_balance_sat")? != 100
@@ -252,8 +252,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             }),
         ),
     )?;
-    let invoice_operation = lab::wait_operation(&mut client, "external-invoice", 120)?;
-    let invoice_content = lab::artifact_content(&invoice_operation)?;
+    let invoice_operation = cell::wait_operation(&mut client, "external-invoice", 120)?;
+    let invoice_content = cell::artifact_content(&invoice_operation)?;
     let external_quote = expect::string(invoice_content, "/mint_quote_id")?.to_owned();
     assert_no_invoice(invoice_content, "typed invoice artifact")?;
 
@@ -273,8 +273,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             }),
         ),
     )?;
-    let private_read = lab::wait_operation(&mut client, "read-private-invoice", 90)?;
-    if expect::integer(lab::artifact_content(&private_read)?, "/exit_code")? != 0 {
+    let private_read = cell::wait_operation(&mut client, "read-private-invoice", 90)?;
+    if expect::integer(cell::artifact_content(&private_read)?, "/exit_code")? != 0 {
         bail!("native private invoice lookup failed: {private_read}");
     }
     let external_invoice = invoice_from(native_output(&private_read)?)?;
@@ -294,8 +294,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             }),
         ),
     )?;
-    let external_payment = lab::wait_operation(&mut client, "external-lightning-pay", 120)?;
-    if expect::integer(lab::artifact_content(&external_payment)?, "/exit_code")? != 0 {
+    let external_payment = cell::wait_operation(&mut client, "external-lightning-pay", 120)?;
+    if expect::integer(cell::artifact_content(&external_payment)?, "/exit_code")? != 0 {
         bail!("external Lightning payment failed: {external_payment}");
     }
 
@@ -312,8 +312,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             }),
         ),
     )?;
-    let claimed = lab::wait_operation(&mut client, "external-claim", 120)?;
-    let claim_content = lab::artifact_content(&claimed)?;
+    let claimed = cell::wait_operation(&mut client, "external-claim", 120)?;
+    let claim_content = cell::artifact_content(&claimed)?;
     if expect::string(claim_content, "/quote_observations/0/state")? != "ISSUED" {
         bail!("externally paid quote was not issued by explicit claim: {claimed}");
     }
@@ -348,7 +348,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     ] {
         let action = context.kubectl.get_json(&[
             "get",
-            "proofstormlabaction",
+            "proofstormcellaction",
             resource,
             "-n",
             "proofstorm-system",
@@ -399,8 +399,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         "typed evidence outside component_forensics requests",
     )?;
 
-    client.call("lab_close", json!({"instance_id": instance}))?;
-    let closed = lab::wait_phase(
+    client.call("cell_close", json!({"instance_id": instance}))?;
+    let closed = cell::wait_phase(
         &mut client,
         &instance,
         "closed",
@@ -408,7 +408,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         Duration::from_secs(3),
     )?;
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {
-        bail!("quote composition lab teardown was not verified: {closed}");
+        bail!("quote composition cell teardown was not verified: {closed}");
     }
     println!(
         "Quote composition acceptance passed: CLI-created typed pay, single-flight job admission, external payment claim, and typed non-disclosure are verified"

@@ -221,7 +221,7 @@ class EvidenceTests(unittest.TestCase):
             pins = {**runner.PINS, 'mcp_release_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}
             values = {'build-pins':pins, 'outcome':{'passed':True},
                       'closed':{'teardown_receipt':{'verified_absent':True}},
-                      'cluster-after':{'remaining_labs_and_actions':0,'instance_namespace_absent':True},
+                      'cluster-after':{'remaining_cells_and_actions':0,'instance_namespace_absent':True},
                       'receipt-audit':{'journal_complete':True,'all_native_cleanup_streams_and_runner_verified':True,
                        'private_payload_streams_empty_and_files_retired':True,
                        'recipient_command_bindings':[{'operation_id':'handoff-out-receive',

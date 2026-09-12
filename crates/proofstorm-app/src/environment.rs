@@ -1,26 +1,26 @@
 //! A credential-free read model shared by CLI, MCP and HTTP.
 mod prober;
 mod resources;
-use crate::{Error, lab::Labs};
+use crate::{Error, cell::Cells};
 use futures::{StreamExt, stream};
 use kube::{Api, ResourceExt};
 use proofstorm_core::Capability;
-use proofstorm_kube::ProofstormLab;
+use proofstorm_kube::ProofstormCell;
 use proofstorm_store::{EnvironmentEntry, StoreError};
 pub use resources::{Endpoint, ResourceDemand};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub use proofstorm_view::*;
 
-impl Labs {
+impl Cells {
     /// Only reads local history and existing runtime status. Never creates a session or job.
     pub async fn environment(&self, query: &EnvironmentQuery) -> Result<EnvironmentView, Error> {
         query
             .validate()
             .map_err(|message| Error::problem("invalid_page", message))?;
         for cap in [
-            Capability::LabRead,
-            Capability::LabStatus,
+            Capability::CellRead,
+            Capability::CellStatus,
             Capability::ExperimentRead,
         ] {
             self.store
@@ -31,8 +31,8 @@ impl Labs {
         let (entries, next_cursor) = if let Some(id) = &query.instance_id {
             if !live.contains(id) {
                 return Err(Error::missing(
-                    "lab is not present in the current cluster",
-                    Some(serde_json::json!({"code":"lab_not_in_cluster"})),
+                    "cell is not present in the current cluster",
+                    Some(serde_json::json!({"code":"cell_not_in_cluster"})),
                 ));
             }
             (
@@ -62,18 +62,18 @@ impl Labs {
             entries.truncate(query.limit as usize);
             (entries, next)
         };
-        // Decode only records belonging to labs still present in the selected cluster.
-        let labs = stream::iter(entries)
+        // Decode only records belonging to cells still present in the selected cluster.
+        let cells = stream::iter(entries)
             .map(|entry| async {
                 let id = entry.id.clone();
                 let handle = entry.handle.clone();
-                match self.environment_lab(entry, query).await {
+                match self.environment_cell(entry, query).await {
                     Err(error)
                         if error.details.as_ref().is_some_and(|details| {
                             details["code"] == "stored_record_incompatible"
                         }) =>
                     {
-                        Ok(unreadable_lab(id, handle))
+                        Ok(unreadable_cell(id, handle))
                     }
                     result => result,
                 }
@@ -85,8 +85,8 @@ impl Labs {
             .collect::<Result<Vec<_>, _>>()?;
         let mut view = EnvironmentView {
             api_version:"proofstorm/environment/v1alpha1".into(),workspace_id:self.workspace.clone(),
-            scope:"labs present in the selected cluster and tracked in this database and workspace; deleted and unmaterialized labs are excluded".into(),
-            observation_started_at_unix:started,observation_finished_at_unix:now(),labs:Page {items:labs,next_cursor},
+            scope:"cells present in the selected cluster and tracked in this database and workspace; deleted and unmaterialized cells are excluded".into(),
+            observation_started_at_unix:started,observation_finished_at_unix:now(),cells:Page {items:cells,next_cursor},
             coverage:Coverage {
                 topology:"declared links, not measured reachability or payment flows".into(),
                 activity:"recorded managed operations; pending/running outcomes may require explicit sync; no receipts are collected by this read".into(),
@@ -98,11 +98,11 @@ impl Labs {
         Ok(view)
     }
 
-    async fn environment_lab(
+    async fn environment_cell(
         &self,
         entry: EnvironmentEntry,
         query: &EnvironmentQuery,
-    ) -> Result<EnvironmentLab, Error> {
+    ) -> Result<EnvironmentCell, Error> {
         let instance = match self
             .store
             .instance(&self.workspace, &self.principal, &entry.id)
@@ -171,12 +171,12 @@ impl Labs {
                 activity.components.retain(|id| {
                     revision
                         .as_ref()
-                        .is_some_and(|r| r.lab.components.iter().any(|c| &c.id == id))
+                        .is_some_and(|r| r.cell.components.iter().any(|c| &c.id == id))
                 });
                 activity
             })
             .collect();
-        Ok(EnvironmentLab {
+        Ok(EnvironmentCell {
             layout_id: instance.as_ref().map(layout_identity),
             desired_generation: instance.as_ref().map(|i| i.generation),
             last_converged_revision: resource
@@ -234,15 +234,15 @@ impl Labs {
 
     async fn observe_environment_runtime(
         &self,
-        instance: &proofstorm_core::LabInstance,
-    ) -> (RuntimeObservation, Option<ProofstormLab>) {
-        let labs = Api::<ProofstormLab>::namespaced(
+        instance: &proofstorm_core::CellInstance,
+    ) -> (RuntimeObservation, Option<ProofstormCell>) {
+        let cells = Api::<ProofstormCell>::namespaced(
             self.runtime.client.clone(),
             &self.runtime.control_namespace,
         );
         let resource = match tokio::time::timeout(
             Duration::from_secs(3),
-            labs.get_opt(&instance.resource_name),
+            cells.get_opt(&instance.resource_name),
         )
         .await
         {
@@ -311,8 +311,8 @@ impl Labs {
         (observation, Some(resource))
     }
 }
-fn unreadable_lab(id: String, handle: Option<proofstorm_store::LabHandle>) -> EnvironmentLab {
-    EnvironmentLab {
+fn unreadable_cell(id: String, handle: Option<proofstorm_store::CellHandle>) -> EnvironmentCell {
+    EnvironmentCell {
         layout_id: None,
         desired_generation: None,
         last_converged_revision: None,
@@ -392,17 +392,17 @@ pub fn bound_page_bytes(view: &mut EnvironmentView, maximum_bytes: usize) -> Res
         .len()
         > maximum_bytes
     {
-        if shorten(&mut view.labs, |lab| &lab.id) {
+        if shorten(&mut view.cells, |cell| &cell.id) {
             continue;
         }
-        let Some(lab) = view.labs.items.first_mut() else {
+        let Some(cell) = view.cells.items.first_mut() else {
             break;
         };
-        let changed = shorten(&mut lab.activity, |op| &op.id)
-            | shorten(&mut lab.sessions, |s| &s.session.id)
-            | shorten(&mut lab.links, |l| &l.id)
-            | shorten(&mut lab.components, |c| &c.id);
-        filter_resources(&mut lab.resources, &lab.components);
+        let changed = shorten(&mut cell.activity, |op| &op.id)
+            | shorten(&mut cell.sessions, |s| &s.session.id)
+            | shorten(&mut cell.links, |l| &l.id)
+            | shorten(&mut cell.components, |c| &c.id);
+        filter_resources(&mut cell.resources, &cell.components);
         if !changed {
             return Err(Error::problem(
                 "environment_item_too_large",
@@ -415,14 +415,14 @@ pub fn bound_page_bytes(view: &mut EnvironmentView, maximum_bytes: usize) -> Res
 
 fn topology(
     revision: Option<&proofstorm_core::PublishedRevision>,
-    resource: Option<&ProofstormLab>,
+    resource: Option<&ProofstormCell>,
     current: bool,
     endpoints: &[Endpoint],
 ) -> (Vec<ComponentView>, Vec<LinkView>) {
     let components: Vec<ComponentView> =
         revision
             .map(|r| {
-                r.lab
+                r.cell
                     .components
                     .iter()
                     .map(|c| {
@@ -482,7 +482,7 @@ fn topology(
             .unwrap_or_default();
     let links: Vec<LinkView> = revision
         .map(|r| {
-            r.lab
+            r.cell
                 .links
                 .iter()
                 .map(|l| LinkView {
@@ -564,7 +564,7 @@ fn component_details(entry: &proofstorm_core::LockEntry, observed: bool) -> Comp
     }
 }
 
-fn layout_identity(instance: &proofstorm_core::LabInstance) -> String {
+fn layout_identity(instance: &proofstorm_core::CellInstance) -> String {
     format!("{}:{}", instance.workspace_id, instance.instance_key)
 }
 
@@ -610,8 +610,8 @@ mod canvas_tests {
     fn identity_providers_are_projected_without_runtime_observations() {
         let revision = serde_json::from_value(serde_json::json!({
             "workspace_id":"test", "digest":"revision",
-            "lab":{"api_version":"proofstorm/v1alpha1", "name":"test", "links":[],
-                "components":[{"id":"identity", "kind":"identity_provider", "implementation":"keycloak", "config_version":"test/v1", "control":"laboratory", "config":{}}]},
+            "cell":{"api_version":"proofstorm/v1alpha1", "name":"test", "links":[],
+                "components":[{"id":"identity", "kind":"identity_provider", "implementation":"keycloak", "config_version":"test/v1", "control":"cell", "config":{}}]},
             "lock":{"api_version":"proofstorm/lock/v2alpha1", "digest":"lock", "entries":[]}
         })).unwrap();
         let (components, _) = topology(Some(&revision), None, false, &[]);

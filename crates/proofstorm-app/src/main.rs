@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, bail};
 use proofstorm_app::{
+    cell::Cells,
     config::{DEFAULT_NAMESPACE, DEFAULT_WORKSPACE},
-    lab::Labs,
 };
 use proofstorm_core::{
-    Capability, InstancePhase, LabSpec, OperationPhase,
+    Capability, CellSpec, InstancePhase, OperationPhase,
     native::{NativeCommand, NativeOutput, OutputMode},
 };
 use proofstorm_store::Store;
@@ -34,16 +34,16 @@ async fn main() -> Result<()> {
         Command::Doctor { .. } => ("doctor", Some("Checking Proofstorm health")),
         Command::InstallBundle { .. } => ("install", Some("Installing Proofstorm")),
         Command::Init { .. } => ("init", Some("Configuring local permissions")),
-        Command::Up { preview: true, .. } => ("up", Some("Reviewing lab changes")),
-        Command::Up { .. } => ("up", Some("Starting lab; checking images and readiness")),
-        Command::Down { .. } => ("down", Some("Removing lab")),
-        Command::Status { .. } => ("status", Some("Reading lab status")),
-        Command::Environment { .. } => ("environment", Some("Reading labs")),
+        Command::Up { preview: true, .. } => ("up", Some("Reviewing cell changes")),
+        Command::Up { .. } => ("up", Some("Starting cell; checking images and readiness")),
+        Command::Down { .. } => ("down", Some("Removing cell")),
+        Command::Status { .. } => ("status", Some("Reading cell status")),
+        Command::Environment { .. } => ("environment", Some("Reading cells")),
         Command::OpsList { .. } => ("ops-list", None),
-        Command::Exec { .. } => ("exec", Some("Running lab command")),
+        Command::Exec { .. } => ("exec", Some("Running cell command")),
         Command::Result { .. } => ("result", Some("Reading operation result")),
-        Command::Sync { .. } => ("sync", Some("Syncing lab activity")),
-        Command::Connect { .. } => ("connect", Some("Opening lab connection")),
+        Command::Sync { .. } => ("sync", Some("Syncing cell activity")),
+        Command::Connect { .. } => ("connect", Some("Opening cell connection")),
         Command::Serve { .. } => ("serve", Some("Preparing server")),
         Command::Version { .. } | Command::CheckoutRegister { .. } | Command::GuiServe { .. } => {
             ("internal", None)
@@ -351,11 +351,11 @@ async fn main() -> Result<()> {
         limit,
     } = &command
     {
-        let lab = store.resolve_lab(&args.workspace, &args.principal, name)?;
+        let cell = store.resolve_cell(&args.workspace, &args.principal, name)?;
         let (items, next_cursor) = store.instance_activity(
             &args.workspace,
             &args.principal,
-            &lab.instance_id,
+            &cell.instance_id,
             cursor,
             *limit,
         )?;
@@ -363,7 +363,7 @@ async fn main() -> Result<()> {
         return output.show(&serde_json::json!({"items":items,"next_cursor":next_cursor}));
     }
     store
-        .authorize(&args.workspace, &args.principal, Capability::LabStatus)
+        .authorize(&args.workspace, &args.principal, Capability::CellStatus)
         .with_context(|| {
             format!(
                 "local permissions missing; run {} dev init",
@@ -371,7 +371,7 @@ async fn main() -> Result<()> {
             )
         })?;
     let runtime = environment.runtime().await?;
-    let labs = Labs::new(store, runtime, args.workspace, args.principal)
+    let cells = Cells::new(store, runtime, args.workspace, args.principal)
         .with_installation(environment.installation.clone());
     match command {
         Command::Version { .. }
@@ -397,37 +397,40 @@ async fn main() -> Result<()> {
             delete_data,
             delete_retained,
         } => {
-            let spec: LabSpec = serde_json::from_slice(&std::fs::read(file)?)?;
+            let spec: CellSpec = serde_json::from_slice(&std::fs::read(file)?)?;
             let name = name.as_deref().unwrap_or(&spec.name);
             if preview {
-                output.show(&labs.plan_edit(name, &spec, delete_data, &delete_retained)?)?;
+                output.show(&cells.plan_edit(name, &spec, delete_data, &delete_retained)?)?;
                 return Ok(());
             }
             let mut view = if delete_data || !delete_retained.is_empty() {
-                labs.edit(name, &spec, delete_data, &delete_retained)
+                cells
+                    .edit(name, &spec, delete_data, &delete_retained)
                     .await?
             } else {
-                labs.up(name, &spec).await?
+                cells.up(name, &spec).await?
             };
             let recovery = proofstorm_app::updates::start_recovery(
-                labs.runtime.clone(),
-                labs.store.clone(),
-                labs.workspace.clone(),
-                labs.principal.clone(),
+                cells.runtime.clone(),
+                cells.store.clone(),
+                cells.workspace.clone(),
+                cells.principal.clone(),
             );
             let waited = if wait == 0 {
                 Ok(None)
             } else {
                 let instance = view.runtime.as_ref().map(|status| &status.instance);
-                labs.wait(proofstorm_app::lab::WaitRequest {
-                    reference: &view.lab.instance_id,
-                    expected_instance_key: instance.map(|instance| instance.instance_key.as_str()),
-                    expected_generation: instance.map(|instance| instance.generation),
-                    target_phase: InstancePhase::Ready,
-                    timeout_seconds: wait,
-                })
-                .await
-                .map(Some)
+                cells
+                    .wait(proofstorm_app::cell::WaitRequest {
+                        reference: &view.cell.instance_id,
+                        expected_instance_key: instance
+                            .map(|instance| instance.instance_key.as_str()),
+                        expected_generation: instance.map(|instance| instance.generation),
+                        target_phase: InstancePhase::Ready,
+                        timeout_seconds: wait,
+                    })
+                    .await
+                    .map(Some)
             };
             recovery.abort();
             if let Some(waited) = waited? {
@@ -441,7 +444,7 @@ async fn main() -> Result<()> {
                     .is_some_and(|r| r.phase == InstancePhase::Ready)
             {
                 bail!(
-                    "lab has not reached Ready; inspect the reported phase and blockers before retrying"
+                    "cell has not reached Ready; inspect the reported phase and blockers before retrying"
                 );
             }
         }
@@ -454,7 +457,7 @@ async fn main() -> Result<()> {
             component_cursor,
             link_cursor,
         } => output.show(
-            &labs
+            &cells
                 .environment(&proofstorm_app::environment::EnvironmentQuery {
                     instance_id,
                     cursor,
@@ -475,15 +478,15 @@ async fn main() -> Result<()> {
                 server_restart::stop_previous(port).await?;
             }
             output.stop();
-            proofstorm_app::http::serve(labs, port).await?;
+            proofstorm_app::http::serve(cells, port).await?;
         }
-        Command::Status { name, after } => output.show(&labs.inspect(&name, after).await?)?,
+        Command::Status { name, after } => output.show(&cells.inspect(&name, after).await?)?,
         Command::Sync { name, watch } => loop {
             // Re-arm after each snapshot, but never animate during the watch interval.
             output.stop();
-            output = cli_output::Output::new(args.json, "sync", Some("Syncing lab activity"));
-            labs.sync(&name).await?;
-            output.show(&labs.inspect(&name, 0).await?)?;
+            output = cli_output::Output::new(args.json, "sync", Some("Syncing cell activity"));
+            cells.sync(&name).await?;
+            output.show(&cells.inspect(&name, 0).await?)?;
             if !watch {
                 break;
             }
@@ -501,7 +504,7 @@ async fn main() -> Result<()> {
             // Preserve retry identity before submission without interleaving with progress.
             output.stop();
             eprintln!("Request: {request_id}; reuse --request-id {request_id} if interrupted");
-            output = cli_output::Output::new(args.json, "exec", Some("Running lab command"));
+            output = cli_output::Output::new(args.json, "exec", Some("Running cell command"));
             let command = NativeCommand {
                 private_io: None,
                 script: String::new(),
@@ -516,16 +519,16 @@ async fn main() -> Result<()> {
                     fields: Vec::new(),
                 },
             };
-            let mut op = labs.exec(&name, &component, command, &request_id).await?;
+            let mut op = cells.exec(&name, &component, command, &request_id).await?;
             let deadline =
                 tokio::time::Instant::now() + Duration::from_secs(u64::from(timeout) + 30);
             while matches!(op.phase, OperationPhase::Pending | OperationPhase::Running)
                 && tokio::time::Instant::now() < deadline
             {
-                labs.sync(&name).await?;
-                op = labs
+                cells.sync(&name).await?;
+                op = cells
                     .store
-                    .operation(&labs.workspace, &labs.principal, &request_id)?;
+                    .operation(&cells.workspace, &cells.principal, &request_id)?;
                 if matches!(op.phase, OperationPhase::Pending | OperationPhase::Running) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
@@ -543,7 +546,7 @@ async fn main() -> Result<()> {
             }
         }
         Command::Down { name, wait } => output.show(
-            &labs
+            &cells
                 .down_with_progress(&name, wait, &|label| output.update(label))
                 .await?,
         )?,
@@ -554,7 +557,7 @@ async fn main() -> Result<()> {
             port,
             config,
         } => {
-            let connection = labs.connect(&name, &component, &endpoint, port).await?;
+            let connection = cells.connect(&name, &component, &endpoint, port).await?;
             connection.write_config(&config)?;
             let _config_guard = ConfigFile(config);
             output.show(&connection.descriptor)?;

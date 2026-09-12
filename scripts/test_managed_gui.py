@@ -82,7 +82,7 @@ def run(prefix, env, work, browser=False, chrome=False):
         assert not (other / ".codex").exists()
         assert str(project.resolve()) in api(record, "/v1/gui/context")[1]["recent_projects"]
         stopped = cli("gui", "stop")
-        assert stopped["stopped"] and not stopped["labs_stopped"] and not record_path.exists()
+        assert stopped["stopped"] and not stopped["cells_stopped"] and not record_path.exists()
         assert cli("gui", "stop")["reason"] == "not_running"
         # Simulate a crash's stale owner record. Only this disposable GUI record is restored.
         descriptor = os.open(record_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

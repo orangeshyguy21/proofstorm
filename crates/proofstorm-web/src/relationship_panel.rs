@@ -1,19 +1,18 @@
 use crate::{freshness::FreshnessStatus, model::sat, relationships::msat};
 use leptos::prelude::*;
-use proofstorm_view::{EnvironmentLab, SystemView};
+use proofstorm_view::{EnvironmentCell, SystemView};
 #[component]
 pub fn RelationshipPanel(
     telemetry: RwSignal<Option<SystemView>>,
-    lab: RwSignal<Option<EnvironmentLab>>,
+    cell: RwSignal<Option<EnvironmentCell>>,
     selected: RwSignal<String>,
 ) -> impl IntoView {
     let observation = Memo::new(move |_| {
-        let lab = lab.get()?;
+        let cell = cell.get()?;
         let system = telemetry.get()?;
-        let usage = system
-            .labs
-            .into_iter()
-            .find(|u| u.id == lab.id && lab.layout_id.as_deref() == Some(u.incarnation.as_str()))?;
+        let usage = system.cells.into_iter().find(|u| {
+            u.id == cell.id && cell.layout_id.as_deref() == Some(u.incarnation.as_str())
+        })?;
         usage
             .balances
             .into_iter()
@@ -62,8 +61,8 @@ pub fn RelationshipPanel(
                     let id=channel.funding_outpoint;let data=Memo::new(move |_|channels.get().and_then(|o|o.channels.into_iter().find(|c|c.funding_outpoint==id)));
                     let peer=move ||{
                         let key=data.get().map(|c|c.peer_pubkey).unwrap_or_default();
-                        let names=telemetry.get().and_then(|s|s.labs.into_iter().find(|u|lab.get().is_some_and(|l|l.id==u.id))).map(|u|u.balances.into_iter().filter(|b|b.lightning.as_ref().and_then(|o|o.node_pubkey.as_deref())==Some(key.as_str())).map(|b|b.component).collect::<Vec<_>>()).unwrap_or_default();
-                        if names.len()==1 {names[0].clone()}else{"Outside this lab".into()}
+                        let names=telemetry.get().and_then(|s|s.cells.into_iter().find(|u|cell.get().is_some_and(|l|l.id==u.id))).map(|u|u.balances.into_iter().filter(|b|b.lightning.as_ref().and_then(|o|o.node_pubkey.as_deref())==Some(key.as_str())).map(|b|b.component).collect::<Vec<_>>()).unwrap_or_default();
+                        if names.len()==1 {names[0].clone()}else{"Outside this cell".into()}
                     };
                     view!{<div class="channel-detail"><strong>{peer}</strong><small>{move ||if data.get().is_some_and(|c|c.active){"Active"}else{"Inactive"}}</small>
                         <div class="balance-row"><span>"Capacity"</span><strong>{move ||data.get().map(|c|msat(c.capacity_msat))}<small>"sat"</small></strong></div>

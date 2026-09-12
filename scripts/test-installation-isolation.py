@@ -59,13 +59,13 @@ def development_snapshot(kubectl, context, kubeconfig, env):
     command = [kubectl, "--kubeconfig", kubeconfig, "--context", context]
     pods = json.loads(run([*command, "get", "pods", "-n", "proofstorm-system",
                            "-l", "app.kubernetes.io/name=proofstormd", "-o", "json"], env).stdout)
-    instances = json.loads(run([*command, "get", "proofstormlabs", "-A", "-o", "json"], env).stdout)
+    instances = json.loads(run([*command, "get", "proofstormcells", "-A", "-o", "json"], env).stdout)
     return {
         "controllers": sorted((pod["metadata"]["uid"],
                                sorted((state["name"], state["restartCount"])
                                       for state in pod.get("status", {}).get("containerStatuses", [])))
                               for pod in pods["items"]),
-        "labs": sorted((instance["metadata"]["uid"], json.dumps(instance["spec"], sort_keys=True))
+        "cells": sorted((instance["metadata"]["uid"], json.dumps(instance["spec"], sort_keys=True))
                        for instance in instances["items"]),
     }
 
@@ -115,7 +115,7 @@ def main():
     parser.add_argument("--k3d", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--kubectl", type=Path,
-                        help="Also verify the existing development controller and lab specs")
+                        help="Also verify the existing development controller and cell specs")
     parser.add_argument("--development-context", default="k3d-proofstorm")
     args = parser.parse_args()
     env = {key: value for key, value in os.environ.items()
@@ -195,7 +195,7 @@ def main():
             report["docker_networks_and_volumes_restored"] = docker_resources(env) == original_resources
             report["preexisting_containers_unchanged"] = container_state(original_inventory, env) == original_containers
             if args.kubectl:
-                report["development_controller_and_labs_unchanged"] = development_snapshot(
+                report["development_controller_and_cells_unchanged"] = development_snapshot(
                     args.kubectl, args.development_context, original_config, env) == original_development
             args.output.write_text(json.dumps(report, indent=2) + "\n")
             print(f"Report: {args.output}", flush=True)
@@ -204,7 +204,7 @@ def main():
     assert report["docker_inventory_restored"]
     assert report["docker_networks_and_volumes_restored"]
     assert report["preexisting_containers_unchanged"]
-    assert report.get("development_controller_and_labs_unchanged", True)
+    assert report.get("development_controller_and_cells_unchanged", True)
 
 
 if __name__ == "__main__":

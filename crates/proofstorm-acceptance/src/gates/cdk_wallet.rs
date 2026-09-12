@@ -8,7 +8,7 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 
 const INSTANCE: &str = "cdk-wallet-instance";
 const EXPERIMENT: &str = "cdk-wallet-experiment";
@@ -20,12 +20,12 @@ fn document(input_fee_ppk: u64) -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cdk-wallet-checkpoint",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}},
-            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
+            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.0","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":input_fee_ppk}},
-            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}},
-            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}}
+            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}},
+            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],
         "links":[
             {"id":"mint-chain","kind":"chain_backend","from":"mint-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
@@ -66,7 +66,7 @@ fn operation(
     args: Value,
 ) -> Result<Value> {
     client.call(tool, scoped(id, args))?;
-    let result = match lab::wait_operation(client, id, 60) {
+    let result = match cell::wait_operation(client, id, 60) {
         Ok(result) => result,
         Err(error) => {
             if let Ok(failed) = client.call("operation_status", json!({"operation_id": id})) {
@@ -76,7 +76,7 @@ fn operation(
         }
     };
     save(directory, id, &result)?;
-    Ok(lab::artifact_content(&result)?.clone())
+    Ok(cell::artifact_content(&result)?.clone())
 }
 
 fn native(
@@ -210,7 +210,7 @@ fn exercise(
         json!({"operation_id":"interrupted-funding","timeout_seconds":30}),
     )?;
     save(directory, "funding-cancelled", &cancelled)?;
-    let cancelled = lab::artifact_content(&cancelled)?;
+    let cancelled = cell::artifact_content(&cancelled)?;
     if cancelled.get("cancelled") != Some(&json!(true))
         || cancelled.get("cleanup_verified") != Some(&json!(true))
     {
@@ -290,7 +290,7 @@ fn exercise(
                 "restart-wallet-a",
                 json!({"component":"wallet-a"}),
             )?;
-            lab::wait_ready(client, INSTANCE)?;
+            cell::wait_ready(client, INSTANCE)?;
             let identity = native(
                 client,
                 directory,
@@ -493,9 +493,9 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
     // Idempotent transport replay must preserve the original receipt, not
     // perform another potentially fee-bearing native attempt.
     client.call("component_exec_live", scoped(id, args))?;
-    let replay = lab::wait_operation(client, id, 60)?;
+    let replay = cell::wait_operation(client, id, 60)?;
     save(directory, &format!("{id}-idempotent-replay"), &replay)?;
-    if lab::artifact_content(&replay)? != &receipt {
+    if cell::artifact_content(&replay)? != &receipt {
         bail!("idempotent native replay changed the terminal receipt");
     }
     let expected_reason = if id == "already-paid-invoice" {
@@ -533,21 +533,21 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &capabilities,
     )?;
     client.call(
-        "lab_create",
-        json!({"draft_id":"cdk-wallet","lab":document(input_fee_ppk),"idempotency_key":"create"}),
+        "cell_create",
+        json!({"draft_id":"cdk-wallet","cell":document(input_fee_ppk),"idempotency_key":"create"}),
     )?;
-    let published = client.call("lab_publish",json!({"draft_id":"cdk-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published = client.call("cell_publish",json!({"draft_id":"cdk-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
     save(&directory, "published", &published)?;
-    let locked = lab::lock_entry(&published, "cdk-cli-wallet")?;
+    let locked = cell::lock_entry(&published, "cdk-cli-wallet")?;
     if locked.pointer("/build_provenance/commit_sha")
         != Some(&json!("d3dec24c784e8fec1fd65f853241c7a2261c7abd"))
     {
         bail!("wallet lock omitted source provenance");
     }
-    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
     // Always attempt normal cleanup after materialization, including failed gates.
     let result = (|| -> Result<()> {
-        let ready = lab::wait_ready(&mut client, INSTANCE)?;
+        let ready = cell::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
         client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
@@ -583,8 +583,8 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &json!({"passed": result.is_ok(),
         "error": result.as_ref().err().map(|error| format!("{error:#}"))}),
     )?;
-    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
         bail!("cleanup did not prove absence: {closed}");

@@ -6,12 +6,12 @@ use kube::{
     api::{DeleteParams, Patch, PatchParams},
 };
 use proofstorm_core::{
-    InstancePhase, LabInstance, LabInstanceStatus, LabOperation, OperationPhase,
+    CellInstance, CellInstanceStatus, CellOperation, InstancePhase, OperationPhase,
     PrivateAccessGrant, PublishedRevision, TeardownReceipt as CoreTeardownReceipt,
 };
 use proofstorm_kube::{
-    ACTION_CANCEL_ANNOTATION, ActionPhase, LabAction, LabPhase, ProofstormLab, ProofstormLabAction,
-    ProofstormLabActionSpec, ProofstormLabSpec,
+    ACTION_CANCEL_ANNOTATION, ActionPhase, CellAction, CellPhase, ProofstormCell,
+    ProofstormCellAction, ProofstormCellActionSpec, ProofstormCellSpec,
 };
 use std::collections::BTreeMap;
 
@@ -27,7 +27,7 @@ impl Runtime {
         &self,
         workspace: &str,
     ) -> Result<std::collections::BTreeSet<String>, Error> {
-        let api = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
+        let api = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
         let resources = tokio::time::timeout(
             std::time::Duration::from_secs(3),
             api.list(&kube::api::ListParams::default()),
@@ -42,8 +42,8 @@ impl Runtime {
         Ok(resources
             .items
             .into_iter()
-            .filter(|lab| lab.spec.workspace_id == workspace)
-            .map(|lab| lab.spec.instance_id)
+            .filter(|cell| cell.spec.workspace_id == workspace)
+            .map(|cell| cell.spec.instance_id)
             .collect())
     }
 
@@ -78,24 +78,24 @@ impl Runtime {
     }
     async fn private_access_once(&self, grant: &PrivateAccessGrant) -> Result<(), Error> {
         use proofstorm_core::private_io::PRIVATE_ACCESS_ANNOTATION;
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        let matches = labs
+        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        let matches = cells
             .list(&kube::api::ListParams::default())
             .await
             .map_err(kube_error)?
             .items
             .into_iter()
-            .filter(|lab| {
-                lab.spec.workspace_id == grant.workspace_id
-                    && lab.spec.instance_id == grant.instance_id
+            .filter(|cell| {
+                cell.spec.workspace_id == grant.workspace_id
+                    && cell.spec.instance_id == grant.instance_id
             })
             .collect::<Vec<_>>();
-        let [lab] = matches.as_slice() else {
-            return Err(invalid_operation("private access lab unavailable"));
+        let [cell] = matches.as_slice() else {
+            return Err(invalid_operation("private access cell unavailable"));
         };
-        proofstorm_kube::require_open_lab(lab)
+        proofstorm_kube::require_open_cell(cell)
             .map_err(|e| Error::problem(e.code(), e.to_string()))?;
-        let mut grants: BTreeMap<String, PrivateAccessGrant> = lab
+        let mut grants: BTreeMap<String, PrivateAccessGrant> = cell
             .annotations()
             .get(PRIVATE_ACCESS_ANNOTATION)
             .map(|s| serde_json::from_str(s))
@@ -124,23 +124,23 @@ impl Runtime {
                 "private access registry exceeds runtime metadata capacity",
             ));
         }
-        labs.patch(&lab.name_any(),&PatchParams::default(),&Patch::Merge(serde_json::json!({"metadata":{"resourceVersion":lab.resource_version(),"annotations":{PRIVATE_ACCESS_ANNOTATION:encoded}}}))).await.map_err(kube_error)?;
+        cells.patch(&cell.name_any(),&PatchParams::default(),&Patch::Merge(serde_json::json!({"metadata":{"resourceVersion":cell.resource_version(),"annotations":{PRIVATE_ACCESS_ANNOTATION:encoded}}}))).await.map_err(kube_error)?;
         Ok(())
     }
     pub async fn apply_action(
         &self,
-        instance: &LabInstance,
-        action: &ProofstormLabAction,
+        instance: &CellInstance,
+        action: &ProofstormCellAction,
     ) -> Result<(), Error> {
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        let lab = labs
+        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        let cell = cells
             .get(&instance.resource_name)
             .await
             .map_err(kube_error)?;
-        proofstorm_kube::require_open_lab(&lab)
+        proofstorm_kube::require_open_cell(&cell)
             .map_err(|error| coded_invalid_request(error.code(), error.to_string()))?;
         let actions =
-            Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
+            Api::<ProofstormCellAction>::namespaced(self.client.clone(), &self.control_namespace);
         let name = action.metadata.name.as_deref().ok_or_else(|| {
             Error::failure(
                 "typed action has no resource name",
@@ -168,16 +168,16 @@ impl Runtime {
     }
     pub async fn action_status(
         &self,
-        operation: &LabOperation,
+        operation: &CellOperation,
     ) -> Result<Option<(OperationPhase, serde_json::Value)>, Error> {
         let actions =
-            Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
+            Api::<ProofstormCellAction>::namespaced(self.client.clone(), &self.control_namespace);
         let Some(action) = actions
             .get_opt(&operation.resource_name)
             .await
             .map_err(kube_error)?
         else {
-            // The runtime resource is gone (lab closed, or garbage collected)
+            // The runtime resource is gone (cell closed, or garbage collected)
             // before the journal saw a terminal phase. A running operation
             // whose resource vanished is a terminal outcome, never a live
             // one; a pending operation may simply not be applied yet.
@@ -189,16 +189,16 @@ impl Runtime {
         };
         Ok(terminal_action_observation(
             status,
-            matches!(action.spec.action, LabAction::ComponentExecLive(_)),
+            matches!(action.spec.action, CellAction::ComponentExecLive(_)),
         ))
     }
     pub async fn request_action_cancellation(
         &self,
-        operation: &LabOperation,
+        operation: &CellOperation,
         token: &str,
     ) -> Result<bool, Error> {
         let actions =
-            Api::<ProofstormLabAction>::namespaced(self.client.clone(), &self.control_namespace);
+            Api::<ProofstormCellAction>::namespaced(self.client.clone(), &self.control_namespace);
         let Some(action) = actions
             .get_opt(&operation.resource_name)
             .await
@@ -241,48 +241,48 @@ impl Runtime {
     }
     pub async fn materialize(
         &self,
-        instance: LabInstance,
+        instance: CellInstance,
         revision: PublishedRevision,
-    ) -> Result<LabInstanceStatus, Error> {
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        let mut resource = ProofstormLab::new(
+    ) -> Result<CellInstanceStatus, Error> {
+        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        let mut resource = ProofstormCell::new(
             &instance.resource_name,
-            ProofstormLabSpec {
+            ProofstormCellSpec {
                 workspace_id: instance.workspace_id.clone(),
                 instance_id: instance.id.clone(),
                 instance_key: instance.instance_key.clone(),
                 revision_digest: instance.revision_digest.clone(),
                 lock: revision.lock,
-                lab: revision.lab,
+                cell: revision.cell,
             },
         );
         resource.metadata.namespace = Some(self.control_namespace.clone());
-        if let Some(existing) = labs
+        if let Some(existing) = cells
             .get_opt(&instance.resource_name)
             .await
             .map_err(kube_error)?
         {
-            proofstorm_kube::require_open_lab(&existing)
+            proofstorm_kube::require_open_cell(&existing)
                 .map_err(|e| coded_invalid_request(e.code(), e.to_string()))?;
             if existing.spec != resource.spec {
                 return Err(coded_invalid_request(
-                    "lab_update_conflict",
+                    "cell_update_conflict",
                     "Existing desired configuration differs; resume the accepted update instead of materializing an older revision",
                 ));
             }
             crate::updates::snapshot(self, &existing).await?;
             return Ok(status_from_resource(instance, &existing));
         }
-        let applied = labs
+        let applied = cells
             .create(&kube::api::PostParams::default(), &resource)
             .await
             .map_err(kube_error)?;
         crate::updates::snapshot(self, &applied).await?;
         Ok(status_from_resource(instance, &applied))
     }
-    pub async fn status(&self, instance: LabInstance) -> Result<LabInstanceStatus, Error> {
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        if let Some(resource) = labs
+    pub async fn status(&self, instance: CellInstance) -> Result<CellInstanceStatus, Error> {
+        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        if let Some(resource) = cells
             .get_opt(&instance.resource_name)
             .await
             .map_err(kube_error)?
@@ -293,7 +293,7 @@ impl Runtime {
             {
                 return Err(Error::problem(
                     "stale_incarnation",
-                    "Runtime resource belongs to a different lab incarnation",
+                    "Runtime resource belongs to a different cell incarnation",
                 ));
             }
             return Ok(status_from_resource(instance, &resource));
@@ -304,14 +304,14 @@ impl Runtime {
         let Some(receipt) = receipt else {
             return Err(Error::missing(
                 format!(
-                    "lab instance {:?} has no runtime resource or teardown receipt",
+                    "cell instance {:?} has no runtime resource or teardown receipt",
                     instance.id
                 ),
                 Some(serde_json::json!({"code": "runtime_not_found"})),
             ));
         };
         let data = receipt.data.unwrap_or_default();
-        Ok(LabInstanceStatus {
+        Ok(CellInstanceStatus {
             observed_generation: 0,
             observed_revision_digest: String::new(),
             last_converged_revision: None,
@@ -332,7 +332,7 @@ impl Runtime {
             message: None,
         })
     }
-    pub async fn close(&self, instance: LabInstance) -> Result<LabInstanceStatus, Error> {
+    pub async fn close(&self, instance: CellInstance) -> Result<CellInstanceStatus, Error> {
         let mut status = match self.status(instance.clone()).await {
             Ok(status) => status,
             Err(error) if error.kind == crate::ErrorKind::Missing => {
@@ -343,29 +343,30 @@ impl Runtime {
         if status.phase == InstancePhase::Closed {
             return Ok(status);
         }
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
-        if let Some(resource) = labs.get_opt(&instance.resource_name).await? {
+        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        if let Some(resource) = cells.get_opt(&instance.resource_name).await? {
             if resource.spec.instance_key != instance.instance_key {
                 return Err(Error::problem(
                     "stale_incarnation",
-                    "Lab incarnation changed",
+                    "Cell incarnation changed",
                 ));
             }
             let uid = resource
                 .uid()
-                .ok_or_else(|| Error::problem("runtime_identity_missing", "Lab UID missing"))?;
-            labs.delete(
-                &instance.resource_name,
-                &DeleteParams {
-                    preconditions: Some(kube::api::Preconditions {
-                        uid: Some(uid),
-                        resource_version: resource.resource_version(),
-                    }),
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(kube_error)?;
+                .ok_or_else(|| Error::problem("runtime_identity_missing", "Cell UID missing"))?;
+            cells
+                .delete(
+                    &instance.resource_name,
+                    &DeleteParams {
+                        preconditions: Some(kube::api::Preconditions {
+                            uid: Some(uid),
+                            resource_version: resource.resource_version(),
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(kube_error)?;
         }
         status.phase = InstancePhase::Closing;
         status.message = Some("deleting instance namespace and verifying absence".into());
@@ -374,10 +375,10 @@ impl Runtime {
 
     /// Verify both runtime identity and namespace absence when startup never
     /// reached the controller, so there is no controller teardown receipt.
-    pub async fn verify_absent(&self, instance: LabInstance) -> Result<LabInstanceStatus, Error> {
-        let labs = Api::<ProofstormLab>::namespaced(self.client.clone(), &self.control_namespace);
+    pub async fn verify_absent(&self, instance: CellInstance) -> Result<CellInstanceStatus, Error> {
+        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
         let namespace = proofstorm_kube::instance_namespace(&instance.instance_key);
-        if labs.get_opt(&instance.resource_name).await?.is_some()
+        if cells.get_opt(&instance.resource_name).await?.is_some()
             || Api::<Namespace>::all(self.client.clone())
                 .get_opt(&namespace)
                 .await?
@@ -388,7 +389,7 @@ impl Runtime {
                 "runtime resource or instance namespace still exists",
             ));
         }
-        Ok(LabInstanceStatus {
+        Ok(CellInstanceStatus {
             observed_generation: 0,
             observed_revision_digest: String::new(),
             last_converged_revision: None,
@@ -411,31 +412,34 @@ impl Runtime {
     }
 }
 #[must_use]
-pub fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> LabInstanceStatus {
+pub fn status_from_resource(
+    instance: CellInstance,
+    resource: &ProofstormCell,
+) -> CellInstanceStatus {
     let mut status = resource.status.clone().unwrap_or_default();
     if status.observed_desired_generation != instance.generation
         || status.observed_revision_digest != instance.revision_digest
         || status.observed_generation != resource.metadata.generation
     {
-        if status.phase == LabPhase::Ready {
-            status.phase = LabPhase::Pending;
+        if status.phase == CellPhase::Ready {
+            status.phase = CellPhase::Pending;
         }
-        if status.phase != LabPhase::Blocked {
-            status.message = Some("Reconciling the desired lab revision; readiness from an older generation is not completion.".into());
+        if status.phase != CellPhase::Blocked {
+            status.message = Some("Reconciling the desired cell revision; readiness from an older generation is not completion.".into());
         }
     }
-    LabInstanceStatus {
+    CellInstanceStatus {
         observed_generation: status.observed_desired_generation,
         observed_revision_digest: status.observed_revision_digest,
         last_converged_revision: status.last_converged_revision,
         retained_storage: status.retained_storage,
         instance,
         phase: match status.phase {
-            LabPhase::Pending => InstancePhase::Pending,
-            LabPhase::Blocked => InstancePhase::Blocked,
-            LabPhase::Ready => InstancePhase::Ready,
-            LabPhase::Closing => InstancePhase::Closing,
-            LabPhase::CleanupBlocked => InstancePhase::CleanupBlocked,
+            CellPhase::Pending => InstancePhase::Pending,
+            CellPhase::Blocked => InstancePhase::Blocked,
+            CellPhase::Ready => InstancePhase::Ready,
+            CellPhase::Closing => InstancePhase::Closing,
+            CellPhase::CleanupBlocked => InstancePhase::CleanupBlocked,
         },
         instance_namespace: status.instance_namespace.unwrap_or_default(),
         components: status.components,
@@ -451,7 +455,7 @@ pub fn status_from_resource(instance: LabInstance, resource: &ProofstormLab) -> 
 }
 #[must_use]
 pub fn terminal_action_observation(
-    status: proofstorm_kube::ProofstormLabActionStatus,
+    status: proofstorm_kube::ProofstormCellActionStatus,
     native: bool,
 ) -> Option<(OperationPhase, serde_json::Value)> {
     let (phase, fallback) = match status.phase {
@@ -486,7 +490,7 @@ pub fn terminal_action_observation(
     ))
 }
 #[must_use]
-pub fn missing_action_artifact(operation: &LabOperation) -> serde_json::Value {
+pub fn missing_action_artifact(operation: &CellOperation) -> serde_json::Value {
     serde_json::json!({
         "code": "action_runtime_not_found",
         "resource_name": operation.resource_name,
@@ -505,15 +509,15 @@ fn kube_error(error: kube::Error) -> Error {
 #[must_use]
 pub fn runtime_action_resource(
     control_namespace: &str,
-    instance: &LabInstance,
-    operation: &LabOperation,
-    action: LabAction,
-) -> ProofstormLabAction {
-    let mut resource = ProofstormLabAction::new(
+    instance: &CellInstance,
+    operation: &CellOperation,
+    action: CellAction,
+) -> ProofstormCellAction {
+    let mut resource = ProofstormCellAction::new(
         &operation.resource_name,
-        ProofstormLabActionSpec {
+        ProofstormCellActionSpec {
             access_scope: None,
-            lab_name: instance.resource_name.clone(),
+            cell_name: instance.resource_name.clone(),
             workspace_id: operation.workspace_id.clone(),
             instance_id: operation.instance_id.clone(),
             instance_key: instance.instance_key.clone(),
@@ -539,7 +543,7 @@ pub fn runtime_action_resource(
             instance.instance_key.clone(),
         ),
         (
-            "proofstorm.dev/lab".to_owned(),
+            "proofstorm.dev/cell".to_owned(),
             instance.resource_name.clone(),
         ),
         (

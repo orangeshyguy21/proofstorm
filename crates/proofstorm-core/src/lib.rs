@@ -17,7 +17,7 @@ mod schema;
 mod update;
 mod validation;
 mod wallet_builds;
-pub use update::{LabChanges, LabUpdatePlan, LabUpdateTarget};
+pub use update::{CellChanges, CellUpdatePlan, CellUpdateTarget};
 
 pub use backend::{
     BackendContractRegistry, BitcoinCoreConfig, CdkMintConfig, ClnConfig, ComponentBackendContract,
@@ -56,13 +56,13 @@ pub use experiment::{
     Session, SessionPhase,
 };
 pub use instance::{
-    ComponentCondition, ComponentStatus, InstancePhase, InventoryEntry, LabInstance,
-    LabInstanceStatus, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, TeardownReceipt,
+    CellInstance, CellInstanceStatus, ComponentCondition, ComponentStatus, InstancePhase,
+    InventoryEntry, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, TeardownReceipt,
 };
 pub use model::{
-    API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, ComponentKind, ComponentSpec,
-    ControlClass, DatabaseRole, DependencyBinding, LabLimits, LabPolicy, LabSpec, LinkKind,
-    LinkSpec, PaymentMethod, ValidateLabRequest,
+    API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, CellLimits, CellPolicy,
+    CellSpec, ComponentKind, ComponentSpec, ControlClass, DatabaseRole, DependencyBinding,
+    LinkKind, LinkSpec, PaymentMethod, ValidateCellRequest,
 };
 pub use mutation::{DraftMutation, apply_draft_mutation};
 pub use network::{
@@ -70,10 +70,10 @@ pub use network::{
     NetworkFaultBackend, NetworkFaultBounds, NetworkFaultDirection, NetworkFaultFeature,
     network_policy_fault_backend,
 };
-pub use operation::{LabOperation, OperationArtifact, OperationKind, OperationPhase};
+pub use operation::{CellOperation, OperationArtifact, OperationKind, OperationPhase};
 pub use publication::{
     EFFECTIVE_CONFIG_DIGEST_VERSION, LOCK_API_VERSION, LockEntry, PublishedRevision,
-    ROLLOUT_DIGEST_VERSION, ResolvedLock, digest_json, publication_digest, resolve_effective_lab,
+    ROLLOUT_DIGEST_VERSION, ResolvedLock, digest_json, publication_digest, resolve_effective_cell,
     resolve_lock,
 };
 pub use quote::{
@@ -81,7 +81,7 @@ pub use quote::{
     WalletQuoteObservationRole, wallet_quote_observations_from_artifact,
 };
 pub use schema::schema_documents;
-pub use validation::{ValidationIssue, ValidationReport, validate_lab};
+pub use validation::{ValidationIssue, ValidationReport, validate_cell};
 pub mod native;
 
 pub mod private_io;

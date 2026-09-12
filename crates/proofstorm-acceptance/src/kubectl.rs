@@ -195,18 +195,18 @@ impl Kubectl {
         Ok(())
     }
 
-    /// Assert no lab action resource survived close.
-    pub fn assert_no_lab_actions(&self) -> Result<()> {
+    /// Assert no cell action resource survived close.
+    pub fn assert_no_cell_actions(&self) -> Result<()> {
         let names = self.run(&[
             "get",
-            "proofstormlabactions.proofstorm.dev",
+            "proofstormcellactions.proofstorm.dev",
             "-n",
             CONTROL_NAMESPACE,
             "-o",
             "name",
         ])?;
         if !names.is_empty() {
-            bail!("ProofstormLabActions remain after verified close: {names}");
+            bail!("ProofstormCellActions remain after verified close: {names}");
         }
         Ok(())
     }

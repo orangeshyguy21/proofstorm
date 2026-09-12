@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 
 const INSTANCE: &str = "mint-management";
 const EXPERIMENT: &str = "mint-management-experiment";
@@ -12,8 +12,8 @@ const MINTS: &[&str] = &["cdk", "cdk-ldk", "cdk-bdk", "nutshell"];
 
 fn document() -> Value {
     let mut components = vec![
-        json!({"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}}),
-        json!({"id":"lightning","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}}),
+        json!({"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}),
+        json!({"id":"lightning","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}}),
     ];
     let mut links = vec![
         json!({"id":"lightning-chain","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}),
@@ -75,7 +75,7 @@ fn execute(client: &mut McpClient, component: &str, id: &str, mut command: Value
         "operation_wait",
         json!({"operation_id":id,"timeout_seconds":120}),
     )?;
-    let content = lab::artifact_content(&finished)?.clone();
+    let content = cell::artifact_content(&finished)?.clone();
     if finished["phase"] != "succeeded" || content["cleanup_verified"] != true {
         bail!("management execution failed: {finished}");
     }
@@ -131,16 +131,16 @@ pub fn run(context: &GateContext) -> Result<()> {
         &capabilities,
     )?;
     client.call(
-        "lab_create",
-        json!({"draft_id":INSTANCE,"lab":document(),"idempotency_key":"create"}),
+        "cell_create",
+        json!({"draft_id":INSTANCE,"cell":document(),"idempotency_key":"create"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id":INSTANCE,"expected_version":1,"idempotency_key":"publish"}),
     )?;
-    client.call("lab_materialize", json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    client.call("cell_materialize", json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
     let result = (|| -> Result<()> {
-        let ready = lab::wait_ready(&mut client, INSTANCE)?;
+        let ready = cell::wait_ready(&mut client, INSTANCE)?;
         let namespace = expect::string(&ready, "/instance_namespace")?;
         client.call("experiment_create", json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
@@ -231,8 +231,8 @@ cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir "$dir" get-info
 
             let restart = format!("{component}-restart");
             client.call("component_restart", json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":SESSION,"operation_id":restart,"idempotency_key":restart,"component":component}))?;
-            lab::wait_succeeded(&mut client, &restart)?;
-            lab::wait_ready(&mut client, INSTANCE)?;
+            cell::wait_succeeded(&mut client, &restart)?;
+            cell::wait_ready(&mut client, INSTANCE)?;
             if fingerprint != secret_fingerprint(context, namespace, component)? {
                 bail!("restart rotated management credentials");
             }
@@ -248,7 +248,7 @@ cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir "$dir" get-info
                 expected,
             )?;
         }
-        // Same-lab traffic is allowed by network policy. A pod-IP refusal proves
+        // Same-cell traffic is allowed by network policy. A pod-IP refusal proves
         // the management listener itself is bound to loopback, not merely hidden by DNS.
         let pods = context
             .kubectl
@@ -303,10 +303,10 @@ cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir "$dir" get-info
     if let Err(error) = &result {
         eprintln!("Management checks failed before teardown: {error:#}");
     }
-    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
-        bail!("management lab teardown was not verified");
+        bail!("management cell teardown was not verified");
     }
     result?;
     println!(

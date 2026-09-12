@@ -234,7 +234,7 @@ BEFORE_NAMESPACES="$RUN_ROOT/namespaces-before.json"
 AFTER_NAMESPACES="$RUN_ROOT/namespaces-after.json"
 "$KUBECTL" --context k3d-proofstorm get namespaces \
   -l proofstorm.dev/instance -o json >"$BEFORE_NAMESPACES"
-# The idle guard above requires no existing lab or candidate workloads.
+# The idle guard above requires no existing cell or candidate workloads.
 
 DATABASE="$RUN_ROOT/proofstorm.sqlite3"
 CONFIG="$RUN_ROOT/opencode.json"
@@ -289,7 +289,7 @@ SOURCE_DIRTY="$(git -C "$ROOT" status --porcelain=v1 | wc -l | tr -d '[:space:]'
 BINARY_DIGEST="$(shasum -a 256 "$ROOT/target/release/proofstorm-mcp" | awk '{print $1}')"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 STARTED_EPOCH="$(date +%s)"
-PROMPT="$PROMPT Absolute budget (Unix seconds): start=$STARTED_EPOCH, cleanup=$(( STARTED_EPOCH + MAX_SECONDS * 80 / 100 )), hard_stop=$(( STARTED_EPOCH + MAX_SECONDS )). Tool responses include _benchmark_budget with current time, phase and remaining seconds. On cleanup phase, immediately stop waiting for experimental completion and cancel remaining work; then finish teardown and reporting. Work-phase observation waits are shortened at the cleanup boundary. During cleanup, lab_wait with target_phase=closed may retain a requested valid wait up to 60 seconds while leaving 30 seconds before the hard deadline for reporting; once inside that margin it uses the server minimum of one second. Other cleanup waits remain at most 10 seconds; execution deadlines and admission are unchanged. Call lab_close, then lab_wait with target_phase=closed and a requested timeout of 60 to verify absence economically. Do not spend cleanup steps updating todo lists; finish the actual report before the hard cap."
+PROMPT="$PROMPT Absolute budget (Unix seconds): start=$STARTED_EPOCH, cleanup=$(( STARTED_EPOCH + MAX_SECONDS * 80 / 100 )), hard_stop=$(( STARTED_EPOCH + MAX_SECONDS )). Tool responses include _benchmark_budget with current time, phase and remaining seconds. On cleanup phase, immediately stop waiting for experimental completion and cancel remaining work; then finish teardown and reporting. Work-phase observation waits are shortened at the cleanup boundary. During cleanup, cell_wait with target_phase=closed may retain a requested valid wait up to 60 seconds while leaving 30 seconds before the hard deadline for reporting; once inside that margin it uses the server minimum of one second. Other cleanup waits remain at most 10 seconds; execution deadlines and admission are unchanged. Call cell_close, then cell_wait with target_phase=closed and a requested timeout of 60 to verify absence economically. Do not spend cleanup steps updating todo lists; finish the actual report before the hard cap."
 
 # Enforce the cleanup boundary at every MCP tool call, including reconnects.
 jq --arg proxy "$ROOT/scripts/native-execution-proxy.py" \
@@ -373,7 +373,7 @@ OPENCODE_PID=$!
     EQUIVALENT_PLANS="$(
       jq -rs '
         [.[]
-         | select(.type == "tool_use" and (.part.tool | endswith("lab_plan")))
+         | select(.type == "tool_use" and (.part.tool | endswith("cell_plan")))
          | .part.state.input
          | del(.plan_id, .idempotency_key)]
         | group_by(.)
@@ -403,7 +403,7 @@ OPENCODE_PID=$!
       exit 0
     fi
     if [[ "$EQUIVALENT_PLANS" -ge "$MAX_EQUIVALENT_PLANS" ]]; then
-      printf 'repeated_equivalent_lab_plan:%s\n' "$EQUIVALENT_PLANS" >"$STOP_REASON"
+      printf 'repeated_equivalent_cell_plan:%s\n' "$EQUIVALENT_PLANS" >"$STOP_REASON"
       kill -TERM "$OPENCODE_PID" 2>/dev/null || true
       sleep 10
       kill -KILL "$OPENCODE_PID" 2>/dev/null || true
@@ -568,11 +568,11 @@ jq -s \
        cache_write: (step_events | map(.part.tokens.cache.write // 0) | add // 0)
      },
      workflow: {
-       lab_materializations: (
-         completed_tool_count("pst_lab_materialize")
-         + completed_tool_count("pst_lab_apply")
+       cell_materializations: (
+         completed_tool_count("pst_cell_materialize")
+         + completed_tool_count("pst_cell_apply")
        ),
-       whole_document_edits: tool_count("pst_lab_edit"),
+       whole_document_edits: tool_count("pst_cell_edit"),
        raw_exec_calls: (
          tool_count("pst_component_exec_live")
          + tool_count("pst_component_forensics")
@@ -609,7 +609,7 @@ jq -s \
           | length),
        equivalent_plan_repeats_max:
          ([tool_events[]
-           | select(.part.tool | endswith("lab_plan"))
+           | select(.part.tool | endswith("cell_plan"))
            | .part.state.input
            | del(.plan_id, .idempotency_key)]
           | group_by(.)
@@ -638,7 +638,7 @@ jq -s \
           | length),
        exact_version_published:
          ([durable_candidate_builds[] as $build
-           | published_revisions[].lab.components[]
+           | published_revisions[].cell.components[]
            | select(
                .implementation == $build.implementation
                and .version == $build.version)]
@@ -656,7 +656,7 @@ jq -s \
                and .source.commit_sha == $build.commit_sha)]
           | length),
        requested_lightning_version_published:
-         ([published_revisions[].lab.components[]
+         ([published_revisions[].cell.components[]
            | select(
                .implementation == "lnd"
                and .version == ($inputs.lightning_version // ""))]
@@ -700,8 +700,8 @@ jq -n \
         end
       ),
       materialization_count_met: (
-        $metrics[0].workflow.lab_materializations >= $expectations.materializations_min
-        and $metrics[0].workflow.lab_materializations <= $expectations.materializations_max
+        $metrics[0].workflow.cell_materializations >= $expectations.materializations_min
+        and $metrics[0].workflow.cell_materializations <= $expectations.materializations_max
       ),
       candidate_build_count_met:
         ($metrics[0].candidate.builds >= ($expectations.candidate_builds_min // 0)),
@@ -748,7 +748,7 @@ jq -n \
       wait_timeouts: $metrics[0].workflow.wait_timeouts,
       raw_exec_calls: $metrics[0].workflow.raw_exec_calls,
       extra_materializations: (
-        [$metrics[0].workflow.lab_materializations - $expectations.materializations_max, 0]
+        [$metrics[0].workflow.cell_materializations - $expectations.materializations_max, 0]
         | max
       ),
       equivalent_plan_repeats_max:

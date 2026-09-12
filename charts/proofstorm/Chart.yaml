@@ -1,6 +1,6 @@
 apiVersion: v2
 name: proofstorm
-description: Proofstorm MCP-native protocol laboratory controller
+description: Proofstorm MCP-native protocol cell controller
 type: application
 version: 0.1.0-alpha.3
 appVersion: 0.1.0-alpha.3

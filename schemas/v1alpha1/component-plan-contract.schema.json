@@ -688,7 +688,7 @@
           "type": "string"
         },
         "id": {
-          "description": "Stable binding identity within one lab revision.",
+          "description": "Stable binding identity within one cell revision.",
           "type": "string"
         },
         "kind": {

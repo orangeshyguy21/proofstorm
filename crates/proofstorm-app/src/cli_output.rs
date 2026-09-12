@@ -154,7 +154,7 @@ fn human(command: &str, value: &Value) -> String {
             text
         }
         "stop" => format!(
-            "GUI {}. Labs keep running.\n",
+            "GUI {}. Cells keep running.\n",
             if value["stopped"] == true {
                 "stopped"
             } else {
@@ -177,16 +177,16 @@ fn human(command: &str, value: &Value) -> String {
         "install" => installation_summary(value),
         "connect" => format!(
             "Connected to {}/{}: {}\nCtrl-C to disconnect.\n",
-            field(value, "lab"),
+            field(value, "cell"),
             field(value, "component"),
             field(value, "url")
         ),
-        "environment" => labs_summary(value),
-        "down" if value["lab"]["phase"] == "closed" => format!(
-            "Removed lab {}.\nDeleted its workloads, storage, and activity history.\n",
-            field(&value["lab"], "name")
+        "environment" => cells_summary(value),
+        "down" if value["cell"]["phase"] == "closed" => format!(
+            "Removed cell {}.\nDeleted its workloads, storage, and activity history.\n",
+            field(&value["cell"], "name")
         ),
-        "up" | "down" | "status" | "sync" if value.get("lab").is_some() => lab_summary(value),
+        "up" | "down" | "status" | "sync" if value.get("cell").is_some() => cell_summary(value),
         "ops-list" => {
             let mut text = String::new();
             if let Some(items) = value["items"].as_array() {
@@ -237,44 +237,44 @@ fn installation_summary(value: &Value) -> String {
     text
 }
 
-fn labs_summary(value: &Value) -> String {
+fn cells_summary(value: &Value) -> String {
     use std::fmt::Write;
 
     let mut text = String::new();
-    if let Some(labs) = value["labs"]["items"].as_array() {
-        if labs.is_empty() {
-            text.push_str("No labs.\n");
+    if let Some(cells) = value["cells"]["items"].as_array() {
+        if cells.is_empty() {
+            text.push_str("No cells.\n");
         }
-        for lab in labs {
+        for cell in cells {
             let _ = writeln!(
                 text,
                 "{}: {} ({})",
-                lab["handle"]["name"]
+                cell["handle"]["name"]
                     .as_str()
-                    .unwrap_or_else(|| field(lab, "id")),
-                lab["runtime"]["phase"].as_str().unwrap_or("unknown"),
-                field(&lab["runtime"], "state")
+                    .unwrap_or_else(|| field(cell, "id")),
+                cell["runtime"]["phase"].as_str().unwrap_or("unknown"),
+                field(&cell["runtime"], "state")
             );
             for key in ["error", "message"] {
-                describe(&mut text, key, &lab["runtime"][key], 2);
+                describe(&mut text, key, &cell["runtime"][key], 2);
             }
-            describe(&mut text, "read error", &lab["read_error"], 2);
+            describe(&mut text, "read error", &cell["read_error"], 2);
         }
     }
-    describe(&mut text, "next cursor", &value["labs"]["next_cursor"], 0);
+    describe(&mut text, "next cursor", &value["cells"]["next_cursor"], 0);
     text
 }
 
-fn lab_summary(value: &Value) -> String {
+fn cell_summary(value: &Value) -> String {
     use std::fmt::Write;
 
     let runtime = &value["runtime"];
     let mut text = format!(
-        "Lab {}: {}\n",
-        field(&value["lab"], "name"),
+        "Cell {}: {}\n",
+        field(&value["cell"], "name"),
         runtime["phase"]
             .as_str()
-            .unwrap_or_else(|| field(&value["lab"], "phase"))
+            .unwrap_or_else(|| field(&value["cell"], "phase"))
     );
     for key in ["message", "retained_storage"] {
         describe(&mut text, key, &runtime[key], 0);
@@ -387,11 +387,11 @@ mod tests {
 
     #[test]
     fn failures_and_dry_runs_keep_actionable_details() {
-        let lab = human(
+        let cell = human(
             "up",
-            &json!({"lab":{"name":"demo"},"runtime":{"phase":"failed","message":"image unavailable","components":[{"id":"node","ready":false,"conditions":[{"message":"pull failed"}]}]}}),
+            &json!({"cell":{"name":"demo"},"runtime":{"phase":"failed","message":"image unavailable","components":[{"id":"node","ready":false,"conditions":[{"message":"pull failed"}]}]}}),
         );
-        assert!(lab.contains("image unavailable") && lab.contains("pull failed"));
+        assert!(cell.contains("image unavailable") && cell.contains("pull failed"));
         let preview = human(
             "attach",
             &json!({"changes_applied":false,"attachment":{"project":"/project","entry":{"command":"/bin/mcp"}}}),

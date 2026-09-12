@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 pub const DEFAULT_DATABASE: &str = ".proofstorm/proofstorm.sqlite3";
-pub const DEFAULT_WORKSPACE: &str = "local-lab";
+pub const DEFAULT_WORKSPACE: &str = "local-cell";
 pub const DEFAULT_CONTEXT: &str = "k3d-proofstorm";
 pub const DEFAULT_NAMESPACE: &str = "proofstorm-system";
 
@@ -173,7 +173,7 @@ mod tests {
             Path::new("/repo/.proofstorm/proofstorm.sqlite3")
         );
         assert_eq!(config.context, "k3d-proofstorm");
-        assert_eq!(config.workspace, "local-lab");
+        assert_eq!(config.workspace, "local-cell");
         assert_eq!(config.mode, Mode::Connected);
         assert!(Environment::resolve(|_| None, Path::new("/repo")).is_err());
     }
@@ -185,13 +185,13 @@ mod tests {
                 "PROOFSTORM_MODE" => Some("offline".into()),
                 "PROOFSTORM_PRINCIPAL" => Some("reader".into()),
                 "PROOFSTORM_CONTEXT" => Some("other-cluster".into()),
-                "PROOFSTORM_DB" => Some("/data/lab.db".into()),
+                "PROOFSTORM_DB" => Some("/data/cell.db".into()),
                 _ => None,
             },
             Path::new("/repo"),
         )
         .unwrap();
-        assert_eq!(config.database, Path::new("/data/lab.db"));
+        assert_eq!(config.database, Path::new("/data/cell.db"));
         assert_eq!(config.context, "other-cluster");
         assert_eq!(config.mode, Mode::Offline);
         assert!(Environment::resolve(|_| Some(String::new()), Path::new("/repo")).is_err());

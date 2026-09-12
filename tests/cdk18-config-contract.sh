@@ -30,10 +30,10 @@ validate_config() {
   echo "validated CDK 0.18 configuration: ${label}"
 }
 
-for golden in cdk cdk-cln-lab cdk-bdk cdk-postgres-lab; do
+for golden in cdk cdk-cln-cell cdk-bdk cdk-postgres-cell; do
   config="${TMP_DIR}/${golden}.toml"
   extract_golden_config "${golden}" "${config}"
-  if [[ "${golden}" == "cdk-postgres-lab" ]]; then
+  if [[ "${golden}" == "cdk-postgres-cell" ]]; then
     validate_config \
       "${golden}" \
       "${STANDARD_IMAGE}" \

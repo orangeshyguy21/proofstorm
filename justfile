@@ -22,7 +22,7 @@ alias serve := gui
 dev *args: web-tools
     bash scripts/develop.sh --shell "$@"
 
-# Rebuild/register checkout artifacts; preserve labs and permissions.
+# Rebuild/register checkout artifacts; preserve cells and permissions.
 dev-build *args: web-tools
     bash scripts/develop.sh "$@"
 
@@ -38,7 +38,7 @@ doctor *args:
 gui *args:
     .proofstorm-dev/bin/proofstorm gui "$@"
 
-# Stop the managed GUI, leaving labs running.
+# Stop the managed GUI, leaving cells running.
 stop:
     .proofstorm-dev/bin/proofstorm gui stop
 
@@ -152,7 +152,7 @@ web-dev *args: web-tools
 tools:
     bash tools/install-host-tools.sh
 
-# Remove downloaded checkout tools, not installation state or labs.
+# Remove downloaded checkout tools, not installation state or cells.
 clean-tools:
     rm -rf -- .tools
 
@@ -196,10 +196,10 @@ e2e *gates: legacy-gate-build
     if [[ $# == 0 ]]; then
       # Known upstream failure nutshell-oidc and local-image gates stay opt-in.
       set -- mint-management private-transfer slice2 slice4 slice5 controller-recovery \
-        network-faults channel-lifecycle native-exec cross-lab-scheduler \
+        network-faults channel-lifecycle native-exec cross-cell-scheduler \
         cross-implementation-wallet nutshell-mint nutshell-cln nutshell-postgres \
         cdk-cln cdk-ldk cdk-ldk-postgres cdk-postgres cdk-bdk-stress cdk-bdk-postgres \
-        failed-melt quote-composition dynamic-lab
+        failed-melt quote-composition dynamic-cell
     fi
     for gate in "$@"; do
       printf '[proofstorm] gate %s\n' "$gate"

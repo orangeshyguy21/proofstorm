@@ -17,7 +17,7 @@ def main():
     request.update(plan_id=run_id + '-plan', idempotency_key=run_id + '-seed')
     (output / 'seed-plan.request.json').write_text(json.dumps(request, indent=2) + '\n')
     environment = {**os.environ, **config['environment']}
-    environment['PROOFSTORM_CAPABILITIES'] = 'catalog.read,lab.create,lab.read'
+    environment['PROOFSTORM_CAPABILITIES'] = 'catalog.read,cell.create,cell.read'
     environment.pop('PROOFSTORM_CONTROL_NAMESPACE', None)
     with (output / 'seed-plan.stderr.log').open('w') as errors:
         process = subprocess.Popen(config['command'], env=environment,
@@ -40,7 +40,7 @@ def main():
             rpc(1, 'initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                                  'clientInfo': {'name': 'fixture-plan-seeder', 'version': '1'}})
             send({'jsonrpc': '2.0', 'method': 'notifications/initialized', 'params': {}})
-            result = rpc(2, 'tools/call', {'name': 'lab_plan', 'arguments': request})
+            result = rpc(2, 'tools/call', {'name': 'cell_plan', 'arguments': request})
             if result.get('isError'):
                 raise RuntimeError(result)
             receipt = result.get('structuredContent') or json.loads(result['content'][0]['text'])

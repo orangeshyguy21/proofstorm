@@ -139,7 +139,7 @@ async fn stop_confirms_owned_exit_when_the_last_http_response_is_lost() {
     let result = stop(&installation.home).await.unwrap();
     task.await.unwrap();
     assert_eq!(result["stopped"], true);
-    assert_eq!(result["labs_stopped"], false);
+    assert_eq!(result["cells_stopped"], false);
     assert!(!installation.home.join(RECORD).exists());
 }
 

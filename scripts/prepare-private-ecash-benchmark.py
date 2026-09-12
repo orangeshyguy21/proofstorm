@@ -111,7 +111,7 @@ def main():
     # Enables existing owned-workspace finalizer if preparation fails before the model manifest.
     (output / 'manifest.json').write_text(json.dumps({'workspace': workspace, 'run_id': run_id,
                                                     'setup_only': True}))
-    scope = {'instance_id': run_id + '-lab', 'experiment_id': run_id + '-experiment',
+    scope = {'instance_id': run_id + '-cell', 'experiment_id': run_id + '-experiment',
              'session_id': run_id + '-session'}
     ids = []
     client = Client(config, output)
@@ -149,19 +149,19 @@ def main():
 
     try:
         advertised = {tool['name'] for tool in client.rpc('tools/list', {})['tools']}
-        required = {'lab_apply', 'lab_wait', 'experiment_create',
+        required = {'cell_apply', 'cell_wait', 'experiment_create',
                     'session_start', 'component_exec_live',
                     'operation_wait_many', 'operation_status',
                     'component_restart', 'liquidity_bootstrap', 'wallet_balance'}
         if required - advertised:
             raise RuntimeError('setup tool profile missing: ' + ','.join(sorted(required - advertised)))
         seed = json.loads((output / 'seed-plan.json').read_text())
-        call('lab_apply', {'plan_id': seed['plan_id'], 'expected_plan_digest': seed['plan_digest'],
+        call('cell_apply', {'plan_id': seed['plan_id'], 'expected_plan_digest': seed['plan_digest'],
                                     'instance_id': scope['instance_id'], 'idempotency_key': 'setup-apply'}, 'applied')
-        ready = call('lab_wait', {'instance_id': scope['instance_id'], 'target_phase': 'ready',
+        ready = call('cell_wait', {'instance_id': scope['instance_id'], 'target_phase': 'ready',
                                            'timeout_seconds': 60}, 'ready')
         if ready.get('phase') != 'ready':
-            raise RuntimeError('prefunding lab not ready')
+            raise RuntimeError('prefunding cell not ready')
         call('experiment_create', {k: v for k, v in {**scope, 'idempotency_key': 'setup-experiment'}.items()
                                              if k != 'session_id'}, 'experiment')
         call('session_start', {'experiment_id': scope['experiment_id'], 'session_id': scope['session_id'],

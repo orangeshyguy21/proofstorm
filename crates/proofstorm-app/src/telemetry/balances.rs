@@ -2,20 +2,20 @@
 use futures::{StreamExt, stream};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, ResourceExt, api::AttachParams};
-use proofstorm_kube::{COMPONENT_LABEL, ProofstormLab, ROLLOUT_DIGEST_ANNOTATION};
+use proofstorm_kube::{COMPONENT_LABEL, ProofstormCell, ROLLOUT_DIGEST_ANNOTATION};
 use proofstorm_view::{BalanceAmount, ComponentBalance, HoldingsObservation, LightningObservation};
 use serde_json::Value;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 pub(super) async fn sample(
-    lab: &ProofstormLab,
+    cell: &ProofstormCell,
     pods: &Api<Pod>,
     inventory: &[Pod],
 ) -> Vec<ComponentBalance> {
     stream::iter(
-        lab.spec
-            .lab
+        cell.spec
+            .cell
             .components
             .iter()
             .filter(|c| {
@@ -33,7 +33,7 @@ pub(super) async fn sample(
             .collect::<Vec<_>>(),
     )
     .map(|component| async move {
-        let entry = lab
+        let entry = cell
             .spec
             .lock
             .entries
@@ -80,7 +80,7 @@ pub(super) async fn sample(
         };
         if let Some(pod) = pod {
             observe(
-                lab,
+                cell,
                 pods,
                 &pod.name_any(),
                 &component.implementation,
@@ -103,7 +103,7 @@ fn matches_adapter(implementation: &str, version: Option<&str>) -> bool {
     }
 }
 async fn observe(
-    lab: &ProofstormLab,
+    cell: &ProofstormCell,
     pods: &Api<Pod>,
     pod: &str,
     implementation: &str,
@@ -193,7 +193,7 @@ async fn observe(
             )
             .await;
             if let Some((amounts, holdings)) =
-                data.and_then(|v| super::holdings::project(lab, implementation, &v))
+                data.and_then(|v| super::holdings::project(cell, implementation, &v))
             {
                 result.amounts = amounts;
                 result.holdings = Some(holdings);

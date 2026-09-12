@@ -1,0 +1,327 @@
+{
+  "$defs": {
+    "Capability": {
+      "enum": [
+        "catalog.read",
+        "candidate.build",
+        "candidate.read",
+        "candidate.cancel",
+        "cell.read",
+        "cell.create",
+        "cell.edit",
+        "cell.clone",
+        "cell.validate",
+        "cell.publish",
+        "cell.materialize",
+        "cell.status",
+        "cell.close",
+        "cell.connect",
+        "experiment.create",
+        "experiment.read",
+        "experiment.close",
+        "cell.operate",
+        "action.cancel",
+        "topology.inspect",
+        "topology.mutate",
+        "node.add",
+        "node.remove",
+        "node.control",
+        "component.control",
+        "peer.connect",
+        "peer.disconnect",
+        "wallet.create",
+        "wallet.control",
+        "wallet.fund",
+        "channel.open",
+        "channel.close",
+        "channel.force_close",
+        "channel.rebalance",
+        "chain.mine",
+        "chain.fee",
+        "chain.reorg",
+        "network.delay",
+        "network.drop",
+        "network.partition",
+        "network.heal",
+        "component.logs",
+        "component.exec_live",
+        "component.forensics",
+        "authentication.test",
+        "traffic.capture",
+        "oracle.list",
+        "oracle.run",
+        "artifact.read",
+        "policy.read",
+        "policy.edit",
+        "snapshot.create",
+        "snapshot.restore"
+      ],
+      "type": "string"
+    },
+    "CellLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_components": {
+          "default": 64,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_config_bytes": {
+          "default": 65536,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_links": {
+          "default": 256,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CellPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "limits": {
+          "$ref": "#/$defs/CellLimits",
+          "default": {
+            "max_components": 64,
+            "max_config_bytes": 65536,
+            "max_links": 256
+          }
+        }
+      },
+      "type": "object"
+    },
+    "ComponentKind": {
+      "enum": [
+        "bitcoin",
+        "lightning",
+        "mint",
+        "database",
+        "identity_provider",
+        "wallet",
+        "attacker",
+        "proxy",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "ComponentSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "config_version": {
+          "description": "Version of the implementation adapter's configuration contract.",
+          "type": "string"
+        },
+        "control": {
+          "$ref": "#/$defs/ControlClass"
+        },
+        "id": {
+          "type": "string"
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "version": {
+          "description": "Version of the service binary, image, or implementation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "implementation",
+        "config_version",
+        "control",
+        "config"
+      ],
+      "type": "object"
+    },
+    "ControlClass": {
+      "enum": [
+        "cell",
+        "target",
+        "attacker",
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "DependencyBinding": {
+      "additionalProperties": false,
+      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+      "properties": {
+        "method": {
+          "enum": [
+            "bolt11",
+            "bolt12",
+            "onchain"
+          ],
+          "type": "string"
+        },
+        "network": {
+          "enum": [
+            "regtest"
+          ],
+          "type": "string"
+        },
+        "protocol": {
+          "enum": [
+            "oidc"
+          ],
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "cache",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chain",
+            "payment",
+            "database",
+            "authentication"
+          ],
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "pattern": "^[a-z0-9-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol",
+          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))"
+        }
+      ]
+    },
+    "LinkKind": {
+      "enum": [
+        "bitcoin_peer",
+        "lightning_peer",
+        "chain_backend",
+        "payment_backend",
+        "database_backend",
+        "authentication_backend",
+        "network_path"
+      ],
+      "type": "string"
+    },
+    "LinkSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependencyBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from": {
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable binding identity within one cell revision.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkKind"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "from",
+        "to"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "backend links require a binding; peer and network-path links forbid one",
+          "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend' || self.kind == 'authentication_backend') ? has(self.binding) : !has(self.binding)"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "type": "string"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/ComponentSpec"
+      },
+      "type": "array"
+    },
+    "links": {
+      "items": {
+        "$ref": "#/$defs/LinkSpec"
+      },
+      "type": "array"
+    },
+    "name": {
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/CellPolicy",
+      "default": {
+        "allow": [],
+        "limits": {
+          "max_components": 64,
+          "max_config_bytes": 65536,
+          "max_links": 256
+        }
+      }
+    }
+  },
+  "required": [
+    "api_version",
+    "name",
+    "components",
+    "links"
+  ],
+  "title": "CellSpec",
+  "type": "object"
+}

@@ -62,8 +62,8 @@ REQUIRED = {"bin/proofstorm", "bin/proofstorm-mcp", "LICENSE", "catalog.json",
             "chart/templates/deployment.yaml", "release-info.json",
             "chart/templates/_helpers.tpl", "chart/templates/serviceaccount.yaml",
             "chart/templates/rbac.yaml", "chart/templates/private-pvc.yaml",
-            "chart/crds/proofstorm.dev_proofstormlabs.yaml",
-            "chart/crds/proofstorm.dev_proofstormlabactions.yaml",
+            "chart/crds/proofstorm.dev_proofstormcells.yaml",
+            "chart/crds/proofstorm.dev_proofstormcellactions.yaml",
             "chart/crds/proofstorm.dev_proofstormcandidatebuilds.yaml"}
 
 

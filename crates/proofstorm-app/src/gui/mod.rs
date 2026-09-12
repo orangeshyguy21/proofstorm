@@ -160,7 +160,7 @@ async fn open_inner(
     };
     Ok(
         json!({"url":record.url(),"reused_server":reused,"browser":browser,"project":project,
-        "attached":false,"tab_focus":"best_effort","note":format!("Stop the GUI: {} gui stop. Labs keep running.", crate::command_name())}),
+        "attached":false,"tab_focus":"best_effort","note":format!("Stop the GUI: {} gui stop. Cells keep running.", crate::command_name())}),
     )
 }
 
@@ -273,13 +273,13 @@ pub async fn stop(home: &Path) -> Result<Value> {
     let installation = Installation::load(home)?;
     let _control = state::lease(&installation.home, "gui-control-lock.sqlite3")?;
     let Some(record) = state::record(&installation.home, &installation.id)? else {
-        return Ok(json!({"stopped":false,"labs_stopped":false,"reason":"not_running"}));
+        return Ok(json!({"stopped":false,"cells_stopped":false,"reason":"not_running"}));
     };
     if !health(&record).await.unwrap_or(false) {
         let _lifetime = state::lease(&installation.home, "gui-runtime-lock.sqlite3")
             .context("GUI ownership could not be verified; no process was stopped")?;
         state::remove_owned(&installation.home, &record)?;
-        return Ok(json!({"stopped":false,"labs_stopped":false,"stale_record_removed":true}));
+        return Ok(json!({"stopped":false,"cells_stopped":false,"stale_record_removed":true}));
     }
     let response = client()?
         .post(format!("{}/v1/gui/stop", record.url()))
@@ -298,7 +298,7 @@ pub async fn stop(home: &Path) -> Result<Value> {
     loop {
         if let Ok(_lifetime) = state::lease(&installation.home, "gui-runtime-lock.sqlite3") {
             state::remove_owned(&installation.home, &record)?;
-            return Ok(json!({"stopped":true,"labs_stopped":false}));
+            return Ok(json!({"stopped":true,"cells_stopped":false}));
         }
         ensure!(
             tokio::time::Instant::now() < deadline,

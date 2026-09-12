@@ -10,7 +10,7 @@ pub fn contract() -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "catalog": proofstorm_core::default_catalog(),
         "helpers": crate::images::HELPER_IMAGES,
-        "crds": [crate::ProofstormLab::crd(), crate::ProofstormLabAction::crd(),
+        "crds": [crate::ProofstormCell::crd(), crate::ProofstormCellAction::crd(),
                  crate::ProofstormCandidateBuild::crd()]
     })
 }

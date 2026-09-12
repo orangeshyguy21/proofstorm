@@ -8,7 +8,7 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const SETTINGS_DRIVER: &str = include_str!("../../drivers/nutshell_postgres_settings.py");
 
@@ -16,14 +16,14 @@ const INSTANCE: &str = "nutshell-postgres-instance";
 const DRAFT: &str = "nutshell-postgres";
 const MARKER: &str = "nutshell-persistent";
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "nutshell-postgres-live-lab",
+        "name": "nutshell-postgres-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
-            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-nutshell-postgres"}},
-            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "laboratory", "config": {"database_name": "nutshell_mint", "storage_size": "2Gi"}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-nutshell-postgres"}},
+            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"database_name": "nutshell_mint", "storage_size": "2Gi"}},
             {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell PostgreSQL", "description": "Secret-backed persistence acceptance", "mint_quote_ttl_seconds": 701, "melt_quote_ttl_seconds": 131}}
         ],
         "links": [
@@ -49,19 +49,19 @@ pub fn run(context: &GateContext) -> Result<()> {
         context.session("nutshell-postgres-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-nutshell-postgres"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-nutshell-postgres"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-postgres"}),
     )?;
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-postgres"}),
     )?;
 
-    let ready = lab::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
+    let ready = cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let public_config =
@@ -211,10 +211,10 @@ pub fn run(context: &GateContext) -> Result<()> {
         );
     }
 
-    lab::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
+    cell::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
 
     println!(
         "Nutshell 0.20.3 + PostgreSQL secret stability, database persistence, mint restart, readiness, and teardown passed"

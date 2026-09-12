@@ -10,7 +10,7 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, http, json as expect, lab, postgres};
+use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, http, json as expect, postgres};
 
 const INSTANCE: &str = "cdk-bdk-instance";
 const DRAFT: &str = "cdk-bdk";
@@ -20,18 +20,18 @@ const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha2
 const PUBKEY: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const QUOTES: usize = 24;
 
-fn lab_document(postgres_enabled: bool) -> Value {
-    let mut lab = json!({
+fn cell_document(postgres_enabled: bool) -> Value {
+    let mut cell = json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "cdk-bdk-stress-lab",
+        "name": "cdk-bdk-stress-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {
                 "id": "mint", "kind": "mint", "implementation": "cdk-bdk", "version": "0.18.0",
                 "config_version": "cdk-mintd-bdk/0.18/v1", "control": "target",
                 "config": {
                     "name": "Proofstorm CDK BDK",
-                    "description": "Native CDK embedded-BDK NUT-30 stress lab",
+                    "description": "Native CDK embedded-BDK NUT-30 stress cell",
                     "description_long": "Agent-authored long-form CDK metadata",
                     "motd": "Proofstorm agents welcome",
                     "icon_url": "https://proofstorm.invalid/cdk-bdk.png",
@@ -59,8 +59,8 @@ fn lab_document(postgres_enabled: bool) -> Value {
         ],
         "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
     });
-    postgres::augment_lab(postgres_enabled, &mut lab, DATABASE);
-    lab
+    postgres::augment_cell(postgres_enabled, &mut cell, DATABASE);
+    cell
 }
 
 const CONFIG_FRAGMENTS: &[&str] = &[
@@ -116,23 +116,23 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     let mut client = context.session("cdk-bdk-stress-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(postgres_enabled), "idempotency_key": "create-cdk-bdk"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(postgres_enabled), "idempotency_key": "create-cdk-bdk"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cdk-bdk", "include_revision": true}),
     )?;
-    let entry = lab::lock_entry(&published, "cdk-bdk")?;
+    let entry = cell::lock_entry(&published, "cdk-bdk")?;
     if expect::string(entry, "/version")? != "0.18.0" || expect::string(entry, "/image")? != IMAGE {
         bail!("unexpected CDK-BDK lock: {entry}");
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cdk-bdk"}),
     )?;
-    let ready = lab::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let config = context.kubectl.exec(
@@ -322,8 +322,8 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
 
     drop(forward);
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_closed(&mut client, INSTANCE)?;
 
     if postgres_enabled {
         println!("CDK embedded BDK + PostgreSQL MCP NUT-30 persistence and teardown passed");

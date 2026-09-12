@@ -287,7 +287,7 @@ pub async fn apply(plan: AttachmentPlan) -> Result<Value> {
     Ok(
         json!({"attached":true,"configuration_changed":plan.changes_configuration,"config":plan.config_path,"backup":backup,
         "actor":plan.actor,"actor_initialized":new_actor,"preset":plan.preset,"server_verified":server,"harness_loaded":false,
-        "harness":plan.harness,"guidance":plan.guidance,"starter_request":"Use Proofstorm to inspect the local environment, then help me choose and start a lab for this project."}),
+        "harness":plan.harness,"guidance":plan.guidance,"starter_request":"Use Proofstorm to inspect the local environment, then help me choose and start a cell for this project."}),
     )
 }
 

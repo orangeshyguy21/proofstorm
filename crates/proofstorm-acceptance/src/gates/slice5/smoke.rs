@@ -1,7 +1,7 @@
 use super::common::{
     EXPERIMENT, INSTANCE, action_kinds, kinds_by_operation, scoped, submit_idempotent,
 };
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
@@ -21,8 +21,8 @@ pub(super) fn run(
         ),
         "wallet-initialize",
     )?;
-    let initialized = lab::wait_operation(client, "wallet-initialize", 120)?;
-    if !expect::boolean(lab::artifact_content(&initialized)?, "/initialized")? {
+    let initialized = cell::wait_operation(client, "wallet-initialize", 120)?;
+    if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
         bail!("wallet-initialize artifact is invalid: {initialized}");
     }
 
@@ -33,8 +33,8 @@ pub(super) fn run(
             json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-balance-slice5"}),
         ),
     )?;
-    let balance = lab::wait_operation(client, "wallet-balance", 120)?;
-    if expect::integer(lab::artifact_content(&balance)?, "/balance_sat")? != 0 {
+    let balance = cell::wait_operation(client, "wallet-balance", 120)?;
+    if expect::integer(cell::artifact_content(&balance)?, "/balance_sat")? != 0 {
         bail!("new wallet did not have a zero sanitized balance: {balance}");
     }
 
@@ -47,8 +47,8 @@ pub(super) fn run(
         ),
         "wallet-fund",
     )?;
-    let funded = lab::wait_operation(client, "wallet-fund", 120)?;
-    let fund_result = lab::artifact_content(&funded)?;
+    let funded = cell::wait_operation(client, "wallet-fund", 120)?;
+    let fund_result = cell::artifact_content(&funded)?;
     if expect::integer(fund_result, "/funded_sat")? != 1000
         || expect::integer(fund_result, "/balance_sat")? != 1000
     {
@@ -69,8 +69,8 @@ pub(super) fn run(
     if kinds.get("round-trip").map(String::as_str) != Some("wallet_round_trip") {
         bail!("wallet request did not create a typed runtime action: {kinds:?}");
     }
-    let round_trip = lab::wait_operation(client, "round-trip", 120)?;
-    let wallet_result = lab::artifact_content(&round_trip)?;
+    let round_trip = cell::wait_operation(client, "round-trip", 120)?;
+    let wallet_result = cell::artifact_content(&round_trip)?;
     if expect::boolean(wallet_result, "/inflation")? {
         bail!("round-trip artifact is invalid: {round_trip}");
     }
@@ -95,9 +95,9 @@ pub(super) fn run(
             json!({"wallet": "receiver-wallet", "mint": "mint", "idempotency_key": "receiver-initialize-slice5"}),
         ),
     )?;
-    let receiver_initialized = lab::wait_operation(client, "receiver-initialize", 120)?;
+    let receiver_initialized = cell::wait_operation(client, "receiver-initialize", 120)?;
     if expect::integer(
-        lab::artifact_content(&receiver_initialized)?,
+        cell::artifact_content(&receiver_initialized)?,
         "/balance_sat",
     )? != 0
     {
@@ -113,8 +113,8 @@ pub(super) fn run(
         ),
         "invoice",
     )?;
-    let invoice = lab::wait_operation(client, "wallet-invoice", 120)?;
-    let invoice_content = lab::artifact_content(&invoice)?.clone();
+    let invoice = cell::wait_operation(client, "wallet-invoice", 120)?;
+    let invoice_content = cell::artifact_content(&invoice)?.clone();
     let mint_quote_id = expect::string(&invoice_content, "/mint_quote_id")?.to_string();
     if expect::string(&invoice_content, "/quote_observations/0/role")? != "invoice_receive"
         || expect::string(&invoice_content, "/quote_observations/0/direction")? != "receive"
@@ -140,8 +140,8 @@ pub(super) fn run(
             json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-balance-before-pay-slice5"}),
         ),
     )?;
-    let baseline = lab::wait_operation(client, "wallet-balance-before-pay", 120)?;
-    if expect::integer(lab::artifact_content(&baseline)?, "/balance_sat")? < 100 {
+    let baseline = cell::wait_operation(client, "wallet-balance-before-pay", 120)?;
+    if expect::integer(cell::artifact_content(&baseline)?, "/balance_sat")? < 100 {
         bail!("wallet baseline is invalid: {baseline}");
     }
 
@@ -154,8 +154,8 @@ pub(super) fn run(
         ),
         "pay",
     )?;
-    let paid = lab::wait_operation(client, "wallet-pay", 120)?;
-    let paid_content = lab::artifact_content(&paid)?.clone();
+    let paid = cell::wait_operation(client, "wallet-pay", 120)?;
+    let paid_content = cell::artifact_content(&paid)?.clone();
     if expect::string(&paid_content, "/quote_observations/0/role")? != "payment_melt"
         || expect::string(&paid_content, "/quote_observations/0/state")? != "PAID"
         || expect::string(&paid_content, "/quote_observations/1/role")? != "payment_receive"
@@ -213,8 +213,8 @@ pub(super) fn run(
     if kinds.contains_key("conservation") {
         bail!("receipt-only conservation unexpectedly created a runtime action: {kinds:?}");
     }
-    let oracle = lab::wait_operation(client, "conservation", 120)?;
-    if !expect::boolean(lab::artifact_content(&oracle)?, "/conserved")? {
+    let oracle = cell::wait_operation(client, "conservation", 120)?;
+    if !expect::boolean(cell::artifact_content(&oracle)?, "/conserved")? {
         bail!("oracle artifact is invalid: {oracle}");
     }
     let oracle_jobs = kubectl.get_json(&[

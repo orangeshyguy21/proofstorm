@@ -86,10 +86,10 @@ runnable `slice5`, `controller-recovery`, `network-faults`, and
 journals, deterministic evidence, and incarnation-fenced teardown. Seven harness
 unit tests, Clippy with warnings denied, and formatting checks passed as well.
 A deliberately injected error while the controller was stopped restored it and
-reclaimed the test lab; the idle-cluster safeguard also refused a concurrent run.
+reclaimed the test cell; the idle-cluster safeguard also refused a concurrent run.
 See the main README for the fixture boundaries and commands. In particular,
 the conservation smoke fixture uses Nutshell's authoritative fee database;
 the existing CDK wallet checkpoint remains the CDK payment integration check.
 
-The two pre-existing disposable test labs and all migration-created labs were
+The two pre-existing disposable test cells and all migration-created cells were
 removed, including their persistent test storage. Historical reports were kept.

@@ -123,7 +123,7 @@ impl McpClient {
     pub fn call(&mut self, tool: &str, mut arguments: Value) -> Result<Value> {
         // Gate convenience: follow the same status -> close -> wait token contract as agents.
         // Raw envelope helpers intentionally do not fill fields, for contract refusal tests.
-        if (tool == "lab_close" || (tool == "lab_wait" && arguments["target_phase"] == "closed"))
+        if (tool == "cell_close" || (tool == "cell_wait" && arguments["target_phase"] == "closed"))
             && arguments.get("expected_instance_key").is_none()
         {
             let id = arguments["instance_id"]
@@ -131,15 +131,15 @@ impl McpClient {
                 .context("instance_id required")?
                 .to_owned();
             if !self.incarnations.contains_key(&id) {
-                self.call("lab_status", json!({"instance_id":id}))?;
+                self.call("cell_status", json!({"instance_id":id}))?;
             }
             arguments["expected_instance_key"] = json!(
                 self.incarnations
                     .get(&id)
-                    .context("lab status did not return instance_key")?
+                    .context("cell status did not return instance_key")?
             );
         }
-        if tool == "lab_materialize" && arguments.get("plan_id").is_none() {
+        if tool == "cell_materialize" && arguments.get("plan_id").is_none() {
             let revision = arguments["revision_digest"]
                 .as_str()
                 .context("revision_digest required")?;
@@ -149,7 +149,7 @@ impl McpClient {
                     .context("publish the plan before materializing")?
             );
         }
-        let published_draft = (tool == "lab_publish")
+        let published_draft = (tool == "cell_publish")
             .then(|| arguments["draft_id"].as_str().map(str::to_owned))
             .flatten();
         let result = self.request("tools/call", tool_params(tool, arguments))?;
@@ -318,7 +318,7 @@ impl Drop for McpClient {
 /// Build a JSON object, moving each value in rather than cloning it.
 ///
 /// `json!` serializes an interpolated `Value` by reference, which would deep
-/// copy every lab document a gate submits.
+/// copy every cell document a gate submits.
 fn frame<const N: usize>(fields: [(&str, Value); N]) -> Value {
     Value::Object(
         fields

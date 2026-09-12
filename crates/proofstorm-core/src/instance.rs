@@ -12,7 +12,7 @@ pub const MAX_CONDITION_MESSAGE_BYTES: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabInstance {
+pub struct CellInstance {
     #[serde(default = "initial_generation")]
     pub generation: u64,
     pub id: String,
@@ -92,7 +92,7 @@ pub struct TeardownReceipt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabInstanceStatus {
+pub struct CellInstanceStatus {
     #[serde(default)]
     pub observed_generation: u64,
     #[serde(default)]
@@ -101,7 +101,7 @@ pub struct LabInstanceStatus {
     pub last_converged_revision: Option<String>,
     #[serde(default)]
     pub retained_storage: BTreeMap<String, String>,
-    pub instance: LabInstance,
+    pub instance: CellInstance,
     pub phase: InstancePhase,
     pub instance_namespace: String,
     pub components: Vec<ComponentStatus>,

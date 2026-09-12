@@ -8,12 +8,12 @@ async fn scheduled_prober_reports_live_scale_without_mutations() {
     let store = Store::open(directory.path().join("state.db")).unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let labs = service(store, cluster.clone());
-    let lab = labs.up("demo", &spec()).await.unwrap();
-    let key = lab.instance_key.unwrap();
+    let cells = service(store, cluster.clone());
+    let cell = cells.up("demo", &spec()).await.unwrap();
+    let key = cell.instance_key.unwrap();
     let namespace = instance_namespace(&key);
     let path = format!("/apis/apps/v1/namespaces/{namespace}/deployments/{PROTOCOL_PROBER_NAME}");
-    let reader = observer(&labs);
+    let reader = observer(&cells);
     let read_start = cluster.lock().unwrap().requests.len();
     for scale in [None, Some(1), Some(0)] {
         if let Some(scale) = scale {
@@ -32,7 +32,7 @@ async fn scheduled_prober_reports_live_scale_without_mutations() {
             .environment(&EnvironmentQuery::default())
             .await
             .unwrap();
-        let resources = view.labs.items[0].resources.as_ref().unwrap();
+        let resources = view.cells.items[0].resources.as_ref().unwrap();
         let prober = resources
             .workloads
             .iter()
@@ -60,7 +60,7 @@ async fn scheduled_prober_reports_live_scale_without_mutations() {
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
-    let prober = view.labs.items[0]
+    let prober = view.cells.items[0]
         .resources
         .as_ref()
         .unwrap()

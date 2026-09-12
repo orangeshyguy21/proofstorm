@@ -370,8 +370,8 @@ pub fn register(
         "release-info.json",
         "chart/Chart.yaml",
         "chart/values.yaml",
-        "chart/crds/proofstorm.dev_proofstormlabs.yaml",
-        "chart/crds/proofstorm.dev_proofstormlabactions.yaml",
+        "chart/crds/proofstorm.dev_proofstormcells.yaml",
+        "chart/crds/proofstorm.dev_proofstormcellactions.yaml",
         "chart/crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
     ] {
         ensure!(
@@ -443,8 +443,8 @@ mod tests {
             for name in [
                 "Chart.yaml",
                 "values.yaml",
-                "crds/proofstorm.dev_proofstormlabs.yaml",
-                "crds/proofstorm.dev_proofstormlabactions.yaml",
+                "crds/proofstorm.dev_proofstormcells.yaml",
+                "crds/proofstorm.dev_proofstormcellactions.yaml",
                 "crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
             ] {
                 fs::write(resources.join("chart").join(name), "fixture").unwrap();

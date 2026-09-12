@@ -1,12 +1,12 @@
 use crate::{
+    cell_view::CellPanel,
     client,
-    lab_view::LabPanel,
-    model::{lab_name, lab_phase},
+    model::{cell_name, cell_phase},
     system::{SystemPanel, SystemSummary},
     theme::ThemePicker,
 };
 use leptos::{prelude::*, task::spawn_local};
-use proofstorm_view::{EnvironmentLab, EnvironmentView, ObserverStatus};
+use proofstorm_view::{EnvironmentCell, EnvironmentView, ObserverStatus};
 use std::{cell::Cell, rc::Rc};
 use wasm_bindgen::{JsCast, closure::Closure};
 
@@ -36,7 +36,7 @@ pub fn App() -> impl IntoView {
     let pan = RwSignal::new((0.0_f64, 0.0_f64));
     let environment = RwSignal::new(None::<EnvironmentView>);
     let selected = RwSignal::new(String::new());
-    let detail = RwSignal::new(None::<EnvironmentLab>);
+    let detail = RwSignal::new(None::<EnvironmentCell>);
     let component = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let connected = RwSignal::new(false);
@@ -50,11 +50,11 @@ pub fn App() -> impl IntoView {
     let dirty = Rc::new(Cell::new(false));
     let refresher = move || refresh.update(|n| *n = n.wrapping_add(1));
 
-    let previous_lab = StoredValue::new(String::new());
+    let previous_cell = StoredValue::new(String::new());
     Effect::new(move |_| {
         let id = selected.get();
-        if previous_lab.get_value() != id {
-            previous_lab.set_value(id);
+        if previous_cell.get_value() != id {
+            previous_cell.set_value(id);
             zoom.set(1.0);
             pan.set((0.0, 0.0));
             history_pages.set(1);
@@ -79,28 +79,28 @@ pub fn App() -> impl IntoView {
                     Ok(view) => {
                         let mut id = selected.get_untracked();
                         // Compare successful inventories so normal refreshes and reconnects
-                        // preserve selection, while a newly observed lab opens its canvas.
-                        let new_lab = environment.with_untracked(|previous| {
+                        // preserve selection, while a newly observed cell opens its canvas.
+                        let new_cell = environment.with_untracked(|previous| {
                             previous.as_ref().and_then(|previous| {
-                                view.labs
+                                view.cells
                                     .items
                                     .iter()
-                                    .find(|lab| {
-                                        !previous.labs.items.iter().any(|old| old.id == lab.id)
+                                    .find(|cell| {
+                                        !previous.cells.items.iter().any(|old| old.id == cell.id)
                                     })
-                                    .map(|lab| lab.id.clone())
+                                    .map(|cell| cell.id.clone())
                             })
                         });
-                        if let Some(new_lab) = new_lab {
-                            id = new_lab;
+                        if let Some(new_cell) = new_cell {
+                            id = new_cell;
                             system_open.set(false);
                             search.set(String::new());
-                        } else if !view.labs.items.iter().any(|lab| lab.id == id) {
+                        } else if !view.cells.items.iter().any(|cell| cell.id == id) {
                             id = view
-                                .labs
+                                .cells
                                 .items
                                 .first()
-                                .map(|lab| lab.id.clone())
+                                .map(|cell| cell.id.clone())
                                 .unwrap_or_default();
                         }
                         if selected.get_untracked() != id {
@@ -116,17 +116,17 @@ pub fn App() -> impl IntoView {
                             detail.set(None);
                             error.set(None);
                         } else {
-                            match client::lab(&id, history_pages.get_untracked()).await {
-                                Ok(lab) if selected.get_untracked() == id => {
+                            match client::cell(&id, history_pages.get_untracked()).await {
+                                Ok(cell) if selected.get_untracked() == id => {
                                     if crate::canvas_model::selected_owner(
-                                        &lab,
+                                        &cell,
                                         &component.get_untracked(),
                                     )
                                     .is_none()
                                     {
                                         component.set(String::new());
                                     }
-                                    detail.set(Some(lab));
+                                    detail.set(Some(cell));
                                     error.set(None);
                                 }
                                 Err(message) if selected.get_untracked() == id => {
@@ -209,25 +209,25 @@ pub fn App() -> impl IntoView {
     let _retry = StoredValue::new_local(retry);
     view! {
         <header class="app-header">
-            <button class="icon-button" aria-label="Toggle lab navigation" aria-expanded=move || navigation.get() on:click=move |_| navigation.update(|open| *open = !*open)><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
+            <button class="icon-button" aria-label="Toggle cell navigation" aria-expanded=move || navigation.get() on:click=move |_| navigation.update(|open| *open = !*open)><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
             <a class="brand" href="/" aria-label="Proofstorm home"><span class="brand-mark" aria-hidden="true" inner_html=LOGO_SVG></span><span class="brand-wordmark" aria-hidden="true" inner_html=WORDMARK_SVG></span></a>
             <span class="header-context">{move || environment.get().map(|v| v.workspace_id)}</span>
-            <div class="header-right"><crate::freshness::FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||error.get().is_some()||telemetry.get().is_some_and(|s|s.error.is_some()||s.labs.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /><crate::gui::GuiControls /></div>
+            <div class="header-right"><crate::freshness::FreshnessStatus unix=Signal::derive(move ||telemetry.get().map_or(0,|s|s.sampled_at_unix)) failed=Signal::derive(move ||error.get().is_some()||telemetry.get().is_some_and(|s|s.error.is_some()||s.cells.iter().any(|l|l.error.is_some()||l.metrics_error.is_some()))) /><crate::gui::GuiControls /></div>
         </header>
         <div class=move || if navigation.get() { "workspace-shell" } else { "workspace-shell nav-collapsed" }>
             <aside class="sidebar" aria-label="Workspace navigation">
                 <SystemSummary telemetry open=system_open />
-                <div class="section-label"><span>"Labs"</span><span>{move || environment.get().map_or(0, |v| v.labs.items.len())}</span></div>
-                <input class="search" aria-label="Find a lab" placeholder="Find a lab…" prop:value=move || search.get() on:input=move |ev| search.set(event_target_value(&ev)) />
-                <nav class="lab-list" aria-label="Labs">{move || {
+                <div class="section-label"><span>"Cells"</span><span>{move || environment.get().map_or(0, |v| v.cells.items.len())}</span></div>
+                <input class="search" aria-label="Find a cell" placeholder="Find a cell…" prop:value=move || search.get() on:input=move |ev| search.set(event_target_value(&ev)) />
+                <nav class="cell-list" aria-label="Cells">{move || {
                     let query = search.get().to_lowercase();
-                    environment.get().map(|v| v.labs.items.into_iter().filter(|lab| lab_name(lab).to_lowercase().contains(&query)).map(|lab| {
-                        let id = lab.id.clone(); let active_id = id.clone();
-                        let name = lab_name(&lab); let status = lab_phase(&lab);
-                        view! { <button class=move || if !system_open.get() && selected.get() == active_id { "lab-item selected" } else { "lab-item" } on:click=move |_| {
+                    environment.get().map(|v| v.cells.items.into_iter().filter(|cell| cell_name(cell).to_lowercase().contains(&query)).map(|cell| {
+                        let id = cell.id.clone(); let active_id = id.clone();
+                        let name = cell_name(&cell); let status = cell_phase(&cell);
+                        view! { <button class=move || if !system_open.get() && selected.get() == active_id { "cell-item selected" } else { "cell-item" } on:click=move |_| {
                             system_open.set(false);
                             if selected.get_untracked() != id { selected.set(id.clone()); detail.set(None); zoom.set(1.0); pan.set((0.0,0.0)); component.set(String::new()); history_pages.set(1); }
-                        }><span class="lab-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-6 10a1.3 1.3 0 0 0 1.2 2h13.6a1.3 1.3 0 0 0 1.2-2L14 9V3M8 14h8" /></svg></span><span><strong>{name}</strong><small>{status}</small></span></button> }
+                        }><span class="cell-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-6 10a1.3 1.3 0 0 0 1.2 2h13.6a1.3 1.3 0 0 0 1.2-2L14 9V3M8 14h8" /></svg></span><span><strong>{name}</strong><small>{status}</small></span></button> }
                     }).collect_view())
                 }}</nav>
                 <footer class="sidebar-footer"><span class="sidebar-footer-label">"Theme"</span><ThemePicker /></footer>
@@ -239,10 +239,10 @@ pub fn App() -> impl IntoView {
                     {move || observer.get().and_then(|o| o.error).map(|message| view! { <div class="notice warning">{message}</div> })}
                     <Show when=move || telemetry_error.get()><div class="notice warning">"Measurements could not refresh. Showing last observed values."</div></Show>
                 </div>
-                <Show when=move || system_open.get()><SystemPanel telemetry selected_lab=selected selected_component=component open=system_open /></Show>
+                <Show when=move || system_open.get()><SystemPanel telemetry selected_cell=selected selected_component=component open=system_open /></Show>
                 <Show when=move || !system_open.get()>
-                    <LabPanel lab=detail selected_component=component history_pages zoom pan telemetry drawer />
-                    <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark" aria-hidden="true" inner_html=LOGO_SVG></span><Show when=move || !loaded.get() || !selected.get().is_empty()><h1>"Loading lab…"</h1></Show><Show when=move || loaded.get() && selected.get().is_empty()><crate::gui::EmptyAgentLauncher /></Show></div></Show>
+                    <CellPanel cell=detail selected_component=component history_pages zoom pan telemetry drawer />
+                    <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark" aria-hidden="true" inner_html=LOGO_SVG></span><Show when=move || !loaded.get() || !selected.get().is_empty()><h1>"Loading cell…"</h1></Show><Show when=move || loaded.get() && selected.get().is_empty()><crate::gui::EmptyAgentLauncher /></Show></div></Show>
                 </Show>
             </main>
         </div>

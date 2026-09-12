@@ -1,4 +1,4 @@
-# Agent lab demonstration
+# Agent cell demonstration
 
 Start the configured native profile from the repository:
 
@@ -8,7 +8,7 @@ OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
 
 Paste this request:
 
-> Build a lab named demo with Bitcoin regtest, two LND nodes, one Core Lightning
+> Build a cell named demo with Bitcoin regtest, two LND nodes, one Core Lightning
 > node, a compatible Cashu mint, and three Cashu wallets: one cdk-cli-wallet,
 > one cocod-wallet and one nutshell-wallet. Discover the current catalog and
 > supported configuration first; use explicit versions and correct backend links.
@@ -27,13 +27,13 @@ Paste this request:
 > Omit experiment_id and session_id for ordinary native commands and diagnostics;
 > Proofstorm supplies attribution. Retain operation IDs and idempotency keys for
 > retries. Wait for terminal results and report exit codes, errors and unresolved
-> outcomes. Keep the website open so the lab and recorded activity update live.
+> outcomes. Keep the website open so the cell and recorded activity update live.
 >
-> Add a second mint through a live edit: read the full lab, plan the updated
+> Add a second mint through a live edit: read the full cell, plan the updated
 > configuration at its expected generation, review changes and apply. Preserve
 > existing component IDs and links. Verify unchanged components keep their state.
 >
-> Leave the lab running for inspection. Summarize what worked, what failed, the
+> Leave the cell running for inspection. Summarize what worked, what failed, the
 > relevant operation IDs and any behavior that remains unverified. Export any
-> evidence you want to retain before subsequently closing the lab; deletion
+> evidence you want to retain before subsequently closing the cell; deletion
 > removes its local activity and releases the name.

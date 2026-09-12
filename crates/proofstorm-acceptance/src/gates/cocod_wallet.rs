@@ -1,5 +1,5 @@
 //! Cocod deterministic vertical slice. Native daemon/CLI, private state and independent money evidence.
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -34,12 +34,12 @@ fn document() -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cocod-wallet-checkpoint",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}},
-            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
+            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.0","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":0}},
-            {"id":"wallet-a","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"laboratory","config":{}},
-            {"id":"wallet-b","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"laboratory","config":{}}
+            {"id":"wallet-a","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"cell","config":{}},
+            {"id":"wallet-b","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"cell","config":{}}
         ],
         "links":[
             {"id":"mint-chain","kind":"chain_backend","from":"mint-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
@@ -80,7 +80,7 @@ pub(super) fn operation(
     args: Value,
 ) -> Result<Value> {
     client.call(tool, scoped(id, args))?;
-    let result = match lab::wait_operation(client, id, 60) {
+    let result = match cell::wait_operation(client, id, 60) {
         Ok(result) => result,
         Err(error) => {
             if let Ok(failed) = client.call("operation_status", json!({"operation_id": id})) {
@@ -90,7 +90,7 @@ pub(super) fn operation(
         }
     };
     save(directory, id, &result)?;
-    Ok(lab::artifact_content(&result)?.clone())
+    Ok(cell::artifact_content(&result)?.clone())
 }
 
 pub(super) fn native(
@@ -217,7 +217,7 @@ pub(super) fn restart(
         id,
         json!({"component":wallet}),
     )?;
-    lab::wait_ready(client, INSTANCE)?;
+    cell::wait_ready(client, INSTANCE)?;
     let after = uid()?;
     if after["items"].as_array().map(Vec::len) != Some(1)
         || before["items"][0]["metadata"]["uid"] == after["items"][0]["metadata"]["uid"]
@@ -621,7 +621,7 @@ fn run_scoped(
     )?;
     let mut document = document();
     if transfer {
-        document["components"][5] = json!({"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}});
+        document["components"][5] = json!({"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}});
     }
     if projection_only {
         document["components"]
@@ -631,20 +631,20 @@ fn run_scoped(
         document["links"] = json!([]);
     }
     client.call(
-        "lab_create",
-        json!({"draft_id":"cocod-wallet","lab":document,"idempotency_key":"create"}),
+        "cell_create",
+        json!({"draft_id":"cocod-wallet","cell":document,"idempotency_key":"create"}),
     )?;
-    let published=client.call("lab_publish",json!({"draft_id":"cocod-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published=client.call("cell_publish",json!({"draft_id":"cocod-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
     save(&directory, "published", &published)?;
-    let lock = lab::lock_entry(&published, "cocod-wallet")?;
+    let lock = cell::lock_entry(&published, "cocod-wallet")?;
     if lock.pointer("/build_provenance/commit_sha")
         != Some(&json!("44e5101cbea370132af6e68f88e01b47e39431c4"))
     {
         bail!("cocod provenance lost from lock");
     }
-    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
     let result = (|| -> Result<()> {
-        let ready = lab::wait_ready(&mut client, INSTANCE)?;
+        let ready = cell::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
         client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
@@ -693,8 +693,8 @@ fn run_scoped(
         "outcome",
         &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(ToString::to_string)}),
     )?;
-    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
         bail!("teardown unverified");

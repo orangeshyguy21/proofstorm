@@ -1,8 +1,8 @@
 //! Shared controller custody. No payload body is ever serialized into an action.
 use super::{
-    Action, ActionPhase, Api, Context, Error, LabAction, Pod, ProofstormLab, ProofstormLabAction,
-    ProofstormLabActionStatus, ResourceExt, instance_namespace, now_unix, patch_action_failure,
-    patch_action_status, status_object,
+    Action, ActionPhase, Api, CellAction, Context, Error, Pod, ProofstormCell,
+    ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, instance_namespace, now_unix,
+    patch_action_failure, patch_action_status, status_object,
 };
 use proofstorm_core::private_io::{PRIVATE_ACCESS_ANNOTATION, PayloadBinding, PrivateIo};
 use proofstorm_core::{Capability, ComponentKind, OperationKind, PrivateAccessGrant};
@@ -22,15 +22,15 @@ fn private<T>(result: Result<T, proofstorm_transfer::Error>) -> Result<T, Error>
     result.map_err(|_| failure())
 }
 
-fn path(lab: &ProofstormLab) -> Result<PathBuf, Error> {
-    if lab.spec.instance_key.is_empty()
-        || !lab
+fn path(cell: &ProofstormCell) -> Result<PathBuf, Error> {
+    if cell.spec.instance_key.is_empty()
+        || !cell
             .spec
             .instance_key
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-        || lab.spec.instance_key == "."
-        || lab.spec.instance_key == ".."
+        || cell.spec.instance_key == "."
+        || cell.spec.instance_key == ".."
     {
         return Err(failure());
     }
@@ -48,42 +48,45 @@ fn path(lab: &ProofstormLab) -> Result<PathBuf, Error> {
     if !meta.is_dir() || meta.permissions().mode() & 0o777 != 0o700 {
         return Err(failure());
     }
-    Ok(root.join(&lab.spec.instance_key))
+    Ok(root.join(&cell.spec.instance_key))
 }
-fn vault(lab: &ProofstormLab) -> Result<Vault, Error> {
+fn vault(cell: &ProofstormCell) -> Result<Vault, Error> {
     private(Vault::open(
-        &path(lab)?,
-        &lab.spec.workspace_id,
-        &lab.spec.instance_key,
+        &path(cell)?,
+        &cell.spec.workspace_id,
+        &cell.spec.instance_key,
         Limits::default(),
     ))
 }
-async fn live_lab(action: &ProofstormLabAction, context: &Context) -> Result<ProofstormLab, Error> {
-    let labs = Api::<ProofstormLab>::namespaced(
+async fn live_cell(
+    action: &ProofstormCellAction,
+    context: &Context,
+) -> Result<ProofstormCell, Error> {
+    let cells = Api::<ProofstormCell>::namespaced(
         context.client.clone(),
         &action.namespace().ok_or_else(failure)?,
     );
-    let lab = labs.get(&action.spec.lab_name).await?;
-    if lab.spec.workspace_id != action.spec.workspace_id
-        || lab.spec.instance_key != action.spec.instance_key
-        || lab.spec.instance_id != action.spec.instance_id
-        || lab.metadata.deletion_timestamp.is_some()
+    let cell = cells.get(&action.spec.cell_name).await?;
+    if cell.spec.workspace_id != action.spec.workspace_id
+        || cell.spec.instance_key != action.spec.instance_key
+        || cell.spec.instance_id != action.spec.instance_id
+        || cell.metadata.deletion_timestamp.is_some()
     {
         return Err(failure());
     }
-    Ok(lab)
+    Ok(cell)
 }
-fn recipient_access(lab: &ProofstormLab, id: &str) -> Result<PrivateAccessGrant, Error> {
+fn recipient_access(cell: &ProofstormCell, id: &str) -> Result<PrivateAccessGrant, Error> {
     let grants: std::collections::BTreeMap<String, PrivateAccessGrant> = serde_json::from_str(
-        lab.annotations()
+        cell.annotations()
             .get(PRIVATE_ACCESS_ANNOTATION)
             .ok_or_else(failure)?,
     )
     .map_err(|_| failure())?;
     let grant = grants.get(id).ok_or_else(failure)?;
     if grant.id != id
-        || grant.workspace_id != lab.spec.workspace_id
-        || grant.instance_id != lab.spec.instance_id
+        || grant.workspace_id != cell.spec.workspace_id
+        || grant.instance_id != cell.spec.instance_id
         || grant.revoked_at_unix.is_some()
     {
         return Err(failure());
@@ -93,13 +96,13 @@ fn recipient_access(lab: &ProofstormLab, id: &str) -> Result<PrivateAccessGrant,
 
 /// Validate every new delegated action, including typed observations, before dispatch.
 pub fn validate_delegated_action(
-    action: &ProofstormLabAction,
-    lab: &ProofstormLab,
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
 ) -> Result<(), Error> {
     let Some(snapshot) = &action.spec.access_scope else {
         return Ok(());
     };
-    let current = recipient_access(lab, &snapshot.id)?;
+    let current = recipient_access(cell, &snapshot.id)?;
     if &current != snapshot
         || current.principal_id != action.spec.principal_id
         || current.instance_id != action.spec.instance_id
@@ -109,11 +112,11 @@ pub fn validate_delegated_action(
     }
     let scope = &current.scope;
     let (kind, request) = match &action.spec.action {
-        LabAction::WalletBalance(r) if action.spec.capability == Capability::WalletControl => (
+        CellAction::WalletBalance(r) if action.spec.capability == Capability::WalletControl => (
             OperationKind::WalletBalance,
             serde_json::json!({"wallet":r.wallet,"mint":r.mint}),
         ),
-        LabAction::PrivateTransfer(r)
+        CellAction::PrivateTransfer(r)
             if action.spec.capability == Capability::ComponentExecLive =>
         {
             (
@@ -121,7 +124,7 @@ pub fn validate_delegated_action(
                 serde_json::json!({"transfer":r}),
             )
         }
-        LabAction::ComponentExecLive(r)
+        CellAction::ComponentExecLive(r)
             if action.spec.capability == Capability::ComponentExecLive =>
         {
             (
@@ -137,53 +140,57 @@ pub fn validate_delegated_action(
     Ok(())
 }
 
-fn recipient_grant(access: &PrivateAccessGrant, lab: &ProofstormLab, wallet: &str) -> Grant {
+fn recipient_grant(access: &PrivateAccessGrant, cell: &ProofstormCell, wallet: &str) -> Grant {
     Grant {
         workspace: access.workspace_id.clone(),
-        lab: lab.spec.instance_key.clone(),
+        cell: cell.spec.instance_key.clone(),
         principal: access.principal_id.clone(),
         wallet: wallet.into(),
         authority: access.id.clone(),
     }
 }
 
-fn grant(action: &ProofstormLabAction, lab: &ProofstormLab, wallet: &str) -> Result<Grant, Error> {
+fn grant(
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
+    wallet: &str,
+) -> Result<Grant, Error> {
     if action.spec.capability != Capability::ComponentExecLive
-        || !lab
+        || !cell
             .spec
-            .lab
+            .cell
             .components
             .iter()
             .any(|c| c.id == wallet && c.kind == ComponentKind::Wallet)
     {
         return Err(failure());
     }
-    validate_delegated_action(action, lab)?;
+    validate_delegated_action(action, cell)?;
     if let Some(access) = &action.spec.access_scope {
-        return Ok(recipient_grant(access, lab, wallet));
+        return Ok(recipient_grant(access, cell, wallet));
     }
     Ok(Grant {
         workspace: action.spec.workspace_id.clone(),
-        lab: lab.spec.instance_key.clone(),
+        cell: cell.spec.instance_key.clone(),
         principal: action.spec.principal_id.clone(),
         wallet: wallet.into(),
         authority: "owner".into(),
     })
 }
 
-pub async fn reconcile(action: &ProofstormLabAction, context: &Context) -> Result<Action, Error> {
+pub async fn reconcile(action: &ProofstormCellAction, context: &Context) -> Result<Action, Error> {
     let result = metadata(action, context).await;
     match result {
         Ok(transfer) => {
             patch_action_status(
                 action,
                 context,
-                ProofstormLabActionStatus {
+                ProofstormCellActionStatus {
                     phase: ActionPhase::Succeeded,
                     observed_generation: action.metadata.generation,
                     completed_at_unix: Some(now_unix()),
                     artifact: Some(status_object(serde_json::json!({"transfer":transfer}))),
-                    ..ProofstormLabActionStatus::default()
+                    ..ProofstormCellActionStatus::default()
                 },
             )
             .await?;
@@ -200,14 +207,14 @@ pub async fn reconcile(action: &ProofstormLabAction, context: &Context) -> Resul
         }
     }
 }
-async fn metadata(action: &ProofstormLabAction, context: &Context) -> Result<Transfer, Error> {
+async fn metadata(action: &ProofstormCellAction, context: &Context) -> Result<Transfer, Error> {
     use proofstorm_kube::TransferMethod;
-    let LabAction::PrivateTransfer(request) = &action.spec.action else {
+    let CellAction::PrivateTransfer(request) = &action.spec.action else {
         return Err(failure());
     };
-    let lab = live_lab(action, context).await?;
-    let source = grant(action, &lab, &request.component)?;
-    let mut vault = vault(&lab)?;
+    let cell = live_cell(action, context).await?;
+    let source = grant(action, &cell, &request.component)?;
+    let mut vault = vault(&cell)?;
     private(vault.expire())?;
     if request.transfer_method == TransferMethod::Handoff {
         if request.destination_component.is_some()
@@ -218,14 +225,14 @@ async fn metadata(action: &ProofstormLabAction, context: &Context) -> Result<Tra
         }
         let id = request.reference.as_deref().ok_or_else(failure)?;
         let recipient = recipient_access(
-            &lab,
+            &cell,
             request.recipient_grant_id.as_deref().ok_or_else(failure)?,
         )?;
         let scope = &recipient.scope;
         if scope.reference != id || scope.issuer_principal_id != source.principal {
             return Err(failure());
         }
-        let destination = recipient_grant(&recipient, &lab, &scope.component);
+        let destination = recipient_grant(&recipient, &cell, &scope.component);
         return private(vault.handoff(&source, &destination, id));
     }
     if request.recipient_grant_id.is_some() {
@@ -237,16 +244,16 @@ async fn metadata(action: &ProofstormLabAction, context: &Context) -> Result<Tra
         }
         let destination = grant(
             action,
-            &lab,
+            &cell,
             request
                 .destination_component
                 .as_deref()
                 .ok_or_else(failure)?,
         )?;
         let maximum = request.maximum_bytes.ok_or_else(failure)?;
-        if lab
+        if cell
             .spec
-            .lab
+            .cell
             .components
             .iter()
             .any(|c| c.id == destination.wallet && c.implementation == "cdk-cli-wallet")
@@ -274,18 +281,18 @@ async fn metadata(action: &ProofstormLabAction, context: &Context) -> Result<Tra
 }
 
 pub async fn configure(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
 ) -> Result<Option<PrivateIo>, Error> {
-    let LabAction::ComponentExecLive(request) = &action.spec.action else {
+    let CellAction::ComponentExecLive(request) = &action.spec.action else {
         return Err(failure());
     };
     let Some(binding) = &request.private_payload else {
         return Ok(None);
     };
-    let lab = live_lab(action, context).await?;
-    let authority = grant(action, &lab, &request.component)?;
-    let mut vault = vault(&lab)?;
+    let cell = live_cell(action, context).await?;
+    let authority = grant(action, &cell, &request.component)?;
+    let mut vault = vault(&cell)?;
     private(vault.expire())?;
     let t = private(vault.status(&authority, binding.reference()))?;
     let io = match binding {
@@ -315,18 +322,18 @@ pub async fn configure(
 
 /// Called only after the existing global native-execution handle fence commits.
 pub async fn start(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let LabAction::ComponentExecLive(request) = &action.spec.action else {
+    let CellAction::ComponentExecLive(request) = &action.spec.action else {
         return Err(failure());
     };
     let Some(binding) = &request.private_payload else {
         return Ok(None);
     };
-    let lab = live_lab(action, context).await?;
-    let authority = grant(action, &lab, &request.component)?;
-    let mut vault = vault(&lab)?;
+    let cell = live_cell(action, context).await?;
+    let authority = grant(action, &cell, &request.component)?;
+    let mut vault = vault(&cell)?;
     let id = binding.reference();
     match binding {
         PayloadBinding::Capture { .. } => {
@@ -343,28 +350,28 @@ pub async fn start(
 }
 
 pub async fn complete(
-    action: &ProofstormLabAction,
+    action: &ProofstormCellAction,
     context: &Context,
     receipt: &serde_json::Value,
 ) -> Result<Option<Transfer>, Error> {
-    let LabAction::ComponentExecLive(request) = &action.spec.action else {
+    let CellAction::ComponentExecLive(request) = &action.spec.action else {
         return Err(failure());
     };
     let Some(binding) = &request.private_payload else {
         return Ok(None);
     };
     // Completion may attach to an accepted operation after the session was released.
-    let labs = Api::<ProofstormLab>::namespaced(
+    let cells = Api::<ProofstormCell>::namespaced(
         context.client.clone(),
         &action.namespace().ok_or_else(failure)?,
     );
-    let lab = labs.get(&action.spec.lab_name).await?;
-    if lab.spec.instance_key != action.spec.instance_key
-        || lab.spec.workspace_id != action.spec.workspace_id
+    let cell = cells.get(&action.spec.cell_name).await?;
+    if cell.spec.instance_key != action.spec.instance_key
+        || cell.spec.workspace_id != action.spec.workspace_id
     {
         return Err(failure());
     }
-    let mut vault = vault(&lab)?;
+    let mut vault = vault(&cell)?;
     let native: NativeReceipt = serde_json::from_value(receipt.clone()).map_err(|_| failure())?;
     let id = binding.reference();
     let result = match binding {
@@ -379,10 +386,10 @@ pub async fn complete(
             let manifest: Option<PayloadManifest> = receipt
                 .get("payload_manifest")
                 .and_then(|value| serde_json::from_value(value.clone()).ok());
-            if manifest.is_none() || lab.metadata.deletion_timestamp.is_some() {
+            if manifest.is_none() || cell.metadata.deletion_timestamp.is_some() {
                 return private(vault.interrupt(id)).map(Some);
             }
-            let Ok(authority) = grant(action, &lab, &request.component) else {
+            let Ok(authority) = grant(action, &cell, &request.component) else {
                 return private(vault.interrupt(id)).map(Some);
             };
             let reference = action
@@ -407,28 +414,28 @@ pub async fn complete(
     Ok(Some(result))
 }
 
-pub fn close(lab: &ProofstormLab) -> Result<(), Error> {
-    let directory = path(lab)?;
+pub fn close(cell: &ProofstormCell) -> Result<(), Error> {
+    let directory = path(cell)?;
     if directory.exists() {
-        let receipt = private(vault(lab)?.close())?;
+        let receipt = private(vault(cell)?.close())?;
         if !receipt.storage_cleanup_verified {
             return Err(failure());
         }
     }
     Ok(())
 }
-pub fn remove_closed(lab: &ProofstormLab) -> Result<(), Error> {
-    close(lab)?;
-    let directory = path(lab)?;
+pub fn remove_closed(cell: &ProofstormCell) -> Result<(), Error> {
+    close(cell)?;
+    let directory = path(cell)?;
     if directory.exists() {
         std::fs::remove_dir_all(directory).map_err(|_| failure())?;
     }
     Ok(())
 }
 
-pub fn expire(lab: &ProofstormLab) -> Result<(), Error> {
-    if path(lab)?.exists() {
-        private(vault(lab)?.expire())?;
+pub fn expire(cell: &ProofstormCell) -> Result<(), Error> {
+    if path(cell)?.exists() {
+        private(vault(cell)?.expire())?;
     }
     Ok(())
 }
@@ -437,19 +444,19 @@ pub fn expire(lab: &ProofstormLab) -> Result<(), Error> {
 mod tests {
     use super::*;
     use proofstorm_kube::{
-        PrivateTransferAction, ProofstormLabActionSpec, ProofstormLabSpec, TransferMethod,
+        PrivateTransferAction, ProofstormCellActionSpec, ProofstormCellSpec, TransferMethod,
     };
-    fn fixture() -> (ProofstormLab, ProofstormLabAction) {
-        let lab=ProofstormLab::new("lab",ProofstormLabSpec {
+    fn fixture() -> (ProofstormCell, ProofstormCellAction) {
+        let cell=ProofstormCell::new("cell",ProofstormCellSpec {
             workspace_id:"workspace".into(),instance_id:"instance".into(),instance_key:"instance-key".into(),revision_digest:"revision".into(),
             lock:proofstorm_core::ResolvedLock {api_version:"proofstorm/v1alpha1".into(),digest:"lock".into(),entries:vec![]},
-            lab:serde_json::from_value(serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"lab","components":[{"id":"wallet","kind":"wallet","implementation":"cocod-wallet","config_version":"test","control":"laboratory","config":{}}],"links":[]})).unwrap(),
+            cell:serde_json::from_value(serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"cell","components":[{"id":"wallet","kind":"wallet","implementation":"cocod-wallet","config_version":"test","control":"cell","config":{}}],"links":[]})).unwrap(),
         });
-        let action = ProofstormLabAction::new(
+        let action = ProofstormCellAction::new(
             "action",
-            ProofstormLabActionSpec {
+            ProofstormCellActionSpec {
                 access_scope: None,
-                lab_name: "lab".into(),
+                cell_name: "cell".into(),
                 workspace_id: "workspace".into(),
                 instance_id: "instance".into(),
                 instance_key: "instance-key".into(),
@@ -461,7 +468,7 @@ mod tests {
                 request_digest: "request".into(),
                 capability: Capability::ComponentExecLive,
                 accepted_at_unix: now_unix(),
-                action: LabAction::PrivateTransfer(PrivateTransferAction {
+                action: CellAction::PrivateTransfer(PrivateTransferAction {
                     recipient_grant_id: None,
                     transfer_method: TransferMethod::Status,
                     component: "wallet".into(),
@@ -471,20 +478,20 @@ mod tests {
                 }),
             },
         );
-        (lab, action)
+        (cell, action)
     }
     #[test]
     fn ordinary_private_work_has_no_session_state_or_single_owner_annotation() {
-        let (lab, mut action) = fixture();
-        let first = grant(&action, &lab, "wallet").unwrap();
+        let (cell, mut action) = fixture();
+        let first = grant(&action, &cell, "wallet").unwrap();
         action.spec.session_id = "another-session".into();
-        let later = grant(&action, &lab, "wallet").unwrap();
+        let later = grant(&action, &cell, "wallet").unwrap();
         assert_eq!(first.authority, later.authority);
-        assert!(grant(&action, &lab, "unknown-wallet").is_err());
+        assert!(grant(&action, &cell, "unknown-wallet").is_err());
     }
     #[test]
     fn private_access_is_bound_and_revocable_independently_of_sessions() {
-        let (mut lab, mut action) = fixture();
+        let (mut cell, mut action) = fixture();
         let access = PrivateAccessGrant {
             id: "receive-one".into(),
             workspace_id: "workspace".into(),
@@ -500,21 +507,21 @@ mod tests {
             created_at_unix: 0,
             revoked_at_unix: None,
         };
-        lab.metadata.annotations = Some(std::collections::BTreeMap::from([(
+        cell.metadata.annotations = Some(std::collections::BTreeMap::from([(
             PRIVATE_ACCESS_ANNOTATION.into(),
             serde_json::json!({access.id.clone():access}).to_string(),
         )]));
         action.spec.principal_id = "receiver".into();
         action.spec.access_scope = Some(access.clone());
-        assert!(validate_delegated_action(&action, &lab).is_ok());
+        assert!(validate_delegated_action(&action, &cell).is_ok());
         action.spec.session_id = "new-session".into();
-        assert!(validate_delegated_action(&action, &lab).is_ok());
+        assert!(validate_delegated_action(&action, &cell).is_ok());
         let mut revoked = access.clone();
         revoked.revoked_at_unix = Some(1);
-        lab.metadata.annotations.as_mut().unwrap().insert(
+        cell.metadata.annotations.as_mut().unwrap().insert(
             PRIVATE_ACCESS_ANNOTATION.into(),
             serde_json::json!({access.id:revoked}).to_string(),
         );
-        assert!(validate_delegated_action(&action, &lab).is_err());
+        assert!(validate_delegated_action(&action, &cell).is_err());
     }
 }

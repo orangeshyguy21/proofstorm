@@ -1,7 +1,7 @@
 //! Stable canvas identities and geometry, independent of browser rendering.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 use proofstorm_core::{ComponentKind, LinkKind};
-use proofstorm_view::{ComponentView, EnvironmentLab};
+use proofstorm_view::{ComponentView, EnvironmentCell};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,13 +50,13 @@ impl CanvasNode {
         }
     }
 }
-pub fn resource_parents(lab: &EnvironmentLab) -> BTreeMap<String, String> {
-    lab.components
+pub fn resource_parents(cell: &EnvironmentCell) -> BTreeMap<String, String> {
+    cell.components
         .items
         .iter()
         .filter(|c| c.kind == ComponentKind::Database)
         .filter_map(|resource| {
-            let consumers = lab
+            let consumers = cell
                 .links
                 .items
                 .iter()
@@ -74,13 +74,13 @@ pub fn resource_parents(lab: &EnvironmentLab) -> BTreeMap<String, String> {
                 return None;
             }
             let parent = *consumers.first()?;
-            let owner = lab.components.items.iter().find(|c| c.id == parent)?;
+            let owner = cell.components.items.iter().find(|c| c.id == parent)?;
             if owner.kind == ComponentKind::Database
                 || resource
                     .details
                     .as_ref()
                     .is_some_and(|d| !d.embedded.is_empty())
-                || !lab.links.items.iter().any(|l| {
+                || !cell.links.items.iter().any(|l| {
                     l.kind == LinkKind::DatabaseBackend && l.from == parent && l.to == resource.id
                 })
             {
@@ -90,9 +90,9 @@ pub fn resource_parents(lab: &EnvironmentLab) -> BTreeMap<String, String> {
         })
         .collect()
 }
-pub fn nodes(lab: &EnvironmentLab) -> Vec<CanvasNode> {
-    let parents = resource_parents(lab);
-    let mut nodes = lab
+pub fn nodes(cell: &EnvironmentCell) -> Vec<CanvasNode> {
+    let parents = resource_parents(cell);
+    let mut nodes = cell
         .components
         .items
         .iter()
@@ -137,8 +137,8 @@ pub fn nodes(lab: &EnvironmentLab) -> Vec<CanvasNode> {
     nodes.sort_by_key(|node| (node.parent.is_some(), !node.is_embedded()));
     nodes
 }
-pub fn selected_owner<'a>(lab: &'a EnvironmentLab, id: &str) -> Option<&'a ComponentView> {
-    lab.components.items.iter().find(|c| {
+pub fn selected_owner<'a>(cell: &'a EnvironmentCell, id: &str) -> Option<&'a ComponentView> {
+    cell.components.items.iter().find(|c| {
         c.id == id
             || c.details
                 .as_ref()
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(p[&items[1].id], (28.0, 154.0));
         assert_ne!(embedded_id("a::b", "c"), embedded_id("a", "b::c"));
     }
-    fn resource_lab(shared: bool) -> EnvironmentLab {
+    fn resource_cell(shared: bool) -> EnvironmentCell {
         use serde_json::json;
         let component = |id, kind| json!({"id":id,"kind":kind,"implementation":"test","conditions":[],"endpoints":[]});
         let mut mint = component("mint", "mint");
@@ -363,26 +363,26 @@ mod tests {
             links
                 .push(json!({"id":"shared", "from":"other", "to":"db", "kind":"database_backend"}));
         }
-        serde_json::from_value(json!({"id":"lab", "journal_read_at_unix":10,
+        serde_json::from_value(json!({"id":"cell", "journal_read_at_unix":10,
             "runtime":{"state":"available","fetched_at_unix":10},
             "components":{"items":[component("db","database"), mint, component("cache","database"), component("other","mint")]},
             "links":{"items":links}, "sessions":{"items":[]}, "activity":{"items":[]}})).unwrap()
     }
     #[test]
     fn dedicated_databases_share_the_wrapper_but_keep_their_own_identity() {
-        let lab = resource_lab(false);
-        let items = nodes(&lab);
+        let cell = resource_cell(false);
+        let items = nodes(&cell);
         let db = items.iter().find(|n| n.id == "db").unwrap();
         let mint = items.iter().find(|n| n.id == "mint").unwrap();
         assert_eq!(db.parent.as_deref(), Some("mint"));
         assert_eq!(db.owner, "db");
         assert!(!db.is_embedded());
-        assert_eq!(selected_owner(&lab, "db").unwrap().id, "db");
+        assert_eq!(selected_owner(&cell, "db").unwrap().id, "db");
         assert!((group_height(mint) - 600.0).abs() < f64::EPSILON);
         assert!(
             items.iter().position(|n| n.id == "mint") < items.iter().position(|n| n.id == "db")
         );
-        assert!(crate::relationships::edges(&lab, None, 0).is_empty());
+        assert!(crate::relationships::edges(&cell, None, 0).is_empty());
 
         let embedded = embedded_id("mint", "bdk");
         let mut p = Positions::from([
@@ -408,8 +408,8 @@ mod tests {
     }
     #[test]
     fn shared_or_unowned_databases_stay_standalone() {
-        let mut lab = resource_lab(true);
-        let items = nodes(&lab);
+        let mut cell = resource_cell(true);
+        let items = nodes(&cell);
         assert!(
             items
                 .iter()
@@ -418,10 +418,10 @@ mod tests {
                 .parent
                 .is_none()
         );
-        assert_eq!(crate::relationships::edges(&lab, None, 0).len(), 2);
-        lab.links.items.clear();
+        assert_eq!(crate::relationships::edges(&cell, None, 0).len(), 2);
+        cell.links.items.clear();
         assert!(
-            nodes(&lab)
+            nodes(&cell)
                 .iter()
                 .filter(|n| n.kind == ComponentKind::Database)
                 .all(|n| n.parent.is_none())

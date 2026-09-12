@@ -1,8 +1,8 @@
 use super::state::{self, RECORD, Record};
 use crate::{
+    cell::Cells,
     config::{DEFAULT_WORKSPACE, Environment},
     installation::Installation,
-    lab::Labs,
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -258,10 +258,10 @@ pub(super) async fn serve(home: &Path, instance: &str, allow_development: bool) 
     store.authorize(
         DEFAULT_WORKSPACE,
         "developer",
-        proofstorm_core::Capability::LabStatus,
+        proofstorm_core::Capability::CellStatus,
     )?;
     let runtime = environment.runtime().await?;
-    let labs = Labs::new(store, runtime, DEFAULT_WORKSPACE.into(), "developer".into())
+    let cells = Cells::new(store, runtime, DEFAULT_WORKSPACE.into(), "developer".into())
         .with_installation(Some(installation.clone()));
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     record.port = listener.local_addr()?.port();
@@ -275,7 +275,7 @@ pub(super) async fn serve(home: &Path, instance: &str, allow_development: bool) 
     );
     session.web_dist = crate::artifacts::web_dist(home)?;
     let session = Arc::new(session);
-    let result = crate::http::serve_managed(labs, listener, session).await;
+    let result = crate::http::serve_managed(cells, listener, session).await;
     state::remove_owned(&installation.home, &record)?;
     result.map_err(Into::into)
 }

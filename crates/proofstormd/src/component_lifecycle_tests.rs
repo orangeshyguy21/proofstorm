@@ -1,7 +1,7 @@
 use super::*;
 use http::{Request, Response};
 use kube::{Client, client::Body};
-use proofstorm_kube::render_lab;
+use proofstorm_kube::render_cell;
 use serde_json::{Value, json};
 use std::{
     convert::Infallible,
@@ -10,7 +10,7 @@ use std::{
 
 struct Cluster {
     workload: Value,
-    action: ProofstormLabAction,
+    action: ProofstormCellAction,
     patches: Vec<Value>,
     pods: Vec<Value>,
     conflict: bool,
@@ -87,11 +87,11 @@ fn fixture(
     Arc<Mutex<Cluster>>,
     Context,
 ) {
-    let spec: proofstorm_core::LabSpec =
-        serde_json::from_str(include_str!("../../../examples/developer-lab.json")).unwrap();
+    let spec: proofstorm_core::CellSpec =
+        serde_json::from_str(include_str!("../../../examples/developer-cell.json")).unwrap();
     let lock = proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).unwrap();
     let key = "i0123456789012345678";
-    let rendered = render_lab(key, "revision", &spec, &lock).unwrap();
+    let rendered = render_cell(key, "revision", &spec, &lock).unwrap();
     let component = if deployment { "mint" } else { "chain" };
     let mut workload = if deployment {
         json!(
@@ -112,13 +112,13 @@ fn fixture(
     };
     workload["metadata"]["resourceVersion"] = json!("42");
     workload["metadata"]["generation"] = json!(4);
-    let mut action = ProofstormLabAction::new(
+    let mut action = ProofstormCellAction::new(
         "action",
-        proofstorm_kube::ProofstormLabActionSpec {
+        proofstorm_kube::ProofstormCellActionSpec {
             access_scope: None,
-            lab_name: "lab".into(),
+            cell_name: "cell".into(),
             workspace_id: "local".into(),
-            instance_id: "lab".into(),
+            instance_id: "cell".into(),
             instance_key: key.into(),
             experiment_id: "run".into(),
             session_id: "session".into(),
@@ -130,17 +130,17 @@ fn fixture(
             accepted_at_unix: 1,
             action: match control {
                 Control::Start => {
-                    LabAction::ComponentStart(proofstorm_kube::ComponentControlAction {
+                    CellAction::ComponentStart(proofstorm_kube::ComponentControlAction {
                         component: component.into(),
                     })
                 }
                 Control::Stop => {
-                    LabAction::ComponentStop(proofstorm_kube::ComponentControlAction {
+                    CellAction::ComponentStop(proofstorm_kube::ComponentControlAction {
                         component: component.into(),
                     })
                 }
                 Control::Restart => {
-                    LabAction::ComponentRestart(proofstorm_kube::ComponentControlAction {
+                    CellAction::ComponentRestart(proofstorm_kube::ComponentControlAction {
                         component: component.into(),
                     })
                 }
@@ -148,7 +148,7 @@ fn fixture(
         },
     );
     action.metadata.namespace = Some("system".into());
-    action.status = Some(ProofstormLabActionStatus {
+    action.status = Some(ProofstormCellActionStatus {
         phase: ActionPhase::Running,
         started_at_unix: Some(1),
         ..Default::default()
@@ -403,7 +403,7 @@ async fn stop_then_edit_then_start_retains_storage_and_uses_the_new_configuratio
             c.action.spec.sequence = 11;
             c.action.spec.operation_id = "start-after-edit".into();
             c.action.spec.action =
-                LabAction::ComponentStart(proofstorm_kube::ComponentControlAction {
+                CellAction::ComponentStart(proofstorm_kube::ComponentControlAction {
                     component: plan.component_id.clone(),
                 });
         }

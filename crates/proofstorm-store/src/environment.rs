@@ -1,14 +1,14 @@
-//! Read-only discovery over retained instances, including unnamed and historical labs.
-use super::{Capability, LabHandle, LabOperation, Store, StoreError, params};
+//! Read-only discovery over retained instances, including unnamed and historical cells.
+use super::{Capability, CellHandle, CellOperation, Store, StoreError, params};
 use rusqlite::OptionalExtension;
 
 pub struct EnvironmentEntry {
     pub id: String,
-    pub handle: Option<LabHandle>,
+    pub handle: Option<CellHandle>,
 }
 
 pub struct PendingObservationPage {
-    pub operations: Vec<LabOperation>,
+    pub operations: Vec<CellOperation>,
     pub next_cursor: Option<String>,
     pub incompatible_records: usize,
 }
@@ -36,11 +36,11 @@ impl Store {
         cursor: &str,
         limit: u32,
     ) -> Result<(Vec<EnvironmentEntry>, Option<String>), StoreError> {
-        self.authorize(workspace, principal, Capability::LabStatus)?;
+        self.authorize(workspace, principal, Capability::CellStatus)?;
         validate_page(cursor, limit)?;
         let rows = {
             let db = self.lock()?;
-            db.prepare("SELECT ids.id,h.name FROM (SELECT id FROM instances WHERE workspace_id=?1 UNION SELECT instance_id AS id FROM lab_handles WHERE workspace_id=?1) ids LEFT JOIN lab_handles h ON h.workspace_id=?1 AND h.instance_id=ids.id WHERE ids.id>?2 ORDER BY ids.id LIMIT ?3")?
+            db.prepare("SELECT ids.id,h.name FROM (SELECT id FROM instances WHERE workspace_id=?1 UNION SELECT instance_id AS id FROM cell_handles WHERE workspace_id=?1) ids LEFT JOIN cell_handles h ON h.workspace_id=?1 AND h.instance_id=ids.id WHERE ids.id>?2 ORDER BY ids.id LIMIT ?3")?
                 .query_map(params![workspace,cursor,limit+1], |r| Ok((r.get::<_,String>(0)?, r.get::<_,Option<String>>(1)?)))?
                 .collect::<Result<Vec<_>,_>>()?
         };
@@ -50,7 +50,7 @@ impl Store {
             .take(limit as usize)
             .map(|(id, name)| {
                 let handle = name
-                    .map(|n| self.lab_handle(workspace, principal, &n))
+                    .map(|n| self.cell_handle(workspace, principal, &n))
                     .transpose()?;
                 // A concurrent close/up may replace the name; do not attach it to the old instance.
                 Ok(EnvironmentEntry {
@@ -68,10 +68,10 @@ impl Store {
         principal: &str,
         id: &str,
     ) -> Result<EnvironmentEntry, StoreError> {
-        self.authorize(workspace, principal, Capability::LabStatus)?;
+        self.authorize(workspace, principal, Capability::CellStatus)?;
         let name: Option<Option<String>> = {
             let db = self.lock()?;
-            db.query_row("SELECT h.name FROM (SELECT id FROM instances WHERE workspace_id=?1 UNION SELECT instance_id AS id FROM lab_handles WHERE workspace_id=?1) ids LEFT JOIN lab_handles h ON h.workspace_id=?1 AND h.instance_id=ids.id WHERE ids.id=?2",params![workspace,id],|r|r.get(0)).optional()?
+            db.query_row("SELECT h.name FROM (SELECT id FROM instances WHERE workspace_id=?1 UNION SELECT instance_id AS id FROM cell_handles WHERE workspace_id=?1) ids LEFT JOIN cell_handles h ON h.workspace_id=?1 AND h.instance_id=ids.id WHERE ids.id=?2",params![workspace,id],|r|r.get(0)).optional()?
         };
         let name = name.ok_or_else(|| StoreError::NotFound {
             resource: "instance",
@@ -80,7 +80,7 @@ impl Store {
         Ok(EnvironmentEntry {
             id: id.into(),
             handle: name
-                .map(|n| self.lab_handle(workspace, principal, &n))
+                .map(|n| self.cell_handle(workspace, principal, &n))
                 .transpose()?
                 .filter(|h| h.instance_id == id),
         })
@@ -94,7 +94,7 @@ impl Store {
         instance: &str,
         cursor: &str,
         limit: u32,
-    ) -> Result<(Vec<LabOperation>, Option<String>), StoreError> {
+    ) -> Result<(Vec<CellOperation>, Option<String>), StoreError> {
         self.authorize(workspace, principal, Capability::ExperimentRead)?;
         validate_page(cursor, limit)?;
         let ids = {
@@ -102,7 +102,7 @@ impl Store {
             let boundary: Option<i64> = if cursor.is_empty() {
                 None
             } else {
-                Some(db.query_row("SELECT accepted_at FROM actions WHERE workspace_id=?1 AND instance_id=?2 AND id=?3",params![workspace,instance,cursor],|r|r.get(0)).optional()?.ok_or_else(||StoreError::Validation("activity cursor does not belong to this lab".into()))?)
+                Some(db.query_row("SELECT accepted_at FROM actions WHERE workspace_id=?1 AND instance_id=?2 AND id=?3",params![workspace,instance,cursor],|r|r.get(0)).optional()?.ok_or_else(||StoreError::Validation("activity cursor does not belong to this cell".into()))?)
             };
             db.prepare("SELECT id FROM actions WHERE workspace_id=?1 AND instance_id=?2 AND (?3 IS NULL OR accepted_at<?3 OR (accepted_at=?3 AND id<?4)) ORDER BY accepted_at DESC,id DESC LIMIT ?5")?
                 .query_map(params![workspace,instance,boundary,cursor,limit+1],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?

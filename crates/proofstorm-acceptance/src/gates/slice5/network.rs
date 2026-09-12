@@ -3,7 +3,7 @@ use super::common::{
     wait_reachability,
 };
 use super::support::ControllerPause;
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 use anyhow::{Result, bail};
 use serde_json::json;
 use std::{thread::sleep, time::Duration};
@@ -37,8 +37,8 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         ),
         "network partition",
     )?;
-    let partitioned = lab::wait_operation(client, "wallet-mint-partition", 120)?;
-    let partition_content = lab::artifact_content(&partitioned)?;
+    let partitioned = cell::wait_operation(client, "wallet-mint-partition", 120)?;
+    let partition_content = cell::artifact_content(&partitioned)?;
     if !expect::boolean(partition_content, "/partitioned")?
         || expect::string(partition_content, "/from_component")? != "wallet"
         || expect::string(partition_content, "/to_component")? != "mint"
@@ -78,8 +78,8 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
             json!({"from_component": "receiver-wallet", "to_component": "mint", "idempotency_key": "receiver-wallet-mint-partition-slice5"}),
         ),
     )?;
-    let receiver_partitioned = lab::wait_operation(client, "receiver-wallet-mint-partition", 120)?;
-    let receiver_content = lab::artifact_content(&receiver_partitioned)?;
+    let receiver_partitioned = cell::wait_operation(client, "receiver-wallet-mint-partition", 120)?;
+    let receiver_content = cell::artifact_content(&receiver_partitioned)?;
     if !expect::boolean(receiver_content, "/partitioned")?
         || expect::string(receiver_content, "/from_component")? != "receiver-wallet"
         || expect::string(receiver_content, "/to_component")? != "mint"
@@ -167,8 +167,8 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
             json!({"partition_operation_id": "wallet-mint-partition", "idempotency_key": "wallet-mint-heal-slice5"}),
         ),
     )?;
-    let healed = lab::wait_operation(client, "wallet-mint-heal", 120)?;
-    let heal_content = lab::artifact_content(&healed)?;
+    let healed = cell::wait_operation(client, "wallet-mint-heal", 120)?;
+    let heal_content = cell::artifact_content(&healed)?;
     if !expect::boolean(heal_content, "/healed")?
         || expect::string(heal_content, "/partition_operation_id")? != "wallet-mint-partition"
         || expect::integer(heal_content, "/active_partition_count")? != 1
@@ -207,8 +207,8 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
             json!({"partition_operation_id": "receiver-wallet-mint-partition", "idempotency_key": "receiver-wallet-mint-heal-slice5"}),
         ),
     )?;
-    let receiver_healed = lab::wait_operation(client, "receiver-wallet-mint-heal", 120)?;
-    let receiver_heal_content = lab::artifact_content(&receiver_healed)?;
+    let receiver_healed = cell::wait_operation(client, "receiver-wallet-mint-heal", 120)?;
+    let receiver_heal_content = cell::artifact_content(&receiver_healed)?;
     if !expect::boolean(receiver_heal_content, "/healed")?
         || expect::string(receiver_heal_content, "/partition_operation_id")?
             != "receiver-wallet-mint-partition"

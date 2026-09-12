@@ -22,9 +22,9 @@ fn cluster_client() -> Client {
                         200,
                         serde_json::json!({"apiVersion":"v1","kind":"ConfigMapList","metadata":{},"items":objects.iter().filter(|(p,_)|p.contains("/configmaps/")).map(|(_,v)|v).collect::<Vec<_>>()}),
                     ),
-                    http::Method::GET if path.ends_with("/proofstormlabactions") => (
+                    http::Method::GET if path.ends_with("/proofstormcellactions") => (
                         200,
-                        serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormLabActionList","metadata":{},"items":[]}),
+                        serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":[]}),
                     ),
                     http::Method::GET => objects
                         .get(&path)
@@ -41,7 +41,7 @@ fn cluster_client() -> Client {
                             value["metadata"]["name"].as_str().unwrap()
                         ));
                         value["metadata"]["resourceVersion"] = serde_json::json!("1");
-                        if value["kind"] == "ProofstormLab" {
+                        if value["kind"] == "ProofstormCell" {
                             value["status"] = serde_json::json!({"phase":"Pending","observedRevisionDigest":value["spec"]["revisionDigest"],"instanceNamespace":format!("proofstorm-{}",value["spec"]["instanceKey"].as_str().unwrap()),"components":[],"inventory":[]});
                         }
                         objects.insert(path, value.clone());
@@ -49,7 +49,7 @@ fn cluster_client() -> Client {
                     }
                     http::Method::DELETE => {
                         let value = objects.remove(&path).unwrap();
-                        if value["kind"] == "ProofstormLab" {
+                        if value["kind"] == "ProofstormCell" {
                             let key = value["spec"]["instanceKey"].as_str().unwrap();
                             let name = format!("proofstorm-teardown-{key}");
                             objects.insert(format!("/api/v1/namespaces/system/configmaps/{name}"), serde_json::json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":name,"uid":format!("uid-{name}")},"data":{"instanceNamespace":format!("proofstorm-{key}"),"verifiedAbsent":"true","inventoryDigest":"digest"}}));
@@ -78,15 +78,15 @@ fn cluster_client() -> Client {
 #[tokio::test]
 async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     let store = tests::seeded_store();
-    for cap in [Capability::ExperimentRead, Capability::LabOperate] {
+    for cap in [Capability::ExperimentRead, Capability::CellOperate] {
         store.grant("alpha", "designer", cap).unwrap();
     }
     let mcp = ProofstormMcp::new(store.clone(), "alpha", "designer")
         .unwrap()
         .with_kubernetes(cluster_client(), "system");
-    let cli = mcp.labs().unwrap();
+    let cli = mcp.cells().unwrap();
     let plan = mcp
-        .proofstorm_lab_plan(Parameters(
+        .proofstorm_cell_plan(Parameters(
             serde_json::from_value(serde_json::json!({
                 "plan_id":"transport-plan","idempotency_key":"transport-plan",
                 "components":[{"id":"chain","implementation":"bitcoin-core"}],
@@ -97,8 +97,8 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
         .unwrap()
         .0;
     let applied = mcp
-        .proofstorm_lab_apply(Parameters(LabApplyRequest {
-            instance_id: "transport-lab".into(),
+        .proofstorm_cell_apply(Parameters(CellApplyRequest {
+            instance_id: "transport-cell".into(),
             plan_id: plan.plan_id,
             expected_plan_digest: plan.plan_digest,
             idempotency_key: "transport-apply".into(),
@@ -106,25 +106,25 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
         .await
         .unwrap()
         .0;
-    let view = cli.inspect("transport-lab", 0).await.unwrap();
-    assert_eq!(view.lab.instance_id, applied.instance_id);
+    let view = cli.inspect("transport-cell", 0).await.unwrap();
+    assert_eq!(view.cell.instance_id, applied.instance_id);
     assert!(
         store
-            .lab_handle("alpha", "designer", "transport-lab")
+            .cell_handle("alpha", "designer", "transport-cell")
             .is_err()
     );
     let read = mcp
-        .proofstorm_lab_read(Parameters(ReadDraftRequest {
-            instance_id: Some("transport-lab".into()),
+        .proofstorm_cell_read(Parameters(ReadDraftRequest {
+            instance_id: Some("transport-cell".into()),
             draft_id: String::new(),
         }))
         .unwrap()
         .0;
-    let closed = cli.down("transport-lab", 2).await.unwrap();
+    let closed = cli.down("transport-cell", 2).await.unwrap();
     let key = closed.runtime.unwrap().instance.instance_key;
     assert!(
-        mcp.proofstorm_lab_wait(Parameters(LabWaitRequest {
-            instance_id: "transport-lab".into(),
+        mcp.proofstorm_cell_wait(Parameters(CellWaitRequest {
+            instance_id: "transport-cell".into(),
             expected_instance_key: Some(key),
             expected_generation: None,
             target_phase: InstancePhase::Closed,
@@ -137,14 +137,14 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     );
 
     let named = cli
-        .up("cli-name", &read.lab)
+        .up("cli-name", &read.cell)
         .await
         .unwrap()
         .runtime
         .unwrap()
         .instance;
     let status = mcp
-        .proofstorm_lab_status(Parameters(InstanceRequest {
+        .proofstorm_cell_status(Parameters(InstanceRequest {
             instance_id: "cli-name".into(),
         }))
         .await
@@ -153,7 +153,7 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     assert_eq!(status.instance_id, named.id);
     assert_eq!(status.instance_key, named.instance_key);
     let closing = mcp
-        .proofstorm_lab_close(Parameters(CloseLabRequest {
+        .proofstorm_cell_close(Parameters(CloseCellRequest {
             instance_id: "cli-name".into(),
             expected_instance_key: named.instance_key.clone(),
         }))
@@ -161,12 +161,12 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
         .unwrap()
         .0;
     assert_eq!(closing.phase, InstancePhase::Closing);
-    mcp.proofstorm_lab_finish(Parameters(DeveloperFinishRequest {
+    mcp.proofstorm_cell_finish(Parameters(DeveloperFinishRequest {
         name: "cli-name".into(),
         expected_instance_key: named.instance_key,
         timeout_seconds: 2,
     }))
     .await
     .unwrap();
-    assert!(store.lab_handle("alpha", "designer", "cli-name").is_err());
+    assert!(store.cell_handle("alpha", "designer", "cli-name").is_err());
 }

@@ -1,14 +1,14 @@
 use std::{fs, path::PathBuf};
 
 use kube::CustomResourceExt;
-use proofstorm_kube::{ProofstormCandidateBuild, ProofstormLab, ProofstormLabAction};
+use proofstorm_kube::{ProofstormCandidateBuild, ProofstormCell, ProofstormCellAction};
 
 #[test]
 fn native_action_fields_survive_the_structural_schema() {
     // CRD regeneration alone cannot catch a field omitted from the hand-written
     // structural union. Check the actual serialized request against that union.
     let action =
-        proofstorm_kube::LabAction::ComponentExecLive(proofstorm_kube::ComponentExecLiveAction {
+        proofstorm_kube::CellAction::ComponentExecLive(proofstorm_kube::ComponentExecLiveAction {
             private_payload: Some(proofstorm_core::private_io::PayloadBinding::Consume {
                 reference: "payload-ref".into(),
                 input: proofstorm_core::private_io::InputBinding::Argv { index: 2 },
@@ -23,7 +23,7 @@ fn native_action_fields_survive_the_structural_schema() {
             },
         });
     let request = serde_json::to_value(action).unwrap();
-    let crd = serde_json::to_value(ProofstormLabAction::crd()).unwrap();
+    let crd = serde_json::to_value(ProofstormCellAction::crd()).unwrap();
     let properties = crd.pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/action/properties/parameters/properties").unwrap();
     for field in request["parameters"].as_object().unwrap().keys() {
         assert!(
@@ -56,12 +56,12 @@ fn checked_in_crds_match_typed_contracts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let cases = [
         (
-            "proofstorm.dev_proofstormlabs.yaml",
-            serde_yaml::to_string(&ProofstormLab::crd()).expect("serialize lab CRD"),
+            "proofstorm.dev_proofstormcells.yaml",
+            serde_yaml::to_string(&ProofstormCell::crd()).expect("serialize cell CRD"),
         ),
         (
-            "proofstorm.dev_proofstormlabactions.yaml",
-            serde_yaml::to_string(&ProofstormLabAction::crd()).expect("serialize action CRD"),
+            "proofstorm.dev_proofstormcellactions.yaml",
+            serde_yaml::to_string(&ProofstormCellAction::crd()).expect("serialize action CRD"),
         ),
         (
             "proofstorm.dev_proofstormcandidatebuilds.yaml",
@@ -70,7 +70,7 @@ fn checked_in_crds_match_typed_contracts() {
         ),
     ];
     for (name, generated) in cases {
-        if name == "proofstorm.dev_proofstormlabs.yaml" {
+        if name == "proofstorm.dev_proofstormcells.yaml" {
             assert!(generated.contains("x-kubernetes-validations:"));
             assert!(generated.contains("chain bindings require only network"));
             assert!(generated.contains("backend links require a binding"));
@@ -83,7 +83,7 @@ fn checked_in_crds_match_typed_contracts() {
 
 #[test]
 fn recipient_scope_and_handoff_survive_structural_schema() {
-    let crd = serde_json::to_value(ProofstormLabAction::crd()).unwrap();
+    let crd = serde_json::to_value(ProofstormCellAction::crd()).unwrap();
     let spec = crd
         .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties")
         .unwrap();

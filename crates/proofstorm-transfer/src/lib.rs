@@ -1,4 +1,4 @@
-//! Private, lab-local byte custody. This crate does not implement Cashu, query a
+//! Private, cell-local byte custody. This crate does not implement Cashu, query a
 //! mint, or infer whether proofs are spent. Native wallet observations own that.
 //!
 //! Runtime-only API: grants must be constructed from freshly checked existing
@@ -51,7 +51,7 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Grant {
     pub workspace: String,
-    pub lab: String,
+    pub cell: String,
     pub principal: String,
     pub wallet: String,
     pub authority: String,
@@ -61,7 +61,7 @@ pub struct Grant {
 pub struct Limits {
     pub payload_bytes: u32,
     /// Includes both source capture and destination inbox reservations.
-    pub lab_bytes: u64,
+    pub cell_bytes: u64,
     pub active_transfers: u32,
     pub retention_seconds: u32,
 }
@@ -70,7 +70,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             payload_bytes: 1024 * 1024,
-            lab_bytes: 32 * 1024 * 1024,
+            cell_bytes: 32 * 1024 * 1024,
             active_transfers: 8,
             retention_seconds: 3600,
         }
@@ -159,7 +159,7 @@ pub struct Transfer {
     pub transport: TransportPath,
     pub id: String,
     pub workspace: String,
-    pub lab: String,
+    pub cell: String,
     pub source_wallet: String,
     pub destination_wallet: String,
     pub maximum_bytes: u32,
@@ -184,12 +184,12 @@ pub struct StorageCleanupReceipt {
     pub storage_cleanup_verified: bool,
 }
 
-// Exactly one lab and one runtime authority own a vault directory. A new process
+// Exactly one cell and one runtime authority own a vault directory. A new process
 // may reopen it, but must reconcile interrupted native stages explicitly.
 pub struct Vault {
     db: Connection,
     workspace: String,
-    lab: String,
+    cell: String,
     limits: Limits,
 }
 
@@ -222,13 +222,13 @@ fn private_directory(path: &Path) -> Result<()> {
 }
 
 impl Vault {
-    pub fn open(root: &Path, workspace: &str, lab: &str, limits: Limits) -> Result<Self> {
+    pub fn open(root: &Path, workspace: &str, cell: &str, limits: Limits) -> Result<Self> {
         if !ident(workspace)
-            || !ident(lab)
+            || !ident(cell)
             || limits.payload_bytes == 0
             || limits.payload_bytes > 16 * 1024 * 1024
-            || limits.lab_bytes > 256 * 1024 * 1024
-            || limits.lab_bytes < u64::from(limits.payload_bytes) * 2
+            || limits.cell_bytes > 256 * 1024 * 1024
+            || limits.cell_bytes < u64::from(limits.payload_bytes) * 2
             || !(1..=32).contains(&limits.active_transfers)
             || !(1..=86400).contains(&limits.retention_seconds)
         {
@@ -255,40 +255,40 @@ impl Vault {
         db.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|_| Error::Storage)?;
         db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;
-            CREATE TABLE IF NOT EXISTS identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), workspace TEXT NOT NULL, lab TEXT NOT NULL, closed INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), workspace TEXT NOT NULL, cell TEXT NOT NULL, closed INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS transfers (id INTEGER PRIMARY KEY, handle TEXT NOT NULL UNIQUE, request_key TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, source_json TEXT NOT NULL, destination_json TEXT NOT NULL, metadata TEXT NOT NULL, capacity INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS payloads (id INTEGER PRIMARY KEY, body BLOB NOT NULL);")
             .map_err(|_| Error::Storage)?;
         db.execute(
-            "INSERT OR IGNORE INTO identity(singleton,workspace,lab) VALUES(1,?1,?2)",
-            params![workspace, lab],
+            "INSERT OR IGNORE INTO identity(singleton,workspace,cell) VALUES(1,?1,?2)",
+            params![workspace, cell],
         )
         .map_err(|_| Error::Storage)?;
         let identity: (String, String) = db
             .query_row(
-                "SELECT workspace,lab FROM identity WHERE singleton=1",
+                "SELECT workspace,cell FROM identity WHERE singleton=1",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(|_| Error::Storage)?;
-        if identity != (workspace.to_owned(), lab.to_owned()) {
+        if identity != (workspace.to_owned(), cell.to_owned()) {
             return Err(Error::Access);
         }
         migration::upgrade(&mut db)?;
         Ok(Self {
             db,
             workspace: workspace.into(),
-            lab: lab.into(),
+            cell: cell.into(),
             limits,
         })
     }
 
     fn grant(&self, grant: &Grant) -> Result<()> {
         if grant.workspace != self.workspace
-            || grant.lab != self.lab
+            || grant.cell != self.cell
             || ![
                 &grant.workspace,
-                &grant.lab,
+                &grant.cell,
                 &grant.principal,
                 &grant.wallet,
                 &grant.authority,
@@ -364,7 +364,7 @@ impl Vault {
         let capacity = u64::from(maximum_bytes) * 2;
         if records >= 4096
             || count >= self.limits.active_transfers
-            || u64::from(used) + capacity > self.limits.lab_bytes
+            || u64::from(used) + capacity > self.limits.cell_bytes
         {
             return Err(Error::Capacity);
         }
@@ -377,7 +377,7 @@ impl Vault {
             transport: TransportPath::InfrastructureRelay,
             id: id.clone(),
             workspace: self.workspace.clone(),
-            lab: self.lab.clone(),
+            cell: self.cell.clone(),
             source_wallet: source.wallet.clone(),
             destination_wallet: destination.wallet.clone(),
             maximum_bytes,
@@ -951,7 +951,7 @@ fn row(db: &Connection, id: &str) -> Result<(i64, Transfer, String, String)> {
 fn grant_identity(grant: &Grant) -> Result<String> {
     serde_json::to_string(&(
         &grant.workspace,
-        &grant.lab,
+        &grant.cell,
         &grant.principal,
         &grant.wallet,
         &grant.authority,

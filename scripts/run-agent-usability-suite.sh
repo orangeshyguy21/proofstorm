@@ -17,7 +17,7 @@ usage() {
     "" \
     "Runs the selected scenario corpus strictly serially. The next fresh" \
     "headless OpenCode session is never started until the prior benchmark" \
-    "has exited and verified that no Proofstorm lab, candidate job, or storage remains."
+    "has exited and verified that no Proofstorm cell, candidate job, or storage remains."
 }
 
 while [[ $# -gt 0 ]]; do

@@ -13,10 +13,10 @@
       "timeout": 240000,
       "environment": {
         "PROOFSTORM_DB": ".proofstorm/proofstorm.sqlite3",
-        "PROOFSTORM_WORKSPACE": "local-lab",
+        "PROOFSTORM_WORKSPACE": "local-cell",
         "PROOFSTORM_PRINCIPAL": "designer-agent",
         "PROOFSTORM_TOOLSET": "native",
-        "PROOFSTORM_CAPABILITIES": "catalog.read,candidate.build,candidate.read,candidate.cancel,lab.read,lab.create,lab.edit,lab.clone,lab.validate,lab.publish,lab.materialize,lab.status,lab.close,experiment.create,experiment.read,experiment.close,lab.operate,action.cancel,topology.mutate,node.control,component.control,component.exec_live,component.forensics,component.logs,chain.mine,wallet.create,wallet.control,wallet.fund,peer.connect,peer.disconnect,channel.open,channel.close,channel.force_close,channel.rebalance,network.delay,network.drop,network.partition,network.heal,oracle.run,artifact.read",
+        "PROOFSTORM_CAPABILITIES": "catalog.read,candidate.build,candidate.read,candidate.cancel,cell.read,cell.create,cell.edit,cell.clone,cell.validate,cell.publish,cell.materialize,cell.status,cell.close,experiment.create,experiment.read,experiment.close,cell.operate,action.cancel,topology.mutate,node.control,component.control,component.exec_live,component.forensics,component.logs,chain.mine,wallet.create,wallet.control,wallet.fund,peer.connect,peer.disconnect,channel.open,channel.close,channel.force_close,channel.rebalance,network.delay,network.drop,network.partition,network.heal,oracle.run,artifact.read",
         "PROOFSTORM_CONTROL_NAMESPACE": "proofstorm-system",
         "PROOFSTORM_CONTEXT": "k3d-proofstorm"
       }

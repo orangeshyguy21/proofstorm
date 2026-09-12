@@ -71,7 +71,7 @@ an execution sandbox that forbids localhost listeners cannot run the entire suit
 Checks build under `target/check`, separate from registered development binaries.
 An explicit `CARGO_TARGET_DIR` is respected for scratch builds. The wrapper ignores
 development GUI asset selection and runtime home/kubeconfig overrides. It does
-not launch apps, update agent configurations, or change running labs.
+not launch apps, update agent configurations, or change running cells.
 
 Shell syntax is checked for tracked and non-ignored new `.sh` files. Strict
 ShellCheck covers `install.sh`, `scripts/test-install.sh`, `tools/install-trunk.sh`,
@@ -85,7 +85,7 @@ ShellCheck covers `install.sh`, `scripts/test-install.sh`, `tools/install-trunk.
 `scripts/release-promote.sh`, `scripts/test-release-promote.sh`,
 `scripts/release.sh`, `scripts/test-release-shortcuts.sh`,
 `scripts/controller-build.sh`, and `scripts/test-controller-build.sh`;
-legacy scenario/lab scripts are syntax-only until formalized.
+legacy scenario/cell scripts are syntax-only until formalized.
 Development-wrapper tests now live in the Rust `proofstorm-xtask` package and
 its Bash integration fixture. Other Python packaging/helper tests remain separate.
 

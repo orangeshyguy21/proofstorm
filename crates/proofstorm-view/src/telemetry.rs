@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct SystemView {
     pub sampled_at_unix: i64,
     pub error: Option<String>,
-    pub labs: Vec<LabUsage>,
+    pub cells: Vec<CellUsage>,
     pub totals: UsageTotals,
 }
 
@@ -50,7 +50,7 @@ impl UsageTotals {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct LabUsage {
+pub struct CellUsage {
     #[serde(default)]
     pub incarnation: String,
     pub id: String,

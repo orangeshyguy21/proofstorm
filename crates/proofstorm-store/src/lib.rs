@@ -12,12 +12,12 @@ mod runs;
 mod session_tests;
 mod sessions;
 pub use sessions::SessionPage;
-mod labs;
+mod cells;
 mod lifecycle;
 pub use lifecycle::{LifecycleGuard, RuntimeBinding};
 mod updates;
-pub use labs::{LabHandle, LabHandlePhase};
-pub use updates::LabUpdateState;
+pub use cells::{CellHandle, CellHandlePhase};
+pub use updates::CellUpdateState;
 
 use std::{
     collections::BTreeSet,
@@ -27,11 +27,11 @@ use std::{
 };
 
 use proofstorm_core::{
-    CandidateBuild, CandidateBuildPhase, Capability, CatalogResponse, DraftMutation, Experiment,
-    ExperimentPhase, LabInstance, LabOperation, LabSpec, OperationArtifact, OperationKind,
+    CandidateBuild, CandidateBuildPhase, Capability, CatalogResponse, CellInstance, CellOperation,
+    CellSpec, DraftMutation, Experiment, ExperimentPhase, OperationArtifact, OperationKind,
     OperationPhase, PublishedRevision, WalletQuoteDirection, WalletQuoteObservation,
     WalletQuoteObservationInput, WalletQuoteObservationRole, apply_draft_mutation, default_catalog,
-    effective_catalog, resolve_effective_lab, resolve_lock, validate_lab,
+    effective_catalog, resolve_effective_cell, resolve_lock, validate_cell,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use schemars::JsonSchema;
@@ -55,7 +55,7 @@ struct PaymentClaimInput<'a> {
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("{code}: {message}")]
-    LabUpdate { code: &'static str, message: String },
+    CellUpdate { code: &'static str, message: String },
     #[error("filesystem failure: {0}")]
     Io(#[from] std::io::Error),
     #[error("store failure: {0}")]
@@ -80,7 +80,7 @@ pub enum StoreError {
     IdempotencyConflict { key: String },
     #[error("{resource} {id:?} already exists with different immutable identity")]
     Conflict { resource: &'static str, id: String },
-    #[error("lab validation failed: {0}")]
+    #[error("cell validation failed: {0}")]
     Validation(String),
     #[error("catalog resolution failed: {0}")]
     Catalog(String),
@@ -93,7 +93,7 @@ pub enum StoreError {
     #[error("operation artifact is {actual} bytes; maximum is {maximum}")]
     ArtifactTooLarge { actual: usize, maximum: usize },
     #[error(
-        "lab instance {instance:?} already has {active} active operations; maximum is {maximum}"
+        "cell instance {instance:?} already has {active} active operations; maximum is {maximum}"
     )]
     OperationLimit {
         instance: String,
@@ -120,7 +120,7 @@ impl StoreError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::LabUpdate { code, .. } => code,
+            Self::CellUpdate { code, .. } => code,
             Self::Io(_)
             | Self::Database(_)
             | Self::Serialization(_)
@@ -156,7 +156,7 @@ pub struct Draft {
     pub id: String,
     pub workspace_id: String,
     pub version: u64,
-    pub lab: LabSpec,
+    pub cell: CellSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -261,7 +261,7 @@ impl Store {
              CREATE TABLE IF NOT EXISTS workspaces (
                id TEXT PRIMARY KEY, name TEXT NOT NULL
              );
-             CREATE TABLE IF NOT EXISTS lab_handles (
+             CREATE TABLE IF NOT EXISTS cell_handles (
                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
                name TEXT NOT NULL, generation INTEGER NOT NULL,
                owner TEXT NOT NULL, config_digest TEXT NOT NULL,
@@ -282,7 +282,7 @@ impl Store {
                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
                id TEXT NOT NULL,
                version INTEGER NOT NULL,
-               lab_json TEXT NOT NULL,
+               cell_json TEXT NOT NULL,
                PRIMARY KEY (workspace_id, id)
              );
              CREATE TABLE IF NOT EXISTS candidate_builds (
@@ -558,7 +558,7 @@ impl Store {
     }
 
     pub fn workspace(&self, workspace: &str, principal: &str) -> Result<Workspace, StoreError> {
-        self.authorize(workspace, principal, Capability::LabRead)?;
+        self.authorize(workspace, principal, Capability::CellRead)?;
         self.lock()?
             .query_row(
                 "SELECT id, name FROM workspaces WHERE id = ?1",
@@ -684,16 +684,16 @@ impl Store {
         workspace: &str,
         principal: &str,
         id: &str,
-        lab: &LabSpec,
+        cell: &CellSpec,
         idempotency_key: &str,
     ) -> Result<Draft, StoreError> {
-        self.authorize(workspace, principal, Capability::LabCreate)?;
-        let request = serde_json::json!({"id": id, "lab": lab});
+        self.authorize(workspace, principal, Capability::CellCreate)?;
+        let request = serde_json::json!({"id": id, "cell": cell});
         if let Some(response) = self.idempotent_response(
             workspace,
             principal,
             idempotency_key,
-            "lab.create",
+            "cell.create",
             &request,
         )? {
             return Ok(response);
@@ -702,11 +702,11 @@ impl Store {
             id: id.to_owned(),
             workspace_id: workspace.to_owned(),
             version: 1,
-            lab: lab.clone(),
+            cell: cell.clone(),
         };
         let inserted = self.lock()?.execute(
-            "INSERT INTO drafts(workspace_id, id, version, lab_json) VALUES (?1, ?2, 1, ?3) ON CONFLICT(workspace_id, id) DO NOTHING",
-            params![workspace, id, serde_json::to_string(lab)?],
+            "INSERT INTO drafts(workspace_id, id, version, cell_json) VALUES (?1, ?2, 1, ?3) ON CONFLICT(workspace_id, id) DO NOTHING",
+            params![workspace, id, serde_json::to_string(cell)?],
         )?;
         if inserted == 0 {
             return Err(StoreError::Conflict {
@@ -718,7 +718,7 @@ impl Store {
             workspace,
             principal,
             idempotency_key,
-            "lab.create",
+            "cell.create",
             &request,
             &draft,
         )?;
@@ -731,7 +731,7 @@ impl Store {
         principal: &str,
         id: &str,
     ) -> Result<Draft, StoreError> {
-        self.authorize(workspace, principal, Capability::LabRead)?;
+        self.authorize(workspace, principal, Capability::CellRead)?;
         self.read_draft_unchecked(workspace, id)
     }
 
@@ -741,22 +741,22 @@ impl Store {
         principal: &str,
         id: &str,
         expected_version: u64,
-        lab: &LabSpec,
+        cell: &CellSpec,
         idempotency_key: &str,
     ) -> Result<Draft, StoreError> {
-        self.authorize(workspace, principal, Capability::LabEdit)?;
+        self.authorize(workspace, principal, Capability::CellEdit)?;
         let request =
-            serde_json::json!({"id": id, "expectedVersion": expected_version, "lab": lab});
+            serde_json::json!({"id": id, "expectedVersion": expected_version, "cell": cell});
         if let Some(response) =
-            self.idempotent_response(workspace, principal, idempotency_key, "lab.edit", &request)?
+            self.idempotent_response(workspace, principal, idempotency_key, "cell.edit", &request)?
         {
             return Ok(response);
         }
         let changed = self.lock()?.execute(
-            "UPDATE drafts SET version = version + 1, lab_json = ?1
+            "UPDATE drafts SET version = version + 1, cell_json = ?1
              WHERE workspace_id = ?2 AND id = ?3 AND version = ?4",
             params![
-                serde_json::to_string(lab)?,
+                serde_json::to_string(cell)?,
                 workspace,
                 id,
                 sql_version(expected_version)?
@@ -775,7 +775,7 @@ impl Store {
             workspace,
             principal,
             idempotency_key,
-            "lab.edit",
+            "cell.edit",
             &request,
             &draft,
         )?;
@@ -791,7 +791,7 @@ impl Store {
         mutation: &DraftMutation,
         idempotency_key: &str,
     ) -> Result<Draft, StoreError> {
-        self.authorize(workspace, principal, Capability::LabEdit)?;
+        self.authorize(workspace, principal, Capability::CellEdit)?;
         let request = serde_json::json!({
             "id": id,
             "expectedVersion": expected_version,
@@ -801,7 +801,7 @@ impl Store {
             workspace,
             principal,
             idempotency_key,
-            "lab.mutate",
+            "cell.mutate",
             &request,
         )? {
             return Ok(response);
@@ -814,25 +814,25 @@ impl Store {
                 actual: current.version,
             });
         }
-        let mut lab = current.lab.clone();
+        let mut cell = current.cell.clone();
         let catalog = self.effective_catalog_unchecked(workspace)?;
-        apply_draft_mutation(&mut lab, mutation, &catalog).map_err(StoreError::Validation)?;
-        if lab == current.lab {
+        apply_draft_mutation(&mut cell, mutation, &catalog).map_err(StoreError::Validation)?;
+        if cell == current.cell {
             self.record_idempotency(
                 workspace,
                 principal,
                 idempotency_key,
-                "lab.mutate",
+                "cell.mutate",
                 &request,
                 &current,
             )?;
             return Ok(current);
         }
         let changed = self.lock()?.execute(
-            "UPDATE drafts SET version = version + 1, lab_json = ?1
+            "UPDATE drafts SET version = version + 1, cell_json = ?1
              WHERE workspace_id = ?2 AND id = ?3 AND version = ?4",
             params![
-                serde_json::to_string(&lab)?,
+                serde_json::to_string(&cell)?,
                 workspace,
                 id,
                 sql_version(expected_version)?
@@ -851,7 +851,7 @@ impl Store {
             workspace,
             principal,
             idempotency_key,
-            "lab.mutate",
+            "cell.mutate",
             &request,
             &draft,
         )?;
@@ -866,11 +866,15 @@ impl Store {
         target: &str,
         idempotency_key: &str,
     ) -> Result<Draft, StoreError> {
-        self.authorize(workspace, principal, Capability::LabClone)?;
+        self.authorize(workspace, principal, Capability::CellClone)?;
         let request = serde_json::json!({"source": source, "target": target});
-        if let Some(response) =
-            self.idempotent_response(workspace, principal, idempotency_key, "lab.clone", &request)?
-        {
+        if let Some(response) = self.idempotent_response(
+            workspace,
+            principal,
+            idempotency_key,
+            "cell.clone",
+            &request,
+        )? {
             return Ok(response);
         }
         let source = self.read_draft_unchecked(workspace, source)?;
@@ -878,17 +882,17 @@ impl Store {
             id: target.to_owned(),
             workspace_id: workspace.to_owned(),
             version: 1,
-            lab: source.lab,
+            cell: source.cell,
         };
         self.lock()?.execute(
-            "INSERT INTO drafts(workspace_id, id, version, lab_json) VALUES (?1, ?2, 1, ?3)",
-            params![workspace, target, serde_json::to_string(&draft.lab)?],
+            "INSERT INTO drafts(workspace_id, id, version, cell_json) VALUES (?1, ?2, 1, ?3)",
+            params![workspace, target, serde_json::to_string(&draft.cell)?],
         )?;
         self.record_idempotency(
             workspace,
             principal,
             idempotency_key,
-            "lab.clone",
+            "cell.clone",
             &request,
             &draft,
         )?;
@@ -905,13 +909,13 @@ impl Store {
         let from = self.read_draft(workspace, principal, from)?;
         let to = self.read_draft(workspace, principal, to)?;
         let from_ids = from
-            .lab
+            .cell
             .components
             .iter()
             .map(|item| item.id.clone())
             .collect::<BTreeSet<_>>();
         let to_ids = to
-            .lab
+            .cell
             .components
             .iter()
             .map(|item| item.id.clone())
@@ -921,8 +925,8 @@ impl Store {
             to_version: to.version,
             added_components: to_ids.difference(&from_ids).cloned().collect(),
             removed_components: from_ids.difference(&to_ids).cloned().collect(),
-            links_changed: from.lab.links != to.lab.links,
-            policy_changed: from.lab.policy != to.lab.policy,
+            links_changed: from.cell.links != to.cell.links,
+            policy_changed: from.cell.policy != to.cell.policy,
         })
     }
 
@@ -934,13 +938,13 @@ impl Store {
         expected_version: u64,
         idempotency_key: &str,
     ) -> Result<PublishedRevision, StoreError> {
-        self.authorize(workspace, principal, Capability::LabPublish)?;
+        self.authorize(workspace, principal, Capability::CellPublish)?;
         let request = serde_json::json!({"draftId": draft_id, "expectedVersion": expected_version});
         if let Some(response) = self.idempotent_response(
             workspace,
             principal,
             idempotency_key,
-            "lab.publish",
+            "cell.publish",
             &request,
         )? {
             return Ok(response);
@@ -953,21 +957,21 @@ impl Store {
                 actual: draft.version,
             });
         }
-        let report = validate_lab(&draft.lab);
+        let report = validate_cell(&draft.cell);
         if !report.valid {
             return Err(StoreError::Validation(serde_json::to_string(
                 &report.issues,
             )?));
         }
         let catalog = self.effective_catalog_unchecked(workspace)?;
-        let effective_lab =
-            resolve_effective_lab(&draft.lab, &catalog).map_err(StoreError::Catalog)?;
-        let lock = resolve_lock(&effective_lab, &catalog).map_err(StoreError::Catalog)?;
-        let digest = proofstorm_core::publication_digest(workspace, &effective_lab, &lock);
+        let effective_cell =
+            resolve_effective_cell(&draft.cell, &catalog).map_err(StoreError::Catalog)?;
+        let lock = resolve_lock(&effective_cell, &catalog).map_err(StoreError::Catalog)?;
+        let digest = proofstorm_core::publication_digest(workspace, &effective_cell, &lock);
         let revision = PublishedRevision {
             workspace_id: workspace.to_owned(),
             digest: digest.clone(),
-            lab: effective_lab,
+            cell: effective_cell,
             lock,
         };
         self.lock()?.execute(
@@ -979,7 +983,7 @@ impl Store {
             workspace,
             principal,
             idempotency_key,
-            "lab.publish",
+            "cell.publish",
             &request,
             &revision,
         )?;
@@ -992,7 +996,7 @@ impl Store {
         principal: &str,
         digest: &str,
     ) -> Result<PublishedRevision, StoreError> {
-        self.authorize(workspace, principal, Capability::LabRead)?;
+        self.authorize(workspace, principal, Capability::CellRead)?;
         let encoded = self
             .lock()?
             .query_row(
@@ -1017,23 +1021,23 @@ impl Store {
         instance_id: &str,
         revision_digest: &str,
         idempotency_key: &str,
-    ) -> Result<LabInstance, StoreError> {
-        self.authorize(workspace, principal, Capability::LabMaterialize)?;
+    ) -> Result<CellInstance, StoreError> {
+        self.authorize(workspace, principal, Capability::CellMaterialize)?;
         if !is_slug(instance_id) {
             return Err(StoreError::Validation(
                 "instance id must be a lowercase kebab-case identifier of 1..=63 bytes".into(),
             ));
         }
         if updates::state(&*self.lock()?, workspace, instance_id)?.closing {
-            return Err(StoreError::LabUpdate { code: "lab_closing", message: "Closed lab cannot be recreated by replaying materialize; start a new lab incarnation".into() });
+            return Err(StoreError::CellUpdate { code: "cell_closing", message: "Closed cell cannot be recreated by replaying materialize; start a new cell incarnation".into() });
         }
         let request =
             serde_json::json!({"instanceId": instance_id, "revisionDigest": revision_digest});
-        if let Some(_response) = self.idempotent_response::<LabInstance, _>(
+        if let Some(_response) = self.idempotent_response::<CellInstance, _>(
             workspace,
             principal,
             idempotency_key,
-            "lab.materialize",
+            "cell.materialize",
             &request,
         )? {
             return self.instance_unchecked(workspace, instance_id);
@@ -1048,7 +1052,7 @@ impl Store {
             return Ok(existing);
         }
         let revision = self.revision_unchecked(workspace, revision_digest)?;
-        // Deleted labs consume their plans. A stale low-level materialize request
+        // Deleted cells consume their plans. A stale low-level materialize request
         // must not resurrect one through a shared immutable revision.
         let has_plan: bool = self.lock()?.query_row("SELECT EXISTS(SELECT 1 FROM revisions r JOIN drafts d ON d.workspace_id=r.workspace_id AND d.id=r.draft_id WHERE r.workspace_id=?1 AND r.digest=?2)", params![workspace, revision_digest], |r|r.get(0))?;
         if !has_plan {
@@ -1062,13 +1066,13 @@ impl Store {
             .query_row("SELECT hex(randomblob(16))", [], |r| r.get(0))?;
         let identity = proofstorm_core::digest_json(&(workspace, instance_id, nonce));
         let instance_key = format!("i{}", &identity[7..26]);
-        let instance = LabInstance {
+        let instance = CellInstance {
             generation: 1,
             id: instance_id.to_owned(),
             workspace_id: workspace.to_owned(),
             revision_digest: revision_digest.to_owned(),
             lock_digest: revision.lock.digest,
-            resource_name: format!("lab-{instance_key}"),
+            resource_name: format!("cell-{instance_key}"),
             instance_key,
         };
         let inserted = self.lock()?.execute(
@@ -1097,7 +1101,7 @@ impl Store {
             workspace,
             principal,
             idempotency_key,
-            "lab.materialize",
+            "cell.materialize",
             &request,
             &instance,
         )?;
@@ -1109,8 +1113,8 @@ impl Store {
         workspace: &str,
         principal: &str,
         id: &str,
-    ) -> Result<LabInstance, StoreError> {
-        self.authorize(workspace, principal, Capability::LabStatus)?;
+    ) -> Result<CellInstance, StoreError> {
+        self.authorize(workspace, principal, Capability::CellStatus)?;
         self.instance_unchecked(workspace, id)
     }
 
@@ -1119,8 +1123,8 @@ impl Store {
         workspace: &str,
         principal: &str,
         id: &str,
-    ) -> Result<LabInstance, StoreError> {
-        self.authorize(workspace, principal, Capability::LabClose)?;
+    ) -> Result<CellInstance, StoreError> {
+        self.authorize(workspace, principal, Capability::CellClose)?;
         self.instance_unchecked(workspace, id)
     }
 
@@ -1209,7 +1213,7 @@ impl Store {
         principal: &str,
         experiment_id: &str,
     ) -> Result<Experiment, StoreError> {
-        self.authorize(workspace, principal, Capability::LabOperate)?;
+        self.authorize(workspace, principal, Capability::CellOperate)?;
         self.experiment_unchecked(workspace, experiment_id)
     }
 
@@ -1265,7 +1269,7 @@ impl Store {
         principal: &str,
         digest: &str,
     ) -> Result<PublishedRevision, StoreError> {
-        self.authorize(workspace, principal, Capability::LabMaterialize)?;
+        self.authorize(workspace, principal, Capability::CellMaterialize)?;
         self.revision_unchecked(workspace, digest)
     }
 
@@ -1285,7 +1289,7 @@ impl Store {
         principal: &str,
         instance_id: &str,
         capability: Capability,
-    ) -> Result<(LabInstance, PublishedRevision), StoreError> {
+    ) -> Result<(CellInstance, PublishedRevision), StoreError> {
         self.authorize(workspace, principal, capability)?;
         let instance = self.instance_unchecked(workspace, instance_id)?;
         let revision = self.revision_unchecked(workspace, &instance.revision_digest)?;
@@ -1300,7 +1304,7 @@ impl Store {
         instance_id: &str,
         operation_id: &str,
         capability: Capability,
-    ) -> Result<(LabInstance, PublishedRevision), StoreError> {
+    ) -> Result<(CellInstance, PublishedRevision), StoreError> {
         let (mut instance, current) =
             self.operation_context(workspace, principal, instance_id, capability)?;
         match self.operation_unchecked(workspace, operation_id) {
@@ -1338,7 +1342,7 @@ impl Store {
         request: &serde_json::Value,
         idempotency_key: &str,
         capability: Capability,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         self.create_operation_inner(
             workspace,
             principal,
@@ -1369,7 +1373,7 @@ impl Store {
         request: &serde_json::Value,
         idempotency_key: &str,
         capability: Capability,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         self.create_operation_inner(
             workspace,
             principal,
@@ -1403,7 +1407,7 @@ impl Store {
         mint_quote_id: &str,
         payer_wallet_id: &str,
         payer_mint_id: &str,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         validate_quote_observation_identity(recipient_wallet_id, recipient_mint_id, mint_quote_id)?;
         if !is_slug(payer_wallet_id) || !is_slug(payer_mint_id) {
             return Err(StoreError::Validation(
@@ -1452,7 +1456,7 @@ impl Store {
         capability: Capability,
         payment_claim: Option<PaymentClaimInput<'_>>,
         expected_revision: Option<&str>,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         self.authorize(workspace, principal, capability)?;
         if !is_slug(operation_id) {
             return Err(StoreError::Validation(
@@ -1482,11 +1486,11 @@ impl Store {
             "sessionId": session_id, "operationId": operation_id,
             "kind": kind, "request": request
         });
-        if let Some(response) = self.idempotent_response::<LabOperation, _>(
+        if let Some(response) = self.idempotent_response::<CellOperation, _>(
             workspace,
             principal,
             idempotency_key,
-            "lab.operation.create",
+            "cell.operation.create",
             &envelope,
         )? {
             return self.operation_unchecked(workspace, &response.id);
@@ -1498,7 +1502,7 @@ impl Store {
         let run = self.experiment_unchecked(workspace, experiment_id)?;
         if run.instance_id != instance_id || run.phase != ExperimentPhase::Active {
             return Err(StoreError::Validation(
-                "action run must be open and belong to this lab".into(),
+                "action run must be open and belong to this cell".into(),
             ));
         }
         let session = self.track_session(workspace, principal, experiment_id, session_id)?;
@@ -1516,14 +1520,14 @@ impl Store {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let handle_phase: Option<String> = transaction
             .query_row(
-                "SELECT phase FROM lab_handles WHERE workspace_id=?1 AND instance_id=?2",
+                "SELECT phase FROM cell_handles WHERE workspace_id=?1 AND instance_id=?2",
                 params![workspace, instance_id],
                 |row| row.get(0),
             )
             .optional()?;
         if handle_phase.is_some_and(|phase| phase != "\"open\"") {
             return Err(StoreError::Validation(
-                "lab is closing; new actions are not admitted".into(),
+                "cell is closing; new actions are not admitted".into(),
             ));
         }
         transaction.execute("UPDATE sessions SET last_activity_at=MAX(last_activity_at,?1) WHERE workspace_id=?2 AND id=?3",params![accepted_at,workspace,session_id])?;
@@ -1544,9 +1548,9 @@ impl Store {
             kind,
         )?;
         if expected_revision.is_some_and(|expected| expected != revision_digest) {
-            return Err(StoreError::LabUpdate {code:"lab_update_conflict", message:"Configuration changed during operation admission; retry against current configuration".into()});
+            return Err(StoreError::CellUpdate {code:"cell_update_conflict", message:"Configuration changed during operation admission; retry against current configuration".into()});
         }
-        let operation = LabOperation {
+        let operation = CellOperation {
             revision_digest,
             id: operation_id.to_owned(),
             workspace_id: workspace.to_owned(),
@@ -1688,7 +1692,7 @@ impl Store {
                 workspace,
                 principal,
                 idempotency_key,
-                "lab.operation.create",
+                "cell.operation.create",
                 &envelope,
                 &existing,
             )?;
@@ -1698,7 +1702,7 @@ impl Store {
             workspace,
             principal,
             idempotency_key,
-            "lab.operation.create",
+            "cell.operation.create",
             &envelope,
             &operation,
         )?;
@@ -1710,7 +1714,7 @@ impl Store {
         workspace: &str,
         principal: &str,
         operation_id: &str,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         self.authorize(workspace, principal, Capability::ArtifactRead)?;
         self.operation_unchecked(workspace, operation_id)
     }
@@ -1720,7 +1724,7 @@ impl Store {
         workspace: &str,
         principal: &str,
         operation_id: &str,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         self.authorize(workspace, principal, Capability::ActionCancel)?;
         let operation = self.operation_unchecked(workspace, operation_id)?;
         if operation.principal_id != principal {
@@ -1740,7 +1744,7 @@ impl Store {
         experiment_id: &str,
         after_sequence: u64,
         limit: u32,
-    ) -> Result<Vec<LabOperation>, StoreError> {
+    ) -> Result<Vec<CellOperation>, StoreError> {
         self.authorize(workspace, principal, Capability::ExperimentRead)?;
         self.experiment_unchecked(workspace, experiment_id)?;
         if !(1..=100).contains(&limit) {
@@ -1772,14 +1776,14 @@ impl Store {
             .collect()
     }
 
-    /// Every pending or running operation recorded for one lab instance, in
-    /// journal order. The store is the ledger of record, so lab close uses this
+    /// Every pending or running operation recorded for one cell instance, in
+    /// journal order. The store is the ledger of record, so cell close uses this
     /// to finalize operations whose runtime resources are about to disappear.
     pub fn active_operations(
         &self,
         workspace: &str,
         instance_id: &str,
-    ) -> Result<Vec<LabOperation>, StoreError> {
+    ) -> Result<Vec<CellOperation>, StoreError> {
         let ids = {
             let connection = self.lock()?;
             let mut statement = connection.prepare(
@@ -1805,7 +1809,7 @@ impl Store {
         operation_id: &str,
         phase: OperationPhase,
         content: serde_json::Value,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         self.record_operation_result_with_quote_observations(
             workspace,
             operation_id,
@@ -1824,7 +1828,7 @@ impl Store {
         phase: OperationPhase,
         content: serde_json::Value,
         observations: &[WalletQuoteObservationInput],
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         if matches!(phase, OperationPhase::Pending | OperationPhase::Running) {
             return Err(StoreError::Validation(
                 "operation result phase must be terminal".into(),
@@ -2055,7 +2059,7 @@ impl Store {
         workspace: &str,
         operation_id: &str,
         phase: OperationPhase,
-    ) -> Result<LabOperation, StoreError> {
+    ) -> Result<CellOperation, StoreError> {
         if phase != OperationPhase::Running {
             return Err(StoreError::Validation(
                 "operation phase update only accepts running".into(),
@@ -2124,12 +2128,12 @@ impl Store {
         let record = self
             .lock()?
             .query_row(
-                "SELECT version, lab_json FROM drafts WHERE workspace_id = ?1 AND id = ?2",
+                "SELECT version, cell_json FROM drafts WHERE workspace_id = ?1 AND id = ?2",
                 params![workspace, id],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;
-        let (version, lab_json) = record.ok_or_else(|| StoreError::NotFound {
+        let (version, cell_json) = record.ok_or_else(|| StoreError::NotFound {
             resource: "draft",
             id: id.to_owned(),
         })?;
@@ -2139,7 +2143,7 @@ impl Store {
             id: id.to_owned(),
             workspace_id: workspace.to_owned(),
             version,
-            lab: serde_json::from_str(&lab_json)?,
+            cell: serde_json::from_str(&cell_json)?,
         })
     }
 
@@ -2165,14 +2169,14 @@ impl Store {
             })
     }
 
-    fn instance_unchecked(&self, workspace: &str, id: &str) -> Result<LabInstance, StoreError> {
+    fn instance_unchecked(&self, workspace: &str, id: &str) -> Result<CellInstance, StoreError> {
         self.lock()?
             .query_row(
-                "SELECT revision_digest, lock_digest, instance_key, resource_name, COALESCE((SELECT generation FROM lab_update_state s WHERE s.workspace_id=instances.workspace_id AND s.instance_id=instances.id),1)
+                "SELECT revision_digest, lock_digest, instance_key, resource_name, COALESCE((SELECT generation FROM cell_update_state s WHERE s.workspace_id=instances.workspace_id AND s.instance_id=instances.id),1)
                  FROM instances WHERE workspace_id = ?1 AND id = ?2",
                 params![workspace, id],
                 |row| {
-                    Ok(LabInstance {
+                    Ok(CellInstance {
                         generation: updates::generation_column(row, 4)?,
                         id: id.to_owned(),
                         workspace_id: workspace.to_owned(),
@@ -2190,7 +2194,7 @@ impl Store {
             })
     }
 
-    fn operation_unchecked(&self, workspace: &str, id: &str) -> Result<LabOperation, StoreError> {
+    fn operation_unchecked(&self, workspace: &str, id: &str) -> Result<CellOperation, StoreError> {
         self.lock()?
             .query_row(
                 "SELECT instance_id, experiment_id, session_id, principal_id, sequence, kind_json,
@@ -2242,7 +2246,7 @@ impl Store {
                 )| {
                     let sequence = u64::try_from(sequence)
                         .map_err(|_| StoreError::InvalidStoredVersion(sequence))?;
-                    Ok::<LabOperation, StoreError>(LabOperation {
+                    Ok::<CellOperation, StoreError>(CellOperation {
                         revision_digest,
                         id: id.to_owned(),
                         workspace_id: workspace.to_owned(),
