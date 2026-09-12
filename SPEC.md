@@ -1,5 +1,11 @@
 # proofstorm adversarial spec
 
+> Historical design document, not the current product or test-coverage contract.
+> The Compose and model-campaign implementations described here have been
+> retired. Current commands are in README.md and scripts/DEVELOPMENT.md;
+> assertion dispositions and remaining coverage gaps are recorded in
+> [the consolidation plan](dev/legacy-consolidation-plan.md).
+
 **Adversarial agent attempts fund theft and denial-of-service against a
 sandboxed CDK/Nutshell deployment.**
 
@@ -114,7 +120,7 @@ oracle is what we assert; the attack is what we run.
 | A6 | **Overspend split** | Request outputs summing to more than inputs in a swap | reject (amount mismatch), no net issuance | spec'd |
 | A7 | **Amountless/underpay melt** | Melt for less LN than the proofs' value implies | conserve value; no free LN out | spec'd |
 
-"Status: built" = a runnable scenario in `scenarios/` with an automated oracle.
+"Status: built" below records the original implementation, not current coverage.
 "spec'd" = mechanism and oracle defined here; scenario is a documented next step
 (some, e.g. A4, require a raw-protocol client that crafts BDHKE messages, which
 is deliberately not shipped as half-working crypto).
@@ -142,7 +148,7 @@ has still failed.
 - **(B) Tests infeasible in CI** — long-duration: multi-hour/day mint liveness,
   keyset rotation under sustained load, slow-drip double-spend across many
   blocks, channel-exhaustion over time. Gated behind `PROOFSTORM_LONG=1` and a
-  duration budget; never run in CI. See `scenarios/README.md`.
+  duration budget; never run in CI. That scenario launcher is now retired.
 - **(C) Red-team agent tests** — §3 and §4. An agent (or script) with wallet
   access and raw HTTP tries the attacks above; the harness asserts the oracle.
 
@@ -150,9 +156,9 @@ has still failed.
 
 ## 6. Oracles reuse conservation
 
-Every fund-theft oracle reduces to value conservation, which proofstorm already
-computes (`scripts/check-conservation.sh`, `wallet_population_total_sat` in
-`scripts/lib/wallet.sh`). An attack "succeeds" (mint is broken) iff the
+The original wallet-population scripts checked spendable value conservation.
+Those scripts are retired; current fee and settlement assertions are documented
+in the consolidation plan. In this original model, an attack succeeds iff the
 population's spendable total increases without a corresponding paid mint quote,
 or the mint's LN backend pays out more than the melted proofs' value. Attacks
 therefore assert: command failed **and** population total unchanged (or changed

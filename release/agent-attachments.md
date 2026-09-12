@@ -1,25 +1,24 @@
 # OpenCode and Claude Code alpha adapters
 
-The next development bundle adds intentional project attachment for OpenCode
-1.x and Claude Code 2.x. No global agent configuration, model, provider, login,
+Generated project attachments support Codex, OpenCode 1.x and Claude Code 2.x. No global agent configuration, model, provider, login,
 permission mode, or project trust choice is changed.
 
 From the project directory:
 
 ```sh
-proofstorm agent open opencode
-proofstorm agent open claude
+storm agent open opencode
+storm agent open claude
 ```
 
 Both commands attach and verify Proofstorm, then start the agent in the current
 interactive terminal. Add `--desktop` to open the installed native app on macOS.
 `claude-code` is also accepted as
 an alias for `claude`. An explicit path works, including paths containing spaces.
-Use `proofstorm agent configure opencode` or `proofstorm agent configure claude` to connect without
+Use `storm agent configure opencode` or `storm agent configure claude` to connect without
 starting an interactive agent. `--dry-run` previews without writes, grants, or
 MCP server startup. Development bundles still require `--allow-development`.
 
-In `proofstorm gui`, choose **Launch Agent**, then click a vendor button. Only
+In `storm gui`, choose **Launch Agent**, then click a vendor button. Only
 supported native apps found in `/Applications` or `~/Applications` are shown
 (Codex can also be discovered through its bundled executable on PATH). The folder
 where the GUI was launched is selected. Click the folder field beneath the buttons
@@ -102,18 +101,23 @@ handoff. The new browser selector was built but not manually clicked in this gat
 
 Unit tests cover lossless edits, conflicts, duplicate JSON keys, JSONC trailing
 commas, literal path expansion hazards, backups, version guards, terminal quoting,
-and typed GUI agent selection. The opt-in installed gate is:
+and typed GUI agent selection. Current unattended checks use the owned runner:
 
 ```sh
-python3 scripts/test_installed_setup.py \
-  --archive /absolute/path/to/development-bundle.tar.gz \
-  --work-dir /private/tmp/a-new-proofstorm-agent-test \
-  --start-runtime --test-agents
+just e2e agent-config
+just e2e agent-clients
+just e2e-bundle /absolute/path/to/unpacked/bundle agent-config
 ```
 
-This gate creates a disposable runtime and private agent homes. It checks CLI and
-GUI attachment, then runs each actual installed client's `mcp list` in the chosen
-and unconnected folders. It does not prompt a model, approve project trust, or
-launch native agent windows. Runtime cleanup and dev-environment preservation
-use the existing installed-smoke ownership checks. See the dated verification
-record for results rather than treating the existence of this test as a pass.
+`agent-config` uses supported client-version fixtures and real MCP connections.
+`agent-clients` requires already installed OpenCode and Claude Code CLIs and checks
+their actual MCP discovery in private test homes and unrelated projects. Add
+`--allow-development` only for a selected development bundle.
+Claude's first-use `pending_approval` status is recorded separately from a
+connection; the check does not grant project trust on the user's behalf.
+
+These gates never launch native apps or model sessions. Desktop handoff and actual
+model calls are separate, explicitly supervised checks. Runtime cleanup and
+preservation use the same installation-owned Rust runner as the other live gates.
+The September 9 record above remains historical evidence, not a result of these
+replacement gates. See [check boundaries](../scripts/CHECKS.md#live-and-manual-checks).

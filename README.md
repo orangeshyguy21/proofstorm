@@ -135,7 +135,8 @@ Commands show progress and readable results. Add `--json` for scripts, or
 
 ## Development
 
-Contributors need Rust, just, and Docker. Installed users do not.
+Contributors also need Rust and just. Docker is required for the runtime in both
+development and installed releases.
 
 ```sh
 just check-quick        # Formatting, shell checks, and command-dispatch tests

@@ -2,11 +2,13 @@
 mod archive;
 mod build;
 mod bundle;
+mod catalog_images;
 mod controller;
 mod linux_install;
 mod macos_install;
 mod package;
 mod promotion;
+mod registry;
 mod shortcuts;
 mod smoke;
 use anyhow::{Context, Result, bail, ensure};
@@ -39,6 +41,9 @@ pub(super) fn shortcuts_cli(args: impl Iterator<Item = OsString>) -> Result<()> 
 
 pub(super) fn controller_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
     controller::cli(args)
+}
+pub(super) fn catalog_image_cli(args: impl Iterator<Item = OsString>) -> Result<()> {
+    catalog_images::cli(args)
 }
 
 pub(super) fn macos_install_cli(args: impl Iterator<Item = OsString>) -> Result<()> {

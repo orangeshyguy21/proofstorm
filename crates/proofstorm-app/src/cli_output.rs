@@ -351,6 +351,100 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn terminal_progress_is_prompt_animated_and_cleared_without_a_timer() {
+        use nix::{
+            fcntl::{FcntlArg, OFlag, fcntl},
+            pty::openpty,
+        };
+        use std::{
+            fs::File,
+            io::{Read, Seek, SeekFrom},
+            os::fd::AsRawFd,
+            process::{Command, Stdio},
+            time::Instant,
+        };
+        let pty = openpty(None, None).unwrap();
+        fcntl(pty.master.as_raw_fd(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).unwrap();
+        let mut master = File::from(pty.master);
+        let mut output = tempfile::tempfile().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "cli_output::tests::terminal_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("PROOFSTORM_PROGRESS_FIXTURE", "1")
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::null())
+            .stdout(output.try_clone().unwrap())
+            .stderr(File::from(pty.slave));
+        let mut child = command.spawn().unwrap();
+        drop(command); // The parent must not retain the slave descriptor.
+        let start = Instant::now();
+        let mut first = None;
+        let mut progress = Vec::new();
+        let status = loop {
+            let mut bytes = [0; 4096];
+            match master.read(&mut bytes) {
+                Ok(n) if n > 0 => {
+                    first.get_or_insert(start.elapsed());
+                    progress.extend_from_slice(&bytes[..n]);
+                }
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(5) => {}
+                Err(error) => panic!("PTY read: {error}"),
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                // Drain final clear-line bytes after the child's output flush.
+                while let Ok(n) = master.read(&mut bytes) {
+                    if n == 0 {
+                        break;
+                    }
+                    progress.extend_from_slice(&bytes[..n]);
+                }
+                break status;
+            }
+            if start.elapsed() > Duration::from_secs(10) {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("PTY fixture timed out");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(status.success());
+        assert!(first.is_some_and(|first| first < Duration::from_secs(5)));
+        let progress = String::from_utf8(progress).unwrap();
+        assert!(
+            progress.contains("| Checking installation")
+                && progress.contains("/ Checking installation")
+        );
+        assert!(progress.contains("Ready") && progress.ends_with('\r'));
+        assert!(!progress.contains(['(', ')', '\x1b']));
+        output.seek(SeekFrom::Start(0)).unwrap();
+        let mut result = String::new();
+        output.read_to_string(&mut result).unwrap();
+        assert!(result.contains("Runtime ready.") && !result.contains("\"ready\""));
+    }
+
+    #[test]
+    #[ignore = "child fixture for the PTY test; not a separate acceptance check"]
+    fn terminal_fixture() {
+        assert_eq!(
+            std::env::var("PROOFSTORM_PROGRESS_FIXTURE").as_deref(),
+            Ok("1")
+        );
+        let mut output = Output::new(false, "setup", Some("Checking installation"));
+        thread::sleep(Duration::from_millis(350));
+        output.update("Ready");
+        thread::sleep(Duration::from_millis(150));
+        output.show(&json!({"ready":true})).unwrap();
+    }
+
+    #[test]
     fn summaries_distinguish_ready_prepared_and_browser_outcomes() {
         assert_eq!(
             human(

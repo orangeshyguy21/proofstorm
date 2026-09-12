@@ -16,6 +16,21 @@ use serde_json::{Value, json};
 /// MCP protocol revision the server implements.
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
+/// Prevent a parent shell from choosing live state or authority for test children.
+pub fn clear_runtime_environment(command: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("PROOFSTORM_")
+            || name.starts_with("K3D_")
+            || name.starts_with("HELM_")
+            || name == "KUBECONFIG"
+            || name == "KUBERNETES_MASTER"
+        {
+            command.env_remove(key);
+        }
+    }
+}
+
 /// A spawned `proofstorm-mcp` process with an initialized MCP session.
 ///
 /// The child is killed on drop, so a gate that aborts mid-way never leaks a
@@ -39,20 +54,22 @@ impl McpClient {
     {
         let mut command = Command::new(binary);
         // A hermetic client must not inherit a user's live DB, mode or authority.
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("PROOFSTORM_") {
-                command.env_remove(key);
-            }
-        }
+        clear_runtime_environment(&mut command);
         for (key, value) in env {
             command.env(key, value);
         }
+        Self::from_command(command, client_name)
+    }
+
+    /// Start an explicitly assembled, test-owned attachment command. The caller
+    /// controls its environment so override resistance can be tested end to end.
+    pub fn from_command(mut command: Command, client_name: &str) -> Result<Self> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .with_context(|| format!("spawn {}", binary.display()))?;
+            .context("spawn selected MCP command")?;
         let stdin = child.stdin.take().context("child stdin")?;
         let stdout = BufReader::new(child.stdout.take().context("child stdout")?);
 

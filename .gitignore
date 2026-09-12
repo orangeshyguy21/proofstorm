@@ -1,4 +1,5 @@
 .env
+# Retired Compose state remains ignored; current commands never read it.
 .proofstorm-active
 *.log
 .DS_Store

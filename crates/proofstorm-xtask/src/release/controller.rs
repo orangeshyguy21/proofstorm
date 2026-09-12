@@ -1,5 +1,5 @@
 //! Verified controller build inputs and immutable publication evidence.
-mod registry;
+use super::registry;
 use super::{archive::output_path, build, bundle, sha256, text};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
@@ -248,7 +248,12 @@ fn published(work: &Path) -> Result<()> {
         "invalid published digest"
     );
     let platform = text(&receipt, "platform")?.to_owned();
-    registry::verify(digest, text(&receipt, "local_image_id")?, &platform)?;
+    registry::verify(
+        &format!("{REPOSITORY}@{digest}"),
+        Some(text(&receipt, "local_image_id")?),
+        &platform,
+        true,
+    )?;
     receipt["image"] = json!(format!("{REPOSITORY}@{digest}"));
     receipt["anonymous_verified"] = json!(true);
     receipt["verification"]["registry_identity"] = json!(true);

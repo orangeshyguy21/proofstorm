@@ -41,5 +41,5 @@ fn main() {
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    eprintln!("Build the browser app with `just web`, then run `proofstorm dev serve`.");
+    eprintln!("Build the browser app with `just web`, then open it with `just gui`.");
 }

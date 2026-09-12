@@ -23,7 +23,7 @@ impl ExternalClient {
                 namespace,
                 "service/mint",
                 &format!("{port}:3338"),
-            ])
+            ])?
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;

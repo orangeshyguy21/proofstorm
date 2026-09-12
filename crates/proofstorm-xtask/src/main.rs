@@ -1,5 +1,6 @@
 //! Maintainer-only filesystem/metadata operations; not part of installed Proofstorm.
 mod development;
+mod host_tools;
 mod release;
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +13,9 @@ fn main() -> Result<()> {
     )?;
     if command == "release-check" {
         return release::cli(args);
+    }
+    if command == "host-tools" {
+        return host_tools::cli(args);
     }
     if command == "release-verify" {
         return release::verify_cli(args);
@@ -41,6 +45,9 @@ fn main() -> Result<()> {
     }
     if command == "release-controller" {
         return release::controller_cli(args);
+    }
+    if command == "catalog-image" {
+        return release::catalog_image_cli(args);
     }
     if command == "macos-install" {
         return release::macos_install_cli(args);

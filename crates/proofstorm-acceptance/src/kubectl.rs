@@ -2,52 +2,33 @@
 //!
 //! Gates assert post-conditions that MCP deliberately does not expose:
 //! teardown receipts, residual instance namespaces, and controller restarts.
-//! Everything here shells out to the version pinned in `tools/versions.env`,
-//! preferring `.tools/bin` over whatever is on `PATH`.
+//! Every command uses the verified installation helper and its private kubeconfig.
 
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{path::PathBuf, process::Command};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-/// The k3d context created by the cluster bootstrap.
-pub const DEFAULT_CONTEXT: &str = "k3d-proofstorm";
 /// Namespace holding the controller and its receipts.
 pub const CONTROL_NAMESPACE: &str = "proofstorm-system";
 
 pub struct Kubectl {
     binary: PathBuf,
     context: String,
-    kubeconfig: Option<PathBuf>,
+    kubeconfig: PathBuf,
+    installation: proofstorm_app::installation::Installation,
 }
 
 impl Kubectl {
-    /// Resolve the pinned binary under `root/.tools/bin`, falling back to `PATH`.
-    pub fn pinned(root: &Path) -> Self {
-        let pinned = root.join(".tools/bin/kubectl");
-        Self {
-            binary: if pinned.is_file() {
-                pinned
-            } else {
-                PathBuf::from("kubectl")
-            },
-            context: DEFAULT_CONTEXT.to_string(),
-            kubeconfig: None,
-        }
-    }
-
-    #[must_use]
     pub fn for_installation(
-        root: &Path,
         installation: &proofstorm_app::installation::Installation,
-    ) -> Self {
-        let mut client = Self::pinned(root);
-        client.context = installation.context();
-        client.kubeconfig = Some(installation.kubeconfig());
-        client
+    ) -> Result<Self> {
+        Ok(Self {
+            binary: proofstorm_app::bootstrap::installed_tool(installation, "kubectl")?,
+            context: installation.context(),
+            kubeconfig: installation.kubeconfig(),
+            installation: installation.clone(),
+        })
     }
 
     /// Run a command that must succeed, returning trimmed stdout.
@@ -60,11 +41,21 @@ impl Kubectl {
     }
 
     /// Build a context-pinned command without running it.
-    pub fn command(&self, args: &[&str]) -> Command {
+    pub fn command(&self, args: &[&str]) -> Result<Command> {
+        proofstorm_app::bootstrap::verify_runtime_identity(&self.installation)?;
+        anyhow::ensure!(
+            self.binary
+                == proofstorm_app::bootstrap::installed_tool(&self.installation, "kubectl")?,
+            "kubectl changed"
+        );
+        Ok(self.invocation(args))
+    }
+
+    /// Pure argument assembly; production callers must pass through command's checks.
+    fn invocation(&self, args: &[&str]) -> Command {
         let mut command = Command::new(&self.binary);
-        if let Some(path) = &self.kubeconfig {
-            command.arg("--kubeconfig").arg(path);
-        }
+        crate::client::clear_runtime_environment(&mut command);
+        command.arg("--kubeconfig").arg(&self.kubeconfig);
         command.arg("--context").arg(&self.context).args(args);
         command
     }
@@ -72,7 +63,7 @@ impl Kubectl {
     /// Run a command that is allowed to fail, returning success, stdout and stderr.
     pub fn try_run(&self, args: &[&str]) -> Result<(bool, String, String)> {
         let output = self
-            .command(args)
+            .command(args)?
             .output()
             .with_context(|| format!("run kubectl {}", args.join(" ")))?;
         Ok((
@@ -97,7 +88,7 @@ impl Kubectl {
         let mut invocation = vec!["exec", "-i", target, "-n", namespace, "--"];
         invocation.extend_from_slice(argv);
         let mut child = self
-            .command(&invocation)
+            .command(&invocation)?
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -142,7 +133,7 @@ impl Kubectl {
     pub fn apply_stdin(&self, manifest: &str) -> Result<String> {
         use std::io::Write;
         let mut child = self
-            .command(&["apply", "-f", "-"])
+            .command(&["apply", "-f", "-"])?
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -339,8 +330,16 @@ mod tests {
         let installation =
             proofstorm_app::installation::Installation::initialize(home.path(), None, None)
                 .unwrap();
-        let client = Kubectl::for_installation(Path::new("/test checkout"), &installation);
-        let command = client.command(&["get", "nodes"]);
+        // Pure argument test; live construction additionally verifies the helper.
+        let client = Kubectl {
+            binary: PathBuf::from("/verified/kubectl"),
+            context: installation.context(),
+            kubeconfig: installation.kubeconfig(),
+            installation: installation.clone(),
+        };
+        assert!(Kubectl::for_installation(&installation).is_err());
+        assert!(client.command(&["get", "nodes"]).is_err());
+        let command = client.invocation(&["get", "nodes"]);
         let args: Vec<_> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())

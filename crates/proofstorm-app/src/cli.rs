@@ -140,7 +140,7 @@ enum Command {
         #[arg(value_name = "COMMAND")]
         path: Vec<String>,
     },
-    /// Contributor initialization and foreground server tools.
+    /// Contributor initialization tools.
     #[command(hide = true)]
     Dev {
         #[command(subcommand)]
@@ -322,8 +322,6 @@ struct SyncArgs {
 enum DevCommand {
     /// Initialize local state and permissions.
     Init(InitArgs),
-    /// Run the foreground web/API server.
-    Serve(ServeArgs),
 }
 
 #[derive(ClapArgs)]
@@ -336,18 +334,14 @@ struct InitArgs {
     registry_port: Option<u16>,
 }
 
-#[derive(ClapArgs)]
-struct ServeArgs {
-    /// Local loopback port for the foreground server.
-    #[arg(long, default_value_t = 8787)]
-    port: u16,
-    /// Replace this checkout's existing foreground server on the selected port.
-    #[arg(long)]
-    replace: bool,
-}
-
 #[derive(Subcommand)]
 enum InternalCommand {
+    /// Permanently retire one explicitly identified runtime; retain diagnostic state.
+    RuntimeDelete {
+        /// Full installation ID, not a cluster name or short prefix.
+        #[arg(long)]
+        installation_id: String,
+    },
     /// Register verified checkout artifacts with a development installation.
     CheckoutRegister(RegisterArgs),
     /// Install a verified local bundle into a user-owned prefix.
@@ -567,10 +561,10 @@ impl Command {
                 api_port,
                 registry_port,
             },
-            Self::Dev {
-                command: DevCommand::Serve(ServeArgs { port, replace }),
-            } => Action::Serve { port, replace },
             Self::Version { verbose } => Action::Version { verbose },
+            Self::Internal {
+                command: InternalCommand::RuntimeDelete { installation_id },
+            } => Action::RuntimeDelete { installation_id },
             Self::Internal {
                 command:
                     InternalCommand::CheckoutRegister(RegisterArgs {

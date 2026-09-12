@@ -16,7 +16,7 @@ const LEASE: &str = "cdk-wallet-session";
 const CLI: &str = "timeout -k 2 45 cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive";
 const LN: &str = "lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=127.0.0.1:10009";
 
-fn document(input_fee_ppk: u64) -> Value {
+pub(super) fn document(input_fee_ppk: u64) -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cdk-wallet-checkpoint",
         "components":[

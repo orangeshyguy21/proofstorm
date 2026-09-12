@@ -1,9 +1,9 @@
 # Agent cell demonstration
 
-Start the configured native profile from the repository:
+From your project's directory, open OpenCode with this installation's tools:
 
 ```sh
-OPENCODE_CONFIG=examples/opencode/proofstorm-only.json opencode .
+storm agent open opencode
 ```
 
 Paste this request:

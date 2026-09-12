@@ -73,7 +73,7 @@ pub(super) fn executable(path: &Path) -> bool {
 pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
     ensure!(
         cli || cfg!(target_os = "macos"),
-        "native Codex launch currently supports macOS; omit --gui to use the CLI"
+        "native Codex launch currently supports macOS; omit --desktop to use the CLI"
     );
     let mut apps = vec![
         PathBuf::from("/Applications/Codex.app"),
@@ -105,7 +105,7 @@ pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
     });
     let executable = if cli { path_cli.or_else(|| desktop.as_ref().map(|app| app.join("Contents/Resources/codex"))) }
         else { desktop.as_ref().map(|app| app.join("Contents/Resources/codex")) }
-        .context(if cli {"Codex CLI is not installed; install Codex, then retry"} else {"Codex desktop app was not found; install it yourself or omit --gui to use the CLI. Nothing was installed or attached."})?;
+        .context(if cli {"Codex CLI is not installed; install Codex, then retry"} else {"Codex desktop app was not found; install it yourself or omit --desktop to use the CLI. Nothing was installed or attached."})?;
     let version = capture(&executable, &["--version"])?;
     ensure!(
         version.starts_with("codex-cli "),

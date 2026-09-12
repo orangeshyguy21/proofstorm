@@ -1,6 +1,6 @@
 use super::process;
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
+use proofstorm_core::tool_pins::{Pins, Tool};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -8,56 +8,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Tool {
-    pub name: String,
-    pub version: String,
-    pub url: String,
-    pub sha256: String,
-    pub executable_sha256: String,
-    pub archive_member: Option<String>,
-}
-
 pub(super) fn pins() -> Result<Vec<Tool>> {
     pins_for(crate::platform::target())
 }
 
 fn pins_for(target: &str) -> Result<Vec<Tool>> {
-    let value: serde_json::Value =
-        serde_json::from_str(crate::platform::bootstrap_pins_for(target)?)?;
-    ensure!(
-        value["format_version"] == 1 && value["target"] == target,
-        "unsupported tool pins"
-    );
-    let tools: Vec<Tool> = serde_json::from_value(value["tools"].clone())?;
-    ensure!(
-        tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>()
-            == ["k3d", "kubectl", "helm"],
-        "incomplete tool pins"
-    );
-    for tool in &tools {
-        ensure!(
-            tool.url.starts_with("https://")
-                && !tool.version.is_empty()
-                && super::digest(&tool.sha256)
-                && super::digest(&tool.executable_sha256),
-            "invalid tool pin"
-        );
-        ensure!(
-            tool.archive_member.as_deref()
-                == if tool.name == "helm" {
-                    Some(crate::platform::helm_member_for(target)?)
-                } else {
-                    None
-                },
-            "unexpected tool archive"
-        );
-    }
-    Ok(tools)
+    Ok(
+        Pins::parse(target, crate::platform::bootstrap_pins_for(target)?)
+            .map_err(anyhow::Error::msg)?
+            .tools,
+    )
 }
 
 pub(super) fn hash(path: &Path) -> Result<String> {

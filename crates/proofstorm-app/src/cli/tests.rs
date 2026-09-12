@@ -13,6 +13,28 @@ fn command_tree_is_valid() {
 }
 
 #[test]
+fn runtime_retirement_is_explicit_and_not_a_public_cell_command() {
+    assert!(parse(&["internal", "runtime-delete"]).is_err());
+    assert!(matches!(
+        parse(&[
+            "internal",
+            "runtime-delete",
+            "--installation-id",
+            &"a".repeat(32)
+        ])
+        .unwrap(),
+        Action::RuntimeDelete { .. }
+    ));
+    assert!(parse(&["runtime-delete", "--help"]).is_err());
+    assert!(
+        !parse(&["--help"])
+            .unwrap_err()
+            .to_string()
+            .contains("runtime-delete")
+    );
+}
+
+#[test]
 fn gui_has_explicit_lifecycle_and_project_scope() {
     assert!(
         matches!(parse(&["gui"]).unwrap(), Action::Gui { project, no_open: false, .. } if project == PathBuf::from("."))
@@ -61,6 +83,15 @@ fn agent_configuration_and_launch_are_distinct() {
 
 #[test]
 fn removed_command_names_are_rejected() {
+    for args in [
+        vec!["dev", "serve"],
+        vec!["dev", "serve", "--replace"],
+        vec!["dev", "serve", "--help"],
+    ] {
+        assert!(
+            parse(&args).is_err_and(|error| error.kind() != clap::error::ErrorKind::DisplayHelp)
+        );
+    }
     for old in [
         "stop",
         "attach",

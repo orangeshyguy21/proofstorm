@@ -1,8 +1,9 @@
 # macOS Apple Silicon release
 
-Status: CI build/install coverage and multi-platform draft promotion are wired.
-The public alpha.2 still contains only Linux AMD64. Hosted builds and fresh-Mac
-acceptance must pass before announcing a Mac download.
+The shared release flow builds native Apple Silicon archives alongside Linux.
+Use the [published downloads](https://github.com/orangeshyguy21/proofstorm/releases)
+and their `release.json` for the selected version's platform inventory. Build,
+public-install, runtime and desktop acceptance are separate evidence.
 
 ## What a Mac release contains
 
@@ -101,7 +102,7 @@ release the host. AWS warns that Apple Silicon host scrubbing can take up to
 the scrubbing `pending` state. Check the host and retained EBS resources afterward.
 [AWS stop and release procedure](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/mac-instance-stop.html).
 
-## Remaining acceptance
+## Acceptance for each candidate
 
 1. Build the ARM64 controller from reviewed source, publish by immutable digest,
    and build the matching native Mac archive. Verify every catalog/helper image

@@ -2,6 +2,7 @@
 mod cluster;
 mod local_controller;
 mod process;
+pub mod teardown;
 mod tools;
 
 use crate::installation::Installation;
@@ -118,6 +119,21 @@ fn tool(home: &Path, name: &str) -> Result<PathBuf> {
             .find(|tool| tool.name == name)
             .context("unknown helper")?,
     )
+}
+
+/// Resolve the installation's checksum-verified helper, with no PATH fallback.
+pub fn installed_tool(installation: &Installation, name: &str) -> Result<PathBuf> {
+    tool(&installation.home, name)
+}
+
+/// Passive ownership check used by installation-aware test clients.
+pub fn verify_runtime_identity(installation: &Installation) -> Result<()> {
+    ensure!(
+        !installation.home.join(teardown::RETIRED).exists(),
+        "installation runtime is retired"
+    );
+    cluster::owned(installation)?;
+    cluster::verify_kubeconfig(installation)
 }
 
 fn docker(home: &Path, args: &[&str], seconds: u64) -> Result<String> {
@@ -290,6 +306,10 @@ pub fn setup_with_progress(
     let home = &installation.home;
     progress("Waiting for installation lock");
     let _guard = Installation::lock(home)?;
+    ensure!(
+        !home.join(teardown::RETIRED).exists(),
+        "this installation is retired; select a new home instead of reusing deleted state"
+    );
     let stage = |name, action: &mut dyn FnMut() -> Result<()>| {
         progress(match name {
             "tools" => "Preparing tools",

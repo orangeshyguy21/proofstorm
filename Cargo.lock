@@ -2357,13 +2357,16 @@ version = "0.1.0-alpha.3"
 dependencies = [
  "anyhow",
  "clap",
+ "nix",
  "proofstorm-app",
  "proofstorm-core",
  "proofstorm-kube",
  "proofstorm-store",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2380,6 +2383,7 @@ dependencies = [
  "hyper-util",
  "k8s-openapi",
  "kube",
+ "nix",
  "proofstorm-core",
  "proofstorm-kube",
  "proofstorm-store",
@@ -2525,6 +2529,8 @@ version = "0.1.0-alpha.3"
 dependencies = [
  "anyhow",
  "flate2",
+ "proofstorm-core",
+ "serde",
  "serde_json",
  "sha2",
  "tar",

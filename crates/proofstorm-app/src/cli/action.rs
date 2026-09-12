@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum Action {
+    RuntimeDelete {
+        installation_id: String,
+    },
     CheckoutRegister {
         source: PathBuf,
         resources: PathBuf,
@@ -68,10 +71,6 @@ pub enum Action {
         activity_cursor: String,
         component_cursor: String,
         link_cursor: String,
-    },
-    Serve {
-        port: u16,
-        replace: bool,
     },
     Sync {
         name: String,

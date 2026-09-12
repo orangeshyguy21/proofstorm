@@ -24,10 +24,10 @@ web assets, chart/CRD resources, and controller source snapshot, then enters a s
 private installation. Docker is not touched by the build. Inside that shell:
 
 ```sh
-proofstorm setup
-proofstorm doctor
-proofstorm up examples/developer-cell.json
-proofstorm gui
+storm setup
+storm doctor
+storm up examples/developer-cell.json
+storm gui
 ```
 
 Leaving the development shell with `exit` or Ctrl-D is a successful session end,
@@ -36,7 +36,7 @@ the shell; build/registration failures before it opens still fail `just dev`.
 
 Commands show an ASCII spinner and status text in an interactive terminal,
 starting before installation checks. Setup reports its current stage. Ordinary
-results are human-readable; use `proofstorm setup --json`, `proofstorm gui --json`,
+results are human-readable; use `storm setup --json`, `storm gui --json`,
 or the global `--json` flag on another command for the full machine-readable
 result, with no spinner. Redirected output uses plain progress lines on stderr,
 not terminal animation. `version --json` and internal checkout registration retain
@@ -54,7 +54,7 @@ application debugging and integrity checks are unchanged. This host-only build
 setting does not invalidate the controller snapshot or require rebuilding images.
 
 For agent attachment, change to the application's directory and run
-`proofstorm agent open codex`, `proofstorm agent open opencode`, or `proofstorm agent open claude`.
+`storm agent open codex`, `storm agent open opencode`, or `storm agent open claude`.
 The connection is project-specific and keeps this installation selected even
 after leaving the development shell. No global agent configuration is changed.
 
@@ -71,8 +71,8 @@ global PATH mutation, or legacy cell migration is involved.
   `just web` performs a single asset rebuild through the same path.
 - Host code: run `just dev-build`; stop/reopen the GUI and reconnect agent
   sessions afterward. Existing cells, installation identity, and grants survive.
-- Chart/CRDs: rebuild, then run `proofstorm setup` to apply the new snapshot.
-- Controller/runtime-contract changes: run `just dev-build`, then `proofstorm
+- Chart/CRDs: rebuild, then run `storm setup` to apply the new snapshot.
+- Controller/runtime-contract changes: run `just dev-build`, then `storm
   setup` (or simply `just deploy`). Setup builds the recorded linux/arm64 source,
   verifies source identity, platform, and client compatibility, publishes only
   to this installation's loopback registry, and deploys by immutable digest.
@@ -98,12 +98,43 @@ either binary outside `just dev-build` makes registration stale and commands
 fail closed until a coherent build is registered. Switching binary paths after
 registration is intentionally refused rather than silently retargeting agents.
 
-## Remaining consolidation
+## Maintainer host tools
 
-Owned runtime teardown and older acceptance gates still need to move behind
-the installation-aware path. The remaining low-level
-legacy recipes (listed under `legacy` by `just --list`) are not part of this new workflow. Release packaging and
-installer tests remain separate because they test distribution, not a second
+`just tools` installs reviewed k3d, kubectl, and Helm executables in `.tools/bin`
+for this checkout. It supports macOS Apple Silicon and Linux x86-64. Existing
+files must match the pinned executable hashes; conflicting files and symlinks
+are refused, not silently adopted or overwritten. Payload and extracted Helm
+executable hashes are checked before installation. Exact existing files are reused.
+
+`storm setup` uses the same Rust pin validator but installs into its own private
+home. It never adopts `.tools/bin`. `just web-tools` and Rust toolchain setup
+remain separate because they install build tools, not runtime helpers.
+
+After deliberately updating `tools/versions.env`, generate candidate pins:
+
+```sh
+scratch="$(mktemp -d)"
+just tool-pins aarch64-apple-darwin "$scratch/macos.json"
+just tool-pins x86_64-unknown-linux-gnu "$scratch/linux.json"
+```
+
+This downloads the exact publisher checksum receipts and payloads, verifies them,
+and hashes the selected executable without running it. Review both candidates
+before replacing `release/bootstrap-tools.json` and
+`release/bootstrap-tools-linux-amd64.json`. Output files must be new; the command
+never rewrites reviewed pins or installs tools as part of resolution.
+
+For workload image maintenance, use [catalog-image](../docker/README.md#build-or-publish-a-catalog-image).
+
+## Workflow boundaries
+
+Live acceptance now uses owned installations and receipt-checked teardown.
+Fixed-cluster setup/image/deletion recipes, raw foreground-server replacement,
+static OpenCode profiles, and historical model campaigns have been removed.
+Compose stacks, Make dispatch and fixed-container wallet/scenario scripts are
+also removed. Ignored `.env`, `.proofstorm-active` and old run output are left
+alone; current commands never load them.
+Release packaging and installer tests remain separate because they test distribution, not a second
 product runtime.
 
 ## Moving from Make
@@ -111,35 +142,104 @@ product runtime.
 The root Makefile has been replaced by `justfile`; use `just dev`, `just check`,
 and `just gui`. Arguments are ordinary quoted CLI arguments, not Make assignments:
 `just dev-build --target-dir '/absolute/path with spaces'` or `just gui start`.
-Legacy gates use `just e2e slice4` instead of `make e2e-slice4`.
-The old Compose harness remains available through `just compose <target>` and
-is the only recipe that still invokes Make. No runtime is migrated by this change.
+Named gates use `just e2e slice4` instead of `make e2e-slice4`.
+No contributor recipe requires Make or Docker Compose. No runtime is migrated
+by this change. Image builds may still need upstream projects' build tools.
+
+## Explicit external runtimes
+
+Normal use selects the installation through its launcher or `--home`. Advanced
+external-cluster use must omit `--home` and supply **both** `--context` and
+`--kubeconfig` (or `PROOFSTORM_CONTEXT` and `PROOFSTORM_KUBECONFIG`). A context
+alone never reads the global kubeconfig. This is not a second alpha setup flow:
+the operator is responsible for the external controller and its configuration.
+MCP also requires an explicit principal for manual external configuration.
+Offline and in-memory MCP test modes remain available and never access a runtime.
 
 ## Live verification
 
-After setup, stop the GUI and leave this installation idle while running:
+The default live test owns its runtime; it never borrows your checkout cluster:
 
 ```sh
-python3 scripts/test_checkout.py \
-  --cli "$PWD/.proofstorm-dev/target/debug/proofstorm" \
-  --home "$PWD/.proofstorm-dev/state" \
-  --work-dir /absolute/new/test-output-directory --test-agents
+just e2e smoke          # Also the default for just e2e
+just e2e slice4         # Select a larger gate explicitly
+just e2e cashu-double-spend  # Spent-proof replay/race against CDK and Nutshell
 ```
 
-This runs doctor, GUI reuse/authentication checks, and the same private
-OpenCode/Claude Code connection scenario used for installed releases. It starts
-no model sessions and stops its GUI afterward. Test attachment receipts and
-private test projects remain for inspection. Do not overlap it with cell creation
-or another installation write; those operations intentionally serialize.
+This builds the checkout artifacts, registers them to a fresh installation home,
+and runs ordinary `storm setup`. The smoke gate creates one Bitcoin cell through
+MCP, reads it using a separate read-only identity, checks that identity cannot
+create a cell, confirms the CLI reads the same ready cell, and deletes the cell.
+CLI and MCP use the ordinary installation database; workspace/actor grants
+isolate test activity. No real model or native agent app is launched.
+Other named gates use the same installation-aware runner; their presence in the
+list does not mean every gate has passed on every platform. The raw-CRD `slice2`
+gate explicitly prefetches catalog images through normal setup.
 
-For a controller update/reuse check, run `scripts/test_checkout_controller.py`
-with the same `--cli`, `--home`, and a new `--work-dir`. It verifies setup/doctor,
-image identity, unchanged repeated deployment, and preservation of installation,
-runtime ownership, and existing database contents. It creates no cells and
-publishes nothing outside the installation's private registry.
+The proof-spend gate funds 64 regtest sats through Lightning, checks repeated
+redemption of one token, then races a second token from two independent wallet
+states/processes. It requires one winner, a spent-proof rejection from the
+loser, and exact zero-fee balances. The start barrier releases both clients;
+it does not prove simultaneous HTTP arrival or exhaustive race coverage.
+Balances use the existing passive database observer, not CLI output parsing or
+CLI-triggered recovery. Tokens and wallet logs remain in disposable test storage;
+the retained receipt contains only amounts, exit codes and rejection flags.
+The old quote-flood/SLA experiment is retired; no sustained-load availability
+claim is made by this gate.
 
-For terminal-output verification, run `scripts/test_cli_progress.py` with the same
-`--cli`, `--home`, and a new `--work-dir`. It checks immediate animated progress,
-line cleanup, readable setup/GUI summaries, and explicit JSON results against the
-ready installation. It creates no cells or agent connections, opens no browser,
-and stops the GUI only if one was not already running when the test began.
+`just check-cdk-config` is a separate image-only contract check: Docker and jq,
+no cluster. It validates generated CDK configs and tests initializer edits,
+restart retries and failed-edit recovery without network access in containers.
+It may download the pinned public images if they are not cached.
+
+At the end, the runner removes only the recorded runtime containers, network,
+and volumes. It compares preexisting Docker resources and configuration before
+and after, excluding the shared image cache. Avoid unrelated Docker/configuration
+changes while testing: drift is reported as a failure, never silently repaired.
+State, logs, and `acceptance.json` stay in the printed private work directory.
+
+If cleanup needs a retry:
+
+```sh
+just e2e-cleanup /absolute/path/to/the/printed/run-directory
+```
+
+Retirement is permanent for that test home; it is not a cell deletion or a
+general-purpose reset of your development installation. Existing installations
+without a resource receipt are not adopted for deletion. Ctrl-C waits for the
+current bounded setup operation to finish recording resources, then cleans up;
+gate workers have a deadline. A forced kill before a resource receipt is written
+needs manual inspection of the retained evidence—cleanup must fail closed.
+
+For an unpacked bundle, use the same gates without rebuilding checkout artifacts:
+
+```sh
+just e2e-bundle /absolute/path/to/unpacked/bundle onboarding agent-config cli-progress
+```
+
+Use `--allow-development` for a development bundle, and `--work-dir` for a new
+absolute evidence directory. Neither artifact source selects an existing runtime.
+
+### Targeted checks
+
+```sh
+just e2e onboarding agent-config cli-progress
+just e2e gui
+just e2e installation-isolation
+# Only when OpenCode and Claude Code CLIs are already installed:
+just e2e agent-clients
+```
+
+Onboarding checks helper-only preparation, repeat setup/controller reuse, on-demand
+images, CLI/MCP cells, and GUI lifecycle while workloads exist. Run it first in a
+fresh test runtime. Attachment checks use private test projects and homes.
+`agent-config` needs no agent installations; `agent-clients` adds actual client
+MCP discovery without starting a model or approving trust.
+
+The PTY gate tests real setup/GUI progress and human/JSON output. Browser appearance,
+folder picking, vendor buttons, and native project handoff require a separate
+manual desktop session; the headless GUI gate does not claim to test those.
+
+All these gates now use the owned Rust runner. There is no selected-development-home
+Python smoke path. See [check lanes and ownership](CHECKS.md#live-and-manual-checks)
+for boundaries and prerequisites.

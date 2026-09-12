@@ -14,6 +14,7 @@ mod operation;
 mod publication;
 mod quote;
 mod schema;
+pub mod tool_pins;
 mod update;
 mod validation;
 mod wallet_builds;
