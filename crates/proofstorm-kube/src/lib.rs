@@ -20,12 +20,12 @@ pub use adapter::{
     AdapterError, COMPONENT_LABEL, ComponentObservationResources,
     PROTOCOL_PROBER_DIGEST_ANNOTATION, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
     PROTOCOL_PROBER_NAME, RenderedCell, RenderedComponent, compile_component_plans,
-    component_ports, observe_component_statuses, render_attacker_component,
-    render_bitcoin_component, render_cdk_component, render_cdk_wallet_component, render_cell,
-    render_cln_component, render_cocod_wallet_component, render_component_network_policy,
-    render_keycloak_component, render_lnd_component, render_nutshell_mint_component,
-    render_postgres_component, render_protocol_prober, render_redis_component,
-    render_wallet_component,
+    component_ports, observe_component_statuses, protocol_probe_container_name,
+    render_attacker_component, render_bitcoin_component, render_cdk_component,
+    render_cdk_wallet_component, render_cell, render_cln_component, render_cocod_wallet_component,
+    render_component_network_policy, render_keycloak_component, render_lnd_component,
+    render_nutshell_mint_component, render_postgres_component, render_protocol_prober,
+    render_redis_component, render_wallet_component,
 };
 pub use api::{
     ActionPhase, AuthenticationConformanceAction, AuthenticationConformanceFailureStage,
@@ -67,8 +67,8 @@ pub use render::{
     render_security_spine,
 };
 pub use scheduler::{
-    MAX_ACTIVE_PROTOCOL_PROBER_CELLS, MAX_GLOBAL_PROTOCOL_PROBES, MAX_PROTOCOL_PROBES_PER_CELL,
-    PROTOCOL_PROBE_LEASE_SECONDS, ProtocolProbeSchedule, schedule_protocol_probers,
+    MAX_ACTIVE_PROTOCOL_PROBER_CELLS, PROTOCOL_PROBE_LEASE_SECONDS,
+    PROTOCOL_PROBE_SCHEDULING_BUDGET, ProtocolProbeSchedule, schedule_protocol_probers,
 };
 
 pub use adapter::{RPC_PASSWORD as BITCOIN_RPC_PASSWORD, RPC_USER as BITCOIN_RPC_USER};

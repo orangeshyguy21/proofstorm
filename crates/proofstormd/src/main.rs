@@ -41,11 +41,11 @@ use proofstorm_kube::{
     CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, CellAction, CellPhase,
     ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL,
     LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION,
-    MAX_PROTOCOL_PROBES_PER_CELL, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
-    PROTOCOL_PROBER_NAME, ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell,
-    ProofstormCellAction, ProofstormCellActionStatus, ProofstormCellStatus,
-    action_result_container, compile_component_plans, evaluate_action_admission,
-    instance_namespace, observe_component_statuses, render_candidate_build_job, render_cell,
+    PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION, PROTOCOL_PROBER_NAME,
+    ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
+    ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
+    compile_component_plans, evaluate_action_admission, instance_namespace,
+    observe_component_statuses, render_candidate_build_job, render_cell,
     render_cell_action_cleanup_job, render_cell_action_job, render_cell_security_spine,
     render_component_network_policy, schedule_protocol_probers,
 };
@@ -56,7 +56,6 @@ const FINALIZER: &str = "proofstorm.dev/cell-cleanup";
 const FIELD_MANAGER: &str = "proofstormd";
 const CELL_CONTROLLER_CONCURRENCY: u16 = 8;
 const ACTION_CONTROLLER_CONCURRENCY: u16 = 16;
-const MAX_CELL_STATUS_BYTES: usize = 256 * 1024;
 const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
@@ -1322,16 +1321,9 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
         match event {
             Event::Apply(cell) => {
                 let result = apply(cell.clone(), &context).await;
-                if let Err(Error::Kube(kube::Error::Api(error))) = &result {
-                    if matches!(error.code, 400 | 403 | 422) {
-                        let mut status = cell.status.clone().unwrap_or_default();
-                        status.phase = CellPhase::Blocked;
-                        status.message = Some(format!(
-                            "Reconciliation blocked (Kubernetes {}): {}",
-                            error.code,
-                            error.message.chars().take(1024).collect::<String>()
-                        ));
-                        let _ = patch_status(&cell, &context, status).await;
+                if let Err(error) = &result {
+                    if let Some(status) = reconciliation_failure_status(&cell, error) {
+                        patch_status(&cell, &context, status).await?;
                     }
                 }
                 result
@@ -1352,6 +1344,42 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
             Error::ControllerInvariant("invalid finalizer JSON patch")
         }
     })
+}
+
+fn reconciliation_failure_status(
+    cell: &ProofstormCell,
+    error: &Error,
+) -> Option<ProofstormCellStatus> {
+    let message = match error {
+        Error::Adapter(error) => format!("Component rendering blocked: {error}"),
+        Error::Kube(kube::Error::Api(error)) if matches!(error.code, 400 | 403 | 413 | 422) => {
+            format!(
+                "Reconciliation blocked (Kubernetes {}): {}",
+                error.code, error.message
+            )
+        }
+        Error::LiveExec(_)
+        | Error::SecretContract(_)
+        | Error::InvalidInstanceKey(_)
+        | Error::ControllerInvariant(_) => format!("Reconciliation blocked: {error}"),
+        _ => return None,
+    };
+    let mut status = cell.status.clone().unwrap_or_default();
+    status.phase = CellPhase::Blocked;
+    status.message = Some(message.chars().take(1024).collect());
+    status.observed_generation = cell.metadata.generation;
+    status
+        .observed_revision_digest
+        .clone_from(&cell.spec.revision_digest);
+    status.observed_desired_generation = cell
+        .annotations()
+        .get("proofstorm.dev/desired-generation")
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(1);
+    // These observations may belong to an older revision. Preserve inventory
+    // for cleanup, but never present old readiness as evidence for this failure.
+    status.components.clear();
+    Some(status)
 }
 
 async fn run_protocol_probe_scheduler(context: Arc<Context>) {
@@ -1376,24 +1404,28 @@ async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Erro
         .list(&ListParams::default())
         .await?;
     let backend_registry = default_backend_registry();
-    let mut candidate_counts = BTreeMap::<String, usize>::new();
+    let mut candidate_counts = BTreeMap::<String, (usize, usize)>::new();
     for cell in &cells.items {
-        if protocol_probe_candidate(cell, backend_registry) {
-            *candidate_counts
+        if let Some(probes) = protocol_probe_count(cell, backend_registry) {
+            let entry = candidate_counts
                 .entry(cell.spec.instance_key.clone())
-                .or_default() += 1;
+                .or_default();
+            entry.0 += 1;
+            entry.1 = probes;
         }
     }
     let candidates = candidate_counts
         .into_iter()
-        .filter_map(|(instance_key, count)| (count == 1).then_some(instance_key));
+        .filter_map(|(instance_key, (count, probes))| {
+            (count == 1).then_some((instance_key, probes))
+        });
     let schedule = schedule_protocol_probers(candidates, now_unix());
     for cell in &cells.items {
         let active = schedule
             .active_instance_keys
             .contains(&cell.spec.instance_key);
         if !active
-            && (protocol_probe_candidate(cell, backend_registry)
+            && (protocol_probe_count(cell, backend_registry).is_some()
                 || cell
                     .annotations()
                     .contains_key(PROTOCOL_PROBER_LEASE_ANNOTATION))
@@ -1461,17 +1493,17 @@ fn unscheduled_protocol_prober_exists(
     })
 }
 
-fn protocol_probe_candidate(
+fn protocol_probe_count(
     cell: &ProofstormCell,
     backend_registry: &BackendContractRegistry,
-) -> bool {
+) -> Option<usize> {
     if cell.metadata.deletion_timestamp.is_some()
         || cell
             .status
             .as_ref()
             .is_some_and(|status| status.phase == CellPhase::Closing)
     {
-        return false;
+        return None;
     }
     let count = cell
         .spec
@@ -1489,7 +1521,7 @@ fn protocol_probe_candidate(
             (backend.kind == component.kind)
                 .then_some(count + usize::from(backend.protocol_probe.is_some()))
         });
-    count.is_some_and(|count| (1..=MAX_PROTOCOL_PROBES_PER_CELL).contains(&count))
+    count.filter(|count| *count > 0)
 }
 
 async fn patch_protocol_prober_lease(
@@ -2369,7 +2401,8 @@ async fn patch_status(
     if !cell_status_update_required(cell.status.as_ref(), &status) {
         return Ok(());
     }
-    enforce_status_budget("ProofstormCell", &status, MAX_CELL_STATUS_BYTES)?;
+    // Component count must not silently disable observations. The Kubernetes
+    // API enforces its actual object-size limit; report that failure normally.
     let namespace = cell
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
@@ -3498,7 +3531,58 @@ mod tests {
     }
 
     #[test]
-    fn cell_status_writes_are_semantic_and_budgeted_at_supported_scale() {
+    fn rendering_failure_reports_the_current_revision_and_keeps_cleanup_inventory() {
+        let spec = proofstorm_core::CellSpec {
+            api_version: proofstorm_core::API_VERSION.into(),
+            name: "failure".into(),
+            components: vec![],
+            links: vec![],
+            policy: proofstorm_core::CellPolicy::default(),
+        };
+        let lock =
+            proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).expect("lock");
+        let mut cell = ProofstormCell::new(
+            "failure",
+            proofstorm_kube::ProofstormCellSpec {
+                workspace_id: "test".into(),
+                instance_id: "test".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "sha256:current".into(),
+                cell: spec,
+                lock,
+            },
+        );
+        cell.metadata.generation = Some(4);
+        cell.metadata.annotations = Some(BTreeMap::from([(
+            "proofstorm.dev/desired-generation".into(),
+            "3".into(),
+        )]));
+        cell.status = Some(ProofstormCellStatus {
+            phase: CellPhase::Ready,
+            observed_revision_digest: "sha256:old".into(),
+            inventory_digest: Some("sha256:cleanup".into()),
+            ..ProofstormCellStatus::default()
+        });
+        let status = reconciliation_failure_status(
+            &cell,
+            &Error::Adapter(AdapterError::InvalidPlan("missing backend binding".into())),
+        )
+        .expect("visible failure");
+        assert_eq!(status.phase, CellPhase::Blocked);
+        assert_eq!(status.observed_generation, Some(4));
+        assert_eq!(status.observed_desired_generation, 3);
+        assert_eq!(status.observed_revision_digest, "sha256:current");
+        assert_eq!(status.inventory_digest.as_deref(), Some("sha256:cleanup"));
+        assert!(
+            status
+                .message
+                .expect("reason")
+                .contains("missing backend binding")
+        );
+    }
+
+    #[test]
+    fn cell_status_writes_are_semantic_at_large_scale() {
         use proofstorm_core::{
             ComponentCondition, ComponentConditionReason, ComponentConditionState,
             ComponentConditionType, ComponentKind, ComponentStatus, InventoryEntry,
@@ -3514,7 +3598,7 @@ mod tests {
             ComponentConditionType::ComponentReady,
             ComponentConditionType::ExperimentControllable,
         ];
-        let components = (0..64)
+        let components = (0..150)
             .map(|index| ComponentStatus {
                 id: format!("wallet-{index}"),
                 kind: ComponentKind::Wallet,
@@ -3536,7 +3620,7 @@ mod tests {
                 ports: BTreeMap::from([("http".into(), 3_338)]),
             })
             .collect::<Vec<_>>();
-        let inventory = (0..64)
+        let inventory = (0..150)
             .flat_map(|index| {
                 (0..6).map(move |resource| InventoryEntry {
                     api_version: "apps/v1".into(),
@@ -3562,16 +3646,23 @@ mod tests {
             ..ProofstormCellStatus::default()
         };
 
-        enforce_status_budget("ProofstormCell", &status, MAX_CELL_STATUS_BYTES)
-            .expect("maximum supported status remains within budget");
+        let encoded = serde_json::to_vec(&status).expect("large status");
+        assert!(
+            encoded.len() > 256 * 1024,
+            "exercise the former cell-status ceiling"
+        );
+        assert_eq!(
+            serde_json::from_slice::<ProofstormCellStatus>(&encoded).unwrap(),
+            status
+        );
         assert!(!cell_status_update_required(Some(&status), &status));
         let mut changed = status.clone();
         changed.phase = CellPhase::Ready;
         assert!(cell_status_update_required(Some(&status), &changed));
 
-        let oversized = "x".repeat(MAX_CELL_STATUS_BYTES);
+        let oversized = "x".repeat(MAX_ACTION_STATUS_BYTES);
         assert!(matches!(
-            enforce_status_budget("ProofstormCell", &oversized, MAX_CELL_STATUS_BYTES),
+            enforce_status_budget("ProofstormCellAction", &oversized, MAX_ACTION_STATUS_BYTES),
             Err(Error::StatusBudgetExceeded { .. })
         ));
     }

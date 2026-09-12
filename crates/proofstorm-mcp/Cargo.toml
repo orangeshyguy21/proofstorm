@@ -19,6 +19,7 @@ proofstorm-kube = { path = "../proofstorm-kube" }
 proofstorm-store = { path = "../proofstorm-store" }
 rmcp.workspace = true
 reqwest.workspace = true
+regex = "1"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

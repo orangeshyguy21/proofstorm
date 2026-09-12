@@ -55,7 +55,25 @@ pub fn merge_resources(target: &mut Option<ResourceDemand>, page: Option<Resourc
         });
         target.retained_storage.extend(page.retained_storage);
         for workload in page.workloads {
-            if !target.workloads.iter().any(|w| w.name == workload.name) {
+            if let Some(existing) = target
+                .workloads
+                .iter_mut()
+                .find(|w| w.name == workload.name)
+            {
+                if existing.omitted_container_count > 0 {
+                    let total = workload
+                        .containers
+                        .len()
+                        .saturating_add(workload.omitted_container_count);
+                    for container in workload.containers {
+                        if !existing.containers.iter().any(|c| c.name == container.name) {
+                            existing.containers.push(container);
+                        }
+                    }
+                    existing.omitted_container_count =
+                        total.saturating_sub(existing.containers.len());
+                }
+            } else {
                 target.workloads.push(workload);
             }
         }
@@ -295,6 +313,7 @@ mod tests {
         let resource = || ResourceDemand {
             retained_storage: std::collections::BTreeMap::new(),
             workloads: vec![proofstorm_view::WorkloadDemand {
+                omitted_container_count: 0,
                 name: "shared".into(),
                 component: None,
                 kind: "Deployment".into(),
@@ -308,5 +327,28 @@ mod tests {
         let mut result = Some(resource());
         merge_resources(&mut result, Some(resource()));
         assert_eq!(result.unwrap().workloads.len(), 1);
+        let mut result = None;
+        for index in [0, 1, 1, 2] {
+            let mut page = resource();
+            page.workloads[0].omitted_container_count = 2;
+            page.workloads[0]
+                .containers
+                .push(proofstorm_view::ContainerDemand {
+                    name: format!("probe-{index}"),
+                    init: false,
+                    requests: std::collections::BTreeMap::new(),
+                    limits: std::collections::BTreeMap::new(),
+                });
+            merge_resources(&mut result, Some(page));
+            let workload = &result.as_ref().unwrap().workloads[0];
+            assert_eq!(
+                workload.containers.len() + workload.omitted_container_count,
+                3
+            );
+        }
+        let result = result.unwrap();
+        assert_eq!(result.workloads.len(), 1);
+        assert_eq!(result.workloads[0].omitted_container_count, 0);
+        assert_eq!(result.workloads[0].containers.len(), 3);
     }
 }

@@ -147,10 +147,7 @@ spec:
                   policy:
                     default:
                       allow: []
-                      limits:
-                        max_components: 64
-                        max_config_bytes: 65536
-                        max_links: 256
+                      limits: {}
                     properties:
                       allow:
                         default: []
@@ -212,27 +209,25 @@ spec:
                           type: string
                         type: array
                       limits:
-                        default:
-                          max_components: 64
-                          max_config_bytes: 65536
-                          max_links: 256
+                        default: {}
                         properties:
                           max_components:
-                            default: 64
-                            format: uint16
-                            maximum: 65535.0
-                            minimum: 0.0
+                            description: Optional user-selected component cap. Omit for no policy cap.
+                            format: uint64
+                            minimum: 1.0
+                            nullable: true
                             type: integer
                           max_config_bytes:
-                            default: 65536
-                            format: uint32
-                            minimum: 0.0
+                            description: Optional per-component serialized configuration byte cap. Omit for no policy cap.
+                            format: uint64
+                            minimum: 1.0
+                            nullable: true
                             type: integer
                           max_links:
-                            default: 256
-                            format: uint16
-                            maximum: 65535.0
-                            minimum: 0.0
+                            description: Optional user-selected link cap. Omit for no policy cap.
+                            format: uint64
+                            minimum: 1.0
+                            nullable: true
                             type: integer
                         type: object
                     type: object

@@ -392,7 +392,7 @@ fn revisions_and_grants_survive_reopen() {
     clippy::too_many_lines,
     reason = "one acceptance scenario keeps session admission, sequencing, quota, and artifact bounds visible"
 )]
-fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
+fn operations_admit_large_batches_and_preserve_idempotency_and_terminal_results() {
     let store = Store::memory().expect("store");
     seed(&store);
     for capability in [
@@ -453,7 +453,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "acquire-operations-session",
         )
         .expect("session");
-    for index in 0..8 {
+    for index in 0..12 {
         let operation = store
             .create_operation(
                 "alpha",
@@ -467,7 +467,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
                 &format!("create-operation-{index}"),
                 Capability::WalletFund,
             )
-            .expect("bounded operation");
+            .expect("operation admitted without a per-cell count cap");
         assert_eq!(operation.phase, OperationPhase::Pending);
         assert_eq!(operation.sequence, index + 1);
     }
@@ -479,23 +479,23 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             .iter()
             .map(|action| action.sequence)
             .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5, 6, 7, 8]
+        (1..=12).collect::<Vec<_>>()
     );
-    assert!(matches!(
-        store.create_operation(
+    let replay = store
+        .create_operation(
             "alpha",
             "designer",
             "operations-instance",
             "operations-experiment",
             "operations-session",
-            "operation-nine",
+            "operation-9",
             OperationKind::BootstrapLiquidity,
             &serde_json::json!({"index": 9}),
-            "create-operation-nine",
+            "create-operation-9",
             Capability::WalletFund,
-        ),
-        Err(StoreError::OperationLimit { maximum: 8, .. })
-    ));
+        )
+        .expect("exact retry with twelve active operations");
+    assert_eq!(replay.sequence, 10);
     let completed = store
         .record_operation_result(
             "alpha",
@@ -519,7 +519,11 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "operation-4",
             "operation-5",
             "operation-6",
-            "operation-7"
+            "operation-7",
+            "operation-8",
+            "operation-9",
+            "operation-10",
+            "operation-11"
         ],
         "a terminal result leaves the ledger's active set"
     );

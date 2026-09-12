@@ -214,6 +214,7 @@ fn workload(
             ReplicaPolicy::Fixed
         },
         observation: None,
+        omitted_container_count: 0,
         containers,
     }
 }

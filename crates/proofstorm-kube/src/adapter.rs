@@ -312,7 +312,7 @@ pub fn render_cell(
     Ok(rendered)
 }
 
-/// Render one bounded, credential-free protocol prober for the complete cell.
+/// Render one credential-free protocol prober for the complete cell.
 ///
 /// # Errors
 ///
@@ -323,16 +323,6 @@ pub fn render_protocol_prober(
     let Some(first) = plans.iter().find(|plan| plan.protocol_probe.is_some()) else {
         return Ok(None);
     };
-    let probe_count = plans
-        .iter()
-        .filter(|plan| plan.protocol_probe.is_some())
-        .count();
-    if probe_count > crate::MAX_PROTOCOL_PROBES_PER_CELL {
-        return Err(AdapterError::InvalidPlan(format!(
-            "protocol probe count {probe_count} exceeds per-cell maximum {}",
-            crate::MAX_PROTOCOL_PROBES_PER_CELL
-        )));
-    }
     let namespace = instance_namespace(&first.instance_key);
     let digest = protocol_probe_digest(plans);
     let mut prober_labels = labels(&first.instance_key, None);
@@ -424,7 +414,9 @@ fn protocol_probe_digest(plans: &[ComponentPlanContract]) -> String {
     proofstorm_core::digest_json(&probes)
 }
 
-fn protocol_probe_container_name(component_id: &str) -> String {
+/// Stable container identity for a component in the shared protocol prober.
+#[must_use]
+pub fn protocol_probe_container_name(component_id: &str) -> String {
     let digest = proofstorm_core::digest_json(&component_id);
     let short_digest = &digest["sha256:".len().."sha256:".len() + 8];
     let prefix = &component_id[..component_id.len().min(48)];
@@ -5330,11 +5322,11 @@ mod tests {
     }
 
     #[test]
-    fn protocol_prober_refuses_more_than_the_per_cell_concurrency_limit() {
+    fn protocol_prober_preserves_every_probe_above_the_former_cell_limit() {
         let cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "too-many-probes".into(),
-            components: (0..=crate::MAX_PROTOCOL_PROBES_PER_CELL)
+            components: (0..150)
                 .map(|index| {
                     component(
                         &format!("chain-{index}"),
@@ -5345,23 +5337,26 @@ mod tests {
                 })
                 .collect(),
             links: vec![],
-            policy: CellPolicy {
-                limits: proofstorm_core::CellLimits {
-                    max_components: 128,
-                    ..proofstorm_core::CellLimits::default()
-                },
-                ..CellPolicy::default()
-            },
+            policy: CellPolicy::default(),
         };
         let lock = resolve_lock(&cell, default_catalog()).expect("lock");
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
                 .expect("plans");
-        assert!(matches!(
-            render_protocol_prober(&plans),
-            Err(AdapterError::InvalidPlan(message))
-                if message.contains("exceeds per-cell maximum")
-        ));
+        let prober = render_protocol_prober(&plans)
+            .expect("render")
+            .expect("prober");
+        assert_eq!(
+            prober
+                .spec
+                .expect("deployment")
+                .template
+                .spec
+                .expect("pod")
+                .containers
+                .len(),
+            150
+        );
     }
 
     #[test]

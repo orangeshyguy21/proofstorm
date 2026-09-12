@@ -6,11 +6,11 @@
     "api_version": {
       "type": "string"
     },
-    "coverage": {
-      "$ref": "#/$defs/Coverage"
-    },
     "cells": {
       "$ref": "#/$defs/Page"
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
     },
     "observation_finished_at_unix": {
       "type": "integer",
@@ -127,6 +127,47 @@
       "enum": [
         "none",
         "basic"
+      ]
+    },
+    "CellHandle": {
+      "type": "object",
+      "properties": {
+        "config_digest": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/CellHandlePhase"
+        }
+      },
+      "required": [
+        "name",
+        "generation",
+        "owner",
+        "config_digest",
+        "phase",
+        "instance_id"
+      ]
+    },
+    "CellHandlePhase": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closing",
+        "closed"
       ]
     },
     "ComponentConditionReason": {
@@ -568,47 +609,6 @@
         "closing",
         "closed",
         "cleanup_blocked"
-      ]
-    },
-    "CellHandle": {
-      "type": "object",
-      "properties": {
-        "config_digest": {
-          "type": "string"
-        },
-        "generation": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "instance_id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "owner": {
-          "type": "string"
-        },
-        "phase": {
-          "$ref": "#/$defs/CellHandlePhase"
-        }
-      },
-      "required": [
-        "name",
-        "generation",
-        "owner",
-        "config_digest",
-        "phase",
-        "instance_id"
-      ]
-    },
-    "CellHandlePhase": {
-      "type": "string",
-      "enum": [
-        "open",
-        "closing",
-        "closed"
       ]
     },
     "LinkKind": {
@@ -1056,6 +1056,13 @@
             }
           ],
           "default": null
+        },
+        "omitted_container_count": {
+          "description": "Prober containers follow the component page; continue its cursor for omitted entries.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
         },
         "replica_policy": {
           "$ref": "#/$defs/ReplicaPolicy",

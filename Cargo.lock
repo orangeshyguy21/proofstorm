@@ -2457,6 +2457,7 @@ dependencies = [
  "proofstorm-kube",
  "proofstorm-store",
  "proofstorm-view",
+ "regex",
  "reqwest",
  "rmcp",
  "schemars",

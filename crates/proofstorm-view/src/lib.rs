@@ -231,6 +231,9 @@ pub struct WorkloadDemand {
     pub replica_policy: ReplicaPolicy,
     #[serde(default)]
     pub observation: Option<WorkloadObservation>,
+    /// Prober containers follow the component page; continue its cursor for omitted entries.
+    #[serde(default)]
+    pub omitted_container_count: usize,
     pub containers: Vec<ContainerDemand>,
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -199,7 +199,10 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         .iter()
         .map(|tool| expect::string(tool, "/name").expect("tool name"))
         .collect::<Vec<_>>();
-    assert_eq!(names, vec!["cell_diff", "cell_read", "workspace_read"]);
+    assert_eq!(
+        names,
+        vec!["cell_diff", "cell_read", "cell_search", "workspace_read"]
+    );
 
     let refused = client
         .call_error("cell_create", json!({}))
@@ -386,12 +389,13 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 15);
+    assert_eq!(names.len(), 16);
     for name in [
         "session_list",
         "cell_up",
         "cell_inspect",
         "cell_read",
+        "cell_search",
         "environment_read",
         "cell_exec",
         "cell_sync",

@@ -38,10 +38,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
-/// Per-instance admission bound for non-terminal runtime actions. Eight allows
-/// one useful agent batch (for example policies, payer funding, and invoices
-/// for a bidirectional treatment) without permitting unbounded fan-out.
-pub const MAX_ACTIVE_OPERATIONS: u32 = 8;
 const MAX_ARTIFACT_BYTES: usize = 32 * 1024;
 
 struct PaymentClaimInput<'a> {
@@ -92,14 +88,6 @@ pub enum StoreError {
     InvalidStoredVersion(i64),
     #[error("operation artifact is {actual} bytes; maximum is {maximum}")]
     ArtifactTooLarge { actual: usize, maximum: usize },
-    #[error(
-        "cell instance {instance:?} already has {active} active operations; maximum is {maximum}"
-    )]
-    OperationLimit {
-        instance: String,
-        active: u32,
-        maximum: u32,
-    },
     #[error("operation {operation:?} belongs to principal {owner:?}, not {principal:?}")]
     OperationOwnerMismatch {
         operation: String,
@@ -135,7 +123,6 @@ impl StoreError {
             Self::Validation(_) => "validation_failed",
             Self::Catalog(_) => "catalog_resolution_failed",
             Self::ArtifactTooLarge { .. } => "artifact_too_large",
-            Self::OperationLimit { .. } => "operation_limit",
             Self::OperationOwnerMismatch { .. } => "operation_owner_mismatch",
             Self::QuoteOwnerMismatch { .. } => "quote_owner_mismatch",
             Self::QuotePaymentAlreadyClaimed { .. } => "quote_payment_already_claimed",
@@ -1570,21 +1557,6 @@ impl Store {
             completed_at_unix: None,
             artifact: None,
         };
-        let active = transaction.query_row(
-            "SELECT COUNT(*) FROM actions
-             WHERE workspace_id = ?1 AND instance_id = ?2 AND id <> ?3
-               AND phase_json IN ('\"pending\"', '\"running\"')
-               AND accepted_at >= unixepoch() - 600",
-            params![workspace, instance_id, operation_id],
-            |row| row.get::<_, u32>(0),
-        )?;
-        if active >= MAX_ACTIVE_OPERATIONS {
-            return Err(StoreError::OperationLimit {
-                instance: instance_id.to_owned(),
-                active,
-                maximum: MAX_ACTIVE_OPERATIONS,
-            });
-        }
         let inserted = transaction.execute(
             "INSERT OR IGNORE INTO actions(workspace_id, id, instance_id, experiment_id, session_id,
              principal_id, sequence, kind_json, capability_json, resource_name, request_digest,
