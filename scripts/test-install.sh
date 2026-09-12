@@ -9,7 +9,7 @@ mkdir -p "$scratch/bin" "$scratch/server" "$scratch/payload/proofstorm/bin"
 export INSTALL_TEST_SERVER="$scratch/server" INSTALL_TEST_LOG="$scratch/downloads" INSTALL_TEST_MARKER="$scratch/installed"
 cat > "$scratch/payload/proofstorm/bin/proofstorm" <<'STUB'
 #!/bin/sh
-[ "$1" = install-bundle ] || exit 97
+[ "$1" = internal ] && [ "$2" = install-bundle ] || exit 97
 printf '%s\n' "$@" > "$INSTALL_TEST_MARKER"
 STUB
 chmod 755 "$scratch/payload/proofstorm/bin/proofstorm"

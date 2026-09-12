@@ -7,7 +7,7 @@ fn release_metadata_and_version_do_not_resolve_installation_state() {
         .current_dir(root.path())
         .env("PROOFSTORM_HOME", root.path().join("missing"))
         .env("PROOFSTORM_CONTEXT", "")
-        .arg("release-info")
+        .args(["version", "--json"])
         .output()
         .unwrap();
     assert!(

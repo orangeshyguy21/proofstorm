@@ -11,7 +11,7 @@ use std::{
     process::Command,
 };
 
-fn binary_info(binary: &Path, flag: &str, work: &Path) -> Result<Value> {
+fn binary_info(binary: &Path, flags: &[&str], work: &Path) -> Result<Value> {
     let environment: Vec<_> = std::env::vars_os()
         .filter(|(name, _)| {
             let name = name.to_string_lossy();
@@ -22,7 +22,7 @@ fn binary_info(binary: &Path, flag: &str, work: &Path) -> Result<Value> {
         })
         .collect();
     let output = Command::new(binary)
-        .arg(flag)
+        .args(flags)
         .current_dir(work)
         .env_clear()
         .envs(environment)
@@ -116,8 +116,8 @@ fn assemble(
     }
     // Execute only the explicitly selected, locally built binaries after copying.
     // Extracting/downloading an archive never invokes this function.
-    let info = binary_info(&root.join("bin/proofstorm"), "release-info", root)?;
-    let mcp = binary_info(&root.join("bin/proofstorm-mcp"), "--release-info", root)?;
+    let info = binary_info(&root.join("bin/proofstorm"), &["version", "--json"], root)?;
+    let mcp = binary_info(&root.join("bin/proofstorm-mcp"), &["--release-info"], root)?;
     ensure!(
         info == mcp,
         "CLI and MCP were not built from the same release inputs"

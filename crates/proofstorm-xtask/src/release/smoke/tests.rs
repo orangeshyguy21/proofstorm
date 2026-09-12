@@ -4,11 +4,11 @@ use crate::release::bundle::tests::Bundle;
 fn executable_bundle(target: &str, behavior: &str) -> Bundle {
     let mut bundle = Bundle::new(target, "development");
     for (name, flag) in [
-        ("proofstorm", "release-info"),
+        ("proofstorm", "version"),
         ("proofstorm-mcp", "--release-info"),
     ] {
         let code = format!(
-            "#!/bin/sh\nset -eu\n[ \"$PROOFSTORM_HOME\" = \"$PWD/must-not-be-created\" ] || exit 97\n[ -z \"$PROOFSTORM_PRINCIPAL\" ] || exit 97\n{behavior}\ncase \"$1\" in --version|--help) echo fixture ;; {flag}) printf '%s\\n' '{}' ;; *) exit 97 ;; esac\n",
+            "#!/bin/sh\nset -eu\n[ \"$PROOFSTORM_HOME\" = \"$PWD/must-not-be-created\" ] || exit 97\n[ -z \"$PROOFSTORM_PRINCIPAL\" ] || exit 97\n{behavior}\ncase \"$1\" in --version|--help) echo fixture ;; {flag}) if [ \"$1\" = version ]; then [ \"$2\" = --json ] || exit 97; fi; printf '%s\\n' '{}' ;; *) exit 97 ;; esac\n",
             bundle.info.to_string().replace('\'', "'\\''")
         );
         let path = format!("bin/{name}");
@@ -39,7 +39,7 @@ fn failed_empty_mismatched_and_stateful_executables_do_not_get_receipts() {
     for behavior in [
         "exit 23",
         "exit 0",
-        "if [ \"$1\" = release-info ]; then echo '{}'; exit 0; fi",
+        "if [ \"$1\" = version ]; then echo '{}'; exit 0; fi",
         "mkdir -p \"$PROOFSTORM_HOME\"",
     ] {
         let temp = tempfile::tempdir().unwrap();

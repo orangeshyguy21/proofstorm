@@ -11,7 +11,7 @@ for attempt in first reinstall; do
   /bin/sh "$work/input/install.sh" --artifact-dir "$work/input" --archive "$archive" --prefix "$HOME/.local"
   "$HOME/.local/bin/proofstorm" --version
   "$HOME/.local/bin/proofstorm" --help >/dev/null
-  "$HOME/.local/bin/proofstorm" release-info > "$work/cli-info.json"
+  "$HOME/.local/bin/proofstorm" version --json > "$work/cli-info.json"
   "$HOME/.local/bin/proofstorm-mcp" --version
   "$HOME/.local/bin/proofstorm-mcp" --help >/dev/null
   "$HOME/.local/bin/proofstorm-mcp" --release-info > "$work/mcp-info.json"

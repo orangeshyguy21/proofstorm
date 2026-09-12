@@ -131,61 +131,85 @@ fn field<'a>(value: &'a Value, name: &str) -> &'a str {
 
 fn human(command: &str, value: &Value) -> String {
     use std::fmt::Write;
+    let bin = proofstorm_app::command_name();
     match command {
-        "setup" if value["ready"] == true => "Proofstorm is ready.\n\nRun proofstorm gui to get started.\n".into(),
-        "setup" if value["prepared"] == true => "Proofstorm tools are prepared. The runtime has not been started.\n\nRun proofstorm setup to finish.\n".into(),
-        "gui" => format!("GUI {}: {}\nProject: {}\n", match value["browser"].as_str() {
-            Some("existing_tab_focused") => "focused",
-            Some("opened_default_browser") => "opened",
-            _ => "ready",
-        }, field(value, "url"), field(value, "project")),
-        "stop" => format!("GUI {}. Labs keep running.\n", if value["stopped"] == true { "stopped" } else { "is not running" }),
+        "setup" if value["ready"] == true => format!("Runtime ready.\nOpen the GUI: {bin} gui\n"),
+        "setup" if value["prepared"] == true => {
+            format!("Tools prepared. Runtime not started.\nStart it: {bin} setup\n")
+        }
+        "gui" => format!(
+            "GUI {}: {}\nStop the GUI: {bin} gui stop\n",
+            match value["browser"].as_str() {
+                Some("existing_tab_focused") => "focused",
+                Some("opened_default_browser") => "opened",
+                _ => "ready",
+            },
+            field(value, "url")
+        ),
+        "gui-status" => {
+            let mut text = format!("GUI {}.\n", field(value, "state"));
+            if let Some(url) = value["url"].as_str() {
+                let _ = writeln!(text, "{url}");
+            }
+            text
+        }
+        "stop" => format!(
+            "GUI {}. Labs keep running.\n",
+            if value["stopped"] == true {
+                "stopped"
+            } else {
+                "is not running"
+            }
+        ),
         "attach" | "open" if value["attached"] == true => {
-            let mut text = format!("Proofstorm MCP configured for {}.\nConfig: {}\n", field(value, "harness"), field(value, "config"));
+            let mut text = format!(
+                "Proofstorm MCP configured for {}.\nConfig: {}\n",
+                field(value, "harness"),
+                field(value, "config")
+            );
             if let Some(backup) = value["backup"].as_str() {
                 let _ = writeln!(text, "Backup: {backup}");
             }
-            let _ = writeln!(text, "\n{}", field(value, "guidance"));
+            text.push_str("Open a new agent session to load the tools.\n");
             text
         }
         "init" => "Local permissions configured.\n".into(),
-        "install" => format!("Proofstorm {} installed.\n\nRun {} setup to get started.\n", field(value, "version"), field(value, "executable")),
-        "connect" => format!("Connected to {}/{}: {}\nKeep this terminal open. Press Ctrl-C to disconnect.\n", field(value, "lab"), field(value, "component"), field(value, "url")),
-        "environment" => {
+        "install" => installation_summary(value),
+        "connect" => format!(
+            "Connected to {}/{}: {}\nCtrl-C to disconnect.\n",
+            field(value, "lab"),
+            field(value, "component"),
+            field(value, "url")
+        ),
+        "environment" => labs_summary(value),
+        "down" if value["lab"]["phase"] == "closed" => format!(
+            "Removed lab {}.\nDeleted its workloads, storage, and activity history.\n",
+            field(&value["lab"], "name")
+        ),
+        "up" | "down" | "status" | "sync" if value.get("lab").is_some() => lab_summary(value),
+        "ops-list" => {
             let mut text = String::new();
-            if let Some(labs) = value["labs"]["items"].as_array() {
-                if labs.is_empty() { text.push_str("No labs in this environment.\n"); }
-                for lab in labs {
-                    let _ = writeln!(text, "{}: {} ({})", lab["handle"]["name"].as_str().unwrap_or_else(|| field(lab, "id")), lab["runtime"]["phase"].as_str().unwrap_or("unknown"), field(&lab["runtime"], "state"));
-                    for key in ["error", "message"] { describe(&mut text, key, &lab["runtime"][key], 2); }
-                    describe(&mut text, "read error", &lab["read_error"], 2);
+            if let Some(items) = value["items"].as_array() {
+                if items.is_empty() {
+                    text.push_str("No recorded operations.\n");
+                }
+                for item in items {
+                    let _ = writeln!(text, "{}  {}", field(item, "id"), field(item, "phase"));
                 }
             }
-            describe(&mut text, "next cursor", &value["labs"]["next_cursor"], 0);
-            text.push_str("Run proofstorm gui to explore, or use --json for full details.\n");
-            text
-        }
-        "up" | "down" | "status" | "sync" if value.get("lab").is_some() => {
-            let runtime = &value["runtime"];
-            let mut text = format!("Lab {}: {}\n", field(&value["lab"], "name"), runtime["phase"].as_str().unwrap_or_else(|| field(&value["lab"], "phase")));
-            for key in ["message", "retained_storage"] {
-                describe(&mut text, key, &runtime[key], 0);
-            }
-            describe(&mut text, "reconciliation error", &value["reconciliation_error"], 0);
-            if let Some(components) = runtime["components"].as_array() {
-                for component in components {
-                    let _ = writeln!(text, "  {}: {}", field(component, "id"), if component["ready"] == true { "ready" } else { "not ready" });
-                    if component["ready"] != true {
-                        describe(&mut text, "conditions", &component["conditions"], 4);
-                    }
-                }
-            }
-            text.push_str("Use --json for the full receipt.\n");
+            describe(&mut text, "next cursor", &value["next_cursor"], 0);
             text
         }
         "exec" | "result" => {
-            let mut text = format!("Operation {}: {}\n", field(value, "id"), field(value, "phase"));
+            let mut text = format!(
+                "Operation {}: {}\n",
+                field(value, "id"),
+                field(value, "phase")
+            );
             describe(&mut text, "result", &value["artifact"]["content"], 0);
+            if value["artifact"]["content"].get("private_output").is_some() {
+                text.push_str("Command output kept private.\n");
+            }
             text
         }
         _ => {
@@ -195,6 +219,90 @@ fn human(command: &str, value: &Value) -> String {
             text
         }
     }
+}
+
+fn installation_summary(value: &Value) -> String {
+    use std::fmt::Write;
+
+    let executable = value["short_executable"]
+        .as_str()
+        .unwrap_or_else(|| field(value, "executable"));
+    let mut text = format!(
+        "Proofstorm {} installed.\nRun {executable} setup\n",
+        field(value, "version")
+    );
+    if let Some(path) = value["short_command_conflict"].as_str() {
+        let _ = writeln!(text, "Existing storm command kept: {path}");
+    }
+    text
+}
+
+fn labs_summary(value: &Value) -> String {
+    use std::fmt::Write;
+
+    let mut text = String::new();
+    if let Some(labs) = value["labs"]["items"].as_array() {
+        if labs.is_empty() {
+            text.push_str("No labs.\n");
+        }
+        for lab in labs {
+            let _ = writeln!(
+                text,
+                "{}: {} ({})",
+                lab["handle"]["name"]
+                    .as_str()
+                    .unwrap_or_else(|| field(lab, "id")),
+                lab["runtime"]["phase"].as_str().unwrap_or("unknown"),
+                field(&lab["runtime"], "state")
+            );
+            for key in ["error", "message"] {
+                describe(&mut text, key, &lab["runtime"][key], 2);
+            }
+            describe(&mut text, "read error", &lab["read_error"], 2);
+        }
+    }
+    describe(&mut text, "next cursor", &value["labs"]["next_cursor"], 0);
+    text
+}
+
+fn lab_summary(value: &Value) -> String {
+    use std::fmt::Write;
+
+    let runtime = &value["runtime"];
+    let mut text = format!(
+        "Lab {}: {}\n",
+        field(&value["lab"], "name"),
+        runtime["phase"]
+            .as_str()
+            .unwrap_or_else(|| field(&value["lab"], "phase"))
+    );
+    for key in ["message", "retained_storage"] {
+        describe(&mut text, key, &runtime[key], 0);
+    }
+    describe(
+        &mut text,
+        "reconciliation error",
+        &value["reconciliation_error"],
+        0,
+    );
+    if let Some(components) = runtime["components"].as_array() {
+        for component in components {
+            let _ = writeln!(
+                text,
+                "  {}: {}",
+                field(component, "id"),
+                if component["ready"] == true {
+                    "ready"
+                } else {
+                    "not ready"
+                }
+            );
+            if component["ready"] != true {
+                describe(&mut text, "conditions", &component["conditions"], 4);
+            }
+        }
+    }
+    text
 }
 
 fn describe(text: &mut String, label: &str, value: &Value, indent: usize) {
@@ -249,9 +357,9 @@ mod tests {
                 "setup",
                 &json!({"ready":true,"capacity":{"secret":"noise"}})
             ),
-            "Proofstorm is ready.\n\nRun proofstorm gui to get started.\n"
+            "Runtime ready.\nOpen the GUI: proofstorm gui\n"
         );
-        assert!(human("setup", &json!({"prepared":true})).contains("not been started"));
+        assert!(human("setup", &json!({"prepared":true})).contains("not started"));
         assert!(
             human(
                 "gui",

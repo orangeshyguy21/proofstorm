@@ -211,8 +211,8 @@ mod tests {
         let mut containers = names(&first);
         containers.push(format!("{}-tools", first.context()));
         for container in containers {
-            let error = ensure_names_available(&second, &format!("{container}\n"), "", "")
-                .unwrap_err();
+            let error =
+                ensure_names_available(&second, &format!("{container}\n"), "", "").unwrap_err();
             assert!(error.to_string().contains(&container));
         }
         assert!(ensure_names_available(&second, "", &first.network_name(), "").is_err());

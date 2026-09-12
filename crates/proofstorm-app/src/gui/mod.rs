@@ -47,14 +47,37 @@ pub async fn open(
     no_open: bool,
     progress: &dyn Fn(&str),
 ) -> Result<Value> {
+    open_inner(home, Some(project), allow_development, no_open, progress).await
+}
+
+pub async fn start_service(
+    home: &Path,
+    allow_development: bool,
+    progress: &dyn Fn(&str),
+) -> Result<Value> {
+    open_inner(home, None, allow_development, true, progress).await
+}
+
+async fn open_inner(
+    home: &Path,
+    project: Option<&Path>,
+    allow_development: bool,
+    no_open: bool,
+    progress: &dyn Fn(&str),
+) -> Result<Value> {
     progress("Checking Proofstorm files");
     let verified = crate::artifacts::Verified::load(home, allow_development)?;
     let installation = &verified.installation;
-    progress("Checking project folder");
     let project = project
-        .canonicalize()
-        .context("GUI project directory must exist")?;
-    ensure!(project.is_dir(), "GUI project must be a directory");
+        .map(|project| {
+            progress("Checking project folder");
+            let project = project
+                .canonicalize()
+                .context("project folder does not exist")?;
+            ensure!(project.is_dir(), "project must be a directory");
+            Ok::<_, anyhow::Error>(project)
+        })
+        .transpose()?;
     progress("Checking existing GUI");
     let _control = state::lease(&installation.home, "gui-control-lock.sqlite3")?;
     let previous = state::record(&installation.home, &installation.id)?;
@@ -66,7 +89,9 @@ pub async fn open(
                         .build_sha256
                         .as_ref()
                         .is_none_or(|sha| sha == &verified.executable_sha256),
-                "GUI uses an older bundle; run proofstorm stop, then proofstorm gui"
+                "GUI uses an older build; run {} gui stop, then {} gui",
+                crate::command_name(),
+                crate::command_name()
             );
             progress("Reusing running GUI");
             (record.clone(), true)
@@ -85,13 +110,27 @@ pub async fn open(
     });
     let browser = if no_open {
         "not_requested"
-    } else if reused && activate(&record, &project).await.unwrap_or(false) {
+    } else if reused
+        && activate(
+            &record,
+            project.as_deref().context("project folder missing")?,
+        )
+        .await
+        .unwrap_or(false)
+    {
         "existing_tab_focused"
     } else {
         progress("Opening default browser");
         let fragment = serde_urlencoded::to_string([
             ("session", record.token.as_str()),
-            ("project", project.to_str().context("non-UTF-8 project")?),
+            (
+                "project",
+                project
+                    .as_deref()
+                    .context("project folder missing")?
+                    .to_str()
+                    .context("non-UTF-8 project")?,
+            ),
         ])?;
         let url = format!("{}/#{fragment}", record.url());
         // Delegate to the desktop's default URL handler, never a specific browser.
@@ -105,16 +144,23 @@ pub async fn open(
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status().context("default browser unavailable; on a headless host use proofstorm gui --no-open (GUI server is still running)")?;
+            .status()
+            .with_context(|| {
+                format!(
+                    "browser unavailable; GUI is running. Use {} gui start on a headless host",
+                    crate::command_name()
+                )
+            })?;
         ensure!(
             status.success(),
-            "default browser could not be opened; GUI server is still running. On a headless host use proofstorm gui --no-open"
+            "browser could not be opened; GUI is running. Use {} gui start on a headless host",
+            crate::command_name()
         );
         "opened_default_browser"
     };
     Ok(
         json!({"url":record.url(),"reused_server":reused,"browser":browser,"project":project,
-        "attached":false,"tab_focus":"best_effort","note":"Opening the GUI does not attach tools. Stop only this GUI with proofstorm stop; labs keep running."}),
+        "attached":false,"tab_focus":"best_effort","note":format!("Stop the GUI: {} gui stop. Labs keep running.", crate::command_name())}),
     )
 }
 
@@ -142,7 +188,7 @@ async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -
     command
         .arg("--home")
         .arg(&installation.home)
-        .arg("gui-serve")
+        .args(["internal", "gui-serve"])
         .arg("--instance")
         .arg(&record.instance);
     if verified.allow_development {
@@ -209,6 +255,18 @@ async fn activate(record: &Record, project: &Path) -> Result<bool> {
         .send()
         .await?;
     Ok(response.status().is_success() && response.json::<Value>().await?["focused"] == true)
+}
+
+/// Inspection never creates a lock file or removes a stale owner record.
+pub async fn status(home: &Path) -> Result<Value> {
+    let installation = Installation::load(home)?;
+    let Some(record) = state::record(home, &installation.id)? else {
+        return Ok(json!({"state":"stopped","url":null}));
+    };
+    let healthy = health(&record).await.unwrap_or(false);
+    Ok(
+        json!({"state":if healthy {"running"} else {"unresponsive"},"url":(record.port != 0).then(|| record.url())}),
+    )
 }
 
 pub async fn stop(home: &Path) -> Result<Value> {

@@ -137,7 +137,7 @@ relocation smoke tests still use Python; end-user installation remains prebuilt
 and source-free. The Linux worker uses this same Bash build driver with
 `--provenance SOURCE_JSON`, which verifies the transported snapshot before building.
 
-`proofstorm release-info`, `proofstorm --version`, and
+`proofstorm version --json`, `proofstorm --version`, and
 `proofstorm-mcp --release-info` work without an installation, principal, cluster,
 or source tree. Normal MCP startup remains stdio-only.
 
@@ -215,7 +215,7 @@ checks passed, and the disposable runtime was removed. See
 inside Codex or OpenCode.
 
 The project-scoped native Codex attachment gate has now been observed on this
-Mac. Running `proofstorm open codex --allow-development` from a disposable
+Mac. Running `proofstorm agent open codex --allow-development` from a disposable
 project configured that directory and launched the native app. A user-started
 Codex task successfully called `proofstorm.environment_read` and reported both
 sample labs Ready. Attachment also passed configuration/backup preservation,
@@ -319,13 +319,13 @@ cd /absolute/path/to/my-app
 The earlier Codex-only tested bundle had a stale setup hint claiming attachment
 was unimplemented. The OpenCode/Claude Code adapter slice refreshes that hint.
 
-`proofstorm gui [PATH]` starts or reuses one background server for this private
+`proofstorm gui --project PATH` starts or reuses one background server for this private
 installation and opens your **default browser**. With no PATH, the current
 directory pre-fills the project dialog; it does not attach anything automatically.
 Choose **Launch Agent** and click **Codex**. Only the
 selected project's `.codex/config.toml` receives the managed entry. Existing
 settings, conflict refusal, backups, project trust, and server verification use
-the same implementation as `proofstorm open codex`. Other projects and global
+the same implementation as `proofstorm agent open codex`. Other projects and global
 Codex settings are not edited. Codex's normal directory inheritance still applies;
 this configuration scope is not a separate runtime or security sandbox.
 
@@ -338,8 +338,8 @@ The **Launch Agent** dialog shows branded buttons for supported installed native
 apps. Clicking one verifies and attaches `proofstorm` for the launch folder, then
 opens Codex, OpenCode, or Claude Code there. Legacy connections get an explicit
 backup-and-replace choice. See [native handoff details](agent-attachments.md).
-Terminal sessions are the default for `proofstorm open codex`,
-`proofstorm open opencode`, and `proofstorm open claude`. Add `--gui` to request
+Terminal sessions are the default for `proofstorm agent open codex`,
+`proofstorm agent open opencode`, and `proofstorm agent open claude`. Add `--desktop` to request
 the native app instead; GUI launch buttons always use native apps. OpenCode
 1.18.30's new layout ignores project links, requiring manual folder selection. See
 [agent attachment formats, safeguards, and tests](agent-attachments.md).
@@ -349,8 +349,8 @@ prevent activation, in which case Proofstorm opens the URL through macOS's defau
 browser handler; that can create another tab. No browser-specific automation
 permission is requested. Exact cross-browser tab activation is not guaranteed.
 
-`proofstorm stop` stops only this installation's GUI; labs continue running.
-`gui --no-open` starts/reuses the server without opening a browser for diagnostics.
+`proofstorm gui stop` stops only this installation's GUI; labs continue running.
+`gui start` starts/reuses the server without opening a browser for diagnostics.
 An authenticated health check and a lifetime lock protect ownership: a stale PID
 or occupied port never authorizes killing another process. A stopped/restarted
 GUI gets a new session; run `proofstorm gui` to reconnect the browser.
@@ -358,7 +358,7 @@ GUI gets a new session; run `proofstorm gui` to reconnect the browser.
 The managed server binds only to loopback. Its private session, exact Host/Origin
 checks, and CSRF protection guard typed project preview/attachment actions; it
 does not expose a shell, arbitrary file-write API, or remote access. Embedded
-assets require no first-run compilation. Existing `proofstorm serve` remains the
+assets require no first-run compilation. Existing `proofstorm dev serve` remains the
 foreground, read-only developer/debug server.
 
 Maintainer gate (opens a disposable project in the native Codex app):

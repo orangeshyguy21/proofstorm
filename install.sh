@@ -112,7 +112,7 @@ mkdir "$install_scratch/unpacked"
 tar -xpzf "$install_scratch/archive.tar.gz" -C "$install_scratch/unpacked"
 bundle="$install_scratch/unpacked/proofstorm"
 [ -x "$bundle/bin/proofstorm" ] || fail 'bundle executable missing'
-set -- "$bundle/bin/proofstorm" install-bundle --bundle "$bundle" --prefix "$install_prefix"
+set -- "$bundle/bin/proofstorm" internal install-bundle --bundle "$bundle" --prefix "$install_prefix"
 if [ "$allow_development" = true ]; then set -- "$@" --allow-development; fi
 "$@" > "$install_scratch/install-result.json"
 printf '\nInstalled. Check it with: "%s/bin/proofstorm" --version\n' "$install_prefix"

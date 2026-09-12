@@ -209,7 +209,7 @@ fn launchers_quote_paths_preserve_arguments_and_refuse_foreign_files() {
     launchers(&source).unwrap();
     let launcher = source.join(".proofstorm-dev/bin/proofstorm");
     let result = Command::new(&launcher)
-        .args(["open", "a directory's name"])
+        .args(["gui", "--project", "a directory's name"])
         .env("PROOFSTORM_HOME", "/foreign")
         .output()
         .unwrap();
@@ -217,10 +217,27 @@ fn launchers_quote_paths_preserve_arguments_and_refuse_foreign_files() {
     assert_eq!(
         String::from_utf8(result.stdout).unwrap(),
         format!(
-            "{}\nopen\na directory's name\n",
+            "{}\ngui\n--project\na directory's name\n",
             source.join(".proofstorm-dev/state").display()
         )
     );
+    let short = source.join(".proofstorm-dev/bin/storm");
+    let result = Command::new(&short)
+        .args(["gui", "status"])
+        .env("PROOFSTORM_HOME", "/foreign")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap(),
+        format!(
+            "{}\ngui\nstatus\n",
+            source.join(".proofstorm-dev/state").display()
+        )
+    );
+    fs::write(&short, "unrelated storm").unwrap();
+    launchers(&source).unwrap();
+    assert_eq!(fs::read_to_string(&short).unwrap(), "unrelated storm");
     fs::write(&launcher, "foreign").unwrap();
     assert!(launchers(&source).is_err());
     assert_eq!(fs::read_to_string(launcher).unwrap(), "foreign");

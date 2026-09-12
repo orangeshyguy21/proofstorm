@@ -24,7 +24,7 @@ fn init_is_cwd_independent_and_home_flags_override_environment() {
         .env("PROOFSTORM_HOME", root.path().join("must not be created"))
         .arg("--home")
         .arg(&home)
-        .arg("init")
+        .args(["dev", "init"])
         .output()
         .unwrap();
     assert!(
@@ -34,7 +34,7 @@ fn init_is_cwd_independent_and_home_flags_override_environment() {
     );
     let second = cli(&second_cwd)
         .env("PROOFSTORM_HOME", &home)
-        .arg("init")
+        .args(["dev", "init"])
         .output()
         .unwrap();
     assert!(

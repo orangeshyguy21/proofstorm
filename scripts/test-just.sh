@@ -98,14 +98,14 @@ run help
 # Literal arguments survive whitespace, quotes, and shell metacharacters.
 tricky="folder with 'quotes'; \$(touch $scratch/INJECTED)"
 for recipe in gui serve; do
-  run "$recipe" "$tricky" --no-open
-  expect proofstorm "$fixture" unset unset gui "$tricky" --no-open
+  run "$recipe" open --project "$tricky"
+  expect proofstorm "$fixture" unset unset gui open --project "$tricky"
 done
 [[ ! -e "$scratch/INJECTED" ]] || fail 'A literal argument was executed as shell code'
 run doctor --json
 expect proofstorm "$fixture" unset unset doctor --json
 run stop
-expect proofstorm "$fixture" unset unset stop
+expect proofstorm "$fixture" unset unset gui stop
 run check-quick
 expect check.sh "$fixture" unset unset quick
 run check-rust

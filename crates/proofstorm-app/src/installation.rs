@@ -98,17 +98,13 @@ impl Installation {
     pub fn load(home: &Path) -> Result<Self> {
         let home = home.canonicalize().with_context(|| {
             format!(
-                "installation home {} is missing; run proofstorm --home <path> init",
+                "installation home {} is missing; run setup first",
                 home.display()
             )
         })?;
         let path = home.join(MANIFEST);
-        let bytes = fs::read(&path).with_context(|| {
-            format!(
-                "read {}; initialize this home explicitly with proofstorm --home <path> init",
-                path.display()
-            )
-        })?;
+        let bytes =
+            fs::read(&path).with_context(|| format!("read {}; run setup first", path.display()))?;
         let installation: Self = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid installation manifest {}", path.display()))?;
         ensure!(

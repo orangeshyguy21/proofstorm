@@ -40,7 +40,7 @@ gui *args:
 
 # Stop the managed GUI, leaving labs running.
 stop:
-    .proofstorm-dev/bin/proofstorm stop
+    .proofstorm-dev/bin/proofstorm gui stop
 
 # Run the same quick checks, lints, and tests as CI; no runtime needed.
 check:

@@ -44,7 +44,7 @@ impl Inputs {
     fn binaries(&self) {
         directory(&self.root.path().join("binaries")).unwrap();
         for (name, flag) in [
-            ("proofstorm", "release-info"),
+            ("proofstorm", "version"),
             ("proofstorm-mcp", "--release-info"),
         ] {
             let path = self.root.path().join("binaries").join(name);
@@ -52,7 +52,7 @@ impl Inputs {
             fs::write(
                 &path,
                 format!(
-                    "#!/bin/sh\n[ \"$1\" = '{flag}' ] || exit 97\nprintf '%s\\n' '{payload}'\n"
+                    "#!/bin/sh\n[ \"$1\" = '{flag}' ] || exit 97\nif [ \"$1\" = version ]; then [ \"$2\" = --json ] || exit 97; fi\nprintf '%s\\n' '{payload}'\n"
                 ),
             )
             .unwrap();

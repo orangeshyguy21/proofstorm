@@ -17,7 +17,7 @@ for attempt in first reinstall; do
         --prefix /tmp/first-user/.local ${2:+"$2"}
     /tmp/first-user/.local/bin/proofstorm --version
     /tmp/first-user/.local/bin/proofstorm --help >/dev/null
-    /tmp/first-user/.local/bin/proofstorm release-info > /tmp/cli-info.json
+    /tmp/first-user/.local/bin/proofstorm version --json > /tmp/cli-info.json
     /tmp/first-user/.local/bin/proofstorm-mcp --version
     /tmp/first-user/.local/bin/proofstorm-mcp --help >/dev/null
     /tmp/first-user/.local/bin/proofstorm-mcp --release-info > /tmp/mcp-info.json

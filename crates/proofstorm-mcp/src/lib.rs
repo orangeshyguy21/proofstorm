@@ -2867,7 +2867,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "environment_read",
-        description = "Read the workspace environment: labs currently present in the selected cluster, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. Deleted and unmaterialized labs are excluded. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page labs, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one lab's sections. Same JSON contract as proofstorm environment and GET /v1/environment."
+        description = "Read the workspace environment: labs currently present in the selected cluster, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. Deleted and unmaterialized labs are excluded. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page labs, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one lab's sections. Same JSON contract as proofstorm ls and GET /v1/environment."
     )]
     async fn proofstorm_environment_read(
         &self,

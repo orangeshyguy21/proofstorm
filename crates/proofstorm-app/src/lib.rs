@@ -5,7 +5,9 @@
 //! Shared application behavior for developer and MCP clients.
 pub mod artifacts;
 pub mod bootstrap;
+mod command_name;
 pub mod config;
+pub use command_name::command_name;
 pub mod connections;
 pub mod developer;
 pub mod environment;

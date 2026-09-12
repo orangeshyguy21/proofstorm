@@ -40,11 +40,11 @@ def run(prefix, env, work, browser=False, chrome=False):
             return error.code, json.load(error)
 
     try:
-        first = cli("gui", "--allow-development", "--no-open")
+        first = cli("gui", "start", "--allow-development")
         record = json.loads(record_path.read_text())
         assert record_path.stat().st_mode & 0o077 == 0
         assert record["token"] not in json.dumps(first)
-        second = cli("gui", "--allow-development", "--no-open", cwd=other)
+        second = cli("gui", "start", "--allow-development", cwd=other)
         assert second["reused_server"] and second["url"] == first["url"]
         assert json.loads(record_path.read_text()) == record
         assert not (project / ".codex").exists() and not (other / ".codex").exists()
@@ -81,18 +81,18 @@ def run(prefix, env, work, browser=False, chrome=False):
         assert configured == (project / ".codex/config.toml").read_bytes()
         assert not (other / ".codex").exists()
         assert str(project.resolve()) in api(record, "/v1/gui/context")[1]["recent_projects"]
-        stopped = cli("stop")
+        stopped = cli("gui", "stop")
         assert stopped["stopped"] and not stopped["labs_stopped"] and not record_path.exists()
-        assert cli("stop")["reason"] == "not_running"
+        assert cli("gui", "stop")["reason"] == "not_running"
         # Simulate a crash's stale owner record. Only this disposable GUI record is restored.
         descriptor = os.open(record_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w") as output:
             json.dump(record, output)
-        restarted = cli("gui", "--allow-development", "--no-open")
+        restarted = cli("gui", "start", "--allow-development")
         fresh = json.loads(record_path.read_text())
         assert not restarted["reused_server"] and fresh["instance"] != record["instance"] and fresh["token"] != record["token"]
         assert api(fresh, "/v1/environment", headers={"Authorization":"Bearer " + record["token"]})[0] == 401
-        assert cli("stop")["stopped"] and not record_path.exists()
+        assert cli("gui", "stop")["stopped"] and not record_path.exists()
         return {"server_reused":True, "opening_does_not_attach":True,
                 "unauthenticated_and_foreign_origin_actions_refused":True,
                 "project_preview_read_only":True, "project_attachment_verified":True,
@@ -103,4 +103,4 @@ def run(prefix, env, work, browser=False, chrome=False):
                 "tab_focus":"best_effort", "harness_loaded":False}
     finally:
         if record_path.exists():
-            cli("stop")
+            cli("gui", "stop")

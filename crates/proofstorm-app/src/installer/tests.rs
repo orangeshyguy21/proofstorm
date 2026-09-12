@@ -1,6 +1,88 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
+#[test]
+fn short_command_is_repeatable_and_keeps_foreign_executables() {
+    let root = tempfile::tempdir().unwrap();
+    let prefix = root.path().join("prefix");
+    let managed = prefix.join("lib/proofstorm");
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    let first = install_short_command(&managed, &prefix, []).unwrap();
+    assert_eq!(first, (Some(prefix.join("bin/storm")), None));
+    assert_eq!(first, install_short_command(&managed, &prefix, []).unwrap());
+    assert_eq!(
+        fs::read_to_string(prefix.join("bin/storm")).unwrap(),
+        short_launcher(&managed).unwrap()
+    );
+    fs::write(prefix.join("bin/storm"), b"unrelated command").unwrap();
+    assert_eq!(
+        install_short_command(&managed, &prefix, []).unwrap(),
+        (None, Some(prefix.join("bin/storm")))
+    );
+    assert_eq!(
+        fs::read(prefix.join("bin/storm")).unwrap(),
+        b"unrelated command"
+    );
+}
+
+#[test]
+fn short_command_does_not_shadow_an_existing_path_entry_or_follow_links() {
+    let root = tempfile::tempdir().unwrap();
+    let prefix = root.path().join("prefix");
+    let managed = prefix.join("lib/proofstorm");
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    let other = root.path().join("other-bin");
+    fs::create_dir(&other).unwrap();
+    fs::write(other.join("storm"), b"existing command").unwrap();
+    assert_eq!(
+        install_short_command(&managed, &prefix, [other.clone()]).unwrap(),
+        (None, Some(other.join("storm")))
+    );
+    assert!(!prefix.join("bin/storm").exists());
+    std::os::unix::fs::symlink(other.join("storm"), prefix.join("bin/storm")).unwrap();
+    assert_eq!(
+        install_short_command(&managed, &prefix, []).unwrap(),
+        (None, Some(prefix.join("bin/storm")))
+    );
+    assert_eq!(fs::read(other.join("storm")).unwrap(), b"existing command");
+}
+
+#[test]
+fn short_launcher_uses_the_same_binary_and_honors_explicit_home() {
+    let root = tempfile::tempdir().unwrap();
+    let managed = root.path().join("managed 'installation'");
+    fs::create_dir_all(managed.join("current/bin")).unwrap();
+    let program = managed.join("current/bin/proofstorm");
+    fs::write(
+        &program,
+        b"#!/bin/sh\nprintf '%s\\n' \"$PROOFSTORM_CLI_NAME\" \"$PROOFSTORM_HOME\" \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(program, fs::Permissions::from_mode(0o755)).unwrap();
+    let wrapper = root.path().join("storm");
+    fs::write(&wrapper, short_launcher(&managed).unwrap()).unwrap();
+    for explicit in [None, Some("/explicit home")] {
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg(&wrapper)
+            .args(["gui", "--project", "/a project's directory"])
+            .env_remove("PROOFSTORM_HOME");
+        if let Some(home) = explicit {
+            command.env("PROOFSTORM_HOME", home);
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success());
+        let home = explicit.map_or_else(
+            || managed.join("state").display().to_string(),
+            str::to_owned,
+        );
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            format!("storm\n{home}\ngui\n--project\n/a project's directory\n")
+        );
+    }
+}
+
 fn fixture(root: &Path) -> PathBuf {
     fixture_with_info(root, &crate::release::describe())
 }
