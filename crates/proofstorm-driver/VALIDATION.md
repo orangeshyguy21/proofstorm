@@ -1,8 +1,9 @@
 # Native driver migration validation
 
-Local validation recorded on September 13, 2026. This working tree contains the
-native-driver migration and the preceding prober refactor. These are local test
-results, not publication receipts or evidence of a fresh installed release.
+Local validation and component publication verification recorded on September 13,
+2026. This record covers the native-driver migration and the preceding prober
+refactor. Local tests and public image availability are recorded separately;
+neither establishes acceptance of a fresh installed release.
 
 ## Passed local checks
 
@@ -45,9 +46,29 @@ Both report `source_sha256: development`: they were built locally and do not
 provide the release workflow's clean-source attestation. Subsequent changes in
 this validation pass corrected test fixtures and documentation only.
 
-The six component manifest pins are recorded in
-[`wallet_builds.rs`](../proofstorm-core/src/wallet_builds.rs). They are local build
-candidates. Their presence in the catalog does not prove public availability.
+## Published component images
+
+All six component images were rebuilt from clean commit
+`fc827752bc834a7fa50a9fad317143209d6f4baf`, source fingerprint
+`e497fa8565b6b6b15b6a1c67466d6577536ddc9ae5f4cf03b34b60debdc12df0`,
+and published to `ghcr.io/orangeshyguy21/proofstorm`. The existing publisher's
+read-only `verify-work` command rechecked every image after publication. It
+verified manifest/config hashes, platform, the local image identity, and anonymous
+layer availability. All six receipts remain `publication: verified`.
+
+The original receipts are retained in
+[`native-driver-publication.json`](../../release/native-driver-publication.json).
+The catalog in [`wallet_builds.rs`](../proofstorm-core/src/wallet_builds.rs) now
+uses these published digests. Upstream versions, source archives and recipes are
+unchanged from the local component checks above. The formal builds add the
+clean-source label, so their image digests differ from the initial local builds.
+The controller images recorded above predate these final catalog pins and must
+be replaced by the matching release CI builds.
+
+After updating the pins and regenerating both platform coverage manifests and
+Kubernetes snapshots, the complete host check passed again: 707 tests, strict
+workspace Clippy, formatting, shell and workflow checks. The local log is
+`/private/tmp/proofstorm-published-images-check.log`.
 
 ## Reproduction
 
@@ -70,8 +91,8 @@ artifacts.
 
 ## Remaining release gates
 
-1. Produce clean-source publication receipts and verify anonymous access to all
-   six new component pins and matching controller images.
+1. Build and publish matching release controller images from the final source
+   and catalog pins through main CI. Component publication is complete.
 2. Run fresh mixed-component acceptance on the release candidate, including
    mint/pay/claim/recovery, authentication, management, Redis and PostgreSQL gates.
 3. Measure real application latency and connection-limit interference under

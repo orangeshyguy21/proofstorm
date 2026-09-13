@@ -49,8 +49,9 @@ explicitly rendered process environment. These projections alone do not establis
 rate-limit enforcement, database persistence or cache behavior; live acceptance
 retains independent checks for those behaviors.
 
-The owned Python migration is implemented and local checks pass. Publication
-evidence and full live acceptance still need to pass before release; see
+The owned Python migration is implemented, local checks pass, and all six
+component images have verified public publication receipts. Matching release
+controllers and full live acceptance still need to pass before release; see
 [the validation record](VALIDATION.md). `scripts/test-workflow-surface.sh` rejects
 owned Python source and execution while preserving explicit tests that Python
 is absent on installed hosts.
@@ -64,10 +65,12 @@ checks and 100 TCP checks. Excess requests returned 429. Application clients use
 source addresses outside Nutshell's exact loopback exemption; no proxy forwarding
 headers were used. This is an actual daemon contract, not a fleet latency result.
 
-The six new per-platform catalog pins are local build candidates pending registry
-publication verification. Fresh installation must not be released with inaccessible
-pins. Both CDK and Coco images were verified without Python on ARM and x86; Nutshell
-retains its own upstream runtime and installs the upstream console entrypoints.
+The six new per-platform catalog pins now reference verified public GHCR builds
+from commit `fc827752bc834a7fa50a9fad317143209d6f4baf`; the
+[publication receipts](../../release/native-driver-publication.json) record their
+exact identities. Both CDK and Coco images were verified without Python on ARM
+and x86; Nutshell retains its own upstream runtime and installs the upstream
+console entrypoints.
 
 The library's default `runtime` feature builds the complete helper. Catalog and
 controller consumers disable default features to read only its protocol constants;

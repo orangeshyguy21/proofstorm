@@ -5,12 +5,12 @@ pub(crate) const LINUX_AMD64: bool = cfg!(all(target_os = "linux", target_arch =
 pub(crate) fn cdk(amd64: bool) -> (&'static str, &'static str) {
     if amd64 {
         (
-            "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:c7b68212a7af2d35bd9fceb0949d2a3f6929f6796e22d70bdee01bd1c9f06cff",
+            "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:613eab7ee578ad733ccd062830190a0905f3192dec1d976bfb72007382f59bff",
             include_str!("../../../docker/wallet/cdk-cli-0.18.0-linux-amd64-provenance.json"),
         )
     } else {
         (
-            "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:9f8b536f138897e5f423b4b1648db6042479aec2aba034eed0646d23ba481f42",
+            "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:31e18a419bb3cafcc795a5c99dcfbb07460bba5ad76f2c1d104341e151cb22e9",
             include_str!("../../../docker/wallet/cdk-cli-0.18.0-provenance.json"),
         )
     }
@@ -19,12 +19,12 @@ pub(crate) fn cdk(amd64: bool) -> (&'static str, &'static str) {
 pub(crate) fn cocod(amd64: bool) -> (&'static str, &'static str) {
     if amd64 {
         (
-            "proofstorm-registry.localhost:5000/cocod-wallet@sha256:859c6f1daf68e0745b5502d4eeddd330823ad8b89aa2c7cf9d901e63caabc00b",
+            "proofstorm-registry.localhost:5000/cocod-wallet@sha256:4c6dfadc79c08a2c2d535859ee750042a28e162c86c2cea788f2b50f7ce39187",
             include_str!("../../../docker/wallet/cocod-44e5101c-linux-amd64-provenance.json"),
         )
     } else {
         (
-            "proofstorm-registry.localhost:5000/cocod-wallet@sha256:35f73767b4721019b0554816f53c400b3534bc20aaa6fbffb64495f2df394b8b",
+            "proofstorm-registry.localhost:5000/cocod-wallet@sha256:940d02390f50a7009d5ad50b343663afc042f7af93fdb94ddceec34d1940d29c",
             include_str!("../../../docker/wallet/cocod-44e5101c-provenance.json"),
         )
     }
@@ -32,9 +32,9 @@ pub(crate) fn cocod(amd64: bool) -> (&'static str, &'static str) {
 
 pub(crate) fn nutshell(amd64: bool) -> &'static str {
     if amd64 {
-        "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:c3e4deaf8a9e101ee7bc6ea07d5b8ded4c501e6515fa8263f2e38130a0ee69d7"
+        "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754"
     } else {
-        "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+        "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f"
     }
 }
 

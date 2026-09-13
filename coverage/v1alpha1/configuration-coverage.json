@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:2d1bf6dd96acb49a44a8d35e225016cb1dc60b31d618f245ed286ff2f09b088d",
+  "catalog_digest": "sha256:2c58b44d99da9f631c4dd559ca22030e59613fe0867928b935878346f5613988",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -554,7 +554,7 @@
       "support_lifecycle": "preferred",
       "config_version": "cdk-cli-wallet/0.18/v1",
       "config_schema_digest": "sha256:6d88a6e4226ad8e2f1396b819e09879657ebef4a9f7b154015f1ddd0be3bed90",
-      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:9f8b536f138897e5f423b4b1648db6042479aec2aba034eed0646d23ba481f42",
+      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:31e18a419bb3cafcc795a5c99dcfbb07460bba5ad76f2c1d104341e151cb22e9",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",
@@ -909,7 +909,7 @@
       "support_lifecycle": "experimental",
       "config_version": "cocod-wallet/0.0.17/v1",
       "config_schema_digest": "sha256:3dde4aa06c82c0f6da042c21478acf2c9cf3f2de849f68330904a95ce7701366",
-      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:35f73767b4721019b0554816f53c400b3534bc20aaa6fbffb64495f2df394b8b",
+      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:940d02390f50a7009d5ad50b343663afc042f7af93fdb94ddceec34d1940d29c",
       "fields": {
         "client_credential": {
           "classification": "generated_instance_secret",
@@ -1206,7 +1206,7 @@
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
       "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
-      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
       "fields": {
         "auth_max_blind_tokens": {
           "classification": "agent_authorable",
@@ -1532,7 +1532,7 @@
       "support_lifecycle": "preferred",
       "config_version": "nutshell-wallet/0.20/v1",
       "config_schema_digest": "sha256:c3c3c1cfd04bf63de992267beabe8d2b1927575da11d8508bbe865957115281f",
-      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",
