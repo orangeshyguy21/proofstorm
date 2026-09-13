@@ -38,6 +38,7 @@ rmcp = { workspace = true, features = ["client"] }
 reqwest.workspace = true
 
 [dev-dependencies]
+proofstorm-driver = { path = "../proofstorm-driver", default-features = false, features = ["observation"] }
 nix = { version = "0.29", features = ["term", "fs"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"

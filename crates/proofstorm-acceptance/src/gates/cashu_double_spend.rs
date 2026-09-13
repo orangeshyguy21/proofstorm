@@ -9,12 +9,6 @@ use crate::{EXPERIMENT_CAPABILITIES, GateContext, McpClient, cell, json as expec
 
 const INSTANCE: &str = "proof-spend";
 const DRIVER: &str = include_str!("../../drivers/cashu_double_spend.sh");
-const BALANCE_OBSERVER: &str =
-    include_str!("../../../proofstorm-kube/drivers/cdk_wallet_balance.py");
-
-fn driver() -> String {
-    DRIVER.replace("__PROOFSTORM_BALANCE_OBSERVER__", BALANCE_OBSERVER)
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -216,7 +210,7 @@ fn exercise(
         "component_exec_live",
         "proof-spend",
         json!({
-            "component":"wallet-a","script":driver(),"timeout_seconds":240,"output":{"mode":"public"}
+            "component":"wallet-a","script":DRIVER,"timeout_seconds":240,"output":{"mode":"public"}
         }),
     )?;
     native_ok(&result)?;
@@ -347,11 +341,8 @@ mod tests {
 
     #[test]
     fn driver_uses_the_shared_passive_observer_without_unresolved_placeholders() {
-        let script = driver();
-        assert_eq!(DRIVER.matches("__PROOFSTORM_BALANCE_OBSERVER__").count(), 1);
-        assert!(script.contains(BALANCE_OBSERVER));
-        assert!(!script.contains("__PROOFSTORM_BALANCE_OBSERVER__"));
-        assert!(script.contains("result[\"balance_sat\"]"));
+        assert!(DRIVER.contains("/opt/proofstorm/driver observe cdk-cli-wallet balance_sat"));
+        assert!(!DRIVER.contains("__PROOFSTORM_BALANCE_OBSERVER__"));
     }
 
     #[test]

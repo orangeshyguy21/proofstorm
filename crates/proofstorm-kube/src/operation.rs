@@ -20,14 +20,6 @@ use crate::{
 
 use crate::images::PROBE_IMAGE as REACHABILITY_PROBE_IMAGE;
 
-/// Fixed driver for the secret-bearing OIDC/CAT/BAT baseline. It writes only
-/// an allowlisted result to the termination log.
-const AUTHENTICATION_CONFORMANCE_DRIVER: &str =
-    include_str!("../drivers/authentication_conformance.py");
-const AUTHENTICATION_PROTECTED_SPEND_DRIVER: &str =
-    include_str!("../drivers/authentication_protected_spend.py");
-const AUTHENTICATION_REPLAY_DRIVER: &str = include_str!("../drivers/authentication_replay.py");
-
 pub struct BootstrapJobSpec<'a> {
     pub resource_name: &'a str,
     pub instance_key: &'a str,
@@ -176,8 +168,6 @@ pub struct WalletFundJobSpec<'a> {
     pub amount_sat: u64,
 }
 
-const WALLET_QUOTE_DRIVER: &str = include_str!("../drivers/wallet_quote_driver.py");
-
 pub struct WalletInvoiceJobSpec<'a> {
     pub resource_name: &'a str,
     pub instance_key: &'a str,
@@ -324,6 +314,25 @@ pub fn evaluate_action_admission(
     action: &ProofstormCellAction,
     cell: &ProofstormCell,
 ) -> Result<(), ActionAdmissionError> {
+    evaluate_action_admission_at(
+        action,
+        cell,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| {
+                i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+            }),
+    )
+}
+
+/// Evaluate readiness at an explicit observation time.
+/// # Errors
+/// Returns an error when a required identity or fresh readiness prerequisite is unavailable.
+pub fn evaluate_action_admission_at(
+    action: &ProofstormCellAction,
+    cell: &ProofstormCell,
+    now_unix: i64,
+) -> Result<(), ActionAdmissionError> {
     require_open_cell(cell)?;
     validate_action_identity(action, cell).map_err(|error| match error {
         ActionRenderError::Identity(field) => ActionAdmissionError::Identity(field),
@@ -336,20 +345,12 @@ pub fn evaluate_action_admission(
         &cell.spec.lock,
     )
     .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
-    let statuses = cell
+    let mut statuses = cell
         .status
         .as_ref()
         .filter(|status| status.observed_revision_digest == cell.spec.revision_digest)
-        .map_or(&[][..], |status| status.components.as_slice());
-    let protocol_lease_current = cell
-        .annotations()
-        .get(crate::PROTOCOL_PROBER_LEASE_ANNOTATION)
-        .is_some_and(|session| {
-            session != "inactive"
-                && cell.status.as_ref().is_some_and(|status| {
-                    status.observed_protocol_probe_lease.as_ref() == Some(session)
-                })
-        });
+        .map_or_else(Vec::new, |status| status.components.clone());
+    crate::expire_protocol_status(&plans, &mut statuses, now_unix);
 
     for (component, operation) in action_participants(&action.spec.action) {
         let plan = require_admission_plan(&plans, component, operation)?;
@@ -362,13 +363,7 @@ pub fn evaluate_action_admission(
                 operation,
             })?;
         for prerequisite in &contract.prerequisites {
-            evaluate_prerequisite(
-                plan,
-                statuses,
-                operation,
-                *prerequisite,
-                protocol_lease_current,
-            )?;
+            evaluate_prerequisite(plan, &statuses, operation, *prerequisite)?;
         }
     }
 
@@ -378,10 +373,9 @@ pub fn evaluate_action_admission(
         let target = require_admission_plan(&plans, target, OperationClass::NativeExec)?;
         evaluate_prerequisite(
             target,
-            statuses,
+            &statuses,
             OperationClass::NativeExec,
             ReadinessPrerequisite::TargetDescriptor,
-            protocol_lease_current,
         )?;
     }
     Ok(())
@@ -430,7 +424,6 @@ fn evaluate_prerequisite(
     statuses: &[ComponentStatus],
     operation: OperationClass,
     prerequisite: ReadinessPrerequisite,
-    protocol_lease_current: bool,
 ) -> Result<(), ActionAdmissionError> {
     let condition_type = match prerequisite {
         ReadinessPrerequisite::Storage => Some(ComponentConditionType::StorageReady),
@@ -447,19 +440,6 @@ fn evaluate_prerequisite(
     let condition_type = condition_type.expect("runtime prerequisite has a condition");
     if !plan.applicable_conditions.contains(&condition_type) {
         return Ok(());
-    }
-    if matches!(
-        prerequisite,
-        ReadinessPrerequisite::Dependencies | ReadinessPrerequisite::Protocol
-    ) && !protocol_lease_current
-    {
-        return Err(unsatisfied(
-            plan,
-            operation,
-            prerequisite,
-            Some(condition_type),
-            None,
-        ));
     }
     let status = current_component_status(plan, statuses);
     let condition = status.and_then(|status| {
@@ -1506,11 +1486,7 @@ const WALLET_OBSERVATION_ADAPTERS: &[WalletObservationAdapter] = &[
 ];
 
 fn render_cdk_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let script = concat!(
-        "python3 - <<'PROOFSTORM_READER' > /dev/termination-log\n",
-        include_str!("../drivers/cdk_wallet_balance.py"),
-        "\nPROOFSTORM_READER\n"
-    );
+    let script = "exec /opt/proofstorm/driver observe cdk-cli-wallet > /dev/termination-log";
     let mint_url = format!("http://{}:3338", spec.mint);
     // SQLite needs writable WAL coordination files even for mode=ro. The
     // locked reader uses query_only and a read transaction; it never starts CDK.
@@ -1518,7 +1494,6 @@ fn render_cdk_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload",
         "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(spec.instance_key),
-        "nodeSelector": {"kubernetes.io/arch": "arm64"},
         "containers": [container_with_env("wallet", spec.wallet_image, script,
             &[mount("wallet", "/wallet", false)], vec![
                 ("PROOFSTORM_DATABASE", "/wallet/cdk/cdk-cli.sqlite"),
@@ -1538,11 +1513,7 @@ fn render_cdk_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_
 }
 
 fn render_cocod_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let script = concat!(
-        "python3 - <<'PROOFSTORM_READER' > /dev/termination-log\n",
-        include_str!("../drivers/cocod_wallet_balance.py"),
-        "\nPROOFSTORM_READER\n"
-    );
+    let script = "exec /opt/proofstorm/driver observe cocod-wallet > /dev/termination-log";
     let mint_url = format!("http://{}:3338", spec.mint);
     // SQLite needs writable WAL coordination files even for mode=ro. The
     // locked reader uses query_only and a read transaction; it never starts cocod or its SDK.
@@ -1550,7 +1521,6 @@ fn render_cocod_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serd
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload",
         "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(spec.instance_key),
-        "nodeSelector": {"kubernetes.io/arch": "arm64"},
         "containers": [container_with_env("wallet", spec.wallet_image, script,
             &[mount("wallet", "/wallet", false)], vec![
                 ("PROOFSTORM_DATABASE", "/wallet/.cocod/coco.db"),
@@ -2863,21 +2833,16 @@ pub fn render_authentication_conformance_job(
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let mint_url = format!("http://{mint}:3338");
-    let script = "exec python3 -c \"$PROOFSTORM_AUTHENTICATION_DRIVER\"";
+    let script = "exec /opt/proofstorm/driver authentication conformance > /dev/termination-log";
     let mut authentication = container_with_env(
         "authentication",
         mint_image,
         script,
         &[],
         vec![
-            (
-                "PROOFSTORM_AUTHENTICATION_DRIVER",
-                AUTHENTICATION_CONFORMANCE_DRIVER,
-            ),
             ("PROOFSTORM_MINT", mint),
             ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
             ("PROOFSTORM_MINT_URL", mint_url.as_str()),
-            ("PYTHONUNBUFFERED", "1"),
         ],
     );
     authentication["env"]
@@ -2944,21 +2909,17 @@ pub fn render_authentication_protected_spend_job(
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let mint_url = format!("http://{mint}:3338");
-    let script = "exec python3 -c \"$PROOFSTORM_AUTHENTICATION_DRIVER\"";
+    let script =
+        "exec /opt/proofstorm/driver authentication protected-spend > /dev/termination-log";
     let mut authentication = container_with_env(
         "authentication",
         mint_image,
         script,
         &[],
         vec![
-            (
-                "PROOFSTORM_AUTHENTICATION_DRIVER",
-                AUTHENTICATION_PROTECTED_SPEND_DRIVER,
-            ),
             ("PROOFSTORM_MINT", mint),
             ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
             ("PROOFSTORM_MINT_URL", mint_url.as_str()),
-            ("PYTHONUNBUFFERED", "1"),
         ],
     );
     authentication["env"]
@@ -3009,22 +2970,17 @@ pub fn render_authentication_replay_job(
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let mint_url = format!("http://{mint}:3338");
-    let script = "exec python3 -c \"$PROOFSTORM_AUTHENTICATION_DRIVER\"";
+    let script = "exec /opt/proofstorm/driver authentication replay > /dev/termination-log";
     let mut authentication = container_with_env(
         "authentication",
         mint_image,
         script,
         &[],
         vec![
-            (
-                "PROOFSTORM_AUTHENTICATION_DRIVER",
-                AUTHENTICATION_REPLAY_DRIVER,
-            ),
             ("PROOFSTORM_MINT", mint),
             ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
             ("PROOFSTORM_MINT_URL", mint_url.as_str()),
             ("PROOFSTORM_SOURCE_OPERATION_ID", source_operation_id),
-            ("PYTHONUNBUFFERED", "1"),
         ],
     );
     let mut private_environment = authentication_identity_environment(identity_provider);
@@ -3093,7 +3049,7 @@ pub fn render_wallet_initialize_job(spec: &WalletJobSpec<'_>) -> Result<Job, ser
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let script = format!(
-        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"initialized\":true,\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"initialized\":true,\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3126,7 +3082,7 @@ pub fn render_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let script = format!(
-        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3214,12 +3170,12 @@ pub fn render_wallet_invoice_job(
     let namespace = instance_namespace(instance_key);
     let deadline_seconds = timeout_seconds.saturating_add(30);
     let script = format!(
-        "set -eu; umask 077; cd /app; output=$(mktemp /tmp/proofstorm-invoice.XXXXXX); cleanup() {{ rm -f \"$output\"; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; cashu() {{ HOME=/wallet python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} --no-check >\"$output\" 2>&1; PROOFSTORM_INVOICE_OUTPUT_PATH=\"$output\" python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log"
+        "set -eu; umask 077; cd /app; output=$(mktemp /tmp/proofstorm-invoice.XXXXXX); cleanup() {{ rm -f \"$output\"; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; cashu() {{ HOME=/wallet command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} --no-check >\"$output\" 2>&1; PROOFSTORM_INVOICE_OUTPUT_PATH=\"$output\" /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "observe-invoice"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338"))])],
+        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PROOFSTORM_QUOTE_DRIVER_MODE", "observe-invoice"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338"))])],
         "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
     });
     job(
@@ -3249,7 +3205,7 @@ pub fn render_wallet_pay_job(spec: &WalletPayJobSpec<'_>) -> Result<Job, serde_j
         wallet_image,
     } = *spec;
     let namespace = instance_namespace(instance_key);
-    let script = "set -eu; cd /app; python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log";
+    let script = "set -eu; cd /app; /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log";
     // SQLite opens the database itself with mode=ro, but WAL readers still
     // need the mount writable so SQLite can maintain its -shm lock file.
     let pod = json!({
@@ -3257,8 +3213,6 @@ pub fn render_wallet_pay_job(spec: &WalletPayJobSpec<'_>) -> Result<Job, serde_j
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
         "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false), mount("recipient", "/recipient", false), mount("payer-mint", "/payer-mint", false)], vec![
             ("HOME", "/wallet"),
-            ("PYTHONUNBUFFERED", "1"),
-            ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER),
             ("PROOFSTORM_QUOTE_DRIVER_MODE", "pay-and-claim"),
             ("PROOFSTORM_WALLET", wallet),
             ("PROOFSTORM_MINT", mint),
@@ -3300,12 +3254,12 @@ pub fn render_wallet_quote_claim_job(
         timeout_seconds,
     } = *spec;
     let namespace = instance_namespace(instance_key);
-    let script = "set -eu; cd /app; python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log";
+    let script = "set -eu; cd /app; /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log";
     let timeout = timeout_seconds.to_string();
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "claim-receive"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id), ("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", timeout.as_str())])],
+        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PROOFSTORM_QUOTE_DRIVER_MODE", "claim-receive"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id), ("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", timeout.as_str())])],
         "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
     });
     job(
@@ -3336,12 +3290,12 @@ pub fn render_wallet_melt_quote_refresh_job(
         timeout_seconds,
     } = *spec;
     let namespace = instance_namespace(instance_key);
-    let script = "set -eu; cd /app; python3 -c \"$PROOFSTORM_QUOTE_DRIVER\" >/dev/termination-log";
+    let script = "set -eu; cd /app; /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log";
     let timeout = timeout_seconds.to_string();
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
         "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1"), ("PROOFSTORM_QUOTE_DRIVER", WALLET_QUOTE_DRIVER), ("PROOFSTORM_QUOTE_DRIVER_MODE", "refresh-melt"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MELT_QUOTE_ID", melt_quote_id), ("PROOFSTORM_DB_TIMEOUT_SECONDS", timeout.as_str())])],
+        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PROOFSTORM_QUOTE_DRIVER_MODE", "refresh-melt"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MELT_QUOTE_ID", melt_quote_id), ("PROOFSTORM_DB_TIMEOUT_SECONDS", timeout.as_str())])],
         "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
     });
     job(
@@ -3416,7 +3370,7 @@ fn wallet_receive_script(
             "fail() {{ stage=\"$1\"; reason=\"$2\"; printf '{{\"code\":\"wallet_orchestration_failed\",\"stage\":\"%s\",\"reason\":\"%s\"}}' \"$stage\" \"$reason\" >/dev/termination-log; printf '%s:%s\\n' \"$stage\" \"$reason\" >/shared/wallet.failed; exit 1; }}; ",
             "classify_log() {{ log=\"$1\"; last=$(tail -n 1 \"$log\"); if printf '%s' \"$last\" | grep -Eqi 'quote.*(not found|unknown)'; then printf quote_not_found; elif printf '%s' \"$last\" | grep -Eqi 'quote.*not paid|not paid.*quote'; then printf quote_not_paid; elif printf '%s' \"$last\" | grep -Eqi 'already.*issued|quote.*issued'; then printf quote_already_issued; elif printf '%s' \"$last\" | grep -Eqi 'database.*locked|locked.*database'; then printf wallet_database_locked; elif printf '%s' \"$last\" | grep -Eqi 'invalid.*signature|signature.*invalid'; then printf invalid_quote_signature; elif printf '%s' \"$last\" | grep -Eqi 'blind'; then printf invalid_blinded_output; elif printf '%s' \"$last\" | grep -Eqi 'proof'; then printf proof_error; elif printf '%s' \"$last\" | grep -Eqi 'keyset'; then printf keyset_error; elif printf '%s' \"$last\" | grep -Eqi 'amount|unit'; then printf amount_or_unit_error; elif printf '%s' \"$last\" | grep -Eqi 'connect|connection|timed out|timeout'; then printf mint_connection_failed; else printf command_failed; fi; }}; ",
             "run_bounded() {{ duration=\"$1\"; marker=\"$2\"; shift 2; rm -f \"$marker\"; \"$@\" & pid=$!; (sleep \"$duration\"; if kill -0 \"$pid\" 2>/dev/null; then touch \"$marker\"; kill \"$pid\" 2>/dev/null || true; sleep 2; kill -9 \"$pid\" 2>/dev/null || true; fi) & watchdog_pid=$!; if wait \"$pid\"; then command_rc=0; else command_rc=$?; fi; pid=; kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; watchdog_pid=; return \"$command_rc\"; }}; ",
-            "cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; ",
+            "cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; ",
             "if run_bounded 30 /shared/invoice-request.timed-out cashu invoice {amount_sat} --no-check >/shared/invoice.log 2>&1; then :; else test ! -f /shared/invoice-request.timed-out || fail invoice invoice_request_timeout; invoice_reason=$(classify_log /shared/invoice.log); fail invoice \"$invoice_reason\"; fi; ",
             "quote_id=$(sed -n 's/.*--id \\([^[:space:]]*\\).*/\\1/p' /shared/invoice.log | tail -1); test -n \"$quote_id\" || fail invoice quote_id_not_observed; ",
             "elapsed=0; until test -f /shared/paid; do test ! -f /shared/payer.failed || fail payment payer_failed; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 105 || fail payment payment_wait_timeout; sleep 1; done; ",
@@ -3457,7 +3411,7 @@ pub fn render_conservation_oracle_job(
     } = spec;
     let namespace = instance_namespace(instance_key);
     let script = format!(
-        "set -eu; cd /app; cashu() {{ python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; actual=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$actual\"; delta=$((actual-{expected_sat})); test \"$delta\" -ge 0 || delta=$((-delta)); conserved=false; test \"$delta\" -le {tolerance_sat} && conserved=true; printf '{{\"baseline_operation_id\":\"{baseline_operation_id}\",\"treatment_operation_id\":\"{treatment_operation_id}\",\"expected_sat\":{expected_sat},\"actual_sat\":%s,\"tolerance_sat\":{tolerance_sat},\"conserved\":%s}}' \"$actual\" \"$conserved\" >/dev/termination-log"
+        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; actual=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$actual\"; delta=$((actual-{expected_sat})); test \"$delta\" -ge 0 || delta=$((-delta)); conserved=false; test \"$delta\" -le {tolerance_sat} && conserved=true; printf '{{\"baseline_operation_id\":\"{baseline_operation_id}\",\"treatment_operation_id\":\"{treatment_operation_id}\",\"expected_sat\":{expected_sat},\"actual_sat\":%s,\"tolerance_sat\":{tolerance_sat},\"conserved\":%s}}' \"$actual\" \"$conserved\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3480,6 +3434,10 @@ fn job(
     deadline_seconds: i64,
     pod: &Value,
 ) -> Result<Job, serde_json::Error> {
+    let mut pod: k8s_openapi::api::core::v1::PodSpec = serde_json::from_value(pod.clone())?;
+    if serde_json::to_string(&pod)?.contains(crate::drivers::DRIVER_PATH) {
+        crate::drivers::install(&mut pod)?;
+    }
     resource(json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -3668,10 +3626,6 @@ mod tests {
     }
 
     fn ready_admission_status(cell: &mut ProofstormCell) {
-        cell.metadata.annotations.get_or_insert_default().insert(
-            crate::PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
-            "lease-current".into(),
-        );
         let plans = crate::compile_component_plans(
             &cell.spec.instance_key,
             &cell.spec.revision_digest,
@@ -3682,6 +3636,11 @@ mod tests {
         let components = plans
             .iter()
             .map(|plan| ComponentStatus {
+                protocol_observation: Some(proofstorm_core::ProtocolObservation {
+                    observed_at_unix: 0,
+                    expires_at_unix: i64::MAX,
+                    elapsed_micros: 1,
+                }),
                 id: plan.component_id.clone(),
                 kind: plan.kind,
                 observed_revision_digest: plan.revision_digest.clone(),
@@ -3971,17 +3930,16 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_lease_fences_protocol_admission_without_blocking_recovery() {
+    fn expired_observation_fences_protocol_admission_without_blocking_recovery() {
         let (mut cell, mut action) = typed_bootstrap();
         ready_admission_status(&mut cell);
-        cell.metadata
-            .annotations
-            .as_mut()
-            .expect("annotations")
-            .insert(
-                crate::PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
-                "inactive".into(),
-            );
+        for component in &mut cell.status.as_mut().expect("status").components {
+            component
+                .protocol_observation
+                .as_mut()
+                .expect("timing")
+                .expires_at_unix = 1;
+        }
 
         action.spec.action = CellAction::PeerConnect(PeerConnectAction {
             from_lightning: "mint-lnd".into(),
@@ -3991,8 +3949,7 @@ mod tests {
             evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 prerequisite: ReadinessPrerequisite::Dependencies | ReadinessPrerequisite::Protocol,
-                state: None,
-                reason: None,
+                state: Some(ComponentConditionState::Unknown),
                 ..
             })
         ));
@@ -4077,14 +4034,16 @@ mod tests {
             assert_eq!(variable["valueFrom"]["secretKeyRef"]["key"], key);
             assert!(variable.get("value").is_none());
         }
-        let driver = environment
-            .iter()
-            .find(|entry| entry["name"] == "PROOFSTORM_AUTHENTICATION_DRIVER")
-            .and_then(|entry| entry["value"].as_str())
-            .expect("fixed driver");
-        assert!(driver.contains("proofstorm/authentication-conformance/v1"));
-        assert!(driver.contains("os.environ[\"OIDC_TEST_PASSWORD\"]"));
-        assert!(!driver.contains("traceback"));
+        assert!(
+            !environment
+                .iter()
+                .any(|entry| entry["name"] == "PROOFSTORM_AUTHENTICATION_DRIVER")
+        );
+        assert_eq!(
+            container["command"].as_array().unwrap().last().unwrap(),
+            "exec /opt/proofstorm/driver authentication conformance > /dev/termination-log"
+        );
+        assert_eq!(pod["initContainers"][0]["name"], "proofstorm-driver");
 
         let protected =
             render_authentication_protected_spend_job(&AuthenticationProtectedSpendJobSpec {
@@ -4160,18 +4119,21 @@ mod tests {
             !script.contains("\"phase\":\"paid\""),
             "the pay script must not assert settlement itself"
         );
-        assert!(script.contains("python3 -c \"$PROOFSTORM_QUOTE_DRIVER\""));
+        assert!(script.contains("/opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\""));
         #[cfg(unix)]
         assert_shell_syntax(script);
         let env = container.env.as_ref().expect("env");
-        let driver = env
-            .iter()
-            .find(|variable| variable.name == "PROOFSTORM_QUOTE_DRIVER")
-            .and_then(|variable| variable.value.as_deref())
-            .expect("settlement driver shipped by environment");
-        assert!(driver.contains("bolt11_melt_quotes"));
-        assert!(driver.contains("FROM melt_quotes"));
-        assert!(driver.contains("melt_quote_missing"));
+        assert!(
+            !env.iter()
+                .any(|variable| variable.name == "PROOFSTORM_QUOTE_DRIVER")
+        );
+        assert!(
+            pod.init_containers
+                .as_ref()
+                .expect("native driver installer")
+                .iter()
+                .any(|container| container.name == "proofstorm-driver")
+        );
         for (name, value) in [
             ("PROOFSTORM_MINT_QUOTE_ID", "quote-1"),
             ("PROOFSTORM_WALLET", "wallet-b"),
@@ -4904,7 +4866,21 @@ mod tests {
         let spec = job.spec.expect("job");
         assert_eq!(spec.active_deadline_seconds, Some(30));
         let pod = spec.template.spec.expect("pod");
-        assert!(pod.init_containers.is_none());
+        let initializers = pod
+            .init_containers
+            .as_ref()
+            .expect("native driver installer");
+        assert_eq!(initializers.len(), 1);
+        assert_eq!(initializers[0].name, "proofstorm-driver");
+        assert_eq!(
+            initializers[0].command.as_ref().expect("installer command"),
+            &["/usr/local/lib/proofstorm-driver", "install"]
+        );
+        assert_eq!(initializers[0].volume_mounts.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            initializers[0].volume_mounts.as_ref().unwrap()[0].name,
+            "proofstorm-driver"
+        );
         assert_eq!(
             pod.containers[0].volume_mounts.as_ref().expect("mount")[0].read_only,
             Some(false)
@@ -4915,9 +4891,10 @@ mod tests {
             .expect("command")
             .last()
             .expect("script");
-        assert!(script.contains("mode=ro"));
-        assert!(!script.contains("subprocess"));
-        assert!(!script.contains("cp -R"));
+        assert_eq!(
+            script,
+            "exec /opt/proofstorm/driver observe cdk-cli-wallet > /dev/termination-log"
+        );
         cell.spec
             .lock
             .entries
@@ -5365,5 +5342,74 @@ mod tests {
             render_cell_action_job(&action, &cell),
             Err(ActionRenderError::Bounds(_))
         ));
+    }
+    #[test]
+    fn expired_chain_evidence_invalidates_dependent_actions_at_the_boundary() {
+        let (mut cell, mut action) = typed_bootstrap();
+        for lightning in ["mint-lnd", "payer-lnd"] {
+            cell.spec.cell.links.push(proofstorm_core::LinkSpec {
+                id: format!("{lightning}-chain"),
+                kind: proofstorm_core::LinkKind::ChainBackend,
+                from: lightning.into(),
+                to: "chain".into(),
+                binding: Some(proofstorm_core::DependencyBinding::Chain {
+                    network: proofstorm_core::BitcoinNetwork::Regtest,
+                }),
+            });
+        }
+        cell.spec.lock = resolve_lock(&cell.spec.cell, default_catalog()).unwrap();
+        ready_admission_status(&mut cell);
+        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
+            from_lightning: "mint-lnd".into(),
+            to_lightning: "payer-lnd".into(),
+        });
+        let chain = cell
+            .status
+            .as_mut()
+            .unwrap()
+            .components
+            .iter_mut()
+            .find(|status| status.id == "chain")
+            .unwrap();
+        chain.protocol_observation.as_mut().unwrap().expires_at_unix = 100;
+        assert!(evaluate_action_admission_at(&action, &cell, 99).is_ok());
+        assert!(matches!(
+            evaluate_action_admission_at(&action, &cell, 100),
+            Err(ActionAdmissionError::PrerequisiteUnsatisfied {
+                prerequisite: ReadinessPrerequisite::Dependencies,
+                state: Some(ComponentConditionState::Unknown),
+                ..
+            })
+        ));
+        let mut projected = cell.clone();
+        crate::probes::expire_cell_status(&mut projected, 100);
+        let lightning = projected
+            .status
+            .as_ref()
+            .unwrap()
+            .components
+            .iter()
+            .find(|status| status.id == "mint-lnd")
+            .unwrap();
+        assert!(!lightning.ready);
+        assert!(
+            lightning
+                .protocol_observation
+                .as_ref()
+                .unwrap()
+                .is_fresh(100),
+            "dependency expiry is independent of this component's own probe"
+        );
+        assert!(
+            cell.status
+                .as_ref()
+                .unwrap()
+                .components
+                .iter()
+                .find(|status| status.id == "chain")
+                .unwrap()
+                .ready,
+            "admission does not rewrite observed status"
+        );
     }
 }

@@ -2,10 +2,11 @@ mod adapter;
 mod api;
 mod candidate;
 pub mod images;
+mod observation;
 mod operation;
+pub mod probes;
 pub mod release;
 mod render;
-mod scheduler;
 
 pub const ACTION_CANCEL_ANNOTATION: &str = "proofstorm.dev/cancel-token";
 pub const BACKEND_ID_ANNOTATION: &str = "proofstorm.dev/backend-id";
@@ -17,10 +18,9 @@ pub const REVISION_DIGEST_ANNOTATION: &str = "proofstorm.dev/revision-digest";
 pub const ROLLOUT_DIGEST_ANNOTATION: &str = "proofstorm.dev/rollout-digest";
 
 pub use adapter::{
-    AdapterError, COMPONENT_LABEL, ComponentObservationResources,
-    PROTOCOL_PROBER_DIGEST_ANNOTATION, PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION,
+    AdapterError, COMPONENT_LABEL, ComponentObservationResources, PROTOCOL_PROBER_LABEL,
     PROTOCOL_PROBER_NAME, RenderedCell, RenderedComponent, compile_component_plans,
-    component_ports, observe_component_statuses, protocol_probe_container_name,
+    component_ports, expire_protocol_status, observe_component_statuses, protocol_prober_resources,
     render_attacker_component, render_bitcoin_component, render_cdk_component,
     render_cdk_wallet_component, render_cell, render_cln_component, render_cocod_wallet_component,
     render_component_network_policy, render_keycloak_component, render_lnd_component,
@@ -53,23 +53,20 @@ pub use operation::{
     ConservationOracleJobSpec, LightningAdapter, PeerConnectJobSpec, PeerDisconnectJobSpec,
     WalletFundJobSpec, WalletInvoiceJobSpec, WalletJobSpec, WalletMeltQuoteRefreshJobSpec,
     WalletPayJobSpec, WalletRoundTripJobSpec, action_result_container, evaluate_action_admission,
-    render_authentication_conformance_job, render_authentication_protected_spend_job,
-    render_authentication_replay_job, render_bootstrap_job, render_cell_action_cleanup_job,
-    render_cell_action_job, render_channel_close_job, render_channel_open_job,
-    render_channel_policy_set_job, render_channel_rebalance_job, render_conservation_oracle_job,
-    render_peer_connect_job, render_peer_disconnect_job, render_wallet_balance_job,
-    render_wallet_fund_job, render_wallet_initialize_job, render_wallet_invoice_job,
-    render_wallet_melt_quote_refresh_job, render_wallet_pay_job, render_wallet_round_trip_job,
-    require_open_cell,
+    evaluate_action_admission_at, render_authentication_conformance_job,
+    render_authentication_protected_spend_job, render_authentication_replay_job,
+    render_bootstrap_job, render_cell_action_cleanup_job, render_cell_action_job,
+    render_channel_close_job, render_channel_open_job, render_channel_policy_set_job,
+    render_channel_rebalance_job, render_conservation_oracle_job, render_peer_connect_job,
+    render_peer_disconnect_job, render_wallet_balance_job, render_wallet_fund_job,
+    render_wallet_initialize_job, render_wallet_invoice_job, render_wallet_melt_quote_refresh_job,
+    render_wallet_pay_job, render_wallet_round_trip_job, require_open_cell,
 };
 pub use render::{
     INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_cell_security_spine,
     render_security_spine,
 };
-pub use scheduler::{
-    MAX_ACTIVE_PROTOCOL_PROBER_CELLS, PROTOCOL_PROBE_LEASE_SECONDS,
-    PROTOCOL_PROBE_SCHEDULING_BUDGET, ProtocolProbeSchedule, schedule_protocol_probers,
-};
 
 pub use adapter::{RPC_PASSWORD as BITCOIN_RPC_PASSWORD, RPC_USER as BITCOIN_RPC_USER};
 pub use api::{PrivateTransferAction, TransferMethod};
+pub mod drivers;

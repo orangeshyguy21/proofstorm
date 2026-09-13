@@ -27,7 +27,7 @@ pub(super) fn ready(cluster: &Arc<Mutex<Cluster>>) {
                 json!([{"subresource":"status","time":"2026-09-06T12:00:00Z"}]);
             object["status"]["observedGeneration"] = json!(1);
             object["status"]["phase"] = json!("Ready");
-            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":object["spec"]["lock"]["entries"][0]["rollout_digest"],"conditions":[],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
+            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":object["spec"]["lock"]["entries"][0]["rollout_digest"],"protocol_observation":{"observed_at_unix":0,"expires_at_unix":i64::MAX,"elapsed_micros":1},"conditions":[{"condition_type":"protocol_ready","state":"true","reason":"protocol_responding","message":"ready","last_transition_unix":1},{"condition_type":"component_ready","state":"true","reason":"component_operational","message":"ready","last_transition_unix":1}],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
         }
     }
 }

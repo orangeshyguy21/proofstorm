@@ -74,6 +74,16 @@ case "$1" in
       if [[ ${CONTROLLER_TEST_FAIL:-none} == helper ]]; then echo 'loader failure' >&2; exit 127; fi
       printf '{"runner_error":"native_runner_failed"}\n' >&2; exit 1
     fi
+    if [[ " $* " == *' --entrypoint /usr/local/lib/proofstorm-prober '* ]]; then
+      [[ " $* " == *' --self-check '* ]] || exit 97
+      if [[ ${CONTROLLER_TEST_FAIL:-none} == prober ]]; then echo 'loader failure' >&2; exit 127; fi
+      printf '{"protocol_version":2}\n'; exit 0
+    fi
+    if [[ " $* " == *' --entrypoint /usr/local/lib/proofstorm-driver '* ]]; then
+      [[ " $* " == *' --self-check '* ]] || exit 97
+      if [[ ${CONTROLLER_TEST_FAIL:-none} == driver ]]; then echo 'loader failure' >&2; exit 127; fi
+      printf '{"driver_version":1}\n'; exit 0
+    fi
     version=0.1.0-alpha.2
     [[ ${CONTROLLER_TEST_FAIL:-none} != metadata ]] || version=0.1.0-alpha.1
     printf '{"format_version":1,"version":"%s","source_sha256":"%s","runtime_contract_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}\n' "$version" "$(< "$CONTROLLER_TEST_STATE/source-sha")" ;;
@@ -130,7 +140,7 @@ cmp "$work/controller.json" "$scratch/worker/controller.json"
 cmp "$scratch/staged.json" "$work/controller.json"
 printf 'tampered' > "$scratch/linux/input/controller.json"
 if "$helper" release-worker-prepare "$scratch/linux/input" "$scratch/worker-bad" "$scratch/artifacts-bad" > "$scratch/output" 2>&1; then fail 'Accepted a tampered transported controller'; fi
-for failure in build root helper metadata; do
+for failure in build root helper prober driver metadata; do
   : > "$CONTROLLER_TEST_TRACE"
   if CONTROLLER_TEST_FAIL=$failure run build --work-dir "$scratch/fail-$failure"; then fail "Accepted $failure"; fi
   if grep -q '^docker push' "$CONTROLLER_TEST_TRACE"; then fail 'Failed build published'; fi

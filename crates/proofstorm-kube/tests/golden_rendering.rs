@@ -4,7 +4,7 @@ use proofstorm_core::{
     API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, CatalogPlatform,
     CatalogResponse, CellPolicy, CellSpec, ComponentKind, ComponentSpec, ControlClass,
     DatabaseRole, DependencyBinding, LinkKind, LinkSpec, PaymentMethod, catalog_for_platform,
-    default_backend_registry, default_catalog, resolve_lock,
+    default_backend_registry, resolve_lock,
 };
 use proofstorm_kube::{
     CellAction, ComponentForensicsAction, ProofstormCell, ProofstormCellAction,
@@ -18,6 +18,14 @@ use serde_json::{Value, json};
 
 const INSTANCE_KEY: &str = "i-golden-b2";
 const REVISION_DIGEST: &str = "sha256:b2-golden-revision";
+
+// Shared snapshots have a fixed platform; the backend matrix below separately
+// checks all platform-specific images without depending on the test host.
+fn default_catalog() -> &'static CatalogResponse {
+    static CATALOG: std::sync::LazyLock<CatalogResponse> =
+        std::sync::LazyLock::new(|| catalog_for_platform(CatalogPlatform::LinuxArm64));
+    &CATALOG
+}
 
 fn component(
     id: &str,
@@ -609,12 +617,14 @@ fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
         .find(|deployment| deployment.metadata.name.as_deref() == Some("mint"))
         .expect("mint deployment");
     let mint = serde_json::to_value(mint).expect("mint JSON");
-    assert_eq!(
-        mint.pointer("/spec/template/spec/initContainers/0/name"),
-        Some(&json!("initialize-config"))
-    );
+    let initialize = mint["spec"]["template"]["spec"]["initContainers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|container| container["name"] == "initialize-config")
+        .expect("CDK configuration initializer");
     assert_postgres_bootstrap_env(&mint["spec"]["template"]["spec"]["containers"][0]);
-    assert_postgres_bootstrap_env(&mint["spec"]["template"]["spec"]["initContainers"][0]);
+    assert_postgres_bootstrap_env(initialize);
     assert_golden(
         "cdk-postgres-cell",
         &json!({
@@ -630,6 +640,72 @@ fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
             }
         }),
     );
+}
+
+#[test]
+fn nutshell_probes_preserve_strict_application_limits() {
+    for trust_proxy in [false, true] {
+        let (mut spec, mint_id) = backend_cell("nutshell");
+        let mint = spec
+            .components
+            .iter_mut()
+            .find(|c| c.id == mint_id)
+            .unwrap();
+        for key in [
+            "global_rate_limit_per_minute",
+            "transaction_rate_limit_per_minute",
+            "auth_rate_limit_per_minute",
+        ] {
+            mint.config.insert(key.into(), json!(1));
+        }
+        mint.config.insert("rate_limit".into(), json!(true));
+        mint.config
+            .insert("rate_limit_proxy_trust".into(), json!(trust_proxy));
+        let lock = resolve_lock(&spec, default_catalog()).expect("strict quota lock");
+        let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock)
+            .expect("strict quota rendering");
+        let config = rendered
+            .config_maps
+            .iter()
+            .find(|c| c.metadata.name.as_deref() == Some("mint-config"))
+            .unwrap()
+            .data
+            .as_ref()
+            .unwrap();
+        assert_eq!(config["MINT_RATE_LIMIT"], "TRUE");
+        assert_eq!(
+            config["MINT_RATE_LIMIT_PROXY_TRUST"],
+            if trust_proxy { "TRUE" } else { "FALSE" }
+        );
+        for key in [
+            "MINT_GLOBAL_RATE_LIMIT_PER_MINUTE",
+            "MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE",
+            "MINT_AUTH_RATE_LIMIT_PER_MINUTE",
+        ] {
+            assert_eq!(config[key], "1");
+        }
+        let plan = rendered
+            .plans
+            .iter()
+            .find(|p| p.component_id == mint_id)
+            .unwrap();
+        assert_eq!(
+            plan.protocol_probe,
+            Some(proofstorm_core::ProtocolProbePlan::Tcp { port: 3338 })
+        );
+        let deployment = rendered
+            .deployments
+            .iter()
+            .find(|d| d.metadata.name.as_deref() == Some(mint_id))
+            .unwrap();
+        let deployment = serde_json::to_value(deployment).unwrap();
+        let readiness = &deployment["spec"]["template"]["spec"]["containers"][0]["readinessProbe"];
+        assert_eq!(
+            readiness["exec"]["command"][3],
+            "http://127.0.0.1:3338/v1/info"
+        );
+        assert!(readiness.get("httpGet").is_none());
+    }
 }
 
 #[test]
@@ -893,13 +969,16 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
         .transpose()
         .expect("Nutshell deployment JSON")
         .expect("Nutshell deployment");
+    let initializers: Vec<_> = mint["spec"]["template"]["spec"]["initContainers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|container| container["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(initializers, ["proofstorm-driver", "wait-for-oidc"]);
     assert_eq!(
-        mint.pointer("/spec/template/spec/initContainers/0/name"),
-        Some(&json!("wait-for-oidc"))
-    );
-    assert_eq!(
-        mint.pointer("/spec/template/spec/containers/0/command/2"),
-        Some(&json!("from cashu.mint.main import main; main()"))
+        mint.pointer("/spec/template/spec/containers/0/command"),
+        Some(&json!(["mint"]))
     );
     assert_eq!(
         mint.pointer("/spec/template/spec/containers/0/readinessProbe/exec/command/3"),
@@ -911,31 +990,14 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
             .is_none(),
         "a kubelet HTTP probe would consume Nutshell's global request quota"
     );
-    let protocol_prober = rendered
-        .deployments
+    let mint_probe = rendered
+        .plans
         .iter()
-        .find(|deployment| {
-            deployment.metadata.name.as_deref() == Some("proofstorm-protocol-prober")
-        })
-        .map(serde_json::to_value)
-        .transpose()
-        .expect("protocol prober JSON")
-        .expect("protocol prober deployment");
-    let mint_probe = protocol_prober
-        .pointer("/spec/template/spec/containers")
-        .and_then(Value::as_array)
-        .and_then(|containers| {
-            containers.iter().find(|container| {
-                container
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|name| name.starts_with("probe-mint-"))
-            })
-        })
-        .expect("Nutshell protocol probe");
+        .find(|plan| plan.component_id == "mint")
+        .expect("Nutshell protocol plan");
     assert_eq!(
-        mint_probe.pointer("/readinessProbe/exec/command/0"),
-        Some(&json!("nc")),
+        mint_probe.protocol_probe,
+        Some(proofstorm_core::ProtocolProbePlan::Tcp { port: 3338 }),
         "the remote probe must verify reachability without making an HTTP request"
     );
     assert_golden(
@@ -1118,7 +1180,12 @@ fn management_is_authenticated_loopback_with_separate_certificate_projections() 
         assert!(config.contains("127.0.0.1"));
         assert!(config.contains("/management-server/tls"));
         let probe = pod["containers"][0]["readinessProbe"].to_string();
-        assert!(probe.contains("/management-client"));
+        if backend == "nutshell" {
+            assert!(probe.contains("/opt/proofstorm/driver"));
+            assert!(probe.contains("nutshell"));
+        } else {
+            assert!(probe.contains("/management-client"));
+        }
         assert!(
             !resources["secrets"]
                 .to_string()
@@ -1176,10 +1243,13 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
     );
     let catalog = catalog_for_platform(platform);
     for backend_id in characterized {
-        // Only these wallets have architecture-specific images. Every other
+        // These packaged components have architecture-specific images. Every other
         // backend must match the same full contract on both platforms.
         let golden_name = match (platform, backend_id) {
-            (CatalogPlatform::LinuxAmd64, "cdk-cli-wallet" | "cocod-wallet") => {
+            (
+                CatalogPlatform::LinuxAmd64,
+                "cdk-cli-wallet" | "cocod-wallet" | "nutshell" | "nutshell-wallet",
+            ) => {
                 format!("linux-amd64/{backend_id}")
             }
             _ => backend_id.to_owned(),
@@ -1352,19 +1422,9 @@ fn nutshell_cln_cell_uses_restricted_runtime_rune_contract() {
         .pointer("/spec/template/spec/containers/0/command/2")
         .and_then(Value::as_str)
         .expect("Nutshell CLN bootstrap command");
-    for method in [
-        "listfunds",
-        "invoice",
-        "pay",
-        "listinvoices",
-        "listpays",
-        "waitanyinvoice",
-    ] {
-        assert!(command.contains(&format!("method={method}")));
-    }
-    for forbidden_method in ["createrune", "withdraw", "stop"] {
-        assert!(!command.contains(&format!("method={forbidden_method}")));
-    }
+    assert_eq!(command, "/opt/proofstorm/driver cln-mint-rune; exec mint");
+    // The actual Unix RPC restriction list and private rune reuse are exercised
+    // against a socket fixture in proofstorm-driver/tests/cln.rs.
     assert_golden(
         "nutshell-cln-cell",
         &json!({

@@ -98,7 +98,7 @@ fn run_cli(client: &mut McpClient, component: &str, id: &str, args: &[&str]) -> 
 
 fn verify_motd(client: &mut McpClient, component: &str, id: &str, motd: &str) -> Result<()> {
     let command = if component == "nutshell" {
-        json!({"argv":["python3","-c","import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:3338/v1/info',timeout=3).read().decode())"]})
+        json!({"argv":["/opt/proofstorm/driver","http-json","http://127.0.0.1:3338/v1/info"]})
     } else {
         json!({"argv":["wget","-q","-T","3","-O","-","http://127.0.0.1:3338/v1/info"]})
     };
@@ -175,7 +175,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             )?;
 
             let insecure = if *component == "nutshell" {
-                json!({"argv":["python3","-c","import grpc; from cashu.mint.management_rpc.protos import management_pb2 as p,management_pb2_grpc as g; g.MintStub(grpc.insecure_channel('127.0.0.1:8086')).GetInfo(p.GetInfoRequest(),timeout=2)"]})
+                json!({"argv":["/opt/proofstorm/driver","management","plaintext","http://127.0.0.1:8086","/management-client/tls"]})
             } else {
                 json!({"argv":["cdk-mint-cli","--addr","http://127.0.0.1:8086","--work-dir","/tmp/no-management-identity","get-info"]})
             };
@@ -193,7 +193,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             // A server identity has serverAuth only. Even though the CA is trusted,
             // presenting that certificate as a client must fail mutual TLS.
             let wrong_identity = if *component == "nutshell" {
-                json!({"argv":["python3","-c","import pathlib,grpc; from cashu.mint.management_rpc.protos import management_pb2 as p,management_pb2_grpc as g; t=pathlib.Path('/management-server/tls'); c=grpc.ssl_channel_credentials((t/'ca.pem').read_bytes(),(t/'server.key').read_bytes(),(t/'server.pem').read_bytes()); g.MintStub(grpc.secure_channel('127.0.0.1:8086',c)).GetInfo(p.GetInfoRequest(),timeout=2)"]})
+                json!({"argv":["/opt/proofstorm/driver","management","server","https://127.0.0.1:8086","/management-server/tls"]})
             } else {
                 json!({"script":r#"set -eu
 dir=$(mktemp -d /tmp/management-wrong-identity.XXXXXXXX)
@@ -216,7 +216,7 @@ cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir "$dir" get-info
                 bail!("{component} accepted a certificate without client authentication usage");
             }
             if *component == "nutshell" {
-                let missing_identity = json!({"argv":["python3","-c","import pathlib,grpc; from cashu.mint.management_rpc.protos import management_pb2 as p,management_pb2_grpc as g; c=grpc.ssl_channel_credentials(pathlib.Path('/management-client/tls/ca.pem').read_bytes()); g.MintStub(grpc.secure_channel('127.0.0.1:8086',c)).GetInfo(p.GetInfoRequest(),timeout=2)"]});
+                let missing_identity = json!({"argv":["/opt/proofstorm/driver","management","missing","https://127.0.0.1:8086","/management-client/tls"]});
                 if execute(
                     &mut client,
                     component,
@@ -266,14 +266,14 @@ cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir "$dir" get-info
                 "nutshell"
             };
             let command = if source == "nutshell" {
-                json!({"argv":["python3","-c","import socket,sys; s=socket.create_connection((sys.argv[1],8086),timeout=2); s.close()",ip]})
+                json!({"argv":["/opt/proofstorm/driver","tcp",ip,"8086"]})
             } else {
                 json!({"argv":["nc","-z","-w","2",ip,"8086"]})
             };
             // Positive control: prove the same source can reach this pod's
             // public HTTP port before treating an RPC refusal as isolation.
             let public_command = if source == "nutshell" {
-                json!({"argv":["python3","-c","import socket,sys; socket.create_connection((sys.argv[1],3338),timeout=2).close()",ip]})
+                json!({"argv":["/opt/proofstorm/driver","tcp",ip,"3338"]})
             } else {
                 json!({"argv":["nc","-z","-w","2",ip,"3338"]})
             };

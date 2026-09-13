@@ -58,7 +58,8 @@ pub use experiment::{
 };
 pub use instance::{
     CellInstance, CellInstanceStatus, ComponentCondition, ComponentStatus, InstancePhase,
-    InventoryEntry, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, TeardownReceipt,
+    InventoryEntry, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES, ProtocolObservation,
+    TeardownReceipt,
 };
 pub use model::{
     API_VERSION, AuthenticationProtocol, BitcoinNetwork, Capability, CellLimits, CellPolicy,

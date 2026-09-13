@@ -180,7 +180,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     cell::wait_operation(&mut client, "fund-payer", 160)?;
 
-    let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
+    let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; cashu -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
     client.call(
         "component_forensics",
         scoped(&instance, &experiment, &session, "compose-invoice", json!({
@@ -258,7 +258,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     assert_no_invoice(invoice_content, "typed invoice artifact")?;
 
     let read_script = format!(
-        "python3 -c 'import glob,sqlite3; print(next(r[0] for p in glob.glob(\"/wallet/.cashu/recipient-wallet/*.sqlite3\") for r in [sqlite3.connect(p).execute(\"SELECT request FROM bolt11_mint_quotes WHERE quote = ?\", (\"{external_quote}\",)).fetchone()] if r))'"
+        "/opt/proofstorm/driver private-invoice /wallet recipient-wallet http://mint:3338 {external_quote}"
     );
     client.call(
         "component_forensics",

@@ -44,7 +44,7 @@ fn source() -> tempfile::TempDir {
 }
 
 pub(crate) fn receipt(provenance: &Value) -> Value {
-    json!({"format_version":1,"release_ready":false,"platform":"linux/amd64","source":provenance,"metadata":{"version":"0.1.0-alpha.2","source_sha256":provenance["sha256"],"runtime_contract_sha256":"c".repeat(64)},"image":format!("{REPOSITORY}@sha256:{}","d".repeat(64)),"anonymous_verified":true,"verification":{"registry_identity":true,"offline_metadata":true,"non_root":true,"helper_startup":true}})
+    json!({"format_version":1,"release_ready":false,"platform":"linux/amd64","source":provenance,"metadata":{"version":"0.1.0-alpha.2","source_sha256":provenance["sha256"],"runtime_contract_sha256":"c".repeat(64)},"image":format!("{REPOSITORY}@sha256:{}","d".repeat(64)),"anonymous_verified":true,"verification":{"registry_identity":true,"offline_metadata":true,"non_root":true,"helper_startup":true,"prober_startup":true,"driver_startup":true}})
 }
 
 #[test]
@@ -88,6 +88,8 @@ fn stale_dirty_wrong_platform_and_unverified_controller_records_fail_closed() {
         ("/anonymous_verified", json!(false)),
         ("/verification/registry_identity", json!(false)),
         ("/verification/helper_startup", json!(false)),
+        ("/verification/prober_startup", json!(false)),
+        ("/verification/driver_startup", json!(false)),
     ] {
         let mut invalid = valid.clone();
         *invalid.pointer_mut(path).unwrap() = value;
@@ -132,11 +134,32 @@ fn local_image_and_exact_helper_probe_are_bound_to_source_and_previous_build() {
     )
     .unwrap();
     fs::write(root.join("helper.status"), "1").unwrap();
+    fs::write(
+        root.join("prober.stdout"),
+        serde_json::to_vec(&json!({"protocol_version": proofstorm_prober::PROTOCOL_VERSION}))
+            .unwrap(),
+    )
+    .unwrap();
+    fs::write(root.join("prober.stderr"), "").unwrap();
+    fs::write(root.join("prober.status"), "0").unwrap();
+    save_file(
+        &root,
+        "driver.stdout",
+        &json!({"driver_version":proofstorm_driver::VERSION}),
+    );
+    fs::write(root.join("driver.stderr"), "").unwrap();
+    fs::write(root.join("driver.status"), "0").unwrap();
     local(&root).unwrap();
     for (name, body) in [
         ("helper.stdout", "unexpected output"),
         ("helper.stderr", "architecture error"),
         ("helper.status", "0"),
+        ("prober.stdout", "{\"protocol_version\":0}"),
+        ("prober.stderr", "architecture error"),
+        ("prober.status", "1"),
+        ("driver.stdout", "{\"driver_version\":0}"),
+        ("driver.stderr", "architecture error"),
+        ("driver.status", "1"),
     ] {
         let old = fs::read(root.join(name)).unwrap();
         fs::write(root.join(name), body).unwrap();

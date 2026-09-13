@@ -40,7 +40,7 @@ fn probe(name: &str) -> Result<&'static str> {
         "cdk-mint-management" | "cdk-ldk-mint-management" => {
             "cdk-mint-cli --version && cdk-mintd --version"
         }
-        "nutshell-mint-management" => "mint-cli --help",
+        "nutshell-mint-management" => "mint --version && cashu --help && mint-cli --help",
         "cdk-cli-wallet" => "cdk-cli --version",
         "cocod-wallet" => "cocod --version",
         _ => bail!("unknown catalog probe"),
@@ -370,7 +370,11 @@ fn valid_probe(repository: &str, output: &str) -> bool {
             let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
             lines == ["cdk-mint-rpc 0.18.0", "cdk-mintd 0.18.0"]
         }
-        "nutshell-mint-management" => output.contains("Usage:") && output.contains("--help"),
+        "nutshell-mint-management" => {
+            output.lines().next() == Some("Nutshell, version 0.20.3")
+                && output.contains("Usage: cashu [OPTIONS] COMMAND [ARGS]...")
+                && output.contains("Usage: mint-cli [OPTIONS] COMMAND [ARGS]...")
+        }
         _ => false,
     }
 }

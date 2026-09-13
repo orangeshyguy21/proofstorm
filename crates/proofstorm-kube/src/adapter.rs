@@ -17,7 +17,7 @@ use proofstorm_core::{
     DatabaseRole, DependencyBinding, EffectiveComponentConfig, ExecutionMountContract,
     ExecutionStorageSource, InventoryEntry, KeycloakConfig, LinkKind,
     LinkedStateObservationContract, MAX_COMPONENT_CONDITIONS, MAX_CONDITION_MESSAGE_BYTES,
-    NutshellMintConfig, ProtocolProbePlan, RedisConfig, ResolvedLock, TargetDescriptorContract,
+    NutshellMintConfig, RedisConfig, ResolvedLock, TargetDescriptorContract,
     WorkloadControllerKind, default_backend_registry,
 };
 use serde::de::DeserializeOwned;
@@ -39,9 +39,6 @@ const CDK_WALLET_MNEMONIC: &str =
     "legal winner thank year wave sausage worth useful legal winner thank yellow";
 pub const PROTOCOL_PROBER_NAME: &str = "proofstorm-protocol-prober";
 pub const PROTOCOL_PROBER_LABEL: &str = "proofstorm.dev/prober";
-pub const PROTOCOL_PROBER_DIGEST_ANNOTATION: &str = "proofstorm.dev/prober-digest";
-pub const PROTOCOL_PROBER_LEASE_ANNOTATION: &str = "proofstorm.dev/prober-lease";
-const INACTIVE_PROBER_LEASE: &str = "inactive";
 use crate::images::PROBE_IMAGE as PROBER_IMAGE;
 
 type ComponentRenderer = fn(&ComponentPlanContract) -> Result<RenderedComponent, AdapterError>;
@@ -116,6 +113,7 @@ pub struct ComponentObservationResources<'a> {
     pub services: &'a [Service],
     pub endpoint_slices: &'a [EndpointSlice],
     pub pods: &'a [Pod],
+    pub protocol: &'a BTreeMap<String, crate::probes::ProbeObservation>,
 }
 
 impl RenderedCell {
@@ -305,9 +303,6 @@ pub fn render_cell(
             })?;
         rendered.append_component(generator(plan)?);
     }
-    if let Some(prober) = render_protocol_prober(&plans)? {
-        rendered.deployments.push(prober);
-    }
     rendered.sort_resources();
     Ok(rendered)
 }
@@ -319,12 +314,12 @@ pub fn render_cell(
 /// Returns an error only if the fixed restricted Deployment is invalid.
 pub fn render_protocol_prober(
     plans: &[ComponentPlanContract],
+    image: &str,
 ) -> Result<Option<Deployment>, AdapterError> {
     let Some(first) = plans.iter().find(|plan| plan.protocol_probe.is_some()) else {
         return Ok(None);
     };
     let namespace = instance_namespace(&first.instance_key);
-    let digest = protocol_probe_digest(plans);
     let mut prober_labels = labels(&first.instance_key, None);
     prober_labels.insert(PROTOCOL_PROBER_LABEL.into(), "true".into());
     prober_labels.insert("proofstorm.dev/operation".into(), "protocol-prober".into());
@@ -332,60 +327,29 @@ pub fn render_protocol_prober(
         NETWORK_IDENTITY_LABEL.into(),
         "proofstorm-protocol-prober".into(),
     );
-    let containers = plans
-        .iter()
-        .filter_map(|plan| {
-            let probe = plan.protocol_probe.as_ref()?;
-            let readiness_probe = match probe {
-                ProtocolProbePlan::Tcp { port } => json!({
-                    "exec": {"command": ["nc", "-z", "-w", "2", plan.component_id, port.to_string()]},
-                    "initialDelaySeconds": 1, "timeoutSeconds": 2, "periodSeconds": 5,
-                    "failureThreshold": 3, "successThreshold": 1
-                }),
-                ProtocolProbePlan::HttpGet { port, path } => json!({
-                    "exec": {"command": ["wget", "-q", "-T", "2", "-O", "/dev/null",
-                        format!("http://{}:{port}{path}", plan.component_id)]},
-                    "initialDelaySeconds": 1, "timeoutSeconds": 2, "periodSeconds": 5,
-                    "failureThreshold": 3, "successThreshold": 1
-                }),
-            };
-            Some(json!({
-                "name": protocol_probe_container_name(&plan.component_id),
-                "image": PROBER_IMAGE,
-                "imagePullPolicy": "IfNotPresent",
-                "command": ["sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"],
-                "securityContext": container_security(),
-                "resources": {
-                    "requests": {"cpu": "5m", "memory": "4Mi"},
-                    "limits": {"cpu": "25m", "memory": "16Mi"}
-                },
-                "readinessProbe": readiness_probe
-            }))
-        })
-        .collect::<Vec<_>>();
+    let containers = vec![json!({
+        "name": "worker", "image": image, "imagePullPolicy": "IfNotPresent",
+        "command": ["/usr/local/lib/proofstorm-prober"],
+        "args": [first.instance_key, namespace],
+        "securityContext": container_security(),
+        "resources": protocol_prober_resources()
+    })];
     let deployment = resource(json!({
         "apiVersion": "apps/v1",
         "kind": "Deployment",
         "metadata": {
             "name": PROTOCOL_PROBER_NAME,
             "namespace": namespace,
-            "labels": prober_labels.clone(),
-            "annotations": {
-                PROTOCOL_PROBER_DIGEST_ANNOTATION: digest,
-                PROTOCOL_PROBER_LEASE_ANNOTATION: INACTIVE_PROBER_LEASE
-            }
+            "labels": prober_labels.clone()
         },
         "spec": {
-            "replicas": 0,
+            "replicas": 1,
             "strategy": {"type": "Recreate"},
             "selector": {"matchLabels": {INSTANCE_LABEL: first.instance_key, PROTOCOL_PROBER_LABEL: "true"}},
             "template": {
                 "metadata": {
                     "labels": prober_labels,
-                    "annotations": {
-                        PROTOCOL_PROBER_DIGEST_ANNOTATION: digest,
-                        PROTOCOL_PROBER_LEASE_ANNOTATION: INACTIVE_PROBER_LEASE
-                    }
+                    "annotations": {"proofstorm.dev/prober-protocol": proofstorm_prober::PROTOCOL_VERSION.to_string()}
                 },
                 "spec": {
                     "serviceAccountName": "proofstorm-workload",
@@ -393,7 +357,6 @@ pub fn render_protocol_prober(
                     "enableServiceLinks": false,
                     "terminationGracePeriodSeconds": 1,
                     "securityContext": pod_security(),
-                    "affinity": instance_affinity(&first.instance_key),
                     "containers": containers
                 }
             }
@@ -402,25 +365,21 @@ pub fn render_protocol_prober(
     Ok(Some(deployment))
 }
 
-fn protocol_probe_digest(plans: &[ComponentPlanContract]) -> String {
-    let probes = plans
-        .iter()
-        .filter_map(|plan| {
-            plan.protocol_probe
-                .as_ref()
-                .map(|probe| (&plan.component_id, &plan.rollout_digest, probe))
-        })
-        .collect::<Vec<_>>();
-    proofstorm_core::digest_json(&probes)
-}
-
-/// Stable container identity for a component in the shared protocol prober.
+/// Fixed worker resource demand, shared by runtime rendering and client planning.
 #[must_use]
-pub fn protocol_probe_container_name(component_id: &str) -> String {
-    let digest = proofstorm_core::digest_json(&component_id);
-    let short_digest = &digest["sha256:".len().."sha256:".len() + 8];
-    let prefix = &component_id[..component_id.len().min(48)];
-    format!("probe-{prefix}-{short_digest}")
+pub fn protocol_prober_resources() -> k8s_openapi::api::core::v1::ResourceRequirements {
+    use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+    k8s_openapi::api::core::v1::ResourceRequirements {
+        requests: Some(BTreeMap::from([
+            ("cpu".into(), Quantity("50m".into())),
+            ("memory".into(), Quantity("16Mi".into())),
+        ])),
+        limits: Some(BTreeMap::from([
+            ("cpu".into(), Quantity("500m".into())),
+            ("memory".into(), Quantity("64Mi".into())),
+        ])),
+        ..Default::default()
+    }
 }
 
 /// Observe workload readiness against the exact compiled rollout identity.
@@ -433,18 +392,24 @@ pub fn observe_component_statuses(
     intentionally_stopped: &BTreeSet<String>,
     observed_at_unix: i64,
 ) -> Vec<ComponentStatus> {
-    let prober_digest = protocol_probe_digest(plans);
+    let resources = &crate::observation::ObservationIndex::new(resources);
+    let mut previous_by_identity = BTreeMap::new();
+    for status in previous {
+        previous_by_identity
+            .entry((
+                status.id.as_str(),
+                status.observed_revision_digest.as_str(),
+                status.observed_rollout_digest.as_str(),
+            ))
+            .or_insert(status);
+    }
     let mut statuses = plans
         .iter()
         .map(|plan| {
             let stopped = intentionally_stopped.contains(&plan.component_id);
-            let mut conditions = observe_atomic_conditions(
-                plan,
-                resources,
-                &prober_digest,
-                stopped,
-                observed_at_unix,
-            );
+            let protocol = crate::probes::current_observation(plan, resources, observed_at_unix);
+            let mut conditions =
+                observe_atomic_conditions(plan, resources, protocol, stopped, observed_at_unix);
             for aggregation in &plan.condition_aggregation {
                 let state = aggregate_condition_state(&aggregation.all_of, &conditions);
                 let (reason, message) =
@@ -475,11 +440,11 @@ pub fn observe_component_statuses(
             conditions.sort_by_key(|condition| condition.condition_type);
             conditions.dedup_by_key(|condition| condition.condition_type);
             debug_assert!(conditions.len() <= MAX_COMPONENT_CONDITIONS);
-            if let Some(previous) = previous.iter().find(|status| {
-                status.id == plan.component_id
-                    && status.observed_revision_digest == plan.revision_digest
-                    && status.observed_rollout_digest == plan.rollout_digest
-            }) {
+            if let Some(previous) = previous_by_identity.get(&(
+                plan.component_id.as_str(),
+                plan.revision_digest.as_str(),
+                plan.rollout_digest.as_str(),
+            )) {
                 preserve_condition_transitions(&mut conditions, &previous.conditions);
             }
             debug_assert!(conditions.iter().all(|condition| {
@@ -494,6 +459,7 @@ pub fn observe_component_statuses(
                 observed_rollout_digest: plan.rollout_digest.clone(),
                 conditions,
                 ready: false,
+                protocol_observation: protocol.map(|observation| observation.timing.clone()),
                 service: format!("{}.{namespace}.svc", plan.component_id),
                 ports: plan.target_descriptor.ports.clone(),
             };
@@ -518,27 +484,36 @@ fn resolve_dependency_conditions(
     intentionally_stopped: &BTreeSet<String>,
     observed_at_unix: i64,
 ) {
-    for _ in 0..plans.len() {
-        let prior_pass = statuses.to_vec();
-        for (plan, status) in plans.iter().zip(statuses.iter_mut()) {
-            if !plan
-                .applicable_conditions
+    let indexes: BTreeMap<_, _> = statuses
+        .iter()
+        .enumerate()
+        .map(|(index, status)| (status.id.clone(), index))
+        .collect();
+    let ready_state = |status: &ComponentStatus| {
+        status
+            .conditions
+            .iter()
+            .find(|condition| condition.condition_type == ComponentConditionType::ComponentReady)
+            .map_or(ComponentConditionState::Unknown, |condition| {
+                condition.state
+            })
+    };
+    let dependent: Vec<_> = plans
+        .iter()
+        .enumerate()
+        .filter(|(_, plan)| {
+            plan.applicable_conditions
                 .contains(&ComponentConditionType::DependenciesReady)
-            {
-                continue;
-            }
+        })
+        .collect();
+    for _ in 0..if dependent.is_empty() { 0 } else { plans.len() } {
+        let prior_pass: Vec<_> = statuses.iter().map(ready_state).collect();
+        for (index, plan) in &dependent {
+            let status = &mut statuses[*index];
             let dependency_states = plan.relevant_links.iter().map(|link| {
-                prior_pass
-                    .iter()
-                    .find(|candidate| candidate.id == link.to)
-                    .and_then(|candidate| {
-                        candidate.conditions.iter().find(|condition| {
-                            condition.condition_type == ComponentConditionType::ComponentReady
-                        })
-                    })
-                    .map_or(ComponentConditionState::Unknown, |condition| {
-                        condition.state
-                    })
+                indexes
+                    .get(&link.to)
+                    .map_or(ComponentConditionState::Unknown, |index| prior_pass[*index])
             });
             let state = aggregate_states(dependency_states);
             let (reason, message) = if state == ComponentConditionState::True {
@@ -569,16 +544,157 @@ fn resolve_dependency_conditions(
                 observed_at_unix,
             );
         }
+        if statuses.iter().map(ready_state).eq(prior_pass) {
+            break;
+        }
     }
+    let previous_by_id: BTreeMap<_, _> = previous
+        .iter()
+        .map(|status| (status.id.as_str(), status))
+        .collect();
     for status in statuses {
-        if let Some(previous) = previous.iter().find(|candidate| {
-            candidate.id == status.id
-                && candidate.observed_revision_digest == status.observed_revision_digest
-                && candidate.observed_rollout_digest == status.observed_rollout_digest
+        if let Some(previous) = previous_by_id.get(status.id.as_str()).filter(|previous| {
+            previous.observed_revision_digest == status.observed_revision_digest
+                && previous.observed_rollout_digest == status.observed_rollout_digest
         }) {
             preserve_condition_transitions(&mut status.conditions, &previous.conditions);
         }
         status.derive_ready();
+    }
+}
+
+/// Expire cached protocol evidence on reads and before action admission, including
+/// the dependent readiness conditions. This does not mutate Kubernetes resources.
+pub fn expire_protocol_status(
+    plans: &[ComponentPlanContract],
+    statuses: &mut [ComponentStatus],
+    now_unix: i64,
+) {
+    let indexes: BTreeMap<_, _> = statuses
+        .iter()
+        .enumerate()
+        .map(|(index, status)| (status.id.clone(), index))
+        .collect();
+    let mut changed = std::collections::VecDeque::new();
+    for plan in plans {
+        let Some(index) = indexes.get(&plan.component_id).copied() else {
+            continue;
+        };
+        let status = &mut statuses[index];
+        let stopped = status
+            .conditions
+            .iter()
+            .any(|condition| condition.reason == ComponentConditionReason::IntentionallyStopped);
+        if plan.protocol_probe.is_none()
+            || stopped
+            || status
+                .protocol_observation
+                .as_ref()
+                .is_some_and(|timing| timing.is_fresh(now_unix))
+        {
+            continue;
+        }
+        let previous = status.conditions.clone();
+        replace_condition(
+            status,
+            component_condition(
+                ComponentConditionType::ProtocolReady,
+                ComponentConditionState::Unknown,
+                ComponentConditionReason::ProtocolProbePending,
+                "protocol observation has expired or has not been obtained",
+                now_unix,
+            ),
+        );
+        recompute_component_ready(plan, status, false, now_unix);
+        preserve_condition_transitions(&mut status.conditions, &previous);
+        status.derive_ready();
+        changed.push_back(index);
+    }
+    expire_dependent_status(plans, statuses, &indexes, changed, now_unix);
+}
+
+fn expire_dependent_status(
+    plans: &[ComponentPlanContract],
+    statuses: &mut [ComponentStatus],
+    indexes: &BTreeMap<String, usize>,
+    mut changed: std::collections::VecDeque<usize>,
+    now_unix: i64,
+) {
+    let plan_by_id: BTreeMap<_, _> = plans
+        .iter()
+        .map(|plan| (plan.component_id.as_str(), plan))
+        .collect();
+    // Reading an old status can only remove readiness, never manufacture new success.
+    // Traverse affected dependents so a failed observation does not rescan the fleet.
+    let mut dependents: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for plan in plans {
+        let Some(index) = indexes.get(&plan.component_id) else {
+            continue;
+        };
+        if !plan
+            .applicable_conditions
+            .contains(&ComponentConditionType::DependenciesReady)
+        {
+            continue;
+        }
+        for link in &plan.relevant_links {
+            dependents.entry(&link.to).or_default().push(*index);
+        }
+    }
+    let mut visited = BTreeSet::new();
+    while let Some(changed_index) = changed.pop_front() {
+        if !visited.insert(changed_index) {
+            continue;
+        }
+        for index in dependents
+            .get(statuses[changed_index].id.as_str())
+            .into_iter()
+            .flatten()
+            .copied()
+        {
+            let plan = plan_by_id[statuses[index].id.as_str()];
+            if statuses[index]
+                .conditions
+                .iter()
+                .any(|condition| condition.reason == ComponentConditionReason::IntentionallyStopped)
+            {
+                continue;
+            }
+            let state = aggregate_states(plan.relevant_links.iter().map(|link| {
+                indexes
+                    .get(&link.to)
+                    .map_or(ComponentConditionState::Unknown, |index| {
+                        statuses[*index]
+                            .conditions
+                            .iter()
+                            .find(|condition| {
+                                condition.condition_type == ComponentConditionType::ComponentReady
+                            })
+                            .map_or(ComponentConditionState::Unknown, |condition| {
+                                condition.state
+                            })
+                    })
+            }));
+            if state == ComponentConditionState::True {
+                continue;
+            }
+            let status = &mut statuses[index];
+            let previous = status.conditions.clone();
+            replace_condition(
+                status,
+                component_condition(
+                    ComponentConditionType::DependenciesReady,
+                    state,
+                    ComponentConditionReason::DependenciesUnsatisfied,
+                    "one or more linked component dependencies lack current readiness evidence",
+                    now_unix,
+                ),
+            );
+            recompute_component_ready(plan, status, false, now_unix);
+            preserve_condition_transitions(&mut status.conditions, &previous);
+            status.derive_ready();
+            changed.push_back(index);
+        }
     }
 }
 
@@ -659,8 +775,8 @@ fn recompute_component_ready(
 
 fn observe_atomic_conditions(
     plan: &ComponentPlanContract,
-    resources: &ComponentObservationResources<'_>,
-    prober_digest: &str,
+    resources: &crate::observation::ObservationIndex<'_>,
+    protocol: Option<&crate::probes::ProbeObservation>,
     stopped: bool,
     observed_at_unix: i64,
 ) -> Vec<ComponentCondition> {
@@ -681,9 +797,7 @@ fn observe_atomic_conditions(
                 ComponentConditionType::StorageReady => storage_observation(plan, resources),
                 ComponentConditionType::CredentialsReady => credential_observation(plan, resources),
                 ComponentConditionType::ServiceReady => service_observation(plan, resources),
-                ComponentConditionType::ProtocolReady => {
-                    protocol_observation(plan, resources, prober_digest)
-                }
+                ComponentConditionType::ProtocolReady => protocol_observation(protocol),
                 ComponentConditionType::DependenciesReady => {
                     not_observed("component dependencies have not been observed")
                 }
@@ -705,9 +819,9 @@ fn observe_atomic_conditions(
         .collect()
 }
 
-fn workload_observation(
+pub(crate) fn workload_observation(
     plan: &ComponentPlanContract,
-    resources: &ComponentObservationResources<'_>,
+    resources: &crate::observation::ObservationIndex<'_>,
 ) -> (
     ComponentConditionState,
     ComponentConditionReason,
@@ -715,11 +829,7 @@ fn workload_observation(
 ) {
     match plan.workload.kind {
         WorkloadControllerKind::Deployment => {
-            let Some(workload) = resources
-                .deployments
-                .iter()
-                .find(|workload| workload.metadata.name.as_deref() == Some(&plan.workload.name))
-            else {
+            let Some(workload) = resources.deployments.get(&plan.workload.name) else {
                 return not_observed("owning Deployment has not been observed");
             };
             let Some(spec) = workload.spec.as_ref() else {
@@ -736,7 +846,8 @@ fn workload_observation(
                 return stale_workload();
             }
             let status = workload.status.as_ref();
-            if let Some(failure) = pod_startup_failure(plan, resources.pods) {
+            if let Some(failure) = pod_startup_failure(plan, resources.pods.all(&plan.component_id))
+            {
                 return failure;
             }
             workload_replica_observation(
@@ -752,11 +863,7 @@ fn workload_observation(
             )
         }
         WorkloadControllerKind::StatefulSet => {
-            let Some(workload) = resources
-                .stateful_sets
-                .iter()
-                .find(|workload| workload.metadata.name.as_deref() == Some(&plan.workload.name))
-            else {
+            let Some(workload) = resources.stateful_sets.get(&plan.workload.name) else {
                 return not_observed("owning StatefulSet has not been observed");
             };
             let Some(spec) = workload.spec.as_ref() else {
@@ -773,7 +880,8 @@ fn workload_observation(
                 return stale_workload();
             }
             let status = workload.status.as_ref();
-            if let Some(failure) = pod_startup_failure(plan, resources.pods) {
+            if let Some(failure) = pod_startup_failure(plan, resources.pods.all(&plan.component_id))
+            {
                 return failure;
             }
             workload_replica_observation(
@@ -792,16 +900,16 @@ fn workload_observation(
     }
 }
 
-fn pod_startup_failure(
+fn pod_startup_failure<'a>(
     plan: &ComponentPlanContract,
-    pods: &[Pod],
+    pods: impl IntoIterator<Item = &'a Pod>,
 ) -> Option<(
     ComponentConditionState,
     ComponentConditionReason,
     &'static str,
 )> {
     use ComponentConditionReason as Reason;
-    for pod in pods.iter().filter(|pod| {
+    for pod in pods.into_iter().filter(|pod| {
         pod.metadata.deletion_timestamp.is_none()
             && pod
                 .metadata
@@ -963,113 +1071,54 @@ const fn stale_workload() -> (
 }
 
 fn protocol_observation(
-    plan: &ComponentPlanContract,
-    resources: &ComponentObservationResources<'_>,
-    prober_digest: &str,
+    observation: Option<&crate::probes::ProbeObservation>,
 ) -> (
     ComponentConditionState,
     ComponentConditionReason,
     &'static str,
 ) {
-    let Some(lease) = resources.deployments.iter().find_map(|deployment| {
-        if deployment.metadata.name.as_deref() != Some(PROTOCOL_PROBER_NAME)
-            || deployment.spec.as_ref().and_then(|spec| spec.replicas) != Some(1)
-            || deployment
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|annotations| annotations.get(PROTOCOL_PROBER_DIGEST_ANNOTATION))
-                .is_none_or(|digest| digest != prober_digest)
-        {
-            return None;
-        }
-        let metadata_lease = deployment
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|annotations| annotations.get(PROTOCOL_PROBER_LEASE_ANNOTATION))?;
-        let template_lease = deployment
-            .spec
-            .as_ref()?
-            .template
-            .metadata
-            .as_ref()?
-            .annotations
-            .as_ref()?
-            .get(PROTOCOL_PROBER_LEASE_ANNOTATION)?;
-        (metadata_lease == template_lease && metadata_lease != INACTIVE_PROBER_LEASE)
-            .then_some(metadata_lease.as_str())
-    }) else {
+    let Some(observation) = observation else {
         return (
             ComponentConditionState::Unknown,
             ComponentConditionReason::ProtocolProbePending,
-            "protocol probing is waiting for a current scheduler lease",
+            "waiting for a fresh check of the current Service endpoint",
         );
     };
-    let Some(pod) = resources.pods.iter().find(|pod| {
-        pod.metadata
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.get(PROTOCOL_PROBER_LABEL))
-            .is_some_and(|value| value == "true")
-            && pod
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|annotations| annotations.get(PROTOCOL_PROBER_DIGEST_ANNOTATION))
-                .is_some_and(|digest| digest == prober_digest)
-            && pod
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|annotations| annotations.get(PROTOCOL_PROBER_LEASE_ANNOTATION))
-                .is_some_and(|pod_lease| pod_lease == lease)
-    }) else {
-        return (
-            ComponentConditionState::Unknown,
-            ComponentConditionReason::ProtocolProbePending,
-            "current protocol prober Pod has not been observed",
-        );
-    };
-    let container_name = protocol_probe_container_name(&plan.component_id);
-    let status = pod
-        .status
-        .as_ref()
-        .and_then(|status| status.container_statuses.as_ref())
-        .and_then(|statuses| statuses.iter().find(|status| status.name == container_name));
-    match status {
-        Some(status) if status.ready => (
+    if observation.outcome == proofstorm_prober::Outcome::Reachable {
+        (
             ComponentConditionState::True,
             ComponentConditionReason::ProtocolResponding,
-            "bounded Service-DNS protocol probe is responding",
-        ),
-        Some(_) => (
+            "current Service-DNS protocol probe is responding",
+        )
+    } else {
+        (
             ComponentConditionState::False,
             ComponentConditionReason::ProtocolProbeFailed,
-            "bounded Service-DNS protocol probe is not responding",
-        ),
-        None => (
-            ComponentConditionState::Unknown,
-            ComponentConditionReason::ProtocolProbePending,
-            "protocol probe container has not reported status",
-        ),
+            match observation.outcome {
+                proofstorm_prober::Outcome::DnsFailed => "Service DNS lookup failed",
+                proofstorm_prober::Outcome::ConnectionRefused => "Service connection was refused",
+                proofstorm_prober::Outcome::TimedOut => "Service protocol check timed out",
+                proofstorm_prober::Outcome::HttpError => {
+                    "Service returned an unsuccessful HTTP status"
+                }
+                _ => "Service protocol check failed",
+            },
+        )
     }
 }
 
 fn storage_observation(
     plan: &ComponentPlanContract,
-    resources: &ComponentObservationResources<'_>,
+    resources: &crate::observation::ObservationIndex<'_>,
 ) -> (
     ComponentConditionState,
     ComponentConditionReason,
     &'static str,
 ) {
-    let claims = plan.storage.iter().map(|required| {
-        resources
-            .persistent_volume_claims
-            .iter()
-            .find(|claim| claim.metadata.name.as_deref() == Some(&required.claim_name))
-    });
+    let claims = plan
+        .storage
+        .iter()
+        .map(|required| resources.claims.get(&required.claim_name));
     let mut saw_claim = false;
     for claim in claims {
         let Some(claim) = claim else {
@@ -1102,7 +1151,7 @@ fn storage_observation(
 
 fn credential_observation(
     plan: &ComponentPlanContract,
-    resources: &ComponentObservationResources<'_>,
+    resources: &crate::observation::ObservationIndex<'_>,
 ) -> (
     ComponentConditionState,
     ComponentConditionReason,
@@ -1112,13 +1161,12 @@ fn credential_observation(
         return not_observed("credential projection workload has not been observed");
     };
     for requirement in &plan.credentials {
-        let claim_bound = resources.persistent_volume_claims.iter().any(|claim| {
-            claim.metadata.name.as_deref() == Some(&requirement.claim_name)
-                && claim
-                    .status
-                    .as_ref()
-                    .and_then(|status| status.phase.as_deref())
-                    == Some("Bound")
+        let claim_bound = resources.claims.all(&requirement.claim_name).any(|claim| {
+            claim
+                .status
+                .as_ref()
+                .and_then(|status| status.phase.as_deref())
+                == Some("Bound")
         });
         let source_identity_matches =
             observed_state_contract(&requirement.source_component_id, resources)
@@ -1162,19 +1210,17 @@ fn credential_observation(
 
 fn observed_pod_spec<'a>(
     plan: &ComponentPlanContract,
-    resources: &'a ComponentObservationResources<'_>,
+    resources: &'a crate::observation::ObservationIndex<'_>,
 ) -> Option<&'a k8s_openapi::api::core::v1::PodSpec> {
     match plan.workload.kind {
         WorkloadControllerKind::Deployment => resources
             .deployments
-            .iter()
-            .find(|workload| workload.metadata.name.as_deref() == Some(&plan.workload.name))
+            .get(&plan.workload.name)
             .and_then(|workload| workload.spec.as_ref())
             .and_then(|spec| spec.template.spec.as_ref()),
         WorkloadControllerKind::StatefulSet => resources
             .stateful_sets
-            .iter()
-            .find(|workload| workload.metadata.name.as_deref() == Some(&plan.workload.name))
+            .get(&plan.workload.name)
             .and_then(|workload| workload.spec.as_ref())
             .and_then(|spec| spec.template.spec.as_ref()),
     }
@@ -1182,38 +1228,32 @@ fn observed_pod_spec<'a>(
 
 fn observed_state_contract<'a>(
     component_id: &str,
-    resources: &'a ComponentObservationResources<'_>,
+    resources: &'a crate::observation::ObservationIndex<'_>,
 ) -> Option<&'a str> {
     resources
         .deployments
-        .iter()
-        .find(|workload| workload.metadata.name.as_deref() == Some(component_id))
+        .get(component_id)
         .and_then(|workload| workload.metadata.annotations.as_ref())
         .and_then(|annotations| annotations.get(EXECUTION_STATE_CONTRACT_ANNOTATION))
         .or_else(|| {
             resources
                 .stateful_sets
-                .iter()
-                .find(|workload| workload.metadata.name.as_deref() == Some(component_id))
+                .get(component_id)
                 .and_then(|workload| workload.metadata.annotations.as_ref())
                 .and_then(|annotations| annotations.get(EXECUTION_STATE_CONTRACT_ANNOTATION))
         })
         .map(String::as_str)
 }
 
-fn service_observation(
+pub(crate) fn service_observation(
     plan: &ComponentPlanContract,
-    resources: &ComponentObservationResources<'_>,
+    resources: &crate::observation::ObservationIndex<'_>,
 ) -> (
     ComponentConditionState,
     ComponentConditionReason,
     &'static str,
 ) {
-    let Some(service) = resources
-        .services
-        .iter()
-        .find(|service| service.metadata.name.as_deref() == Some(&plan.component_id))
-    else {
+    let Some(service) = resources.services.get(&plan.component_id) else {
         return not_observed("required Service has not been observed");
     };
     let service_ports = service
@@ -1234,14 +1274,8 @@ fn service_observation(
             "Service does not publish every required port",
         );
     }
-    let endpoints_ready = resources.endpoint_slices.iter().any(|slice| {
-        slice
-            .metadata
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.get("kubernetes.io/service-name"))
-            == Some(&plan.component_id)
-            && endpoint_slice_ports_match(plan, slice)
+    let endpoints_ready = resources.endpoints.all(&plan.component_id).any(|slice| {
+        endpoint_slice_ports_match(plan, slice)
             && slice.endpoints.iter().any(|endpoint| {
                 !endpoint.addresses.is_empty()
                     && endpoint
@@ -2260,10 +2294,14 @@ pub fn render_nutshell_mint_component(
             "valueFrom": {"secretKeyRef": {"name": cache_secret, "key": "REDIS_URL"}}
         }));
     }
-    let command_script = if lightning.backend_id == "cln" {
-        NUTSHELL_CLN_BOOTSTRAP.to_owned()
+    let command = if lightning.backend_id == "cln" {
+        json!([
+            "sh",
+            "-ec",
+            "/opt/proofstorm/driver cln-mint-rune; exec mint"
+        ])
     } else {
-        "from cashu.mint.main import main; main()".to_owned()
+        json!(["mint"])
     };
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut rendered = RenderedComponent::default();
@@ -2292,7 +2330,7 @@ pub fn render_nutshell_mint_component(
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
                 "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
-                    "command": ["python3", "-c", command_script],
+                    "command": command,
                     "envFrom": [{"configMapRef": {"name": config_name}}],
                     "env": env,
                     "ports": [{"name": "http", "containerPort": http_port}],
@@ -2304,8 +2342,7 @@ pub fn render_nutshell_mint_component(
                     // prober checks the Service-DNS path over TCP.
                     "readinessProbe": {
                         "exec": {"command": [
-                            "python3", "-c",
-                            include_str!("../drivers/nutshell_management_ready.py"),
+                            crate::drivers::DRIVER_PATH, "ready", "nutshell",
                             format!("http://127.0.0.1:{http_port}/v1/info")
                         ]},
                         "timeoutSeconds": 3,
@@ -2331,7 +2368,21 @@ pub fn render_nutshell_mint_component(
     add_nutshell_cache_init_container(&mut deployment, cache);
     add_nutshell_auth_init_container(&mut deployment, authentication);
     rendered.deployments.push(resource(deployment)?);
+    install_component_driver(&mut rendered)?;
     Ok(rendered)
+}
+
+fn install_component_driver(rendered: &mut RenderedComponent) -> Result<(), AdapterError> {
+    for deployment in &mut rendered.deployments {
+        if let Some(pod) = deployment
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+        {
+            crate::drivers::install(pod)?;
+        }
+    }
+    Ok(())
 }
 
 fn add_nutshell_auth_init_container(
@@ -2710,64 +2761,6 @@ fn nutshell_mint_environment(
     environment
 }
 
-const NUTSHELL_CLN_BOOTSTRAP: &str = r#"import json
-import os
-import socket
-import time
-
-socket_path = "/cln/regtest/lightning-rpc"
-rune_directory = "/app/data/.proofstorm"
-rune_path = f"{rune_directory}/cln.rune"
-if not os.path.exists(rune_path) or os.path.getsize(rune_path) == 0:
-    os.makedirs(rune_directory, mode=0o700, exist_ok=True)
-    for attempt in range(180):
-        try:
-            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            connection.settimeout(10)
-            connection.connect(socket_path)
-            break
-        except OSError:
-            connection.close()
-            if attempt == 179:
-                raise
-            time.sleep(1)
-    request = {
-        "jsonrpc": "2.0",
-        "id": "proofstorm-nutshell",
-        "method": "createrune",
-        "params": {
-            "restrictions": [[
-                "method=listfunds",
-                "method=invoice",
-                "method=pay",
-                "method=listinvoices",
-                "method=listpays",
-                "method=waitanyinvoice",
-            ]]
-        },
-    }
-    connection.sendall(json.dumps(request, separators=(",", ":")).encode() + b"\n\n")
-    response = b""
-    while b"\n\n" not in response:
-        chunk = connection.recv(65536)
-        if not chunk:
-            raise RuntimeError("Core Lightning closed the rune request")
-        response += chunk
-    connection.close()
-    result = json.loads(response.split(b"\n\n", 1)[0])
-    if "error" in result:
-        raise RuntimeError(f"Core Lightning rune creation failed: {result['error']}")
-    rune = result["result"]["rune"]
-    temporary_path = f"{rune_path}.tmp"
-    descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as rune_file:
-        rune_file.write(rune)
-    os.replace(temporary_path, rune_path)
-
-from cashu.mint.main import main
-main()
-"#;
-
 /// Render a disposable attacker workspace from a compiled plan without
 /// cluster I/O.
 ///
@@ -2825,18 +2818,6 @@ pub fn render_cdk_wallet_component(
     let deployment = rendered.deployments.first_mut().expect("wallet deployment");
     deployment.spec.as_mut().expect("deployment spec").strategy =
         Some(resource(json!({"type": "Recreate"}))?);
-    deployment
-        .spec
-        .as_mut()
-        .expect("deployment spec")
-        .template
-        .spec
-        .as_mut()
-        .expect("pod spec")
-        .node_selector = Some(BTreeMap::from([(
-        "kubernetes.io/arch".into(),
-        "arm64".into(),
-    )]));
     let container = &mut deployment
         .spec
         .as_mut()
@@ -2873,10 +2854,6 @@ pub fn render_cocod_wallet_component(
         .expect("deployment spec");
     deployment.strategy = Some(resource(json!({"type":"Recreate"}))?);
     let pod = deployment.template.spec.as_mut().expect("wallet pod");
-    pod.node_selector = Some(BTreeMap::from([(
-        "kubernetes.io/arch".into(),
-        "arm64".into(),
-    )]));
     pod.termination_grace_period_seconds = Some(45);
     let container = &mut pod.containers[0];
     container.env = Some(resource(json!([
@@ -2893,7 +2870,7 @@ pub fn render_cocod_wallet_component(
         "-c".into(),
         "umask 077; unset COCOD_URL; exec cocod daemon".into(),
     ]);
-    let probe = json!({"exec":{"command":["python3","-c","import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:62626/health',timeout=2)); assert r['status']=='ok' and r['interfaceVersion']=='1'"]},"timeoutSeconds":3,"periodSeconds":3});
+    let probe = json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"ready","cocod"]},"timeoutSeconds":3,"periodSeconds":3});
     container.readiness_probe = Some(resource(probe)?);
     Ok(rendered)
 }
@@ -2926,6 +2903,7 @@ fn render_cli_wallet_workspace(
             }
         }}
     }))?);
+    install_component_driver(&mut rendered)?;
     Ok(rendered)
 }
 
@@ -3800,6 +3778,7 @@ mod tests {
                 assert!(failure.2.len() <= MAX_CONDITION_MESSAGE_BYTES);
                 assert!(!failure.2.contains("SECRET"));
                 let resources = ComponentObservationResources {
+                    protocol: &std::collections::BTreeMap::new(),
                     deployments: &[],
                     stateful_sets: std::slice::from_ref(&fixture.workload),
                     persistent_volume_claims: &[],
@@ -3807,7 +3786,14 @@ mod tests {
                     endpoint_slices: &[],
                     pods: std::slice::from_ref(&pod),
                 };
-                assert_eq!(workload_observation(plan, &resources).1, expected);
+                assert_eq!(
+                    workload_observation(
+                        plan,
+                        &crate::observation::ObservationIndex::new(&resources)
+                    )
+                    .1,
+                    expected
+                );
                 pod.metadata
                     .annotations
                     .as_mut()
@@ -3824,66 +3810,6 @@ mod tests {
             pod_startup_failure(plan, &[pod]).unwrap().1,
             ComponentConditionReason::PodUnschedulable
         );
-    }
-
-    fn protocol_prober_pod(
-        plans: &[ComponentPlanContract],
-        component_id: &str,
-        ready: bool,
-    ) -> Pod {
-        let mut pod = Pod::default();
-        pod.metadata.labels = Some(BTreeMap::from([(
-            PROTOCOL_PROBER_LABEL.into(),
-            "true".into(),
-        )]));
-        pod.metadata.annotations = Some(BTreeMap::from([
-            (
-                PROTOCOL_PROBER_DIGEST_ANNOTATION.into(),
-                protocol_probe_digest(plans),
-            ),
-            (
-                PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
-                "lease-current".into(),
-            ),
-        ]));
-        pod.status = Some(k8s_openapi::api::core::v1::PodStatus {
-            container_statuses: Some(vec![k8s_openapi::api::core::v1::ContainerStatus {
-                name: protocol_probe_container_name(component_id),
-                ready,
-                ..Default::default()
-            }]),
-            ..Default::default()
-        });
-        pod
-    }
-
-    fn active_protocol_prober(plans: &[ComponentPlanContract]) -> Deployment {
-        let mut deployment = render_protocol_prober(plans)
-            .expect("prober render")
-            .expect("protocol probes");
-        let spec = deployment.spec.as_mut().expect("Deployment spec");
-        spec.replicas = Some(1);
-        deployment
-            .metadata
-            .annotations
-            .as_mut()
-            .expect("Deployment annotations")
-            .insert(
-                PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
-                "lease-current".into(),
-            );
-        spec.template
-            .metadata
-            .as_mut()
-            .expect("Pod metadata")
-            .annotations
-            .as_mut()
-            .expect("Pod annotations")
-            .insert(
-                PROTOCOL_PROBER_LEASE_ANNOTATION.into(),
-                "lease-current".into(),
-            );
-        deployment
     }
 
     #[test]
@@ -3936,8 +3862,13 @@ mod tests {
             policy: CellPolicy::default(),
         };
         let lock = resolve_lock(&cell, default_catalog()).expect("lock");
-        let rendered =
+        let mut rendered =
             render_cell("i0123456789012345678", "sha256:revision", &cell, &lock).expect("render");
+        rendered.deployments.push(
+            render_protocol_prober(&rendered.plans, PROBER_IMAGE)
+                .unwrap()
+                .unwrap(),
+        );
         assert_eq!(rendered.services.len(), 3);
         assert_eq!(rendered.stateful_sets.len(), 2);
         assert_eq!(rendered.deployments.len(), 3);
@@ -4885,6 +4816,7 @@ mod tests {
                 "status": {"containerStatuses": [{"name":"wallet", "image":"fixture", "imageID":"", "ready":false, "restartCount":0, "state":{"waiting":{"reason":waiting}}}]}
             })).expect("pod");
             let resources = ComponentObservationResources {
+                protocol: &std::collections::BTreeMap::new(),
                 deployments: std::slice::from_ref(&workload),
                 stateful_sets: &[],
                 persistent_volume_claims: &[],
@@ -4892,7 +4824,8 @@ mod tests {
                 endpoint_slices: &[],
                 pods: std::slice::from_ref(&pod),
             };
-            let (state, reason, _) = workload_observation(plan, &resources);
+            let (state, reason, _) =
+                workload_observation(plan, &crate::observation::ObservationIndex::new(&resources));
             assert_eq!(state, ComponentConditionState::False, "{waiting}");
             assert_eq!(reason, expected, "{waiting}");
         }
@@ -4907,6 +4840,7 @@ mod tests {
             status.updated_replicas = Some(updated);
             status.available_replicas = Some(available);
             let resources = ComponentObservationResources {
+                protocol: &std::collections::BTreeMap::new(),
                 deployments: std::slice::from_ref(&workload),
                 stateful_sets: &[],
                 persistent_volume_claims: &[],
@@ -4915,7 +4849,9 @@ mod tests {
                 pods: &[],
             };
             assert_eq!(
-                workload_observation(plan, &resources).0 == ComponentConditionState::True,
+                workload_observation(plan, &crate::observation::ObservationIndex::new(&resources))
+                    .0
+                    == ComponentConditionState::True,
                 expected
             );
         }
@@ -4936,6 +4872,7 @@ mod tests {
             status.current_revision = current.map(str::to_owned);
             status.update_revision = next.map(str::to_owned);
             let resources = ComponentObservationResources {
+                protocol: &std::collections::BTreeMap::new(),
                 deployments: &[],
                 stateful_sets: std::slice::from_ref(&fixture.workload),
                 persistent_volume_claims: &[],
@@ -4944,14 +4881,21 @@ mod tests {
                 pods: &[],
             };
             assert_eq!(
-                workload_observation(&fixture.plans[0], &resources).0
-                    == ComponentConditionState::True,
+                workload_observation(
+                    &fixture.plans[0],
+                    &crate::observation::ObservationIndex::new(&resources)
+                )
+                .0 == ComponentConditionState::True,
                 expected
             );
         }
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one fixture compares current and stale rollout observations"
+    )]
     fn observation_requires_the_compiled_rollout_identity() {
         let cell = workspace_cell();
         let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
@@ -4970,6 +4914,7 @@ mod tests {
         );
         set_deployment_rollout(&mut workload, "sha256:stale");
         let stale_resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: std::slice::from_ref(&workload),
             stateful_sets: &[],
             persistent_volume_claims: &[],
@@ -4999,6 +4944,7 @@ mod tests {
 
         set_deployment_rollout(&mut workload, &wallet.rollout_digest);
         let accepted_resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: std::slice::from_ref(&workload),
             stateful_sets: &[],
             persistent_volume_claims: &[],
@@ -5031,6 +4977,7 @@ mod tests {
         assert_eq!(wallet_status.ports, wallet.target_descriptor.ports);
 
         let empty_resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: &[],
             stateful_sets: &[],
             persistent_volume_claims: &[],
@@ -5075,6 +5022,7 @@ mod tests {
                 .remove(0),
         );
         let resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: std::slice::from_ref(&workload),
             stateful_sets: &[],
             persistent_volume_claims: &[],
@@ -5123,6 +5071,7 @@ mod tests {
         let mut fixture = chain_observation_fixture();
         assert_eq!(fixture.plans[0].storage[0].claim_name, "data-chain-0");
         let resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: &[],
             stateful_sets: std::slice::from_ref(&fixture.workload),
             persistent_volume_claims: std::slice::from_ref(&fixture.claim),
@@ -5164,6 +5113,7 @@ mod tests {
             .expect("endpoint conditions")
             .ready = Some(true);
         let ready_resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: &[],
             stateful_sets: std::slice::from_ref(&fixture.workload),
             persistent_volume_claims: std::slice::from_ref(&fixture.claim),
@@ -5195,6 +5145,7 @@ mod tests {
         assert!(!ready[0].ready, "protocol readiness remains independent");
 
         let empty = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: &[],
             stateful_sets: &[],
             persistent_volume_claims: &[],
@@ -5223,7 +5174,7 @@ mod tests {
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
                 .expect("plans");
-        let prober = render_protocol_prober(&plans)
+        let prober = render_protocol_prober(&plans, PROBER_IMAGE)
             .expect("prober render")
             .expect("applicable probes");
         let pod = prober
@@ -5234,32 +5185,30 @@ mod tests {
             .spec
             .as_ref()
             .expect("Pod spec");
-        assert_eq!(
-            pod.containers.len(),
-            plans
-                .iter()
-                .filter(|plan| plan.protocol_probe.is_some())
-                .count()
-        );
+        assert_eq!(pod.containers.len(), 1);
         assert_eq!(pod.automount_service_account_token, Some(false));
         assert!(pod.volumes.as_ref().is_none_or(Vec::is_empty));
         for container in &pod.containers {
             assert_eq!(container.image.as_deref(), Some(PROBER_IMAGE));
             assert!(container.env.as_ref().is_none_or(Vec::is_empty));
             assert!(container.volume_mounts.as_ref().is_none_or(Vec::is_empty));
-            let probe = container.readiness_probe.as_ref().expect("readiness probe");
-            assert_eq!(probe.timeout_seconds, Some(2));
-            assert_eq!(probe.period_seconds, Some(5));
-            assert_eq!(probe.failure_threshold, Some(3));
+            assert!(
+                container.readiness_probe.is_none(),
+                "checks must not fork through kubelet exec"
+            );
+            assert_eq!(
+                container.command.as_deref(),
+                Some(["/usr/local/lib/proofstorm-prober".into()].as_slice())
+            );
             let resources = container.resources.as_ref().expect("resource bounds");
             assert!(resources.requests.as_ref().is_some_and(|values| {
-                values.get("memory").is_some_and(|value| value.0 == "4Mi")
+                values.get("memory").is_some_and(|value| value.0 == "16Mi")
             }));
         }
     }
 
     #[test]
-    fn protocol_prober_is_bounded_at_the_maximum_component_count() {
+    fn protocol_prober_lifetime_and_resources_do_not_depend_on_target_count() {
         let cell = CellSpec {
             api_version: API_VERSION.into(),
             name: "max-probes".into(),
@@ -5280,7 +5229,7 @@ mod tests {
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
                 .expect("max plans");
-        let prober = render_protocol_prober(&plans)
+        let prober = render_protocol_prober(&plans, PROBER_IMAGE)
             .expect("prober render")
             .expect("applicable probes");
         let containers = &prober
@@ -5292,24 +5241,17 @@ mod tests {
             .as_ref()
             .expect("Pod spec")
             .containers;
-        assert_eq!(containers.len(), 64);
+        assert_eq!(containers.len(), 1);
+        assert_eq!(prober.spec.as_ref().and_then(|spec| spec.replicas), Some(1));
+        let mut changed = plans[..1].to_vec();
+        changed[0].revision_digest = "sha256:updated".into();
+        changed[0].rollout_digest = "sha256:new-workload".into();
         assert_eq!(
-            containers
-                .iter()
-                .map(|container| container.name.as_str())
-                .collect::<BTreeSet<_>>()
-                .len(),
-            64
-        );
-        assert!(
-            containers
-                .iter()
-                .all(|container| container.name.len() <= 63)
-        );
-        assert_eq!(
-            prober.spec.as_ref().and_then(|spec| spec.replicas),
-            Some(0),
-            "rendering never bypasses the global scheduler"
+            prober,
+            render_protocol_prober(&changed, PROBER_IMAGE)
+                .unwrap()
+                .unwrap(),
+            "target edits must not restart or resize the worker"
         );
         assert_eq!(
             prober
@@ -5343,7 +5285,14 @@ mod tests {
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
                 .expect("plans");
-        let prober = render_protocol_prober(&plans)
+        assert_eq!(
+            plans
+                .iter()
+                .filter(|plan| plan.protocol_probe.is_some())
+                .count(),
+            150
+        );
+        let prober = render_protocol_prober(&plans, PROBER_IMAGE)
             .expect("render")
             .expect("prober");
         assert_eq!(
@@ -5355,7 +5304,7 @@ mod tests {
                 .expect("pod")
                 .containers
                 .len(),
-            150
+            1
         );
     }
 
@@ -5382,6 +5331,7 @@ mod tests {
             compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
                 .expect("max plans");
         let resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: &[],
             stateful_sets: &[],
             persistent_volume_claims: &[],
@@ -5414,107 +5364,193 @@ mod tests {
         assert!(bounded.is_char_boundary(bounded.len()));
     }
 
-    #[test]
-    fn protocol_observation_is_fresh_bounded_and_independent() {
-        let mut fixture = chain_observation_fixture();
-        make_chain_fixture_ready(&mut fixture);
-        let prober = active_protocol_prober(&fixture.plans);
-        let failed_pod = protocol_prober_pod(&fixture.plans, "chain", false);
-        let failed_resources = ComponentObservationResources {
-            deployments: std::slice::from_ref(&prober),
-            stateful_sets: std::slice::from_ref(&fixture.workload),
-            persistent_volume_claims: std::slice::from_ref(&fixture.claim),
-            services: std::slice::from_ref(&fixture.service),
-            endpoint_slices: std::slice::from_ref(&fixture.endpoint_slice),
-            pods: std::slice::from_ref(&failed_pod),
-        };
-        let failed = observe_component_statuses(
-            "instance",
-            &fixture.plans,
-            &failed_resources,
-            &[],
-            &BTreeSet::new(),
-            10,
+    fn probe_fixture(
+        fixture: &mut ChainObservationFixture,
+    ) -> (Vec<Pod>, BTreeMap<String, crate::probes::ProbeObservation>) {
+        make_chain_fixture_ready(fixture);
+        fixture.service.metadata.uid = Some("service-current".into());
+        fixture.endpoint_slice.metadata.namespace = fixture.service.metadata.namespace.clone();
+        fixture.endpoint_slice.metadata.owner_references = Some(vec![
+            serde_json::from_value(json!({
+                "apiVersion": "v1", "kind": "Service", "name": "chain", "uid": "service-current"
+            }))
+            .unwrap(),
+        ]);
+        fixture.endpoint_slice.endpoints[0].target_ref = Some(
+            serde_json::from_value(json!({
+                "kind": "Pod", "name": "chain-0", "uid": "workload-current"
+            }))
+            .unwrap(),
         );
-        assert_eq!(
-            status_condition(&failed[0], ComponentConditionType::ProtocolReady).reason,
-            ComponentConditionReason::ProtocolProbeFailed
-        );
-        assert!(!failed[0].ready);
+        let plan = &fixture.plans[0];
+        let pods = vec![resource(json!({
+            "metadata": {"name": "chain-0", "namespace": instance_namespace(&plan.instance_key),
+                "uid": "workload-current", "labels": labels(&plan.instance_key, Some(&plan.component_id)),
+                "annotations": rollout_annotations(plan)},
+            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}],
+                "containerStatuses": [{"name": "component", "image": "fixture", "imageID": "fixture", "ready": true, "restartCount": 0}]}
+        })).unwrap(), resource(json!({
+            "metadata": {"name": "worker", "uid": "worker-current", "namespace": instance_namespace(&plan.instance_key),
+                "labels": {INSTANCE_LABEL: plan.instance_key, PROTOCOL_PROBER_LABEL: "true"}},
+            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}
+        })).unwrap()];
+        let runtime_digest = crate::probes::eligible_target(
+            plan,
+            &ComponentObservationResources {
+                deployments: &[],
+                stateful_sets: std::slice::from_ref(&fixture.workload),
+                persistent_volume_claims: std::slice::from_ref(&fixture.claim),
+                services: std::slice::from_ref(&fixture.service),
+                endpoint_slices: std::slice::from_ref(&fixture.endpoint_slice),
+                pods: &pods,
+                protocol: &BTreeMap::new(),
+            },
+        )
+        .expect("current runtime eligible")
+        .runtime_digest;
+        let observations = BTreeMap::from([(
+            "chain".into(),
+            crate::probes::ProbeObservation {
+                rollout_digest: plan.rollout_digest.clone(),
+                runtime_digest,
+                worker_uid: "worker-current".into(),
+                outcome: proofstorm_prober::Outcome::Reachable,
+                timing: proofstorm_core::ProtocolObservation {
+                    observed_at_unix: 10,
+                    expires_at_unix: 40,
+                    elapsed_micros: 123,
+                },
+            },
+        )]);
+        (pods, observations)
+    }
 
-        let ready_pod = protocol_prober_pod(&fixture.plans, "chain", true);
-        let ready_resources = ComponentObservationResources {
-            deployments: std::slice::from_ref(&prober),
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one current runtime fixture checks independent freshness and identity failures"
+    )]
+    fn protocol_observation_is_fresh_and_bound_to_current_runtime() {
+        let mut fixture = chain_observation_fixture();
+        let (pods, observations) = probe_fixture(&mut fixture);
+        let resources = ComponentObservationResources {
+            protocol: &observations,
+            deployments: &[],
             stateful_sets: std::slice::from_ref(&fixture.workload),
             persistent_volume_claims: std::slice::from_ref(&fixture.claim),
             services: std::slice::from_ref(&fixture.service),
             endpoint_slices: std::slice::from_ref(&fixture.endpoint_slice),
-            pods: std::slice::from_ref(&ready_pod),
+            pods: &pods,
         };
-        let ready = observe_component_statuses(
-            "instance",
-            &fixture.plans,
-            &ready_resources,
-            &failed,
-            &BTreeSet::new(),
+        let observe = |resources: &ComponentObservationResources<'_>, now| {
+            observe_component_statuses(
+                "instance",
+                &fixture.plans,
+                resources,
+                &[],
+                &BTreeSet::new(),
+                now,
+            )
+        };
+        assert!(observe(&resources, 20)[0].ready);
+        for now in [9, 40, 100] {
+            let status = observe(&resources, now).remove(0);
+            assert!(!status.ready);
+            assert_eq!(
+                status_condition(&status, ComponentConditionType::ProtocolReady).state,
+                ComponentConditionState::Unknown
+            );
+        }
+        let mut failed = observations.clone();
+        failed.get_mut("chain").unwrap().outcome = proofstorm_prober::Outcome::ConnectionRefused;
+        let failed_status = observe(
+            &ComponentObservationResources {
+                protocol: &failed,
+                ..resources
+            },
             20,
         );
         assert_eq!(
-            status_condition(&ready[0], ComponentConditionType::ProtocolReady).reason,
-            ComponentConditionReason::ProtocolResponding
+            status_condition(&failed_status[0], ComponentConditionType::ProtocolReady).state,
+            ComponentConditionState::False
         );
-        assert!(ready[0].ready);
-
-        let mut stale_pod = ready_pod.clone();
-        stale_pod
-            .metadata
-            .annotations
-            .as_mut()
-            .expect("prober annotations")
-            .insert(
-                PROTOCOL_PROBER_DIGEST_ANNOTATION.into(),
-                "sha256:stale".into(),
+        assert!(!failed_status[0].ready);
+        for mismatch in ["rollout", "runtime", "worker"] {
+            let mut stale = observations.clone();
+            let observation = stale.get_mut("chain").unwrap();
+            match mismatch {
+                "rollout" => observation.rollout_digest = "old".into(),
+                "runtime" => observation.runtime_digest = "old".into(),
+                _ => observation.worker_uid = "old".into(),
+            }
+            assert!(
+                !observe(
+                    &ComponentObservationResources {
+                        protocol: &stale,
+                        ..resources
+                    },
+                    20
+                )[0]
+                .ready,
+                "accepted {mismatch}"
             );
-        let stale_resources = ComponentObservationResources {
-            pods: std::slice::from_ref(&stale_pod),
-            ..ready_resources
-        };
-        let stale = observe_component_statuses(
-            "instance",
-            &fixture.plans,
-            &stale_resources,
-            &ready,
-            &BTreeSet::new(),
-            30,
-        );
-        assert_eq!(
-            status_condition(&stale[0], ComponentConditionType::ProtocolReady).reason,
-            ComponentConditionReason::ProtocolProbePending
-        );
-        assert!(!stale[0].ready);
-
-        let mut inactive_prober = prober.clone();
-        inactive_prober
-            .spec
+        }
+        let mut restarted = pods.clone();
+        restarted[0]
+            .status
             .as_mut()
-            .expect("Deployment spec")
-            .replicas = Some(0);
-        let inactive_resources = ComponentObservationResources {
-            deployments: std::slice::from_ref(&inactive_prober),
-            pods: std::slice::from_ref(&ready_pod),
-            ..ready_resources
-        };
-        let inactive = observe_component_statuses(
-            "instance",
-            &fixture.plans,
-            &inactive_resources,
-            &ready,
-            &BTreeSet::new(),
-            40,
+            .unwrap()
+            .container_statuses
+            .as_mut()
+            .unwrap()[0]
+            .restart_count += 1;
+        assert!(
+            !observe(
+                &ComponentObservationResources {
+                    pods: &restarted,
+                    ..resources
+                },
+                20
+            )[0]
+            .ready
         );
-        assert_eq!(
-            status_condition(&inactive[0], ComponentConditionType::ProtocolReady).reason,
-            ComponentConditionReason::ProtocolProbePending
+        let mut mixed = fixture.endpoint_slice.clone();
+        let mut old = mixed.endpoints[0].clone();
+        old.target_ref.as_mut().unwrap().uid = Some("old-workload".into());
+        mixed.endpoints.push(old);
+        assert!(
+            !observe(
+                &ComponentObservationResources {
+                    endpoint_slices: &[mixed],
+                    ..resources
+                },
+                20
+            )[0]
+            .ready
+        );
+        let mut old_owner = fixture.endpoint_slice.clone();
+        old_owner.metadata.owner_references.as_mut().unwrap()[0].uid = "old-service".into();
+        assert!(
+            !observe(
+                &ComponentObservationResources {
+                    endpoint_slices: &[fixture.endpoint_slice.clone(), old_owner],
+                    ..resources
+                },
+                20
+            )[0]
+            .ready
+        );
+        let mut stopped_worker = pods.clone();
+        stopped_worker[1].status.as_mut().unwrap().phase = Some("Failed".into());
+        assert!(
+            !observe(
+                &ComponentObservationResources {
+                    pods: &stopped_worker,
+                    ..resources
+                },
+                20
+            )[0]
+            .ready
         );
     }
 
@@ -5549,6 +5585,7 @@ mod tests {
             ..Default::default()
         });
         let resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: std::slice::from_ref(&deployment),
             stateful_sets: std::slice::from_ref(&source),
             persistent_volume_claims: std::slice::from_ref(&claim),
@@ -5577,6 +5614,7 @@ mod tests {
                 "proofstorm/stale-state/v1".into(),
             );
         let stale_resources = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: std::slice::from_ref(&deployment),
             stateful_sets: std::slice::from_ref(&source),
             persistent_volume_claims: std::slice::from_ref(&claim),
@@ -5610,6 +5648,7 @@ mod tests {
             compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
                 .expect("CDK plans");
         let empty = ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: &[],
             stateful_sets: &[],
             persistent_volume_claims: &[],

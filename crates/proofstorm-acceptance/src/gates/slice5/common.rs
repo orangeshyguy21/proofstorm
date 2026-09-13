@@ -157,9 +157,10 @@ pub(super) fn pod_can_reach_mint(
         namespace,
         pod,
         "--",
-        "python3",
-        "-c",
-        "import socket; s=socket.create_connection((\"mint\",3338),3); s.close()",
+        "/opt/proofstorm/driver",
+        "tcp",
+        "mint",
+        "3338",
     ])?;
     Ok(ok)
 }

@@ -331,6 +331,7 @@ spec:
                           items:
                             enum:
                             - native_cli
+                            - native_cli_entrypoints
                             - mint_management_rpc
                             - regtest
                             - persistent_state
@@ -505,6 +506,25 @@ spec:
                         maximum: 65535.0
                         minimum: 0.0
                         type: integer
+                      type: object
+                    protocol_observation:
+                      description: Freshness of a completed protocol check, independently of condition transition time.
+                      nullable: true
+                      properties:
+                        elapsed_micros:
+                          format: uint64
+                          minimum: 0.0
+                          type: integer
+                        expires_at_unix:
+                          format: int64
+                          type: integer
+                        observed_at_unix:
+                          format: int64
+                          type: integer
+                      required:
+                      - elapsed_micros
+                      - expires_at_unix
+                      - observed_at_unix
                       type: object
                     ready:
                       description: Alpha compatibility projection derived only from `ComponentReady`.

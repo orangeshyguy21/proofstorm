@@ -416,6 +416,23 @@ pub fn status_from_resource(
     instance: CellInstance,
     resource: &ProofstormCell,
 ) -> CellInstanceStatus {
+    let mut resource = resource.clone();
+    proofstorm_kube::probes::expire_cell_status(
+        &mut resource,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| {
+                i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+            }),
+    );
+    status_from_current_resource(instance, &resource)
+}
+
+// The caller has already expired protocol observations on this resource.
+pub(crate) fn status_from_current_resource(
+    instance: CellInstance,
+    resource: &ProofstormCell,
+) -> CellInstanceStatus {
     let mut status = resource.status.clone().unwrap_or_default();
     if status.observed_desired_generation != instance.generation
         || status.observed_revision_digest != instance.revision_digest

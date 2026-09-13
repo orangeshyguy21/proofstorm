@@ -53,7 +53,7 @@ fn default_catalog_uses_the_build_hosts_platform_contract() {
 }
 
 #[test]
-fn only_platform_specific_wallet_builds_differ_between_catalogs() {
+fn only_platform_specific_component_builds_differ_between_catalogs() {
     let arm = catalog_for_platform(CatalogPlatform::LinuxArm64);
     let amd = catalog_for_platform(CatalogPlatform::LinuxAmd64);
     assert_eq!(arm.entries.len(), amd.entries.len());
@@ -94,6 +94,15 @@ fn only_platform_specific_wallet_builds_differ_between_catalogs() {
                         .any(|note| note.contains("Initial image is Linux arm64 only."))
                 );
             }
+        } else if matches!(arm_entry.id.as_str(), "nutshell" | "nutshell-wallet") {
+            assert_ne!(arm_entry.image, amd_entry.image);
+            assert_eq!(arm_entry.source_digest, amd_entry.source_digest);
+            let mut normalized = amd_entry.clone();
+            normalized.image.clone_from(&arm_entry.image);
+            assert_eq!(
+                arm_entry, &normalized,
+                "only the packaged image identity may differ"
+            );
         } else {
             assert_eq!(
                 arm_entry, amd_entry,

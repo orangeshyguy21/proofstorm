@@ -313,6 +313,16 @@
         "kind": {
           "$ref": "#/$defs/ComponentKind"
         },
+        "protocol_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolObservation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "ready": {
           "type": [
             "boolean",
@@ -804,6 +814,31 @@
       },
       "required": [
         "items"
+      ]
+    },
+    "ProtocolObservation": {
+      "description": "Freshness of a completed protocol check, independently of condition transition time.",
+      "type": "object",
+      "properties": {
+        "elapsed_micros": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "expires_at_unix": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "observed_at_unix": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "observed_at_unix",
+        "expires_at_unix",
+        "elapsed_micros"
       ]
     },
     "ReplicaPolicy": {

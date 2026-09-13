@@ -10,8 +10,6 @@ use serde_json::{Value, json};
 
 use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, gate::CONTROL_NAMESPACE, json as expect};
 
-const SETTINGS_DRIVER: &str = include_str!("../../drivers/nutshell_postgres_settings.py");
-
 const INSTANCE: &str = "nutshell-postgres-instance";
 const DRAFT: &str = "nutshell-postgres";
 const MARKER: &str = "nutshell-persistent";
@@ -136,7 +134,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let rendered = context.kubectl.exec(
         namespace,
         "deployment/mint",
-        &["python3", "-c", SETTINGS_DRIVER],
+        &["/opt/proofstorm/driver", "nutshell", "postgres-settings"],
     )?;
     let settings: Value = serde_json::from_str(rendered.trim())?;
     let expected = json!({

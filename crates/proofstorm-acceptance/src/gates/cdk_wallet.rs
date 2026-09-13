@@ -190,7 +190,7 @@ fn exercise(
         directory,
         "await-funding-quote",
         "wallet-a",
-        "python3 - <<'PY'\nimport sqlite3,time\nfor _ in range(100):\n c=sqlite3.connect('file:/wallet/cdk/cdk-cli.sqlite?mode=ro',uri=True)\n rows=c.execute(\"SELECT id FROM mint_quote WHERE amount=5000 AND state='UNPAID'\").fetchall(); c.close()\n if len(rows)==1: break\n time.sleep(.1)\nelse: raise SystemExit('unpaid quote not observed')\nprint('real unpaid quote observed')\nPY",
+        "/opt/proofstorm/driver cdk-quote await UNPAID /wallet/cdk/cdk-cli.sqlite http://mint:3338 5000",
     )?;
     balance(client, directory, "passive-during-funding", "wallet-a", 0)?;
     let active = client.call(
@@ -216,8 +216,19 @@ fn exercise(
     {
         bail!("funding interruption lacked verified cleanup");
     }
-    let invoice = context.kubectl.exec(namespace,"deployment/wallet-a", &["python3","-c",
-        "import sqlite3; c=sqlite3.connect('file:/wallet/cdk/cdk-cli.sqlite?mode=ro',uri=True); rows=c.execute(\"SELECT request FROM mint_quote WHERE amount=5000 AND mint_url='http://mint:3338' AND state='UNPAID'\").fetchall(); assert len(rows)==1; print(rows[0][0])"])?;
+    let invoice = context.kubectl.exec(
+        namespace,
+        "deployment/wallet-a",
+        &[
+            "/opt/proofstorm/driver",
+            "cdk-quote",
+            "invoice",
+            "UNPAID",
+            "/wallet/cdk/cdk-cli.sqlite",
+            "http://mint:3338",
+            "5000",
+        ],
+    )?;
     context.kubectl.exec_stdin(
         namespace,
         "statefulset/payer-lnd",
@@ -250,7 +261,7 @@ fn exercise(
         "claim-funding",
         "wallet-a",
         &format!(
-            "quote=$(python3 -c \"import sqlite3; c=sqlite3.connect('file:/wallet/cdk/cdk-cli.sqlite?mode=ro',uri=True); rows=c.execute('SELECT id FROM mint_quote WHERE amount=5000').fetchall(); assert len(rows)==1; print(rows[0][0])\") && {CLI} mint http://mint:3338 --quote-id \"$quote\" --wait-duration 10 >/wallet/claim.log 2>&1 && echo claim_command_completed"
+            "quote=$(/opt/proofstorm/driver cdk-quote id any /wallet/cdk/cdk-cli.sqlite http://mint:3338 5000) && {CLI} mint http://mint:3338 --quote-id \"$quote\" --wait-duration 10 >/wallet/claim.log 2>&1 && echo claim_command_completed"
         ),
     )?;
     balance(client, directory, "funded-wallet-a", "wallet-a", 5000)?;
@@ -354,7 +365,7 @@ fn exercise(
                 id,
                 "wallet-a",
                 &format!(
-                    "{CLI} melt --mint-url http://mint:3338 --invoice \"$(cat /wallet/recipient.invoice)\" >/wallet/{id}.log 2>&1; code=$?; rm -f /wallet/recipient.invoice; test \"$code\" -eq 0 || exit \"$code\"; python3 - <<'PY'\nimport json,re\nfrom pathlib import Path\nrows=re.findall(r'^Payment successful: state=(\\w+), amount=(\\d+), fee_paid=(\\d+)$',Path('/wallet/{id}.log').read_text(),re.M)\nassert len(rows)==1, 'missing native melt receipt'\nstate,amount,fee=rows[0]\nprint(json.dumps(dict(state=state,amount_sat=int(amount),fee_paid_sat=int(fee))))\nPY"
+                    "{CLI} melt --mint-url http://mint:3338 --invoice \"$(cat /wallet/recipient.invoice)\" >/wallet/{id}.log 2>&1; code=$?; rm -f /wallet/recipient.invoice; test \"$code\" -eq 0 || exit \"$code\"; /opt/proofstorm/driver cdk-melt-receipt /wallet/{id}.log"
                 ),
             )?;
             let native_receipt: Value = serde_json::from_str(&native_receipt)?;
@@ -470,7 +481,7 @@ fn exercise(
         directory,
         "native-process-cleanup",
         "wallet-a",
-        "python3 - <<'PY'\nfrom pathlib import Path\nactive=[]\nfor proc in Path('/proc').iterdir():\n if not proc.name.isdigit(): continue\n try: exe=(proc/'exe').resolve(strict=True).name\n except (OSError,RuntimeError): continue\n if exe=='cdk-cli': active.append(proc.name)\nassert not active, 'native wallet processes still running'\nprint('native wallet processes absent')\nPY",
+        "/opt/proofstorm/driver process-absent cdk-cli",
     )?;
     Ok(())
 }
@@ -509,7 +520,7 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
         &format!("{id}-reason"),
         "wallet-a",
         &format!(
-            "python3 - <<'PY'\nfrom pathlib import Path\ns=Path('/wallet/{id}.log').read_text().lower()\nassert '{expected_reason}' in s, 'unexpected private rejection reason'\nprint('expected native rejection reason verified')\nPY"
+            "grep -Fiq -- '{expected_reason}' /wallet/{id}.log && printf 'expected native rejection reason verified\\n'"
         ),
     )?;
     Ok(())

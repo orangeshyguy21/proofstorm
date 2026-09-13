@@ -90,7 +90,7 @@ impl Cells {
             coverage:Coverage {
                 topology:"declared links, not measured reachability or payment flows".into(),
                 activity:"recorded managed operations; pending/running outcomes may require explicit sync; no receipts are collected by this read".into(),
-                resource_demand:"rendered desired requests/limits with namespace defaults; excludes transient action jobs. replicas is desired scale, not a running pod count. The protocol prober is a controller-scheduled Deployment: its scale and observation come from a bounded live read, or are null when unavailable. Compare observation generation with observed_generation before treating status as current.".into(),
+                resource_demand:"rendered desired requests/limits with namespace defaults; excludes transient action jobs. replicas is desired scale, not a running pod count. The protocol prober is one persistent worker per cell. Its desired scale is one; its live observation is null when unavailable. Compare observation generation with observed_generation before treating status as current.".into(),
                 resource_usage:"not collected".into(),protocol_traffic:"not collected".into(),attached_clients:"not tracked; advertised endpoints do not imply active tunnels or clients".into(),
             },
         };
@@ -240,7 +240,7 @@ impl Cells {
             self.runtime.client.clone(),
             &self.runtime.control_namespace,
         );
-        let resource = match tokio::time::timeout(
+        let mut resource = match tokio::time::timeout(
             Duration::from_secs(3),
             cells.get_opt(&instance.resource_name),
         )
@@ -275,6 +275,7 @@ impl Cells {
                 None,
             );
         }
+        proofstorm_kube::probes::expire_cell_status(&mut resource, now());
         let status = resource.status.as_ref();
         let current = status.is_some_and(|s| {
             s.observed_desired_generation == instance.generation
@@ -282,8 +283,9 @@ impl Cells {
                 && resource.metadata.generation.is_some()
                 && s.observed_generation == resource.metadata.generation
         });
-        let phase =
-            status.map(|_| crate::runtime::status_from_resource(instance.clone(), &resource).phase);
+        let phase = status.map(|_| {
+            crate::runtime::status_from_current_resource(instance.clone(), &resource).phase
+        });
         let observation = RuntimeObservation {
             message: status.and_then(|s| s.message.clone()),
             observed_desired_generation: status.map(|s| s.observed_desired_generation),
@@ -370,20 +372,6 @@ fn filter_resources(resources: &mut Option<ResourceDemand>, components: &Page<Co
                 .is_none_or(|id| components.items.iter().any(|c| &c.id == id))
         };
         resources.workloads.retain(|w| keep(&w.component));
-        let probes = components
-            .items
-            .iter()
-            .map(|c| proofstorm_kube::protocol_probe_container_name(&c.id))
-            .collect::<std::collections::BTreeSet<_>>();
-        for workload in &mut resources.workloads {
-            if workload.name == proofstorm_kube::PROTOCOL_PROBER_NAME {
-                let previous_count = workload.containers.len();
-                workload
-                    .containers
-                    .retain(|container| probes.contains(&container.name));
-                workload.omitted_container_count += previous_count - workload.containers.len();
-            }
-        }
         resources.storage.retain(|s| keep(&s.component));
     }
 }
@@ -433,67 +421,69 @@ fn topology(
     current: bool,
     endpoints: &[Endpoint],
 ) -> (Vec<ComponentView>, Vec<LinkView>) {
-    let components: Vec<ComponentView> =
-        revision
-            .map(|r| {
-                r.cell
-                    .components
-                    .iter()
-                    .map(|c| {
-                        let status =
-                            resource
-                                .as_ref()
-                                .and_then(|r| r.status.as_ref())
-                                .and_then(|s| {
-                                    s.components.iter().find(|s| {
-                                        s.id == c.id
-                                            && r.lock.entries.iter().any(|e| {
-                                                e.component_id == c.id
-                                                    && e.rollout_digest == s.observed_rollout_digest
-                                            })
+    let components: Vec<ComponentView> = revision
+        .map(|r| {
+            r.cell
+                .components
+                .iter()
+                .map(|c| {
+                    let status = resource
+                        .as_ref()
+                        .and_then(|r| r.status.as_ref())
+                        .and_then(|s| {
+                            s.components.iter().find(|s| {
+                                s.id == c.id
+                                    && r.lock.entries.iter().any(|e| {
+                                        e.component_id == c.id
+                                            && e.rollout_digest == s.observed_rollout_digest
                                     })
-                                });
-                        ComponentView {
-                            details: r.lock.entries.iter().find(|e| e.component_id == c.id).map(
-                                |entry| component_details(entry, status.is_some_and(|s| s.ready)),
-                            ),
-                            id: c.id.clone(),
-                            kind: c.kind,
-                            implementation: c.implementation.clone(),
-                            version: c.version.clone(),
-                            ready: status
-                                .filter(|s| {
-                                    current
-                                        || r.lock.entries.iter().any(|e| {
-                                            e.component_id == c.id
-                                                && e.rollout_digest == s.observed_rollout_digest
-                                        })
-                                })
-                                .map(|s| s.ready),
-                            conditions: status
-                                .map(|s| {
-                                    s.conditions
-                                        .iter()
-                                        .map(|c| ConditionView {
-                                            message: c.message.clone(),
-                                            condition_type: c.condition_type,
-                                            state: c.state,
-                                            reason: c.reason,
-                                            last_transition_unix: c.last_transition_unix,
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                            endpoints: endpoints
-                                .iter()
-                                .filter(|e| e.component == c.id)
-                                .cloned()
-                                .collect(),
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                            })
+                        });
+                    ComponentView {
+                        protocol_observation: status.and_then(|s| s.protocol_observation.clone()),
+                        details: r
+                            .lock
+                            .entries
+                            .iter()
+                            .find(|e| e.component_id == c.id)
+                            .map(|entry| component_details(entry, status.is_some_and(|s| s.ready))),
+                        id: c.id.clone(),
+                        kind: c.kind,
+                        implementation: c.implementation.clone(),
+                        version: c.version.clone(),
+                        ready: status
+                            .filter(|s| {
+                                current
+                                    || r.lock.entries.iter().any(|e| {
+                                        e.component_id == c.id
+                                            && e.rollout_digest == s.observed_rollout_digest
+                                    })
+                            })
+                            .map(|s| s.ready),
+                        conditions: status
+                            .map(|s| {
+                                s.conditions
+                                    .iter()
+                                    .map(|c| ConditionView {
+                                        message: c.message.clone(),
+                                        condition_type: c.condition_type,
+                                        state: c.state,
+                                        reason: c.reason,
+                                        last_transition_unix: c.last_transition_unix,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        endpoints: endpoints
+                            .iter()
+                            .filter(|e| e.component == c.id)
+                            .cloned()
+                            .collect(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let links: Vec<LinkView> = revision
         .map(|r| {
             r.cell

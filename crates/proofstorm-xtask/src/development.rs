@@ -18,6 +18,8 @@ const RUNTIME: &[&str] = &[
     "proofstorm-kube",
     "proofstorm-transfer",
     "proofstorm-exec",
+    "proofstorm-driver",
+    "proofstorm-prober",
     "proofstormd",
 ];
 const LAUNCHER_HEADER: &str = "#!/bin/sh\n# Proofstorm checkout launcher v1\n";

@@ -5,6 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+contract-tests = []
+
+[[bin]]
+name = "proofstorm-exec-fixture"
+path = "tests/support/fixture.rs"
+required-features = ["contract-tests"]
+
+[dev-dependencies]
+tempfile = "3.20"
+
 [dependencies]
 proofstorm-core = { path = "../proofstorm-core" }
 serde_json.workspace = true

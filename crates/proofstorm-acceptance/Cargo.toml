@@ -19,7 +19,10 @@ serde_json.workspace = true
 serde.workspace = true
 sha2.workspace = true
 tempfile = "3.20"
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+rusqlite.workspace = true
 
 [lints]
 workspace = true

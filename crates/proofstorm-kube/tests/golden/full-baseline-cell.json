@@ -183,12 +183,6 @@
     {
       "api_version": "apps/v1",
       "kind": "Deployment",
-      "name": "proofstorm-protocol-prober",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "apps/v1",
-      "kind": "Deployment",
       "name": "wallet",
       "namespace": "proofstorm-i-golden-b2"
     },
@@ -1581,7 +1575,7 @@
           "HOME": "/wallet",
           "PROOFSTORM_WALLET": "{component_id}"
         },
-        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+        "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382",
         "mounts": [
           {
             "mount_path": "/wallet",
@@ -1659,7 +1653,7 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:04473faa6aafd649143e28371924db8459d6d5c045051f882337d5b6536d131d",
+      "rollout_digest": "sha256:f0591ee79345dc214486772560823542b991a368e12f3fbfbd74536eeb9a2b2d",
       "storage": [
         {
           "claim_name": "wallet-data"
@@ -2066,309 +2060,6 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/prober-digest": "sha256:236ea75b7522f265e9d2b41ffd363b817419ea3913e9c8143ac3f124ecd1e37c",
-            "proofstorm.dev/prober-lease": "inactive"
-          },
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "proofstorm-protocol-prober",
-            "proofstorm.dev/operation": "protocol-prober",
-            "proofstorm.dev/prober": "true"
-          },
-          "name": "proofstorm-protocol-prober",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "replicas": 0,
-          "selector": {
-            "matchLabels": {
-              "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/prober": "true"
-            }
-          },
-          "strategy": {
-            "type": "Recreate"
-          },
-          "template": {
-            "metadata": {
-              "annotations": {
-                "proofstorm.dev/prober-digest": "sha256:236ea75b7522f265e9d2b41ffd363b817419ea3913e9c8143ac3f124ecd1e37c",
-                "proofstorm.dev/prober-lease": "inactive"
-              },
-              "labels": {
-                "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "proofstorm-protocol-prober",
-                "proofstorm.dev/operation": "protocol-prober",
-                "proofstorm.dev/prober": "true"
-              }
-            },
-            "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
-              "automountServiceAccountToken": false,
-              "containers": [
-                {
-                  "command": [
-                    "sh",
-                    "-c",
-                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
-                  ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-                  "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-chain-a-3964513b",
-                  "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "nc",
-                        "-z",
-                        "-w",
-                        "2",
-                        "chain-a",
-                        "18443"
-                      ]
-                    },
-                    "failureThreshold": 3,
-                    "initialDelaySeconds": 1,
-                    "periodSeconds": 5,
-                    "successThreshold": 1,
-                    "timeoutSeconds": 2
-                  },
-                  "resources": {
-                    "limits": {
-                      "cpu": "25m",
-                      "memory": "16Mi"
-                    },
-                    "requests": {
-                      "cpu": "5m",
-                      "memory": "4Mi"
-                    }
-                  },
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "capabilities": {
-                      "drop": [
-                        "ALL"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "command": [
-                    "sh",
-                    "-c",
-                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
-                  ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-                  "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-chain-b-3cc91cdf",
-                  "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "nc",
-                        "-z",
-                        "-w",
-                        "2",
-                        "chain-b",
-                        "18443"
-                      ]
-                    },
-                    "failureThreshold": 3,
-                    "initialDelaySeconds": 1,
-                    "periodSeconds": 5,
-                    "successThreshold": 1,
-                    "timeoutSeconds": 2
-                  },
-                  "resources": {
-                    "limits": {
-                      "cpu": "25m",
-                      "memory": "16Mi"
-                    },
-                    "requests": {
-                      "cpu": "5m",
-                      "memory": "4Mi"
-                    }
-                  },
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "capabilities": {
-                      "drop": [
-                        "ALL"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "command": [
-                    "sh",
-                    "-c",
-                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
-                  ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-                  "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-cln-a20575fb",
-                  "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "nc",
-                        "-z",
-                        "-w",
-                        "2",
-                        "cln",
-                        "9735"
-                      ]
-                    },
-                    "failureThreshold": 3,
-                    "initialDelaySeconds": 1,
-                    "periodSeconds": 5,
-                    "successThreshold": 1,
-                    "timeoutSeconds": 2
-                  },
-                  "resources": {
-                    "limits": {
-                      "cpu": "25m",
-                      "memory": "16Mi"
-                    },
-                    "requests": {
-                      "cpu": "5m",
-                      "memory": "4Mi"
-                    }
-                  },
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "capabilities": {
-                      "drop": [
-                        "ALL"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "command": [
-                    "sh",
-                    "-c",
-                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
-                  ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-                  "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-lnd-783f1672",
-                  "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "nc",
-                        "-z",
-                        "-w",
-                        "2",
-                        "lnd",
-                        "10009"
-                      ]
-                    },
-                    "failureThreshold": 3,
-                    "initialDelaySeconds": 1,
-                    "periodSeconds": 5,
-                    "successThreshold": 1,
-                    "timeoutSeconds": 2
-                  },
-                  "resources": {
-                    "limits": {
-                      "cpu": "25m",
-                      "memory": "16Mi"
-                    },
-                    "requests": {
-                      "cpu": "5m",
-                      "memory": "4Mi"
-                    }
-                  },
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "capabilities": {
-                      "drop": [
-                        "ALL"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "command": [
-                    "sh",
-                    "-c",
-                    "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
-                  ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-                  "imagePullPolicy": "IfNotPresent",
-                  "name": "probe-mint-2913daf3",
-                  "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "wget",
-                        "-q",
-                        "-T",
-                        "2",
-                        "-O",
-                        "/dev/null",
-                        "http://mint:3338/v1/info"
-                      ]
-                    },
-                    "failureThreshold": 3,
-                    "initialDelaySeconds": 1,
-                    "periodSeconds": 5,
-                    "successThreshold": 1,
-                    "timeoutSeconds": 2
-                  },
-                  "resources": {
-                    "limits": {
-                      "cpu": "25m",
-                      "memory": "16Mi"
-                    },
-                    "requests": {
-                      "cpu": "5m",
-                      "memory": "4Mi"
-                    }
-                  },
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "capabilities": {
-                      "drop": [
-                        "ALL"
-                      ]
-                    }
-                  }
-                }
-              ],
-              "enableServiceLinks": false,
-              "securityContext": {
-                "fsGroup": 1000,
-                "runAsGroup": 1000,
-                "runAsNonRoot": true,
-                "runAsUser": 1000,
-                "seccompProfile": {
-                  "type": "RuntimeDefault"
-                }
-              },
-              "serviceAccountName": "proofstorm-workload",
-              "terminationGracePeriodSeconds": 1
-            }
-          }
-        }
-      },
-      {
-        "apiVersion": "apps/v1",
-        "kind": "Deployment",
-        "metadata": {
-          "annotations": {
             "proofstorm.dev/backend-id": "nutshell-wallet",
             "proofstorm.dev/execution-state-contract": "proofstorm/nutshell-wallet-state/v1",
             "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
@@ -2395,7 +2086,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:04473faa6aafd649143e28371924db8459d6d5c045051f882337d5b6536d131d"
+                "proofstorm.dev/rollout-digest": "sha256:f0591ee79345dc214486772560823542b991a368e12f3fbfbd74536eeb9a2b2d"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2437,7 +2128,7 @@
                       "value": "wallet"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+                  "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "securityContext": {
@@ -2452,11 +2143,53 @@
                     {
                       "mountPath": "/wallet",
                       "name": "wallet"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
                     }
                   ]
                 }
               ],
               "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -2473,6 +2206,10 @@
                   "persistentVolumeClaim": {
                     "claimName": "wallet-data"
                   }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
                 }
               ]
             }

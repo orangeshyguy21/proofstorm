@@ -3,17 +3,13 @@
 //!
 //! Ported from `tests/kubernetes/nutshell_mint_mcp_client.py`.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, json as expect};
 
-/// The driver runs inside the mint's own image, which ships the `cashu` library.
-const SETTINGS_DRIVER: &str = include_str!("../../drivers/nutshell_settings.py");
-
 const INSTANCE: &str = "nutshell-mint-instance";
 const DRAFT: &str = "nutshell-mint";
-const IMAGE: &str = "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d";
 
 fn cell_document() -> Value {
     json!({
@@ -135,7 +131,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         "/config_version",
         &Value::from("nutshell-mint/0.20/v1"),
     )?;
-    expect::equals(entry, "/image", &Value::from(IMAGE))?;
+    let image = &proofstorm_core::default_catalog()
+        .entries
+        .iter()
+        .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
+        .context("Nutshell catalog build missing")?
+        .image;
+    expect::equals(entry, "/image", &Value::from(image.clone()))?;
 
     client.call(
         "cell_materialize",
@@ -152,7 +154,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let rendered = context.kubectl.exec(
         namespace,
         "deployment/mint",
-        &["python3", "-c", SETTINGS_DRIVER],
+        &["/opt/proofstorm/driver", "nutshell", "settings"],
     )?;
     let settings: Value = serde_json::from_str(rendered.trim())?;
     let expected = expected_settings();

@@ -66,13 +66,11 @@ pub fn render_candidate_build_job(
         // source code or the runtime backend under test.
         "nutshell" | "nutshell-wallet" => {
             let mut script = "sed -i '/RUN poetry install --without dev --no-root/i RUN poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.17.0' /workspace/Dockerfile".to_owned();
-            if build.spec.implementation == "nutshell" {
-                script.push_str("\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n");
-                script.push_str(include_str!(
-                    "../drivers/candidate_nutshell_management.Dockerfile"
-                ));
-                script.push_str("\nPROOFSTORM_MANAGEMENT_EOF\n");
-            }
+            script.push_str("\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n");
+            script.push_str(include_str!(
+                "../drivers/candidate_nutshell_management.Dockerfile"
+            ));
+            script.push_str("\nPROOFSTORM_MANAGEMENT_EOF\n");
             script
         }
         "cdk" | "cdk-ldk" | "cdk-bdk" => format!(

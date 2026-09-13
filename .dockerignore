@@ -1,7 +1,10 @@
 .git
 .env
 .tools
-.proofstorm
+.proofstorm*
+.codex
+.opencode
+node_modules
 target
 dev
 __pycache__

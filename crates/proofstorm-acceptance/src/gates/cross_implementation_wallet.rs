@@ -12,8 +12,6 @@ use serde_json::{Value, json};
 
 use crate::{EXPERIMENT_CAPABILITIES, GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
-const CACHE_DRIVER: &str = include_str!("../../drivers/nutshell_redis_settings.py");
-
 const INSTANCE: &str = "cross-mint-wallet-instance";
 const EXPERIMENT: &str = "cross-mint-experiment";
 const LEASE: &str = "cross-mint-session";
@@ -219,7 +217,7 @@ fn exercise(context: &GateContext) -> Result<()> {
     let rendered = context.kubectl.exec(
         namespace,
         "deployment/nutshell-mint",
-        &["python3", "-c", CACHE_DRIVER],
+        &["/opt/proofstorm/driver", "nutshell", "redis-settings"],
     )?;
     let cache_settings: Value = serde_json::from_str(rendered.trim())?;
     let expected_cache = json!({

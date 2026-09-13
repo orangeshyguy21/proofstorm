@@ -75,6 +75,19 @@ lint-helm:
 check-cdk-config:
     bash tests/cdk18-config-contract.sh
 
+# Measure offline MCP discovery/planning against an explicit trusted binary; no cluster.
+audit-mcp binary:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-acceptance --example mcp_agent_audit -- "$1"
+
+# Exercise real supervisor process cleanup and private I/O on Linux.
+test-native-supervisor:
+    @test "$(uname -s)" = Linux || { printf 'Native supervisor contracts require Linux.\n' >&2; exit 1; }
+    cargo test --locked -p proofstorm-exec --features contract-tests --test supervisor
+
+# Check a native driver against an explicit local component image, with no external network.
+check-component-driver component driver-image component-image platform='linux/arm64':
+    bash scripts/test-component-driver.sh "$1" "$2" "$3" "$4"
+
 # Validate release metadata offline; this does not publish or prove release readiness.
 release-check +args:
     CARGO_TARGET_DIR="$PWD/target/check" cargo run --locked -p proofstorm-xtask -- release-check "$@"

@@ -184,6 +184,10 @@ pub struct CredentialObservationContract {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProtocolProbeContract {
     Tcp { port_name: String },
+    // Backend authors must audit this endpoint in the pinned implementation:
+    // checks must not spend application request/auth/payment quotas. A read-only
+    // GET can still pass through a global limiter. Use dedicated health APIs or
+    // TCP plus quota-exempt local readiness when HTTP isolation is unproven.
     HttpGet { port_name: String, path: String },
 }
 
@@ -664,6 +668,7 @@ impl BackendContractRegistry {
             ));
         }
         require_mint_management_image(input)?;
+        require_native_entrypoints(input)?;
         let effective = self.resolve_effective_component(&input.component)?;
         let effective_config = EffectiveComponentConfig::try_from_component(&effective)?;
         let mut relevant_links = input.relevant_links.clone();
@@ -750,6 +755,23 @@ fn require_mint_management_image(input: &ComponentPlanInput) -> Result<(), Strin
     {
         return Err(format!(
             "mint_management_image_required: component {:?} uses a lock from before native management RPC support; resolve a new cell revision (and rebuild old candidates) before upgrading this mint",
+            input.component.id
+        ));
+    }
+    Ok(())
+}
+
+fn require_native_entrypoints(input: &ComponentPlanInput) -> Result<(), String> {
+    if matches!(
+        input.lock.catalog_id.as_str(),
+        "nutshell" | "nutshell-wallet"
+    ) && !input
+        .lock
+        .features
+        .contains(&crate::CatalogFeature::NativeCliEntrypoints)
+    {
+        return Err(format!(
+            "native_cli_image_required: component {:?} uses an image from before upstream console entrypoints were packaged; resolve a new cell revision and rebuild old candidates before upgrading",
             input.component.id
         ));
     }
@@ -3842,6 +3864,42 @@ mod tests {
         assert!(error.starts_with("backend_lock_config_version_mismatch:"));
         assert!(error.contains("cdk-mintd/0.17/v1"));
         assert!(error.contains("cdk-mintd/0.18/v1"));
+    }
+
+    #[test]
+    fn native_cli_upgrade_refuses_old_nutshell_images_before_rendering() {
+        for (implementation, kind) in [
+            ("nutshell", ComponentKind::Mint),
+            ("nutshell-wallet", ComponentKind::Wallet),
+        ] {
+            let mut component = component("component", implementation, kind);
+            if kind == ComponentKind::Mint {
+                component.control = ControlClass::Target;
+            }
+            let cell = crate::CellSpec {
+                api_version: crate::API_VERSION.into(),
+                name: "old-console-image".into(),
+                components: vec![component.clone()],
+                links: vec![],
+                policy: crate::CellPolicy::default(),
+            };
+            let mut lock = resolve_lock(&cell, crate::default_catalog()).unwrap();
+            lock.entries[0]
+                .features
+                .remove(&crate::CatalogFeature::NativeCliEntrypoints);
+            let error = default_backend_registry()
+                .compile_contract(&ComponentPlanInput {
+                    instance_key: "instance-key".into(),
+                    revision_digest: "sha256:revision".into(),
+                    component,
+                    lock: lock.entries[0].clone(),
+                    relevant_links: vec![],
+                    linked_targets: BTreeMap::new(),
+                    linked_state: BTreeMap::new(),
+                })
+                .unwrap_err();
+            assert!(error.starts_with("native_cli_image_required:"));
+        }
     }
 
     #[test]

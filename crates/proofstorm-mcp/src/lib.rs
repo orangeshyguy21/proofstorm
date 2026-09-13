@@ -3207,7 +3207,7 @@ impl ProofstormMcp {
         );
         let request_digest = digest_json(&identity);
         let resource_name = format!("candidate-{}", &request_digest[7..26]);
-        let build_features = if matches!(
+        let mut build_features = if matches!(
             request.implementation.as_str(),
             "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
         ) {
@@ -3217,6 +3217,12 @@ impl ProofstormMcp {
         } else {
             BTreeSet::new()
         };
+        if matches!(
+            request.implementation.as_str(),
+            "nutshell" | "nutshell-wallet"
+        ) {
+            build_features.insert(proofstorm_core::CatalogFeature::NativeCliEntrypoints);
+        }
         let candidate = CandidateBuild {
             api_version: proofstorm_core::CANDIDATE_BUILD_API_VERSION.into(),
             id: request.candidate_id,
@@ -13803,6 +13809,7 @@ mod tests {
             )
             .unwrap();
         let component = ComponentStatus {
+            protocol_observation: None,
             id: "wallet-cdk".into(), kind: proofstorm_core::ComponentKind::Wallet,
             observed_revision_digest: revision.digest.clone(), observed_rollout_digest: "rollout".into(),
             ready: false, service: String::new(), ports: BTreeMap::new(),

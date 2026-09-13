@@ -32,6 +32,7 @@ for tool in rustup sh cargo; do
 done
 ln -s "$scratch/stub" "$fixture/.proofstorm-dev/bin/proofstorm"
 ln -s "$scratch/stub" "$fixture/scripts/check.sh"
+ln -s "$scratch/stub" "$fixture/scripts/test-component-driver.sh"
 ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
 ln -s "$scratch/stub" "$fixture/scripts/acceptance.sh"
 ln -s "$scratch/stub" "$fixture/tests/cdk18-config-contract.sh"
@@ -127,8 +128,12 @@ run check-quick
 expect check.sh "$fixture" unset unset quick
 run check-rust
 expect check.sh "$fixture" unset unset rust
+run check-component-driver nutshell driver-image component-image linux/amd64
+expect test-component-driver.sh "$fixture" unset unset nutshell driver-image component-image linux/amd64
 run check-cdk-config
 expect cdk18-config-contract.sh "$fixture" unset unset
+run audit-mcp "$tricky"
+expect cargo "$fixture" unset unset run --locked -p proofstorm-acceptance --example mcp_agent_audit -- "$tricky"
 run catalog-image build cdk-cli-wallet linux/amd64 "$tricky"
 expect catalog-image.sh "$fixture" unset unset build cdk-cli-wallet linux/amd64 "$tricky"
 run tool-pins x86_64-unknown-linux-gnu "$tricky"

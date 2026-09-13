@@ -8,9 +8,6 @@ use serde_json::{Value, json};
 
 use crate::{EXPERIMENT_CAPABILITIES, GateContext, cell, json as expect};
 
-/// Runs inside the mint image, which ships `httpx` and the rune file.
-const RUNE_PROBE: &str = include_str!("../../drivers/cln_rune_probe.py");
-
 const INSTANCE: &str = "nutshell-cln-instance";
 const EXPERIMENT: &str = "nutshell-cln-experiment";
 const LEASE: &str = "nutshell-cln-session";
@@ -172,7 +169,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     let probe = |kubectl: &crate::Kubectl| -> Result<Value> {
-        let raw = kubectl.exec(namespace, "deployment/mint", &["python3", "-c", RUNE_PROBE])?;
+        let raw = kubectl.exec(
+            namespace,
+            "deployment/mint",
+            &["/opt/proofstorm/driver", "nutshell", "rune-probe"],
+        )?;
         Ok(serde_json::from_str(raw.trim())?)
     };
     let before = probe(&context.kubectl)?;

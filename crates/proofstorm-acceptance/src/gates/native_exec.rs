@@ -77,7 +77,7 @@ fn commands() -> Vec<(
             "wallet-help",
             "wallet",
             "wallet",
-            "cd /app && python3 -c 'from cashu.wallet.cli.cli import cli; cli()' --help",
+            "cd /app && cashu --help",
             vec!["usage", "cashu"],
         ),
         (

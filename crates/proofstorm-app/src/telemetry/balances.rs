@@ -185,9 +185,9 @@ async fn observe(
                 pods,
                 pod,
                 vec![
-                    "python3".into(),
-                    "-c".into(),
-                    super::holdings::script(implementation),
+                    proofstorm_kube::drivers::DRIVER_PATH.into(),
+                    "holdings".into(),
+                    implementation.into(),
                     result.component.clone(),
                 ],
             )

@@ -8,6 +8,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+proofstorm-driver = { path = "../proofstorm-driver", default-features = false }
+proofstorm-prober = { path = "../proofstorm-prober", default-features = false }
 anyhow.workspace = true
 proofstorm-core = { path = "../proofstorm-core", default-features = false }
 serde.workspace = true

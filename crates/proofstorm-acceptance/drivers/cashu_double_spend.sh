@@ -12,10 +12,6 @@ report_failure() {
 }
 trap report_failure 0
 scratch=$(mktemp -d /wallet/proof-spend.XXXXXX)
-# Rust embeds the existing product observer, not a second balance implementation.
-cat > "$scratch/observe_balance.py" <<'PY'
-__PROOFSTORM_BALANCE_OBSERVER__
-PY
 
 cli() {
     work=$1
@@ -26,15 +22,9 @@ cli() {
 balance() {
     # CLI balance starts saga recovery and mixes its messages into stdout.
     # Observe the database passively, failing closed on missing/incompatible state.
-    python3 -c '
-import runpy, sys
-try:
-    observe = runpy.run_path(sys.argv[1])["observe"]
-    result = observe(sys.argv[2], "fixture", "mint", "http://mint:3338")
-except Exception:
-    sys.exit("wallet balance observation failed")
-print(result["balance_sat"])
-' "$scratch/observe_balance.py" "$1/cdk-cli.sqlite"
+    PROOFSTORM_DATABASE="$1/cdk-cli.sqlite" PROOFSTORM_WALLET=fixture \
+        PROOFSTORM_MINT=mint PROOFSTORM_MINT_URL=http://mint:3338 \
+        /opt/proofstorm/driver observe cdk-cli-wallet balance_sat
 }
 
 send() {

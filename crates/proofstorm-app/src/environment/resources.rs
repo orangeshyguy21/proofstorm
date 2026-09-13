@@ -22,9 +22,11 @@ pub(super) fn include_runtime(
         return;
     };
     if let Some((replicas, observation)) = prober {
-        if let Some(workload) = resources.workloads.iter_mut().find(|w| {
-            w.name == PROTOCOL_PROBER_NAME && w.replica_policy == ReplicaPolicy::ControllerScheduled
-        }) {
+        if let Some(workload) = resources
+            .workloads
+            .iter_mut()
+            .find(|w| w.name == PROTOCOL_PROBER_NAME)
+        {
             workload.replicas = Some(replicas);
             workload.observation = Some(observation);
         }
@@ -71,6 +73,33 @@ pub(super) fn project(
                 &limit_defaults,
             ));
         }
+    }
+    if rendered
+        .plans
+        .iter()
+        .any(|plan| plan.protocol_probe.is_some())
+    {
+        // Helper image is installation-specific; planning shares the runtime resource quantities.
+        let metadata = k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some(PROTOCOL_PROBER_NAME.into()),
+            ..Default::default()
+        };
+        let pod = PodSpec {
+            containers: vec![k8s_openapi::api::core::v1::Container {
+                name: "worker".into(),
+                resources: Some(proofstorm_kube::protocol_prober_resources()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        workloads.push(workload(
+            "Deployment",
+            &metadata,
+            Some(1),
+            Some(&pod),
+            &request_defaults,
+            &limit_defaults,
+        ));
     }
     for set in &rendered.stateful_sets {
         if let Some(spec) = &set.spec {
@@ -206,13 +235,8 @@ fn workload(
         name: meta.name.clone().unwrap_or_default(),
         component: component(meta),
         kind: kind.into(),
-        replicas: (meta.name.as_deref() != Some(PROTOCOL_PROBER_NAME))
-            .then_some(replicas.unwrap_or(1)),
-        replica_policy: if meta.name.as_deref() == Some(PROTOCOL_PROBER_NAME) {
-            ReplicaPolicy::ControllerScheduled
-        } else {
-            ReplicaPolicy::Fixed
-        },
+        replicas: Some(replicas.unwrap_or(1)),
+        replica_policy: ReplicaPolicy::Fixed,
         observation: None,
         omitted_container_count: 0,
         containers,

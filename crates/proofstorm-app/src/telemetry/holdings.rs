@@ -5,30 +5,6 @@ use proofstorm_kube::{ProofstormCell, instance_namespace};
 use proofstorm_view::{BalanceAmount, HoldingsObservation, MintHolding};
 use serde_json::Value;
 
-const CDK_READER: &str = include_str!("../../../proofstorm-kube/drivers/cdk_wallet_balance.py");
-const COCO_READER: &str = include_str!("../../../proofstorm-kube/drivers/cocod_wallet_balance.py");
-
-pub(super) fn script(implementation: &str) -> String {
-    if implementation == "nutshell-wallet" {
-        return include_str!("nutshell_balance.py").into();
-    }
-    let (reader, database, query) = if implementation == "cdk-cli-wallet" {
-        (
-            CDK_READER,
-            "/wallet/cdk/cdk-cli.sqlite",
-            "SELECT DISTINCT mint_url FROM proof WHERE unit='sat'",
-        )
-    } else {
-        (
-            COCO_READER,
-            "/wallet/.cocod/coco.db",
-            "SELECT mintUrl FROM coco_cashu_mints",
-        )
-    };
-    format!(
-        "__name__='dashboard_reader'\n{reader}\nimport sys\ndatabase={database:?}\nwith sqlite3.connect(Path(database).as_uri()+'?mode=ro', uri=True, timeout=1) as db:\n urls=[r[0] for r in db.execute({query:?})]\nrows=[dict(observe(database,sys.argv[1],'',url),mint_url=url) for url in sorted(set(urls))]\nprint(json.dumps({{'mints':rows}}))"
-    )
-}
 pub(super) fn project(
     cell: &ProofstormCell,
     implementation: &str,
@@ -186,28 +162,16 @@ mod tests {
             .is_none()
         );
     }
-    fn run(script: &str) -> Value {
-        let output = std::process::Command::new("python3")
-            .args(["-c", script, "wallet"])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).unwrap()
-    }
     #[test]
     fn pinned_cdk_reader_keeps_mints_and_proof_states_separate() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wallet.sqlite");
+        std::fs::create_dir(dir.path().join("cdk")).unwrap();
+        let path = dir.path().join("cdk/cdk-cli.sqlite");
         let db = Connection::open(&path).unwrap();
         db.execute_batch("CREATE TABLE proof(mint_url TEXT, unit TEXT, state TEXT, amount INTEGER);
             INSERT INTO proof VALUES ('http://mint:3338','sat','UNSPENT',30),('http://mint:3338','sat','RESERVED',5),('http://mint:3338','sat','PENDING',7),('http://mint:3338','sat','PENDING_SPENT',11),('http://mint:3338','sat','SPENT',1000),('http://other:3338','sat','UNSPENT',9),('http://other:3338','usd','UNSPENT',200);").unwrap();
         let data =
-            run(&script("cdk-cli-wallet")
-                .replace("/wallet/cdk/cdk-cli.sqlite", path.to_str().unwrap()));
+            proofstorm_driver::wallet::holdings("cdk-cli-wallet", dir.path(), "wallet").unwrap();
         let (totals, observation) = project(&cell(), "cdk-cli-wallet", &data).unwrap();
         assert_eq!(
             totals.iter().map(|a| a.sat).collect::<Vec<_>>(),
@@ -223,14 +187,15 @@ mod tests {
     #[test]
     fn coco_reader_keeps_reserved_and_inflight_out_of_spendable() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("coco.db");
+        std::fs::create_dir(dir.path().join(".cocod")).unwrap();
+        let path = dir.path().join(".cocod/coco.db");
         let db = Connection::open(&path).unwrap();
         db.execute_batch("CREATE TABLE coco_cashu_migrations(id TEXT); INSERT INTO coco_cashu_migrations VALUES ('038_keypair_derivation_allocations');
             CREATE TABLE coco_cashu_mints(mintUrl TEXT); INSERT INTO coco_cashu_mints VALUES ('http://mint:3338'),('http://other:3338');
             CREATE TABLE coco_cashu_proofs(mintUrl TEXT,unit TEXT,state TEXT,amount TEXT,usedByOperationId TEXT);
             INSERT INTO coco_cashu_proofs VALUES ('http://mint:3338','sat','ready','10',NULL),('http://mint:3338','sat','ready','4','op'),('http://mint:3338','sat','inflight','6',NULL),('http://mint:3338','sat','spent','200',NULL),('http://other:3338','sat','ready','9',NULL);").unwrap();
         let data =
-            run(&script("cocod-wallet").replace("/wallet/.cocod/coco.db", path.to_str().unwrap()));
+            proofstorm_driver::wallet::holdings("cocod-wallet", dir.path(), "wallet").unwrap();
         let (totals, observation) = project(&cell(), "cocod-wallet", &data).unwrap();
         assert_eq!(
             totals.iter().map(|a| a.sat).collect::<Vec<_>>(),
@@ -241,14 +206,14 @@ mod tests {
     #[test]
     fn nutshell_groups_keysets_once_across_named_wallets() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("alice");
-        std::fs::create_dir(&root).unwrap();
+        let root = dir.path().join(".cashu/alice");
+        std::fs::create_dir_all(&root).unwrap();
         let db = Connection::open(root.join("alice.sqlite3")).unwrap();
         db.execute_batch("CREATE TABLE keysets(id TEXT,mint_url TEXT,unit TEXT); CREATE TABLE proofs(id TEXT,amount INTEGER,reserved INTEGER);
             INSERT INTO keysets VALUES ('a','http://mint:3338','sat'),('a','http://mint:3338','sat'),('b','http://other:3338','sat');
             INSERT INTO proofs VALUES ('a',12,0),('a',3,1),('b',20,0);").unwrap();
         let data =
-            run(&script("nutshell-wallet").replace("/wallet/.cashu", dir.path().to_str().unwrap()));
+            proofstorm_driver::wallet::holdings("nutshell-wallet", dir.path(), "wallet").unwrap();
         let (totals, observation) = project(&cell(), "nutshell-wallet", &data).unwrap();
         assert_eq!(
             totals.iter().map(|a| a.sat).collect::<Vec<_>>(),

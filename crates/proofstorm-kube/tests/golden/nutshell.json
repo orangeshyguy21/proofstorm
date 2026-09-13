@@ -137,7 +137,7 @@
         "CASHU_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382",
       "mounts": [
         {
           "mount_path": "/app/data",
@@ -252,7 +252,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:c24fd8543a3e88507f5b36e15da69759b5f75da2735621c2d687667db1961751",
+    "rollout_digest": "sha256:8f4a5729fbcf4693b3b11aabd2fcb1c0e4d2f86f534fba60e0518632fc0cea9b",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -382,7 +382,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:c24fd8543a3e88507f5b36e15da69759b5f75da2735621c2d687667db1961751"
+                "proofstorm.dev/rollout-digest": "sha256:8f4a5729fbcf4693b3b11aabd2fcb1c0e4d2f86f534fba60e0518632fc0cea9b"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -410,9 +410,7 @@
               "containers": [
                 {
                   "command": [
-                    "python3",
-                    "-c",
-                    "from cashu.mint.main import main; main()"
+                    "mint"
                   ],
                   "env": [
                     {
@@ -432,7 +430,7 @@
                       }
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
+                  "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -444,9 +442,9 @@
                   "readinessProbe": {
                     "exec": {
                       "command": [
-                        "python3",
-                        "-c",
-                        "\"\"\"Bounded authenticated management + HTTP readiness, without CLI error parsing.\"\"\"\nimport pathlib\nimport sys\nimport urllib.request\n\nimport grpc\nfrom cashu.mint.management_rpc.protos import management_pb2, management_pb2_grpc\n\ntls = pathlib.Path('/management-client/tls')\ncredentials = grpc.ssl_channel_credentials(\n    root_certificates=(tls / 'ca.pem').read_bytes(),\n    private_key=(tls / 'client.key').read_bytes(),\n    certificate_chain=(tls / 'client.pem').read_bytes(),\n)\nwith grpc.secure_channel('127.0.0.1:8086', credentials) as channel:\n    management_pb2_grpc.MintStub(channel).GetInfo(management_pb2.GetInfoRequest(), timeout=1)\nurllib.request.urlopen(sys.argv[1], timeout=1).read()\n",
+                        "/opt/proofstorm/driver",
+                        "ready",
+                        "nutshell",
                         "http://127.0.0.1:3338/v1/info"
                       ]
                     },
@@ -481,11 +479,53 @@
                       "mountPath": "/management-client/tls",
                       "name": "management-client",
                       "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
                     }
                   ]
                 }
               ],
               "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -550,6 +590,10 @@
                     ],
                     "secretName": "mint-management-tls"
                   }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
                 }
               ]
             }

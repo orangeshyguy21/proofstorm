@@ -160,8 +160,10 @@ fn fixture(
         pods: vec![],
         conflict: false,
     }));
+    let client = client(cluster.clone());
     let context = Context {
-        client: client(cluster.clone()),
+        probes: crate::probes::Manager::new(client.clone(), "fixture-controller".into()).0,
+        client,
     };
     (
         rendered
@@ -229,6 +231,7 @@ fn stopped_status(
     observed_stops(
         std::slice::from_ref(plan),
         &ComponentObservationResources {
+            protocol: &std::collections::BTreeMap::new(),
             deployments: &deployments,
             stateful_sets: &stateful_sets,
             pods: &pods,
@@ -265,6 +268,11 @@ async fn interrupted_stops_wait_for_pods_and_never_delete_storage() {
             &plan,
             &cluster,
             &Context {
+                probes: crate::probes::Manager::new(
+                    client(cluster.clone()),
+                    "fixture-controller".into(),
+                )
+                .0,
                 client: client(cluster.clone()),
             },
             Control::Stop,

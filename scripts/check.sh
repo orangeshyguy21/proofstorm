@@ -33,6 +33,7 @@ check_fmt() {
   just --summary >/dev/null
   bash scripts/test-just.sh
   bash scripts/test-workflow-surface.sh
+  bash scripts/test-update-site.sh
   bash scripts/test-ci-linux-bundle.sh
   bash scripts/test-ci-macos-bundle.sh
   bash scripts/test-linux-build-worker.sh
@@ -74,20 +75,22 @@ check_shell() {
   shellcheck --external-sources scripts/ci-macos-bundle.sh scripts/test-ci-macos-bundle.sh scripts/macos-install-smoke.sh scripts/macos-install-check.sh
   shellcheck --external-sources scripts/acceptance.sh
   shellcheck scripts/test-workflow-surface.sh
+  shellcheck --external-sources scripts/update-site.sh scripts/test-update-site.sh
+  shellcheck scripts/test-component-driver.sh tests/component-driver/*.sh
   shellcheck scripts/test-cdk-config.sh tests/cdk18-config-contract.sh crates/proofstorm-acceptance/drivers/cashu_double_spend.sh
 }
 
 check_clippy() {
   require cargo
   printf '\nChecking Rust lints\n'
-  cargo clippy --locked --workspace --all-targets -- -D warnings
+  cargo clippy --locked --workspace --all-targets --features proofstorm-prober/runtime -- -D warnings
 }
 
 check_test() {
   require cargo
   printf '\nRunning hermetic workspace tests\n'
   # Finish the other test binaries after a failure so CI reports all broken suites.
-  cargo test --locked --workspace --all-targets --no-fail-fast
+  cargo test --locked --workspace --all-targets --features proofstorm-prober/runtime --no-fail-fast
 }
 
 case "$mode" in

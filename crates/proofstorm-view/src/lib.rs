@@ -149,6 +149,8 @@ pub struct RuntimeObservation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ComponentView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_observation: Option<proofstorm_core::ProtocolObservation>,
     #[serde(default)]
     pub details: Option<ComponentDetails>,
     pub id: String,

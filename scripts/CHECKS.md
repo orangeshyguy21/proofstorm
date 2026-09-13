@@ -14,6 +14,9 @@ a sandbox denying these cannot run the complete suite.
 
 Python, Node, Docker, Helm, and Trunk are not code-check dependencies. Checks use
 `target/check`, separate from registered development binaries and GUI assets.
+The workspace lint/test gate explicitly enables `proofstorm-prober/runtime`, so
+the shipped worker and its DNS/TCP/HTTP regressions are included in local and CI
+checks. Library-only consumers can still omit the worker runtime dependencies.
 
 | Command | Purpose |
 | --- | --- |
@@ -41,9 +44,12 @@ reinstall, and exact upload/download evidence. Installer negative tests run the
 real shell installer with compiler/network stubs. These replace the old Python
 release implementation and its duplicate fixtures.
 
-The narrow workflow guard rejects retired operational files and executable
-references to them. It does not ban Python drivers, historical evidence, negative
-fixtures, or the logical `proofstorm-registry.localhost:5000` image namespace.
+The workflow guard rejects retired operational files, owned Python source, and
+Python execution in maintained adapters, acceptance fixtures and tooling.
+Historical evidence and explicit fixtures proving Python is absent remain allowed.
+Upstream Nutshell retains its own runtime; Proofstorm calls its installed console
+commands through the Rust driver. The logical
+`proofstorm-registry.localhost:5000` image namespace remains valid.
 
 ## Live and manual checks
 
@@ -91,11 +97,31 @@ compare the bytes immediately before and after Proofstorm's refused operation.
 Claude may report a discovered project server as `pending_approval`; the report
 keeps that distinct from `connected`. The gate never approves it for the user.
 
-For Linux execution-helper contracts, the retained
-`tests/native_supervisor_contract.py` is an opt-in diagnostic:
-`PROOFSTORM_NATIVE_RUNNER=/absolute/path/to/proofstorm-exec python3 -m unittest discover -s tests -p native_supervisor_contract.py`.
-Run on Linux with a trusted matching helper. This creates local process/private-I/O
-fixtures, not cells or live funds; it is not a normal build dependency.
+`just test-native-supervisor` runs the Rust Linux execution-helper contracts.
+It builds a Rust child-process fixture behind the `contract-tests` feature; that
+fixture is absent from production builds. The tests create local process/private-I/O
+fixtures, including descendants that escape their session, without cells or funds.
+Set `PROOFSTORM_NATIVE_RUNNER` only to test an explicit trusted matching helper.
+
+`just audit-mcp /absolute/path/to/proofstorm-mcp` runs the offline discovery and
+planner-size diagnostic in Rust. It starts the explicitly selected trusted MCP
+binary with a fresh temporary database and stripped runtime/authority overrides,
+records request/response sizes and persisted drafts, and reaps the child even on
+failure. It never materializes a cell. This replaces the exploratory
+`dev/mcp-agent-audit-probes.py` host script.
+
+`cargo test -p proofstorm-driver` covers passive wallet transactions, bounded
+HTTP and Unix RPC, private rune handling, and readiness proxy/redirect isolation.
+The transport tests use local sockets; they need permission to bind listeners.
+They do not by themselves establish live mint quota isolation.
+
+`just check-component-driver COMPONENT DRIVER_IMAGE COMPONENT_IMAGE PLATFORM`
+runs the CDK, Coco or Nutshell contract against explicit local images. Each
+contract runs with external networking disabled and a total deadline. These
+cover native startup, Coco initialization and locked restart, and actual Nutshell
+readiness/TLS and application quota preservation. See the
+[native driver validation record](../crates/proofstorm-driver/VALIDATION.md) for
+the verified boundaries and remaining release checks.
 
 ## Distribution diagnostics
 
@@ -153,7 +179,13 @@ No cleanup in this plan changes that release gate.
 | Other `scripts/test-*.sh` | Fixtures for the matching wrapper; quick lane or `proofstorm-xtask/tests/wrapper.rs` |
 | `tests/cdk18-config-contract.sh` | Generated CDK config contract; opt-in image-only lane |
 | Acceptance and Kubernetes drivers | Their Rust `include_str!`/execution consumers; named live gates / backend tests |
-| `tests/native_supervisor_contract.py` | Linux execution helper; opt-in command above |
+| `proofstorm-exec/tests/supervisor.rs` | Linux execution helper; `just test-native-supervisor` |
+| `proofstorm-driver/tests` | Native protocol and passive wallet contracts; Rust workspace gate |
+| `proofstorm-acceptance/examples/mcp_agent_audit.rs` | Offline MCP diagnostic; `just audit-mcp` |
 
-Runtime Python drivers remain because the shipped product or explicit contracts
-use them. Retiring host orchestration is not a blanket language rewrite.
+Owned integration and test code is moving to Rust, with Bash/Just for tool
+sequencing. A component's implementation language does not justify an additional
+Proofstorm runtime or SDK dependency. Upstream Nutshell's own interpreter remains
+part of that component; remaining owned Python drivers must be replaced while
+preserving their protocol, privacy and failure contracts. See the driver crate's
+README for migration status and outstanding validation.

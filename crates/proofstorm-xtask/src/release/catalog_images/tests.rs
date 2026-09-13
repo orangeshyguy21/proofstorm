@@ -7,6 +7,10 @@ fn probe_outputs_match_reviewed_versions_and_the_cdk_rpc_binary_name() {
         ("cdk-cli-wallet", "cdk-cli 0.18.0\n"),
         ("cocod-wallet", "0.0.17\n"),
         (
+            "nutshell-mint-management",
+            "Nutshell, version 0.20.3\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
+        ),
+        (
             "cdk-mint-management",
             "cdk-mint-rpc 0.18.0\ncdk-mintd 0.18.0\n",
         ),
@@ -18,6 +22,10 @@ fn probe_outputs_match_reviewed_versions_and_the_cdk_rpc_binary_name() {
         assert!(valid_probe(name, output));
         assert!(!valid_probe(name, "wrong version"));
     }
+    assert!(!valid_probe(
+        "nutshell-mint-management",
+        "Usage: mint-cli [OPTIONS] COMMAND [ARGS]...\n--help\n"
+    ));
     assert!(!valid_probe(
         "bitcoin-core",
         "Bitcoin Core version v31.10.0\n"

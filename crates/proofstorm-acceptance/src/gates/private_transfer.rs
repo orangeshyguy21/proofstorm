@@ -4,7 +4,7 @@
     reason = "acceptance helpers own constructed JSON request fixtures"
 )]
 use super::cocod_wallet::{
-    balance, native, operation, private, python, relay_invoice, restart, start_session,
+    balance, coco, native, operation, private, relay_invoice, restart, start_session,
 };
 use crate::{GateContext, McpClient, cell};
 use anyhow::{Result, bail};
@@ -128,9 +128,9 @@ pub fn exercise(
         "wallet-b",
         &synthetic,
         json!([
-            "python3",
+            "sh",
             "-c",
-            "import sys;sys.stdout.write('private-transfer-canary-'*24000)"
+            "i=0; while [ \"$i\" -lt 24000 ]; do printf 'private-transfer-canary-'; i=$((i+1)); done"
         ]),
         "bytes",
     )?;
@@ -201,11 +201,11 @@ pub fn exercise(
         "wallet-a",
         &synthetic,
         json!([
-            "python3",
+            "sh",
             "-c",
-            format!(
-                "import sys,hashlib; b=sys.stdin.buffer.read(); assert len(b)==576000 and hashlib.sha256(b).hexdigest()=='{digest}'"
-            )
+            r#"set -eu; umask 077; data=$(mktemp); trap 'rm -f "$data"' EXIT; cat >"$data"; test "$(wc -c <"$data" | tr -d '[:space:]')" = 576000; printf '%s  %s\n' "$1" "$data" | sha256sum -c - >/dev/null"#,
+            "proofstorm-private-digest",
+            digest
         ]),
         json!({"kind":"stdin"}),
     )?;
@@ -214,7 +214,7 @@ pub fn exercise(
         directory,
         "component_exec_live",
         "synthetic-replay-refused",
-        json!({"component":"wallet-a","argv":["python3","-c","raise SystemExit(99)"],"timeout_seconds":10,"private_payload":{"kind":"consume","reference":synthetic,"input":{"kind":"stdin"}}}),
+        json!({"component":"wallet-a","argv":["sh","-c","exit 99"],"timeout_seconds":10,"private_payload":{"kind":"consume","reference":synthetic,"input":{"kind":"stdin"}}}),
     );
     if replay.is_ok() {
         bail!("duplicate private consumer was admitted");
@@ -239,7 +239,7 @@ pub fn exercise(
         directory,
         "initialize-wallet-a",
         "wallet-a",
-        json!({"script":python("p=Path('/wallet/session.passphrase'); p.write_text(secrets.token_urlsafe(32)); p.chmod(0o600)\nr=api('/v1/admin/wallet/initialize',{'passphrase':p.read_text()}); assert r['generatedMnemonic']\nconfig=root/'config.json'; settings=json.loads(config.read_text()); settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings)); config.chmod(0o600)")}),
+        json!({"script":coco("initialize http://mint:3338")}),
         0,
     )?;
     restart(
@@ -281,9 +281,7 @@ pub fn exercise(
         directory,
         "issuance",
         "wallet-a",
-        &python(
-            "deadline=time.monotonic()+40\nwhile time.monotonic()<deadline:\n if api('/balance')['output'].get('http://mint:3338',{}).get('sats')==5000: break\n time.sleep(.5)\nelse: raise RuntimeError('issuance_not_observed')\nprint('issuance observed')",
-        ),
+        &coco("wait-balance http://mint:3338 5000"),
     )?;
     balance(client, directory, "funded", "wallet-a", 5000)?;
 
@@ -362,14 +360,13 @@ pub fn exercise(
         "cashu_token",
     )?;
     deliver(client, directory, "cashu-back-deliver", "wallet-a", &back)?;
-    let receiver = "import sys,json,urllib.request\nfrom pathlib import Path\ntoken=sys.stdin.read(); key=Path('/wallet/.cocod/credentials/current/client').read_text().strip()\nr=urllib.request.Request('http://127.0.0.1:62626/receive/cashu',data=json.dumps({'token':token}).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})\nwith urllib.request.urlopen(r,timeout=40) as response: result=json.load(response)\nassert 'error' not in result and 'output' in result";
     consume(
         client,
         directory,
         "cashu-back-receive",
         "wallet-a",
         &back,
-        json!(["python3", "-c", receiver]),
+        json!(["/opt/proofstorm/driver", "coco", "receive"]),
         json!({"kind":"stdin"}),
     )?;
     private(

@@ -1,4 +1,5 @@
 mod component_lifecycle;
+mod probes;
 #[cfg(test)]
 use component_lifecycle::same_lifecycle_identity;
 mod cell_updates;
@@ -32,8 +33,8 @@ use kube::{
         watcher,
     },
 };
+use proofstorm_core::CandidateBuildPhase;
 use proofstorm_core::WorkloadControllerKind;
-use proofstorm_core::{BackendContractRegistry, CandidateBuildPhase, default_backend_registry};
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
@@ -41,13 +42,12 @@ use proofstorm_kube::{
     CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, CellAction, CellPhase,
     ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL,
     LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION,
-    PROTOCOL_PROBER_LABEL, PROTOCOL_PROBER_LEASE_ANNOTATION, PROTOCOL_PROBER_NAME,
     ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
     ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_cell,
     render_cell_action_cleanup_job, render_cell_action_job, render_cell_security_spine,
-    render_component_network_policy, schedule_protocol_probers,
+    render_component_network_policy,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -61,6 +61,7 @@ const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
 #[derive(Clone)]
 struct Context {
     client: Client,
+    probes: Arc<probes::Manager>,
 }
 
 #[derive(Debug, Error)]
@@ -95,6 +96,7 @@ enum Error {
     LiveExec(String),
 }
 
+#[cfg(test)]
 fn pod_belongs_to_instance(pod: &Pod, key: &str) -> bool {
     pod.labels()
         .get(INSTANCE_LABEL)
@@ -123,24 +125,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cells = Api::<ProofstormCell>::all(client.clone());
     let actions = Api::<ProofstormCellAction>::all(client.clone());
     let candidate_builds = Api::<ProofstormCandidateBuild>::all(client.clone());
-    let context = Arc::new(Context { client });
-    let cell_controller = Controller::new(cells, watcher::Config::default());
-    let cell_cache = cell_controller.store();
-    let cell_controller = cell_controller
-        // Pod readiness, restarts and probe changes should refresh stable cells promptly.
-        // Keep the slower periodic requeue as a fallback when the watch reconnects.
-        .watches(
-            Api::<Pod>::all(context.client.clone()),
-            watcher::Config::default().labels(INSTANCE_LABEL),
-            move |pod| {
-                cell_cache
-                    .state()
-                    .into_iter()
-                    .filter(|cell| pod_belongs_to_instance(&pod, &cell.spec.instance_key))
-                    .map(|cell| kube::runtime::reflector::ObjectRef::from_obj(cell.as_ref()))
-                    .collect::<Vec<_>>()
-            },
-        )
+    let image = std::env::var("PROOFSTORM_PROBER_IMAGE")
+        .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
+    let (probes, triggers) = probes::Manager::new(client.clone(), image);
+    let context = Arc::new(Context { client, probes });
+    let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
+        receive.recv().await.map(|object| (object, receive))
+    });
+    let cell_controller = Controller::new(cells, watcher::Config::default())
+        .reconcile_on(trigger_stream)
         .with_config(
             kube::runtime::controller::Config::default().concurrency(CELL_CONTROLLER_CONCURRENCY),
         )
@@ -178,14 +171,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => eprintln!("candidate build reconciliation failed: {error}"),
             }
         });
-    let probe_scheduler = run_protocol_probe_scheduler(context);
-    tokio::join!(
-        cell_controller,
-        action_controller,
-        candidate_controller,
-        probe_scheduler
-    );
-    Ok(())
+    let probe_scheduler = context.probes.clone().run();
+    tokio::select! {
+        result = probe_scheduler => result.map_err(Into::into),
+        () = async { tokio::join!(cell_controller, action_controller, candidate_controller); } => Ok(()),
+    }
 }
 
 #[allow(
@@ -548,7 +538,7 @@ async fn reconcile_action(
     if matches!(action.spec.action, CellAction::ComponentExecLive(_)) {
         return reconcile_component_exec_live(action.as_ref(), &cell, &context).await;
     }
-    let job = match render_cell_action_job(action.as_ref(), &cell) {
+    let mut job = match render_cell_action_job(action.as_ref(), &cell) {
         Ok(job) => job,
         Err(error) => {
             patch_action_status(
@@ -569,6 +559,13 @@ async fn reconcile_action(
             return Ok(Action::await_change());
         }
     };
+    if let Some(pod) = job
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.template.spec.as_mut())
+    {
+        proofstorm_kube::drivers::bind_image(pod, &context.probes.image);
+    }
     let instance_namespace = instance_namespace(&action.spec.instance_key);
     let jobs = Api::<Job>::namespaced(context.client.clone(), &instance_namespace);
     let name = action.name_any();
@@ -1160,7 +1157,14 @@ async fn reconcile_action_cancellation(
         .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
     let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
     let cell = cells.get(&action.spec.cell_name).await?;
-    if let Some(cleanup) = render_cell_action_cleanup_job(action, &cell)? {
+    if let Some(mut cleanup) = render_cell_action_cleanup_job(action, &cell)? {
+        if let Some(pod) = cleanup
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+        {
+            proofstorm_kube::drivers::bind_image(pod, &context.probes.image);
+        }
         let cleanup_name = cleanup.name_any();
         let Some(observed) = jobs.get_opt(&cleanup_name).await? else {
             jobs.patch(
@@ -1320,9 +1324,14 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
     finalizer(&cells, FINALIZER, cell, |event| async {
         match event {
             Event::Apply(cell) => {
-                let result = apply(cell.clone(), &context).await;
+                let result = if let Some(applied) = context.probes.applied(&cell) {
+                    observe_cell(cell.clone(), &context, &applied).await
+                } else {
+                    apply(cell.clone(), &context).await
+                };
                 if let Err(error) = &result {
                     if let Some(status) = reconciliation_failure_status(&cell, error) {
+                        context.probes.remove(&cell.spec.instance_key);
                         patch_status(&cell, &context, status).await?;
                     }
                 }
@@ -1380,227 +1389,6 @@ fn reconciliation_failure_status(
     // for cleanup, but never present old readiness as evidence for this failure.
     status.components.clear();
     Some(status)
-}
-
-async fn run_protocol_probe_scheduler(context: Arc<Context>) {
-    loop {
-        if let Err(error) = reconcile_protocol_probe_schedule(&context).await {
-            eprintln!("protocol probe scheduler retryable error: {error}");
-        }
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => {
-                if let Err(error) = result {
-                    eprintln!("protocol probe scheduler shutdown signal failed: {error}");
-                }
-                break;
-            }
-            () = tokio::time::sleep(Duration::from_secs(2)) => {}
-        }
-    }
-}
-
-async fn reconcile_protocol_probe_schedule(context: &Context) -> Result<(), Error> {
-    let cells = Api::<ProofstormCell>::all(context.client.clone())
-        .list(&ListParams::default())
-        .await?;
-    let backend_registry = default_backend_registry();
-    let mut candidate_counts = BTreeMap::<String, (usize, usize)>::new();
-    for cell in &cells.items {
-        if let Some(probes) = protocol_probe_count(cell, backend_registry) {
-            let entry = candidate_counts
-                .entry(cell.spec.instance_key.clone())
-                .or_default();
-            entry.0 += 1;
-            entry.1 = probes;
-        }
-    }
-    let candidates = candidate_counts
-        .into_iter()
-        .filter_map(|(instance_key, (count, probes))| {
-            (count == 1).then_some((instance_key, probes))
-        });
-    let schedule = schedule_protocol_probers(candidates, now_unix());
-    for cell in &cells.items {
-        let active = schedule
-            .active_instance_keys
-            .contains(&cell.spec.instance_key);
-        if !active
-            && (protocol_probe_count(cell, backend_registry).is_some()
-                || cell
-                    .annotations()
-                    .contains_key(PROTOCOL_PROBER_LEASE_ANNOTATION))
-        {
-            patch_cell_protocol_probe_lease(cell, "inactive", context).await?;
-        }
-    }
-    let deployments = Api::<Deployment>::all(context.client.clone())
-        .list(&ListParams::default().labels(&format!("{PROTOCOL_PROBER_LABEL}=true")))
-        .await?;
-
-    for deployment in &deployments.items {
-        let instance_key = deployment
-            .metadata
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.get(INSTANCE_LABEL));
-        if !instance_key
-            .is_some_and(|instance_key| schedule.active_instance_keys.contains(instance_key))
-        {
-            patch_protocol_prober_lease(deployment, 0, "inactive", context).await?;
-        }
-    }
-
-    let observed_prober_pods = Api::<Pod>::all(context.client.clone())
-        .list(&ListParams::default().labels(&format!("{PROTOCOL_PROBER_LABEL}=true")))
-        .await?
-        .items;
-    if unscheduled_protocol_prober_exists(&observed_prober_pods, &schedule.active_instance_keys) {
-        return Ok(());
-    }
-
-    for deployment in &deployments.items {
-        let active = deployment
-            .metadata
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.get(INSTANCE_LABEL))
-            .is_some_and(|instance_key| schedule.active_instance_keys.contains(instance_key));
-        if active {
-            patch_protocol_prober_lease(deployment, 1, &schedule.lease_id, context).await?;
-        }
-    }
-    for cell in &cells.items {
-        if schedule
-            .active_instance_keys
-            .contains(&cell.spec.instance_key)
-        {
-            patch_cell_protocol_probe_lease(cell, &schedule.lease_id, context).await?;
-        }
-    }
-    Ok(())
-}
-
-fn unscheduled_protocol_prober_exists(
-    pods: &[Pod],
-    active_instance_keys: &BTreeSet<String>,
-) -> bool {
-    pods.iter().any(|pod| {
-        !pod.metadata
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.get(INSTANCE_LABEL))
-            .is_some_and(|instance_key| active_instance_keys.contains(instance_key))
-    })
-}
-
-fn protocol_probe_count(
-    cell: &ProofstormCell,
-    backend_registry: &BackendContractRegistry,
-) -> Option<usize> {
-    if cell.metadata.deletion_timestamp.is_some()
-        || cell
-            .status
-            .as_ref()
-            .is_some_and(|status| status.phase == CellPhase::Closing)
-    {
-        return None;
-    }
-    let count = cell
-        .spec
-        .cell
-        .components
-        .iter()
-        .try_fold(0_usize, |count, component| {
-            let lock = cell
-                .spec
-                .lock
-                .entries
-                .iter()
-                .find(|entry| entry.component_id == component.id)?;
-            let backend = backend_registry.require(&lock.catalog_id).ok()?;
-            (backend.kind == component.kind)
-                .then_some(count + usize::from(backend.protocol_probe.is_some()))
-        });
-    count.filter(|count| *count > 0)
-}
-
-async fn patch_protocol_prober_lease(
-    deployment: &Deployment,
-    replicas: i32,
-    lease_id: &str,
-    context: &Context,
-) -> Result<(), Error> {
-    let current_replicas = deployment.spec.as_ref().and_then(|spec| spec.replicas);
-    let metadata_lease = deployment
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.get(PROTOCOL_PROBER_LEASE_ANNOTATION));
-    let template_lease = deployment
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.template.metadata.as_ref())
-        .and_then(|metadata| metadata.annotations.as_ref())
-        .and_then(|annotations| annotations.get(PROTOCOL_PROBER_LEASE_ANNOTATION));
-    if current_replicas == Some(replicas)
-        && metadata_lease.is_some_and(|current| current == lease_id)
-        && template_lease.is_some_and(|current| current == lease_id)
-    {
-        return Ok(());
-    }
-    let namespace = deployment
-        .namespace()
-        .ok_or_else(|| Error::MissingNamespace(deployment.name_any()))?;
-    let deployments = Api::<Deployment>::namespaced(context.client.clone(), &namespace);
-    deployments
-        .patch(
-            &deployment.name_any(),
-            &PatchParams::default(),
-            &Patch::Merge(serde_json::json!({
-                "metadata": {
-                    "annotations": {PROTOCOL_PROBER_LEASE_ANNOTATION: lease_id}
-                },
-                "spec": {
-                    "replicas": replicas,
-                    "template": {
-                        "metadata": {
-                            "annotations": {PROTOCOL_PROBER_LEASE_ANNOTATION: lease_id}
-                        }
-                    }
-                }
-            })),
-        )
-        .await?;
-    Ok(())
-}
-
-async fn patch_cell_protocol_probe_lease(
-    cell: &ProofstormCell,
-    lease_id: &str,
-    context: &Context,
-) -> Result<(), Error> {
-    if cell
-        .annotations()
-        .get(PROTOCOL_PROBER_LEASE_ANNOTATION)
-        .is_some_and(|current| current == lease_id)
-    {
-        return Ok(());
-    }
-    let namespace = cell
-        .namespace()
-        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
-    Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace)
-        .patch(
-            &cell.name_any(),
-            &PatchParams::default(),
-            &Patch::Merge(serde_json::json!({
-                "metadata": {
-                    "annotations": {PROTOCOL_PROBER_LEASE_ANNOTATION: lease_id}
-                }
-            })),
-        )
-        .await?;
-    Ok(())
 }
 
 async fn ensure_generated_postgres_secret(
@@ -1912,12 +1700,38 @@ async fn ensure_generated_keycloak_secret(
 async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, Error> {
     validate_instance_key(&cell.spec.instance_key)?;
     private_transfer::expire(&cell)?;
-    let workloads = render_cell(
+    let mut workloads = render_cell(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
         &cell.spec.cell,
         &cell.spec.lock,
     )?;
+    for deployment in &mut workloads.deployments {
+        if let Some(pod) = deployment
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+        {
+            proofstorm_kube::drivers::bind_image(pod, &context.probes.image);
+        }
+    }
+    for stateful in &mut workloads.stateful_sets {
+        if let Some(pod) = stateful
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+        {
+            proofstorm_kube::drivers::bind_image(pod, &context.probes.image);
+        }
+    }
+    if let Some(worker) =
+        proofstorm_kube::render_protocol_prober(&workloads.plans, &context.probes.image)?
+    {
+        workloads.deployments.push(worker);
+    }
+    context
+        .probes
+        .register(&cell, Arc::new(workloads.plans.clone()))?;
     // Persist the intended inventory before the first component write. If the process
     // stops halfway through, the next edit can still identify and prune partial additions.
     let desired_generation = cell
@@ -2058,36 +1872,15 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     let deployments = Api::<Deployment>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.deployments {
         let name = resource.metadata.name.as_deref().unwrap_or_default();
-        if name == PROTOCOL_PROBER_NAME && deployments.get_opt(name).await?.is_some() {
-            let mut desired = resource.clone();
-            if let Some(spec) = desired.spec.as_mut() {
-                spec.replicas = None;
-                if let Some(annotations) = spec
-                    .template
-                    .metadata
-                    .as_mut()
-                    .and_then(|metadata| metadata.annotations.as_mut())
-                {
-                    annotations.remove(PROTOCOL_PROBER_LEASE_ANNOTATION);
-                }
-            }
-            if let Some(annotations) = desired.metadata.annotations.as_mut() {
-                annotations.remove(PROTOCOL_PROBER_LEASE_ANNOTATION);
-            }
-            deployments
-                .patch(name, &PatchParams::default(), &Patch::Merge(&desired))
-                .await?;
-        } else {
-            clear_rolling_update_strategy(&deployments, resource).await?;
-            let resource = component_lifecycle::preserve(&deployments, resource).await?;
-            deployments
-                .patch(
-                    name,
-                    &patch,
-                    &Patch::Apply(deployment_apply_document(&resource)),
-                )
-                .await?;
-        }
+        clear_rolling_update_strategy(&deployments, resource).await?;
+        let resource = component_lifecycle::preserve(&deployments, resource).await?;
+        deployments
+            .patch(
+                name,
+                &patch,
+                &Patch::Apply(deployment_apply_document(&resource)),
+            )
+            .await?;
     }
     let policies = Api::<NetworkPolicy>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.network_policies {
@@ -2154,44 +1947,44 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
         .await?;
 
-    let instance_resources = ListParams::default().labels(&format!(
-        "proofstorm.dev/instance={}",
-        cell.spec.instance_key
-    ));
-    let observed_deployments = deployments.list(&instance_resources).await?;
-    let observed_stateful_sets = stateful_sets.list(&instance_resources).await?;
-    let observed_claims = claims.list(&instance_resources).await?;
-    let observed_services = services.list(&instance_resources).await?;
-    let observed_pods = Api::<Pod>::namespaced(client.clone(), &namespace_name)
-        .list(&instance_resources)
-        .await?;
-    let endpoint_slices = Api::<EndpointSlice>::namespaced(client, &namespace_name)
-        .list(&ListParams::default())
-        .await?;
-    let observed_resources = ComponentObservationResources {
-        deployments: &observed_deployments.items,
-        stateful_sets: &observed_stateful_sets.items,
-        persistent_volume_claims: &observed_claims.items,
-        services: &observed_services.items,
-        endpoint_slices: &endpoint_slices.items,
-        pods: &observed_pods.items,
+    let applied = probes::Applied {
+        signature: probes::signature(&cell),
+        at: std::time::Instant::now(),
+        plans: Arc::new(workloads.plans),
+        inventory,
+        retained_storage,
+        pruned,
     };
+    context
+        .probes
+        .remember_applied(&cell.spec.instance_key, applied.clone());
+    observe_cell(cell, context, &applied).await
+}
+
+async fn observe_cell(
+    cell: Arc<ProofstormCell>,
+    context: &Context,
+    applied: &probes::Applied,
+) -> Result<Action, Error> {
+    let namespace_name = instance_namespace(&cell.spec.instance_key);
+    let snapshot = context.probes.snapshot(&cell.spec.instance_key);
+    let observed_resources = snapshot.observed();
     let previous_components = cell
         .status
         .as_ref()
         .filter(|status| status.observed_revision_digest == cell.spec.revision_digest)
         .map_or(&[][..], |status| status.components.as_slice());
     let stopped_components =
-        component_lifecycle::observed_stops(&workloads.plans, &observed_resources);
+        component_lifecycle::observed_stops(&applied.plans, &observed_resources);
     let components = observe_component_statuses(
         &namespace_name,
-        &workloads.plans,
+        &applied.plans,
         &observed_resources,
         previous_components,
         &stopped_components,
         now_unix(),
     );
-    let ready = pruned
+    let ready = applied.pruned
         && components
             .iter()
             .all(|component| component.ready || stopped_components.contains(&component.id));
@@ -2216,7 +2009,7 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
                 .get("proofstorm.dev/desired-generation")
                 .and_then(|g| g.parse().ok())
                 .unwrap_or(1),
-            retained_storage,
+            retained_storage: applied.retained_storage.clone(),
             last_converged_revision: if ready {
                 Some(cell.spec.revision_digest.clone())
             } else {
@@ -2232,13 +2025,10 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             instance_namespace: Some(namespace_name),
             observed_generation: cell.metadata.generation,
             observed_revision_digest: cell.spec.revision_digest.clone(),
-            observed_protocol_probe_lease: cell
-                .annotations()
-                .get(PROTOCOL_PROBER_LEASE_ANNOTATION)
-                .cloned(),
+            observed_protocol_probe_lease: None,
             components,
-            inventory,
-            inventory_digest: Some(inventory_digest),
+            inventory: applied.inventory.clone(),
+            inventory_digest: Some(proofstorm_core::digest_json(&applied.inventory)),
             teardown_receipt: None,
             message,
         },
@@ -2310,6 +2100,7 @@ fn deployment_apply_document(deployment: &Deployment) -> serde_json::Value {
 }
 
 async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, Error> {
+    context.probes.remove(&cell.spec.instance_key);
     private_transfer::close(&cell)?;
     let instance_namespace = instance_namespace(&cell.spec.instance_key);
     patch_status(
@@ -3506,31 +3297,6 @@ mod tests {
     }
 
     #[test]
-    fn probe_rotation_drains_old_cells_before_activation() {
-        let pod = |instance: &str| {
-            let mut pod = Pod::default();
-            pod.metadata.labels = Some(BTreeMap::from([
-                (INSTANCE_LABEL.into(), instance.into()),
-                (PROTOCOL_PROBER_LABEL.into(), "true".into()),
-            ]));
-            pod
-        };
-        let active = BTreeSet::from(["instance-new".to_owned()]);
-        assert!(unscheduled_protocol_prober_exists(
-            &[pod("instance-old")],
-            &active
-        ));
-        assert!(!unscheduled_protocol_prober_exists(
-            &[pod("instance-new")],
-            &active
-        ));
-        assert!(unscheduled_protocol_prober_exists(
-            &[Pod::default()],
-            &active
-        ));
-    }
-
-    #[test]
     fn rendering_failure_reports_the_current_revision_and_keeps_cleanup_inventory() {
         let spec = proofstorm_core::CellSpec {
             api_version: proofstorm_core::API_VERSION.into(),
@@ -3600,6 +3366,7 @@ mod tests {
         ];
         let components = (0..150)
             .map(|index| ComponentStatus {
+                protocol_observation: None,
                 id: format!("wallet-{index}"),
                 kind: ComponentKind::Wallet,
                 observed_revision_digest: format!("sha256:{:064x}", index + 1),

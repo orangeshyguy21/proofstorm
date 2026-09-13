@@ -38,6 +38,7 @@ pub enum SupportLifecycle {
 #[serde(rename_all = "snake_case")]
 pub enum CatalogFeature {
     NativeCli,
+    NativeCliEntrypoints,
     MintManagementRpc,
     Regtest,
     PersistentState,
@@ -531,7 +532,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.20.3",
             ReleaseChannel::Stable,
-            "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
+            crate::wallet_builds::nutshell(amd64),
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -655,7 +656,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.20.3",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+            crate::wallet_builds::nutshell(amd64),
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::PersistentState,
@@ -701,6 +702,9 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         ),
     ];
     for entry in &mut entries {
+        if matches!(entry.id.as_str(), "nutshell" | "nutshell-wallet") {
+            entry.features.insert(CatalogFeature::NativeCliEntrypoints);
+        }
         if matches!(
             entry.id.as_str(),
             "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
@@ -1421,7 +1425,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
                 "wallet_pay",
             ],
             &[
-                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
+                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; cashu --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
             ],
         )],
         "keycloak" => vec![runtime_endpoint(
