@@ -57,6 +57,40 @@ fn isolated_stdio_uses_the_selected_home_for_persistent_state() {
     assert!(!installation.kubeconfig().exists());
 }
 
+#[test]
+fn connected_stdio_refuses_ambient_cluster_before_creating_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let ambient = disconnected_kubeconfig(directory.path());
+    let original = std::fs::read(&ambient).unwrap();
+    for selector in [
+        None,
+        Some("PROOFSTORM_CONTEXT"),
+        Some("PROOFSTORM_KUBECONFIG"),
+    ] {
+        let mut command = std::process::Command::new(binary());
+        proofstorm_acceptance::client::clear_runtime_environment(&mut command);
+        command
+            .current_dir(directory.path())
+            .env("PROOFSTORM_PRINCIPAL", "agent")
+            .env("KUBECONFIG", &ambient);
+        match selector {
+            Some("PROOFSTORM_CONTEXT") => {
+                command.env("PROOFSTORM_CONTEXT", "disconnected-test");
+            }
+            Some(_) => {
+                command.env("PROOFSTORM_KUBECONFIG", &ambient);
+            }
+            None => {}
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("requires both"));
+        assert!(!directory.path().join(".proofstorm").exists());
+        assert_eq!(std::fs::read(&ambient).unwrap(), original);
+    }
+}
+
 fn assert_resource_contract(client: &mut McpClient) {
     let templates = client
         .request("resources/templates/list", json!({}))
@@ -154,7 +188,7 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
             ("PROOFSTORM_TOOLSET", "all".as_ref()),
-            ("PROOFSTORM_CAPABILITIES", "lab.read".as_ref()),
+            ("PROOFSTORM_CAPABILITIES", "cell.read".as_ref()),
         ],
     )
     .expect("spawn configured proofstorm-mcp");
@@ -165,11 +199,14 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         .iter()
         .map(|tool| expect::string(tool, "/name").expect("tool name"))
         .collect::<Vec<_>>();
-    assert_eq!(names, vec!["lab_diff", "lab_read", "workspace_read"]);
+    assert_eq!(
+        names,
+        vec!["cell_diff", "cell_read", "cell_search", "workspace_read"]
+    );
 
     let refused = client
-        .call_error("lab_create", json!({}))
-        .expect("lab create must be refused");
+        .call_error("cell_create", json!({}))
+        .expect("cell create must be refused");
     expect::equals(&refused, "/message", &Value::from("tool not found")).expect("refusal message");
 }
 
@@ -183,7 +220,8 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
         "private-transfer-contract",
         &[
             ("PROOFSTORM_DB", database.as_os_str()),
-            ("KUBECONFIG", kubeconfig.as_os_str()),
+            ("PROOFSTORM_KUBECONFIG", kubeconfig.as_os_str()),
+            ("PROOFSTORM_CONTEXT", "disconnected-test".as_ref()),
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "agent".as_ref()),
             (
@@ -338,10 +376,11 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
     let database = directory.path().join("developer.sqlite3");
     let mut client = McpClient::spawn(binary(), "developer-discovery", &[
         ("PROOFSTORM_DB", database.as_os_str()),
-            ("KUBECONFIG", kubeconfig.as_os_str()),
+            ("PROOFSTORM_KUBECONFIG", kubeconfig.as_os_str()),
+            ("PROOFSTORM_CONTEXT", "disconnected-test".as_ref()),
         ("PROOFSTORM_WORKSPACE", "local".as_ref()),
         ("PROOFSTORM_PRINCIPAL", "developer".as_ref()),
-        ("PROOFSTORM_CAPABILITIES", "catalog.read,lab.create,lab.read,lab.publish,lab.materialize,lab.status,lab.close,experiment.read,experiment.close,lab.operate,component.exec_live,artifact.read,action.cancel".as_ref()),
+        ("PROOFSTORM_CAPABILITIES", "catalog.read,cell.create,cell.read,cell.publish,cell.materialize,cell.status,cell.close,experiment.read,experiment.close,cell.operate,component.exec_live,artifact.read,action.cancel".as_ref()),
     ]).unwrap();
     let listed = client.request("tools/list", json!({})).unwrap();
     let names = listed["tools"]
@@ -350,23 +389,24 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 15);
+    assert_eq!(names.len(), 16);
     for name in [
         "session_list",
-        "lab_up",
-        "lab_inspect",
-        "lab_read",
+        "cell_up",
+        "cell_inspect",
+        "cell_read",
+        "cell_search",
         "environment_read",
-        "lab_exec",
-        "lab_sync",
-        "lab_finish",
+        "cell_exec",
+        "cell_sync",
+        "cell_finish",
     ] {
         assert!(names.contains(&name));
     }
     for name in [
         "experiment_create",
         "session_start",
-        "lab_recipe_bootstrap",
+        "cell_recipe_bootstrap",
         "wallet_pay",
     ] {
         assert!(!names.contains(&name));
@@ -376,13 +416,13 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         client.initialize_result()["instructions"]
             .as_str()
             .unwrap()
-            .contains("lab_up")
+            .contains("cell_up")
     );
 }
 
 fn disconnected_kubeconfig(directory: &Path) -> std::path::PathBuf {
     let path = directory.join("kubeconfig");
-    std::fs::write(&path, "apiVersion: v1\nkind: Config\ncurrent-context: other\ncontexts:\n- name: k3d-proofstorm\n  context: {cluster: test, user: test}\nclusters:\n- name: test\n  cluster: {server: 'http://127.0.0.1:1'}\nusers:\n- name: test\n  user: {}\n").unwrap();
+    std::fs::write(&path, "apiVersion: v1\nkind: Config\ncurrent-context: other\ncontexts:\n- name: disconnected-test\n  context: {cluster: test, user: test}\nclusters:\n- name: test\n  cluster: {server: 'http://127.0.0.1:1'}\nusers:\n- name: test\n  user: {}\n").unwrap();
     path
 }
 
@@ -393,13 +433,17 @@ fn offline_mode_uses_existing_grants_without_replacing_them() {
     let store = proofstorm_store::Store::open(&database).unwrap();
     store
         .put_workspace(&proofstorm_store::Workspace {
-            id: "local-lab".into(),
-            name: "local-lab".into(),
+            id: "local-cell".into(),
+            name: "local-cell".into(),
         })
         .unwrap();
     store.put_principal("reader").unwrap();
     store
-        .grant("local-lab", "reader", proofstorm_core::Capability::LabRead)
+        .grant(
+            "local-cell",
+            "reader",
+            proofstorm_core::Capability::CellRead,
+        )
         .unwrap();
     let mut client = McpClient::spawn(
         binary(),
@@ -419,12 +463,12 @@ fn offline_mode_uses_existing_grants_without_replacing_them() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert!(names.contains(&"lab_read"));
-    assert!(!names.contains(&"lab_apply"));
+    assert!(names.contains(&"cell_read"));
+    assert!(!names.contains(&"cell_apply"));
     assert!(!names.contains(&"component_exec_live"));
     assert_eq!(
-        store.capabilities("local-lab", "reader").unwrap(),
-        [proofstorm_core::Capability::LabRead].into()
+        store.capabilities("local-cell", "reader").unwrap(),
+        [proofstorm_core::Capability::CellRead].into()
     );
 }
 

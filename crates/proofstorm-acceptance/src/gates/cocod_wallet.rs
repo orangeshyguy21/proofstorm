@@ -1,5 +1,5 @@
 //! Cocod deterministic vertical slice. Native daemon/CLI, private state and independent money evidence.
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -34,12 +34,12 @@ fn document() -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cocod-wallet-checkpoint",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}},
-            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
+            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.0","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":0}},
-            {"id":"wallet-a","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"laboratory","config":{}},
-            {"id":"wallet-b","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"laboratory","config":{}}
+            {"id":"wallet-a","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"cell","config":{}},
+            {"id":"wallet-b","kind":"wallet","implementation":"cocod-wallet","version":"0.0.17-dev.44e5101c","config_version":"cocod-wallet/0.0.17/v1","control":"cell","config":{}}
         ],
         "links":[
             {"id":"mint-chain","kind":"chain_backend","from":"mint-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
@@ -80,7 +80,7 @@ pub(super) fn operation(
     args: Value,
 ) -> Result<Value> {
     client.call(tool, scoped(id, args))?;
-    let result = match lab::wait_operation(client, id, 60) {
+    let result = match cell::wait_operation(client, id, 60) {
         Ok(result) => result,
         Err(error) => {
             if let Ok(failed) = client.call("operation_status", json!({"operation_id": id})) {
@@ -90,7 +90,7 @@ pub(super) fn operation(
         }
     };
     save(directory, id, &result)?;
-    Ok(lab::artifact_content(&result)?.clone())
+    Ok(cell::artifact_content(&result)?.clone())
 }
 
 pub(super) fn native(
@@ -118,27 +118,8 @@ pub(super) fn native(
     Ok(expect::string(&result, "/stdout")?.trim().into())
 }
 
-const API: &str = r"import json, urllib.request, urllib.error, hashlib, secrets, time
-from pathlib import Path
-root=Path('/wallet/.cocod')
-def api(path, body=None):
- credential=(root/'credentials/current/client').read_text().strip()
- request=urllib.request.Request('http://127.0.0.1:62626'+path,
-  data=None if body is None else json.dumps(body).encode(),
-  headers={'Authorization':'Bearer '+credential,'Content-Type':'application/json'})
- with urllib.request.urlopen(request,timeout=20) as response: return json.load(response)
-def session(expected):
- deadline=time.monotonic()+40
- while time.monotonic()<deadline:
-  status=api('/v1/status')
-  if status['cocoSession']['state']==expected: return status
-  if status['cocoSession']['state']=='failed': raise RuntimeError('native_session_failed')
-  time.sleep(.25)
- raise RuntimeError('native_session_deadline')
-";
-
-pub(super) fn python(code: &str) -> String {
-    format!("python3 - <<'PY'\n{API}\n{code}\nPY")
+pub(super) fn coco(arguments: &str) -> String {
+    format!("/opt/proofstorm/driver coco {arguments}")
 }
 
 pub(super) fn private(
@@ -217,7 +198,7 @@ pub(super) fn restart(
         id,
         json!({"component":wallet}),
     )?;
-    lab::wait_ready(client, INSTANCE)?;
+    cell::wait_ready(client, INSTANCE)?;
     let after = uid()?;
     if after["items"].as_array().map(Vec::len) != Some(1)
         || before["items"][0]["metadata"]["uid"] == after["items"][0]["metadata"]["uid"]
@@ -242,22 +223,15 @@ pub(super) fn start_session(
         directory,
         id,
         wallet,
-        json!({"script":python("api('/v1/admin/session/start',{'passphrase':Path('/wallet/session.passphrase').read_text()}); session('running')")}),
+        json!({"script":coco("start")}),
         0,
     )?;
     Ok(())
 }
 
 fn identity(client: &mut McpClient, directory: &Path, wallet: &str, id: &str) -> Result<String> {
-    native(
-        client,
-        directory,
-        id,
-        wallet,
-        &python(
-            "r=api('/v1/admin/wallet/recovery-material',{'passphrase':Path('/wallet/session.passphrase').read_text()}); print(hashlib.sha256(r['mnemonic'].encode()).hexdigest())",
-        ),
-    )
+    let value = native(client, directory, id, wallet, &coco("identity"))?;
+    Ok(serde_json::from_str(&value)?)
 }
 
 fn exercise(
@@ -273,30 +247,14 @@ fn exercise(
             directory,
             &format!("uninitialized-{wallet}"),
             wallet,
-            &python(
-                r"
-h=json.load(urllib.request.urlopen('http://127.0.0.1:62626/health',timeout=2)); assert h['status']=='ok'
-s=api('/v1/status'); assert s['wallet'] is None and s['cocoSession']['state']=='stopped'
-try: urllib.request.urlopen('http://127.0.0.1:62626/v1/status',timeout=2)
-except urllib.error.HTTPError as error: assert error.code==401
-else: raise AssertionError('unauthenticated administrative read accepted')
-assert (root/'credentials/current/client').stat().st_mode & 0o777 == 0o600
-print(json.dumps({'healthy':True,'initialized':False,'unauthenticated_status':401}))
-",
-            ),
+            &coco("uninitialized"),
         )?;
         private(
             client,
             directory,
             &format!("initialize-{wallet}"),
             wallet,
-            json!({"script":python(r"
-p=Path('/wallet/session.passphrase'); p.write_text(secrets.token_urlsafe(32)); p.chmod(0o600)
-r=api('/v1/admin/wallet/initialize',{'passphrase':p.read_text()})
-assert r['generatedMnemonic'] and r['status']['cocoSession']['state']=='stopped'
-config=root/'config.json'; settings=json.loads(config.read_text()); assert settings['encrypted'] is True
-settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings)); config.chmod(0o600)
-")}),
+            json!({"script":coco("initialize http://mint:3338")}),
             0,
         )?;
         restart(
@@ -312,9 +270,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
             directory,
             &format!("locked-{wallet}"),
             wallet,
-            &python(
-                "s=api('/v1/status'); assert s['seedAccess']['state']=='locked' and s['cocoSession']['state']=='stopped'; print('protected session remained stopped')",
-            ),
+            &coco("locked"),
         )?;
         start_session(client, directory, wallet, &format!("start-{wallet}"))?;
         balance(client, directory, &format!("empty-{wallet}"), wallet, 0)?;
@@ -345,7 +301,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
         directory,
         "owner-still-healthy",
         "wallet-a",
-        &python("session('running'); print('original session running')"),
+        &coco("session running"),
     )?;
     client.call_refused(
         "wallet_initialize",
@@ -388,9 +344,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
         directory,
         "issuance",
         "wallet-a",
-        &python(
-            "deadline=time.monotonic()+40\nwhile time.monotonic()<deadline:\n b=api('/balance')['output'].get('http://mint:3338',{}).get('sats')\n if b==5000: break\n time.sleep(.5)\nelse: raise RuntimeError('issuance_not_observed')\nprint(json.dumps({'native_ready_total_sat':b}))",
-        ),
+        &coco("wait-balance http://mint:3338 5000"),
     )?;
     balance(client, directory, "funded", "wallet-a", 5000)?;
     for (id, amount, remaining) in [
@@ -411,9 +365,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
                 directory,
                 "restart-session-locked",
                 "wallet-a",
-                &python(
-                    "s=api('/v1/status'); assert s['seedAccess']['state']=='locked' and s['cocoSession']['state']=='stopped'; print('explicit unlock required')",
-                ),
+                &coco("locked"),
             )?;
             balance(
                 client,
@@ -470,9 +422,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
             directory,
             &format!("{id}-native-balance"),
             "wallet-a",
-            &python(&format!(
-                "b=api('/balance')['output']['http://mint:3338']['sats']; assert b=={remaining}; print(json.dumps({{'native_ready_total_sat':b}}))"
-            )),
+            &coco(&format!("balance http://mint:3338 {remaining}")),
         )?;
         balance(client, directory, &format!("{id}-isolated"), "wallet-b", 0)?;
     }
@@ -489,9 +439,7 @@ settings['mintUrl']='http://mint:3338'; config.write_text(json.dumps(settings));
         directory,
         "stopped-session-healthy",
         "wallet-a",
-        &python(
-            "session('stopped'); assert json.load(urllib.request.urlopen('http://127.0.0.1:62626/health'))['status']=='ok'; print('daemon healthy with session stopped')",
-        ),
+        &coco("session stopped"),
     )?;
     balance(
         client,
@@ -539,7 +487,7 @@ fn projection_checkpoint(client: &mut McpClient, directory: &Path) -> Result<()>
         "project-initialize",
         "wallet-a",
         json!({"script":
-        "python3 - <<'PY'\nimport os,secrets\nfrom pathlib import Path\np=Path('/wallet/session.passphrase'); p.write_text(secrets.token_urlsafe(32)); p.chmod(0o600)\nos.execvp('cocod',['cocod','wallet','initialize','--passphrase',p.read_text()])\nPY"}),
+        "/opt/proofstorm/driver coco initialize-cli"}),
         0,
     )?;
     let receipt = operation(
@@ -621,7 +569,7 @@ fn run_scoped(
     )?;
     let mut document = document();
     if transfer {
-        document["components"][5] = json!({"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}});
+        document["components"][5] = json!({"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}});
     }
     if projection_only {
         document["components"]
@@ -631,20 +579,20 @@ fn run_scoped(
         document["links"] = json!([]);
     }
     client.call(
-        "lab_create",
-        json!({"draft_id":"cocod-wallet","lab":document,"idempotency_key":"create"}),
+        "cell_create",
+        json!({"draft_id":"cocod-wallet","cell":document,"idempotency_key":"create"}),
     )?;
-    let published=client.call("lab_publish",json!({"draft_id":"cocod-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published=client.call("cell_publish",json!({"draft_id":"cocod-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
     save(&directory, "published", &published)?;
-    let lock = lab::lock_entry(&published, "cocod-wallet")?;
+    let lock = cell::lock_entry(&published, "cocod-wallet")?;
     if lock.pointer("/build_provenance/commit_sha")
         != Some(&json!("44e5101cbea370132af6e68f88e01b47e39431c4"))
     {
         bail!("cocod provenance lost from lock");
     }
-    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
     let result = (|| -> Result<()> {
-        let ready = lab::wait_ready(&mut client, INSTANCE)?;
+        let ready = cell::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
         client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
@@ -693,8 +641,8 @@ fn run_scoped(
         "outcome",
         &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(ToString::to_string)}),
     )?;
-    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
         bail!("teardown unverified");

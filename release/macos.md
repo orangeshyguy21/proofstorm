@@ -1,8 +1,9 @@
 # macOS Apple Silicon release
 
-Status: CI build/install coverage and multi-platform draft promotion are wired.
-The public alpha.2 still contains only Linux AMD64. Hosted builds and fresh-Mac
-acceptance must pass before announcing a Mac download.
+The shared release flow builds native Apple Silicon archives alongside Linux.
+Use the [published downloads](https://github.com/orangeshyguy21/proofstorm/releases)
+and their `release.json` for the selected version's platform inventory. Build,
+public-install, runtime and desktop acceptance are separate evidence.
 
 ## What a Mac release contains
 
@@ -10,7 +11,7 @@ acceptance must pass before announcing a Mac download.
 | --- | --- | --- |
 | CLI, MCP server, embedded browser GUI | `aarch64-apple-darwin` | macOS |
 | Controller and execution helper | `linux/arm64` | Docker's Linux runtime |
-| Lab components and protocol prober | Pinned images with ARM64 support | The same private runtime |
+| Cell components and protocol prober | Pinned images with ARM64 support | The same private runtime |
 
 There is no macOS container image. The host bundle is native macOS; its services
 are Linux containers. A matching controller receipt must come from the exact same
@@ -101,11 +102,11 @@ release the host. AWS warns that Apple Silicon host scrubbing can take up to
 the scrubbing `pending` state. Check the host and retained EBS resources afterward.
 [AWS stop and release procedure](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/mac-instance-stop.html).
 
-## Remaining acceptance
+## Acceptance for each candidate
 
 1. Build the ARM64 controller from reviewed source, publish by immutable digest,
    and build the matching native Mac archive. Verify every catalog/helper image
-   needed by the smoke lab has an anonymously accessible ARM64 manifest.
+   needed by the smoke cell has an anonymously accessible ARM64 manifest.
 2. Verify the first hosted Mac build and installer run, then prepare a new alpha
    version through the shared release flow. Inspect both platform reports before
    explicitly publishing a candidate for fresh-host testing.
@@ -113,9 +114,9 @@ the scrubbing `pending` state. Check the host and retained EBS resources afterwa
    installed Rust, development flags, or cached Proofstorm state. Docker and the
    chosen agent are prerequisites, not payload build tools. No compilation should
    occur during installation or setup.
-4. Repeat Linux's install → setup/doctor → Bitcoin lab → actual MCP read →
+4. Repeat Linux's install → setup/doctor → Bitcoin cell → actual MCP read →
    reinstall → cleanup scenario. Compare prober scale and status to Kubernetes.
-   Reinstall must preserve the existing lab; cleanup must verify storage absence.
+   Reinstall must preserve the existing cell; cleanup must verify storage absence.
 5. In a desktop session, separately test default-browser opening/reuse, folder
    selection, and native agent buttons. Record permission prompts and any signing
    or Gatekeeper friction. Do not prescribe disabling macOS security checks.

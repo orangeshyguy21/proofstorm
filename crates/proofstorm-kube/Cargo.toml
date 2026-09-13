@@ -7,9 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+proofstorm-driver = { path = "../proofstorm-driver", default-features = false }
 k8s-openapi.workspace = true
 kube.workspace = true
 proofstorm-core = { path = "../proofstorm-core" }
+proofstorm-prober = { path = "../proofstorm-prober" }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

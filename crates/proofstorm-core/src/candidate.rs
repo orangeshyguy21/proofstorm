@@ -130,13 +130,13 @@ pub fn candidate_catalog_entry(
     entry.support_lifecycle = SupportLifecycle::Experimental;
     entry.image.clone_from(image);
     entry.build_provenance = None;
-    if !candidate
-        .build_features
-        .contains(&crate::CatalogFeature::MintManagementRpc)
-    {
-        entry
-            .features
-            .remove(&crate::CatalogFeature::MintManagementRpc);
+    for feature in [
+        crate::CatalogFeature::MintManagementRpc,
+        crate::CatalogFeature::NativeCliEntrypoints,
+    ] {
+        if !candidate.build_features.contains(&feature) {
+            entry.features.remove(&feature);
+        }
     }
     entry.source_digest = digest_json(&(
         base.source_digest.as_str(),
@@ -232,7 +232,10 @@ mod tests {
             pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
             resource_name: "candidate-aabbccdd".into(),
             request_digest: "sha256:request".into(),
-            build_features: BTreeSet::from([crate::CatalogFeature::MintManagementRpc]),
+            build_features: BTreeSet::from([
+                crate::CatalogFeature::MintManagementRpc,
+                crate::CatalogFeature::NativeCliEntrypoints,
+            ]),
             phase: CandidateBuildPhase::Succeeded,
             accepted_at_unix: 1,
             started_at_unix: Some(2),
@@ -271,6 +274,25 @@ mod tests {
                 .unwrap()
                 .features
                 .contains(&crate::CatalogFeature::MintManagementRpc)
+        );
+        let mut without_entrypoints = candidate.clone();
+        without_entrypoints
+            .build_features
+            .remove(&crate::CatalogFeature::NativeCliEntrypoints);
+        let old = candidate_catalog_entry(base, &without_entrypoints).unwrap();
+        assert!(
+            old.features
+                .contains(&crate::CatalogFeature::MintManagementRpc)
+        );
+        assert!(
+            !old.features
+                .contains(&crate::CatalogFeature::NativeCliEntrypoints)
+        );
+        assert!(
+            candidate_catalog_entry(base, &candidate)
+                .unwrap()
+                .features
+                .contains(&crate::CatalogFeature::NativeCliEntrypoints)
         );
     }
 

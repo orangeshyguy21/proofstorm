@@ -5,8 +5,12 @@
 //! Shared application behavior for developer and MCP clients.
 pub mod artifacts;
 pub mod bootstrap;
+mod command_name;
 pub mod config;
+pub use command_name::command_name;
+pub mod cell;
 pub mod connections;
+pub mod dev_reset;
 pub mod developer;
 pub mod environment;
 mod error;
@@ -17,7 +21,6 @@ pub mod http;
 pub mod installation;
 pub mod installer;
 pub mod journal;
-pub mod lab;
 pub mod lifecycle;
 pub mod observer;
 pub mod platform;

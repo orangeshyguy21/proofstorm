@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kube::CustomResource;
 use proofstorm_core::{
-    CandidateBuildPhase, Capability, ComponentStatus, InventoryEntry, LabSpec, ResolvedLock,
+    CandidateBuildPhase, Capability, CellSpec, ComponentStatus, InventoryEntry, ResolvedLock,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
@@ -12,27 +12,27 @@ use serde_json::Value;
 #[kube(
     group = "proofstorm.dev",
     version = "v1alpha1",
-    kind = "ProofstormLab",
-    plural = "proofstormlabs",
-    shortname = "pslab",
+    kind = "ProofstormCell",
+    plural = "proofstormcells",
+    shortname = "pscell",
     namespaced,
-    status = "ProofstormLabStatus"
+    status = "ProofstormCellStatus"
 )]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProofstormLabSpec {
+pub struct ProofstormCellSpec {
     pub workspace_id: String,
     pub instance_id: String,
     /// Stable opaque identity used to derive the instance namespace.
     pub instance_key: String,
-    /// Digest of the immutable resolved lab revision.
+    /// Digest of the immutable resolved cell revision.
     pub revision_digest: String,
     pub lock: ResolvedLock,
-    pub lab: LabSpec,
+    pub cell: CellSpec,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "PascalCase")]
-pub enum LabPhase {
+pub enum CellPhase {
     #[default]
     Pending,
     Blocked,
@@ -53,19 +53,19 @@ pub struct TeardownReceipt {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProofstormLabStatus {
+pub struct ProofstormCellStatus {
     #[serde(default = "initial_desired_generation")]
     pub observed_desired_generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_converged_revision: Option<String>,
     #[serde(default)]
     pub retained_storage: BTreeMap<String, String>,
-    pub phase: LabPhase,
+    pub phase: CellPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
-    /// Immutable lab revision against which this status was observed.
+    /// Immutable cell revision against which this status was observed.
     pub observed_revision_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_protocol_probe_lease: Option<String>,
@@ -132,17 +132,17 @@ pub struct ProofstormCandidateBuildStatus {
 #[kube(
     group = "proofstorm.dev",
     version = "v1alpha1",
-    kind = "ProofstormLabAction",
-    plural = "proofstormlabactions",
+    kind = "ProofstormCellAction",
+    plural = "proofstormcellactions",
     shortname = "psaction",
     namespaced,
-    status = "ProofstormLabActionStatus"
+    status = "ProofstormCellActionStatus"
 )]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProofstormLabActionSpec {
+pub struct ProofstormCellActionSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_scope: Option<proofstorm_core::PrivateAccessGrant>,
-    pub lab_name: String,
+    pub cell_name: String,
     pub workspace_id: String,
     pub instance_id: String,
     pub instance_key: String,
@@ -155,13 +155,13 @@ pub struct ProofstormLabActionSpec {
     pub request_digest: String,
     pub capability: Capability,
     pub accepted_at_unix: i64,
-    #[schemars(with = "LabActionSchema")]
-    pub action: LabAction,
+    #[schemars(with = "CellActionSchema")]
+    pub action: CellAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "parameters", rename_all = "snake_case")]
-pub enum LabAction {
+pub enum CellAction {
     NodeStart(ComponentControlAction),
     NodeStop(ComponentControlAction),
     NodeRestart(ComponentControlAction),
@@ -204,15 +204,15 @@ pub enum LabAction {
 #[derive(JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(dead_code)]
-struct LabActionSchema {
-    kind: LabActionKindSchema,
-    parameters: LabActionParametersSchema,
+struct CellActionSchema {
+    kind: CellActionKindSchema,
+    parameters: CellActionParametersSchema,
 }
 
 #[derive(JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
-enum LabActionKindSchema {
+enum CellActionKindSchema {
     NodeStart,
     NodeStop,
     NodeRestart,
@@ -251,7 +251,7 @@ enum LabActionKindSchema {
 #[derive(JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(dead_code)]
-struct LabActionParametersSchema {
+struct CellActionParametersSchema {
     transfer_method: Option<TransferMethod>,
     recipient_grant_id: Option<String>,
     reference: Option<String>,
@@ -310,7 +310,7 @@ pub struct ComponentControlAction {
 
 /// A bounded read of one component's own container log.
 ///
-/// The controller fulfills this directly rather than rendering a Job: lab
+/// The controller fulfills this directly rather than rendering a Job: cell
 /// workloads deliberately carry no Kubernetes credentials, and the log must
 /// stay readable when the component is unready, crash-looping, or stopped,
 /// which is exactly when it is worth reading.
@@ -330,7 +330,7 @@ pub struct AuthenticationConformanceAction {
     pub identity_provider: String,
 }
 
-/// Mint and spend a BAT while retaining the spent token inside the lab.
+/// Mint and spend a BAT while retaining the spent token inside the cell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthenticationProtectedSpendAction {
@@ -683,7 +683,7 @@ fn preserved_object_schema(_: &mut SchemaGenerator) -> Schema {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProofstormLabActionStatus {
+pub struct ProofstormCellActionStatus {
     pub phase: ActionPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_execution: Option<NativeExecutionRef>,

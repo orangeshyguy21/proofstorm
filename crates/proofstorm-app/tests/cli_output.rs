@@ -14,7 +14,12 @@ fn cli() -> Command {
 fn human_default_and_explicit_json_work_before_and_after_subcommand() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
-    let human = cli().arg("--home").arg(&home).arg("init").output().unwrap();
+    let human = cli()
+        .arg("--home")
+        .arg(&home)
+        .args(["dev", "init"])
+        .output()
+        .unwrap();
     assert!(
         human.status.success(),
         "{}",
@@ -22,7 +27,7 @@ fn human_default_and_explicit_json_work_before_and_after_subcommand() {
     );
     assert_eq!(human.stdout, b"Local permissions configured.\n");
     assert_eq!(human.stderr, b"Configuring local permissions...\n");
-    for args in [["--json", "init"], ["init", "--json"]] {
+    for args in [["--json", "dev", "init"], ["dev", "init", "--json"]] {
         let output = cli().arg("--home").arg(&home).args(args).output().unwrap();
         assert!(output.status.success());
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -37,16 +42,20 @@ fn early_failure_preserves_error_and_has_no_success_output() {
     for (command, label) in [
         ("setup", "Checking installation"),
         ("gui", "Checking Proofstorm files"),
-        ("stop", "Stopping GUI"),
+        ("gui stop", "Stopping GUI"),
     ] {
-        let human = cli().arg(command).output().unwrap();
+        let human = cli().args(command.split_whitespace()).output().unwrap();
         assert!(!human.status.success());
         assert!(human.stdout.is_empty());
         let stderr = String::from_utf8(human.stderr).unwrap();
         assert!(stderr.starts_with(&format!("{label}...\n")));
         assert!(stderr.contains("Error:") && stderr.contains("--home"));
         assert!(!stderr.contains(['\r', '\x1b']));
-        let machine = cli().args([command, "--json"]).output().unwrap();
+        let machine = cli()
+            .args(command.split_whitespace())
+            .arg("--json")
+            .output()
+            .unwrap();
         assert!(!machine.status.success());
         assert!(machine.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&machine.stderr).contains(label));
@@ -58,27 +67,128 @@ fn every_public_command_accepts_global_json() {
     for command in [
         "setup",
         "gui",
-        "stop",
+        "gui start",
+        "gui stop",
+        "gui status",
         "doctor",
-        "open",
-        "attach",
-        "init",
+        "agent open",
+        "agent configure",
+        "dev init",
+        "dev reset",
         "up",
-        "down",
+        "rm",
         "status",
-        "environment",
+        "ls",
         "exec",
-        "result",
+        "ops show",
+        "ops ls",
+        "ops sync",
         "connect",
-        "sync",
-        "serve",
-        "install-bundle",
+        "version",
+        "internal install-bundle",
     ] {
-        let output = cli().args([command, "--help"]).output().unwrap();
+        let output = cli()
+            .args(command.split_whitespace())
+            .arg("--help")
+            .output()
+            .unwrap();
         assert!(output.status.success(), "{command}");
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("--json"),
             "{command}"
         );
     }
+}
+
+#[test]
+fn doctor_and_unregistered_setup_do_not_initialize_a_home() {
+    let root = tempfile::tempdir().unwrap();
+    for action in ["doctor", "setup"] {
+        let home = root.path().join(action);
+        let result = cli()
+            .arg("--home")
+            .arg(&home)
+            .args([action, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            !result.status.success(),
+            "unregistered {action} unexpectedly succeeded"
+        );
+        assert!(
+            !home.exists(),
+            "{action} created state before verifying its installation"
+        );
+    }
+}
+
+#[test]
+fn missing_runtime_selection_fails_before_local_state_is_created() {
+    let root = tempfile::tempdir().unwrap();
+    let ambient = root.path().join("ambient.yaml");
+    std::fs::write(&ambient, "must not be read or rewritten").unwrap();
+    for args in [
+        vec!["ls"],
+        vec!["--context", "legacy", "ls"],
+        vec!["--kubeconfig", "explicit.yaml", "ls"],
+    ] {
+        let output = cli()
+            .current_dir(root.path())
+            .env("KUBECONFIG", &ambient)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("requires both"));
+        assert!(!root.path().join(".proofstorm").exists());
+    }
+    assert_eq!(
+        std::fs::read_to_string(ambient).unwrap(),
+        "must not be read or rewritten"
+    );
+}
+
+#[test]
+fn operation_listing_uses_recorded_state_and_requires_read_access() {
+    use proofstorm_core::Capability;
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("history.sqlite3");
+    let store = proofstorm_store::Store::open(&database).unwrap();
+    proofstorm_app::developer::configure(&store, "local-cell", "developer").unwrap();
+    store
+        .reserve_cell("local-cell", "developer", "demo", "fixture")
+        .unwrap();
+    let read = || {
+        cli()
+            .arg("--database")
+            .arg(&database)
+            .arg("--kubeconfig")
+            .arg(root.path().join("missing-kubeconfig"))
+            .args(["--context", "explicit-test-context"])
+            .args(["--json", "ops", "ls", "demo"])
+            .output()
+            .unwrap()
+    };
+    store
+        .replace_grants(
+            "local-cell",
+            "developer",
+            [Capability::CellStatus, Capability::ExperimentRead],
+        )
+        .unwrap();
+    let output = read();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let page: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(page["items"], serde_json::json!([]));
+    assert!(page["next_cursor"].is_null());
+    store
+        .replace_grants("local-cell", "developer", [Capability::CellStatus])
+        .unwrap();
+    assert!(!read().status.success());
+    assert!(!root.path().join("missing-kubeconfig").exists());
 }

@@ -1,29 +1,29 @@
-//! Resume accepted lab edits without allowing an older request to overwrite newer desired state.
+//! Resume accepted cell edits without allowing an older request to overwrite newer desired state.
 use crate::{Error, Runtime};
 use k8s_openapi::api::core::v1::ConfigMap;
 use kube::{
     Api, Resource, ResourceExt,
     api::{Patch, PatchParams, PostParams},
 };
-use proofstorm_core::{InstancePhase, LabInstanceStatus};
-use proofstorm_kube::{ProofstormLab, ProofstormLabSpec};
+use proofstorm_core::{CellInstanceStatus, InstancePhase};
+use proofstorm_kube::{ProofstormCell, ProofstormCellSpec};
 use proofstorm_store::Store;
 
 pub const GENERATION: &str = "proofstorm.dev/desired-generation";
 pub const DELETE_DATA: &str = "proofstorm.dev/delete-component-data";
 
-pub async fn snapshot(runtime: &Runtime, lab: &ProofstormLab) -> Result<(), Error> {
-    let name = proofstorm_core::digest_json(&(&lab.spec.instance_key, &lab.spec.revision_digest));
+pub async fn snapshot(runtime: &Runtime, cell: &ProofstormCell) -> Result<(), Error> {
+    let name = proofstorm_core::digest_json(&(&cell.spec.instance_key, &cell.spec.revision_digest));
     let maps = Api::<ConfigMap>::namespaced(runtime.client.clone(), &runtime.control_namespace);
     let name = format!("revision-{}", &name[7..39]);
-    let value = serde_json::json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":name,"ownerReferences":lab.controller_owner_ref(&()).into_iter().collect::<Vec<_>>()},"immutable":true,"data":{"spec.json":serde_json::to_string(&lab.spec).map_err(|e|Error::problem("serialization_failed",e.to_string()))?}});
+    let value = serde_json::json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":name,"ownerReferences":cell.controller_owner_ref(&()).into_iter().collect::<Vec<_>>()},"immutable":true,"data":{"spec.json":serde_json::to_string(&cell.spec).map_err(|e|Error::problem("serialization_failed",e.to_string()))?}});
     if let Some(existing) = maps.get_opt(&name).await.map_err(runtime_error)? {
-        let expected = serde_json::to_string(&lab.spec)
+        let expected = serde_json::to_string(&cell.spec)
             .map_err(|e| Error::problem("serialization_failed", e.to_string()))?;
         if existing.data.as_ref().and_then(|d| d.get("spec.json")) != Some(&expected) {
             return Err(Error::problem(
-                "lab_revision_conflict",
-                "Immutable revision snapshot differs from the expected lab configuration",
+                "cell_revision_conflict",
+                "Immutable revision snapshot differs from the expected cell configuration",
             ));
         }
     } else {
@@ -48,7 +48,7 @@ fn runtime_error(e: kube::Error) -> Error {
     };
     Error::failure(
         e.to_string(),
-        Some(serde_json::json!({"code":"lab_update_runtime", "http_status":status})),
+        Some(serde_json::json!({"code":"cell_update_runtime", "http_status":status})),
     )
 }
 
@@ -58,7 +58,7 @@ pub async fn reconcile(
     workspace: &str,
     principal: &str,
     id: &str,
-) -> Result<LabInstanceStatus, Error> {
+) -> Result<CellInstanceStatus, Error> {
     for attempt in 0..4 {
         let result = reconcile_once(runtime, store, workspace, principal, id).await;
         if result.as_ref().is_err_and(|error| {
@@ -84,7 +84,7 @@ async fn reconcile_once(
     workspace: &str,
     principal: &str,
     id: &str,
-) -> Result<LabInstanceStatus, Error> {
+) -> Result<CellInstanceStatus, Error> {
     // Always reread durable desired state, including when replaying an old accepted request.
     let instance = store.instance(workspace, principal, id)?;
     let state = store.update_state(workspace, principal, id)?;
@@ -93,33 +93,35 @@ async fn reconcile_once(
     }
     let revision =
         store.revision_for_materialize(workspace, principal, &instance.revision_digest)?;
-    let labs = Api::<ProofstormLab>::namespaced(runtime.client.clone(), &runtime.control_namespace);
-    let Some(mut lab) = labs
+    let cells =
+        Api::<ProofstormCell>::namespaced(runtime.client.clone(), &runtime.control_namespace);
+    let Some(mut cell) = cells
         .get_opt(&instance.resource_name)
         .await
         .map_err(runtime_error)?
     else {
-        // Never resurrect an externally deleted or closing lab as a side effect of recovery.
+        // Never resurrect an externally deleted or closing cell as a side effect of recovery.
         return Err(Error::problem(
-            "lab_update_runtime_missing",
-            "existing lab is absent; edit reconciliation will not recreate it",
+            "cell_update_runtime_missing",
+            "existing cell is absent; edit reconciliation will not recreate it",
         ));
     };
-    proofstorm_kube::require_open_lab(&lab).map_err(|e| Error::problem(e.code(), e.to_string()))?;
-    let observed_desired = lab
+    proofstorm_kube::require_open_cell(&cell)
+        .map_err(|e| Error::problem(e.code(), e.to_string()))?;
+    let observed_desired = cell
         .annotations()
         .get(GENERATION)
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(1);
     if observed_desired > state.generation {
         return Err(Error::problem(
-            "lab_update_superseded",
+            "cell_update_superseded",
             "cluster already has a newer desired generation",
         ));
     }
-    if lab.spec.revision_digest != revision.digest || observed_desired != state.generation {
-        snapshot(runtime, &lab).await?;
-        let actions = Api::<proofstorm_kube::ProofstormLabAction>::namespaced(
+    if cell.spec.revision_digest != revision.digest || observed_desired != state.generation {
+        snapshot(runtime, &cell).await?;
+        let actions = Api::<proofstorm_kube::ProofstormCellAction>::namespaced(
             runtime.client.clone(),
             &runtime.control_namespace,
         );
@@ -136,33 +138,33 @@ async fn reconcile_once(
                 .annotations()
                 .contains_key("proofstorm.dev/action-revision")
             {
-                actions.patch(&action.name_any(),&PatchParams::default(),&Patch::Merge(serde_json::json!({"metadata":{"resourceVersion":action.metadata.resource_version,"annotations":{"proofstorm.dev/action-revision":lab.spec.revision_digest}}}))).await.map_err(runtime_error)?;
+                actions.patch(&action.name_any(),&PatchParams::default(),&Patch::Merge(serde_json::json!({"metadata":{"resourceVersion":action.metadata.resource_version,"annotations":{"proofstorm.dev/action-revision":cell.spec.revision_digest}}}))).await.map_err(runtime_error)?;
             }
         }
-        lab.spec = ProofstormLabSpec {
+        cell.spec = ProofstormCellSpec {
             workspace_id: workspace.into(),
             instance_id: id.into(),
             instance_key: instance.instance_key.clone(),
             revision_digest: revision.digest,
             lock: revision.lock,
-            lab: revision.lab,
+            cell: revision.cell,
         };
-        lab.annotations_mut()
+        cell.annotations_mut()
             .insert(GENERATION.into(), state.generation.to_string());
         let deleted = store.pending_deleted_data(workspace, principal, id)?;
-        lab.annotations_mut().insert(
+        cell.annotations_mut().insert(
             DELETE_DATA.into(),
             serde_json::to_string(&deleted)
                 .map_err(|e| Error::problem("serialization_failed", e.to_string()))?,
         );
         // replace uses resourceVersion: simultaneous edit/close or a newer update makes this fail.
-        lab = labs
-            .replace(&instance.resource_name, &PostParams::default(), &lab)
+        cell = cells
+            .replace(&instance.resource_name, &PostParams::default(), &cell)
             .await
             .map_err(runtime_error)?;
-        snapshot(runtime, &lab).await?;
+        snapshot(runtime, &cell).await?;
     }
-    let status = crate::runtime::status_from_resource(instance, &lab);
+    let status = crate::runtime::status_from_resource(instance, &cell);
     if status.phase == InstancePhase::Ready {
         store.mark_update_applied(
             workspace,
@@ -200,7 +202,7 @@ pub fn start_recovery(
                     {
                         cleanup_cursor = next.into();
                     }
-                    eprintln!("lab lifecycle reconciliation: {error}");
+                    eprintln!("cell lifecycle reconciliation: {error}");
                 }
             }
             let Ok(ids) = store.pending_updates(&workspace, &principal) else {

@@ -2,6 +2,7 @@
 mod cluster;
 mod local_controller;
 mod process;
+pub mod teardown;
 mod tools;
 
 use crate::installation::Installation;
@@ -120,6 +121,21 @@ fn tool(home: &Path, name: &str) -> Result<PathBuf> {
     )
 }
 
+/// Resolve the installation's checksum-verified helper, with no PATH fallback.
+pub fn installed_tool(installation: &Installation, name: &str) -> Result<PathBuf> {
+    tool(&installation.home, name)
+}
+
+/// Passive ownership check used by installation-aware test clients.
+pub fn verify_runtime_identity(installation: &Installation) -> Result<()> {
+    ensure!(
+        !installation.home.join(teardown::RETIRED).exists(),
+        "installation runtime is retired"
+    );
+    cluster::owned(installation)?;
+    cluster::verify_kubeconfig(installation)
+}
+
 fn docker(home: &Path, args: &[&str], seconds: u64) -> Result<String> {
     process::run(home, Path::new("docker"), args, seconds)
 }
@@ -180,7 +196,7 @@ fn preflight(home: &Path) -> Result<Value> {
     );
     Ok(
         json!({"docker_memory_bytes":info["MemTotal"],"docker_cpus":info["NCPU"],"buildx":buildx.trim(),"disk":disk.trim(),
-        "resource_note":"Observed capacity only; minimum lab requirements have not yet been measured."}),
+        "resource_note":"Observed capacity only; minimum cell requirements have not yet been measured."}),
     )
 }
 
@@ -237,7 +253,7 @@ pub fn doctor(home: &Path) -> Value {
         })(),
     );
     json!({"ok":checks.iter().all(|c| c["ok"] == true),"checks":checks,
-        "mcp_server":"not checked","harness":"not checked","image_pulls":"not checked by read-only doctor; lab creation verifies selected pulls (setup --prefetch-all verifies the full catalog)"})
+        "mcp_server":"not checked","harness":"not checked","image_pulls":"not checked by read-only doctor; cell creation verifies selected pulls (setup --prefetch-all verifies the full catalog)"})
 }
 
 /// Setup is explicit, serialized per home, and reconciles each stage on retry.
@@ -290,6 +306,10 @@ pub fn setup_with_progress(
     let home = &installation.home;
     progress("Waiting for installation lock");
     let _guard = Installation::lock(home)?;
+    ensure!(
+        !home.join(teardown::RETIRED).exists(),
+        "this installation is retired; select a new home instead of reusing deleted state"
+    );
     let stage = |name, action: &mut dyn FnMut() -> Result<()>| {
         progress(match name {
             "tools" => "Preparing tools",
@@ -355,7 +375,7 @@ pub fn setup_with_progress(
     Ok(
         json!({"ready":true,"home":home,"cluster":installation.cluster_name(),"capacity":capacity,
         "permissions_initialized":true,"image_policy":if prefetch_all {"prefetch_all"} else {"on_demand"},
-        "next":"Runtime ready. Run proofstorm gui, or proofstorm open codex, proofstorm open opencode, or proofstorm open claude from your project. Create a lab with proofstorm up FILE; its images download on first use."}),
+        "next":format!("Open the GUI: {} gui", crate::command_name())}),
     )
 }
 
@@ -393,7 +413,7 @@ fn stage(home: &Path, name: &str, action: impl FnOnce() -> Result<()>) -> Result
     result.with_context(|| format!("setup stage {name} failed; rerun the same setup command to retry (no resources were deleted)"))
 }
 
-/// Only explicit, authorized lab mutations call this. Reads never start downloads.
+/// Only explicit, authorized cell mutations call this. Reads never start downloads.
 pub(crate) async fn prepare_images(
     installation: Installation,
     lock: proofstorm_core::ResolvedLock,
@@ -429,7 +449,7 @@ fn selected_images(
                     && candidate_prefixes
                         .iter()
                         .any(|p| entry.image.starts_with(p))),
-            "lab image is neither shipped nor an installation-local candidate"
+            "cell image is neither shipped nor an installation-local candidate"
         );
         source(&entry.image)?; // Require an immutable digest for every image.
         selected.insert(entry.image.clone());
@@ -527,20 +547,20 @@ fn deploy(
         .as_array()
         .context("CRD list missing")?
         .iter()
-        .any(|item| item["metadata"]["name"] == "proofstormlabs.proofstorm.dev")
+        .any(|item| item["metadata"]["name"] == "proofstormcells.proofstorm.dev")
     {
-        let labs: Value = serde_json::from_str(&kube(
+        let cells: Value = serde_json::from_str(&kube(
             installation,
-            &["get", "proofstormlabs", "-A", "-o", "json"],
+            &["get", "proofstormcells", "-A", "-o", "json"],
         )?)?;
-        for lab in labs["items"].as_array().context("lab list missing")? {
-            serde_json::from_value::<proofstorm_kube::ProofstormLabSpec>(lab["spec"].clone())
+        for cell in cells["items"].as_array().context("cell list missing")? {
+            serde_json::from_value::<proofstorm_kube::ProofstormCellSpec>(cell["spec"].clone())
                 .context(
-                    "existing lab schema is incompatible; no automatic migration or deletion",
+                    "existing cell schema is incompatible; no automatic migration or deletion",
                 )?;
         }
     }
-    progress("Applying lab resource schemas");
+    progress("Applying cell resource schemas");
     kube(
         installation,
         &[

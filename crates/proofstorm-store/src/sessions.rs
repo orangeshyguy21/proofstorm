@@ -131,7 +131,7 @@ impl Store {
         self.remember_session(workspace, &session.id)?;
         Ok(session)
     }
-    /// Finish tracking only. Accepted work, lab availability and access grants are unaffected.
+    /// Finish tracking only. Accepted work, cell availability and access grants are unaffected.
     pub fn finish_session(
         &self,
         workspace: &str,
@@ -158,13 +158,13 @@ impl Store {
         }
         Ok(session)
     }
-    pub fn finish_lab_sessions(
+    pub fn finish_cell_sessions(
         &self,
         workspace: &str,
         principal: &str,
         instance: &str,
     ) -> Result<(), StoreError> {
-        self.authorize(workspace, principal, Capability::LabClose)?;
+        self.authorize(workspace, principal, Capability::CellClose)?;
         self.lock()?.execute("UPDATE sessions SET phase_json='\"finished\"',finished_at=COALESCE(finished_at,?1) WHERE workspace_id=?2 AND instance_id=?3",params![now_unix(),workspace,instance])?;
         Ok(())
     }

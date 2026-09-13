@@ -1,6 +1,6 @@
 //! Pure presentation helpers, also checked by native tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-use proofstorm_view::{ComponentView, EnvironmentLab, ResourceDemand};
+use proofstorm_view::{ComponentView, EnvironmentCell, ResourceDemand};
 
 pub fn label(value: &impl serde::Serialize) -> String {
     serde_json::to_value(value)
@@ -9,26 +9,26 @@ pub fn label(value: &impl serde::Serialize) -> String {
         .unwrap_or_default()
         .replace('_', " ")
 }
-pub fn lab_name(lab: &EnvironmentLab) -> String {
-    lab.handle
+pub fn cell_name(cell: &EnvironmentCell) -> String {
+    cell.handle
         .as_ref()
-        .map_or_else(|| lab.id.clone(), |h| h.name.clone())
+        .map_or_else(|| cell.id.clone(), |h| h.name.clone())
 }
-pub fn closed(lab: &EnvironmentLab) -> bool {
-    lab.handle
+pub fn closed(cell: &EnvironmentCell) -> bool {
+    cell.handle
         .as_ref()
-        .is_some_and(|h| h.phase == proofstorm_view::LabHandlePhase::Closed)
+        .is_some_and(|h| h.phase == proofstorm_view::CellHandlePhase::Closed)
 }
-pub fn lab_phase(lab: &EnvironmentLab) -> String {
-    if lab.read_error.is_some() {
+pub fn cell_phase(cell: &EnvironmentCell) -> String {
+    if cell.read_error.is_some() {
         "history unavailable".into()
-    } else if closed(lab) {
+    } else if closed(cell) {
         "closed".into()
     } else {
-        lab.runtime
+        cell.runtime
             .phase
             .as_ref()
-            .map_or_else(|| label(&lab.runtime.state), label)
+            .map_or_else(|| label(&cell.runtime.state), label)
     }
 }
 pub fn health(component: &ComponentView) -> &'static str {
@@ -55,7 +55,25 @@ pub fn merge_resources(target: &mut Option<ResourceDemand>, page: Option<Resourc
         });
         target.retained_storage.extend(page.retained_storage);
         for workload in page.workloads {
-            if !target.workloads.iter().any(|w| w.name == workload.name) {
+            if let Some(existing) = target
+                .workloads
+                .iter_mut()
+                .find(|w| w.name == workload.name)
+            {
+                if existing.omitted_container_count > 0 {
+                    let total = workload
+                        .containers
+                        .len()
+                        .saturating_add(workload.omitted_container_count);
+                    for container in workload.containers {
+                        if !existing.containers.iter().any(|c| c.name == container.name) {
+                            existing.containers.push(container);
+                        }
+                    }
+                    existing.omitted_container_count =
+                        total.saturating_sub(existing.containers.len());
+                }
+            } else {
                 target.workloads.push(workload);
             }
         }
@@ -107,7 +125,7 @@ pub fn cpu_quantity(value: &str) -> String {
     cpu(number.parse::<f64>().ok().map(|number| number * factor))
 }
 pub const OBSERVATION_MAX_AGE: i64 = 20;
-// Kubernetes metrics refresh less often than the lab observations.
+// Kubernetes metrics refresh less often than the cell observations.
 pub const METRICS_MAX_AGE: i64 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,8 +195,8 @@ pub fn sat(value: u64) -> String {
         })
 }
 
-pub fn block_height(lab: &proofstorm_view::LabUsage) -> Option<u64> {
-    lab.balances
+pub fn block_height(cell: &proofstorm_view::CellUsage) -> Option<u64> {
+    cell.balances
         .iter()
         .filter(|b| b.error.is_none())
         .filter_map(|b| b.block_height)
@@ -265,7 +283,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn height_tracks_the_current_lab_and_can_decrease() {
+    fn height_tracks_the_current_cell_and_can_decrease() {
         let observation = |height, error| proofstorm_view::ComponentBalance {
             rollout_digest: None,
             lightning: None,
@@ -276,7 +294,7 @@ mod tests {
             amounts: vec![],
             block_height: height,
         };
-        let mut lab = proofstorm_view::LabUsage {
+        let mut cell = proofstorm_view::CellUsage {
             balances: vec![
                 observation(Some(12), None),
                 observation(Some(15), None),
@@ -284,17 +302,18 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert_eq!(block_height(&lab), Some(15));
-        lab.balances = vec![observation(Some(0), None)];
-        assert_eq!(block_height(&lab), Some(0));
-        lab.balances.clear();
-        assert_eq!(block_height(&lab), None);
+        assert_eq!(block_height(&cell), Some(15));
+        cell.balances = vec![observation(Some(0), None)];
+        assert_eq!(block_height(&cell), Some(0));
+        cell.balances.clear();
+        assert_eq!(block_height(&cell), None);
     }
     #[test]
     fn merges_component_pages_without_duplicating_shared_demands() {
         let resource = || ResourceDemand {
             retained_storage: std::collections::BTreeMap::new(),
             workloads: vec![proofstorm_view::WorkloadDemand {
+                omitted_container_count: 0,
                 name: "shared".into(),
                 component: None,
                 kind: "Deployment".into(),
@@ -308,5 +327,28 @@ mod tests {
         let mut result = Some(resource());
         merge_resources(&mut result, Some(resource()));
         assert_eq!(result.unwrap().workloads.len(), 1);
+        let mut result = None;
+        for index in [0, 1, 1, 2] {
+            let mut page = resource();
+            page.workloads[0].omitted_container_count = 2;
+            page.workloads[0]
+                .containers
+                .push(proofstorm_view::ContainerDemand {
+                    name: format!("probe-{index}"),
+                    init: false,
+                    requests: std::collections::BTreeMap::new(),
+                    limits: std::collections::BTreeMap::new(),
+                });
+            merge_resources(&mut result, Some(page));
+            let workload = &result.as_ref().unwrap().workloads[0];
+            assert_eq!(
+                workload.containers.len() + workload.omitted_container_count,
+                3
+            );
+        }
+        let result = result.unwrap();
+        assert_eq!(result.workloads.len(), 1);
+        assert_eq!(result.workloads[0].omitted_container_count, 0);
+        assert_eq!(result.workloads[0].containers.len(), 3);
     }
 }

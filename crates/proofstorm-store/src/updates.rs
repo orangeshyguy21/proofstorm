@@ -1,13 +1,13 @@
 //! Durable desired-state updates. `SQLite` acceptance and Kubernetes reconciliation are resumable.
 use super::{
-    BTreeSet, Capability, Connection, Deserialize, JsonSchema, LabInstance, OptionalExtension,
+    BTreeSet, Capability, CellInstance, Connection, Deserialize, JsonSchema, OptionalExtension,
     PublishedRevision, Serialize, Store, StoreError, TransactionBehavior, now_unix, params,
     sql_version,
 };
-use proofstorm_core::{LabUpdatePlan, LabUpdateTarget};
+use proofstorm_core::{CellUpdatePlan, CellUpdateTarget};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct LabUpdateState {
+pub struct CellUpdateState {
     pub generation: u64,
     pub applied_generation: u64,
     pub converged_revision: Option<String>,
@@ -15,9 +15,9 @@ pub struct LabUpdateState {
 }
 
 pub(super) fn initialize_schema(db: &Connection) -> Result<(), StoreError> {
-    db.execute_batch("CREATE TABLE IF NOT EXISTS lab_update_state(workspace_id TEXT NOT NULL,instance_id TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 1,applied_generation INTEGER NOT NULL DEFAULT 1,converged_revision TEXT,closing INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace_id,instance_id));
-        CREATE TABLE IF NOT EXISTS lab_update_plans(workspace_id TEXT NOT NULL,plan_id TEXT NOT NULL,plan_json TEXT NOT NULL,PRIMARY KEY(workspace_id,plan_id));
-        CREATE TABLE IF NOT EXISTS lab_updates(workspace_id TEXT NOT NULL,instance_id TEXT NOT NULL,generation INTEGER NOT NULL,principal_id TEXT NOT NULL,request_key TEXT NOT NULL,plan_json TEXT NOT NULL,accepted_at INTEGER NOT NULL,PRIMARY KEY(workspace_id,instance_id,generation),UNIQUE(workspace_id,principal_id,request_key));
+    db.execute_batch("CREATE TABLE IF NOT EXISTS cell_update_state(workspace_id TEXT NOT NULL,instance_id TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 1,applied_generation INTEGER NOT NULL DEFAULT 1,converged_revision TEXT,closing INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace_id,instance_id));
+        CREATE TABLE IF NOT EXISTS cell_update_plans(workspace_id TEXT NOT NULL,plan_id TEXT NOT NULL,plan_json TEXT NOT NULL,PRIMARY KEY(workspace_id,plan_id));
+        CREATE TABLE IF NOT EXISTS cell_updates(workspace_id TEXT NOT NULL,instance_id TEXT NOT NULL,generation INTEGER NOT NULL,principal_id TEXT NOT NULL,request_key TEXT NOT NULL,plan_json TEXT NOT NULL,accepted_at INTEGER NOT NULL,PRIMARY KEY(workspace_id,instance_id,generation),UNIQUE(workspace_id,principal_id,request_key));
         CREATE TABLE IF NOT EXISTS operation_revisions(workspace_id TEXT NOT NULL,operation_id TEXT NOT NULL,revision_digest TEXT NOT NULL,PRIMARY KEY(workspace_id,operation_id));
         CREATE TRIGGER IF NOT EXISTS capture_operation_revision AFTER INSERT ON actions BEGIN INSERT OR IGNORE INTO operation_revisions SELECT NEW.workspace_id,NEW.id,revision_digest FROM instances WHERE workspace_id=NEW.workspace_id AND id=NEW.instance_id; END;
         CREATE TABLE IF NOT EXISTS retained_components(workspace_id TEXT NOT NULL,instance_id TEXT NOT NULL,component_id TEXT NOT NULL,PRIMARY KEY(workspace_id,instance_id,component_id));")?;
@@ -27,15 +27,15 @@ pub(crate) fn state(
     db: &Connection,
     workspace: &str,
     instance: &str,
-) -> Result<LabUpdateState, StoreError> {
-    Ok(db.query_row("SELECT generation,applied_generation,converged_revision,closing FROM lab_update_state WHERE workspace_id=?1 AND instance_id=?2",params![workspace,instance],|r| Ok(LabUpdateState {generation:generation_column(r, 0)?,applied_generation:generation_column(r, 1)?,converged_revision:r.get(2)?,closing:r.get(3)?})).optional()?.unwrap_or(LabUpdateState {generation:1,applied_generation:1,converged_revision:None,closing:false}))
+) -> Result<CellUpdateState, StoreError> {
+    Ok(db.query_row("SELECT generation,applied_generation,converged_revision,closing FROM cell_update_state WHERE workspace_id=?1 AND instance_id=?2",params![workspace,instance],|r| Ok(CellUpdateState {generation:generation_column(r, 0)?,applied_generation:generation_column(r, 1)?,converged_revision:r.get(2)?,closing:r.get(3)?})).optional()?.unwrap_or(CellUpdateState {generation:1,applied_generation:1,converged_revision:None,closing:false}))
 }
 pub(crate) fn generation_column(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(index)?;
     u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
 }
 fn error(code: &'static str, message: &str) -> StoreError {
-    StoreError::LabUpdate {
+    StoreError::CellUpdate {
         code,
         message: message.into(),
     }
@@ -54,45 +54,45 @@ impl Store {
         workspace: &str,
         principal: &str,
     ) -> Result<Vec<String>, StoreError> {
-        self.authorize(workspace, principal, Capability::LabMaterialize)?;
-        Ok(self.lock()?.prepare("SELECT instance_id FROM lab_update_state WHERE workspace_id=?1 AND generation>applied_generation AND closing=0 LIMIT 50")?.query_map([workspace],|r|r.get(0))?.collect::<Result<Vec<_>,_>>()?)
+        self.authorize(workspace, principal, Capability::CellMaterialize)?;
+        Ok(self.lock()?.prepare("SELECT instance_id FROM cell_update_state WHERE workspace_id=?1 AND generation>applied_generation AND closing=0 LIMIT 50")?.query_map([workspace],|r|r.get(0))?.collect::<Result<Vec<_>,_>>()?)
     }
     pub fn update_state(
         &self,
         workspace: &str,
         principal: &str,
         instance: &str,
-    ) -> Result<LabUpdateState, StoreError> {
-        self.authorize(workspace, principal, Capability::LabStatus)?;
+    ) -> Result<CellUpdateState, StoreError> {
+        self.authorize(workspace, principal, Capability::CellStatus)?;
         state(&*self.lock()?, workspace, instance)
     }
     pub fn plan_update(
         &self,
         workspace: &str,
         principal: &str,
-        target: LabUpdateTarget,
+        target: CellUpdateTarget,
         revision: &PublishedRevision,
-    ) -> Result<LabUpdatePlan, StoreError> {
-        self.authorize(workspace, principal, Capability::LabEdit)?;
+    ) -> Result<CellUpdatePlan, StoreError> {
+        self.authorize(workspace, principal, Capability::CellEdit)?;
         let instance = self.instance_unchecked(workspace, &target.instance_id)?;
         let old = self.revision_unchecked(workspace, &instance.revision_digest)?;
         let current = state(&*self.lock()?, workspace, &target.instance_id)?;
         if current.closing {
-            return Err(error("lab_closing", "closing labs cannot be edited"));
+            return Err(error("cell_closing", "closing cells cannot be edited"));
         }
         if current.generation != target.expected_generation {
             return Err(error(
-                "lab_update_conflict",
+                "cell_update_conflict",
                 "desired generation changed; read current configuration and replan",
             ));
         }
         let mut plan =
-            LabUpdatePlan::new(target, &old, revision).map_err(StoreError::Validation)?;
+            CellUpdatePlan::new(target, &old, revision).map_err(StoreError::Validation)?;
         plan.bind_instance(&instance.instance_key);
         let db = self.lock()?;
         for id in &plan.target.delete_retained {
             let retained:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM retained_components WHERE workspace_id=?1 AND instance_id=?2 AND component_id=?3)",params![workspace,plan.target.instance_id,id],|r|r.get(0))?;
-            if !retained || revision.lab.components.iter().any(|c| &c.id == id) {
+            if !retained || revision.cell.components.iter().any(|c| &c.id == id) {
                 return Err(error(
                     "retained_component_conflict",
                     "explicit retained deletion must identify removed data, never a current component",
@@ -115,23 +115,23 @@ impl Store {
         workspace: &str,
         principal: &str,
         id: &str,
-        plan: &LabUpdatePlan,
+        plan: &CellUpdatePlan,
     ) -> Result<(), StoreError> {
-        self.authorize(workspace, principal, Capability::LabEdit)?;
+        self.authorize(workspace, principal, Capability::CellEdit)?;
         let encoded = serde_json::to_string(plan)?;
         let db = self.lock()?;
         db.execute(
-            "INSERT OR IGNORE INTO lab_update_plans VALUES(?1,?2,?3)",
+            "INSERT OR IGNORE INTO cell_update_plans VALUES(?1,?2,?3)",
             params![workspace, id, encoded],
         )?;
         let old: String = db.query_row(
-            "SELECT plan_json FROM lab_update_plans WHERE workspace_id=?1 AND plan_id=?2",
+            "SELECT plan_json FROM cell_update_plans WHERE workspace_id=?1 AND plan_id=?2",
             params![workspace, id],
             |r| r.get(0),
         )?;
         if old != encoded {
             return Err(error(
-                "lab_plan_id_conflict",
+                "cell_plan_id_conflict",
                 "use a new plan ID for a changed update",
             ));
         }
@@ -142,12 +142,12 @@ impl Store {
         workspace: &str,
         principal: &str,
         id: &str,
-    ) -> Result<Option<LabUpdatePlan>, StoreError> {
-        self.authorize(workspace, principal, Capability::LabRead)?;
+    ) -> Result<Option<CellUpdatePlan>, StoreError> {
+        self.authorize(workspace, principal, Capability::CellRead)?;
         let row: Option<String> = self
             .lock()?
             .query_row(
-                "SELECT plan_json FROM lab_update_plans WHERE workspace_id=?1 AND plan_id=?2",
+                "SELECT plan_json FROM cell_update_plans WHERE workspace_id=?1 AND plan_id=?2",
                 params![workspace, id],
                 |r| r.get(0),
             )
@@ -163,25 +163,25 @@ impl Store {
         &self,
         workspace: &str,
         principal: &str,
-        plan: &LabUpdatePlan,
+        plan: &CellUpdatePlan,
         key: &str,
-    ) -> Result<LabInstance, StoreError> {
-        self.authorize(workspace, principal, Capability::LabEdit)?;
-        self.authorize(workspace, principal, Capability::LabMaterialize)?;
+    ) -> Result<CellInstance, StoreError> {
+        self.authorize(workspace, principal, Capability::CellEdit)?;
+        self.authorize(workspace, principal, Capability::CellMaterialize)?;
         if !plan.changes.unsupported.is_empty() {
             return Err(error(
-                "lab_update_unsupported",
+                "cell_update_unsupported",
                 &plan.changes.unsupported.join("; "),
             ));
         }
         let revision = self.revision_unchecked(workspace, &plan.target_revision)?;
         let old = self.revision_unchecked(workspace, &plan.base_revision)?;
-        let mut verified = LabUpdatePlan::new(plan.target.clone(), &old, &revision)
+        let mut verified = CellUpdatePlan::new(plan.target.clone(), &old, &revision)
             .map_err(StoreError::Validation)?;
         verified.bind_instance(&plan.instance_key);
         if verified != *plan {
             return Err(error(
-                "lab_plan_digest_mismatch",
+                "cell_plan_digest_mismatch",
                 "update plan does not match its immutable revisions",
             ));
         }
@@ -197,12 +197,12 @@ impl Store {
         if key_now.as_deref() != Some(plan.instance_key.as_str()) {
             return Err(error(
                 "stale_incarnation",
-                "This plan targets a deleted or replaced lab; replan",
+                "This plan targets a deleted or replaced cell; replan",
             ));
         }
         let previous:Option<String>=tx.query_row("SELECT response_json FROM idempotency WHERE workspace_id=?1 AND principal_id=?2 AND key=?3",params![workspace,principal,key],|r|r.get(0)).optional()?;
         if let Some(ref previous) = previous {
-            if serde_json::from_str::<LabUpdatePlan>(previous)
+            if serde_json::from_str::<CellUpdatePlan>(previous)
                 .ok()
                 .as_ref()
                 != Some(plan)
@@ -215,7 +215,7 @@ impl Store {
         } else {
             let current = state(&tx, workspace, &plan.target.instance_id)?;
             if current.closing {
-                return Err(error("lab_closing", "closing labs cannot be edited"));
+                return Err(error("cell_closing", "closing cells cannot be edited"));
             }
             let current_revision: String = tx.query_row(
                 "SELECT revision_digest FROM instances WHERE workspace_id=?1 AND id=?2",
@@ -226,7 +226,7 @@ impl Store {
                 || current_revision != plan.base_revision
             {
                 return Err(error(
-                    "lab_update_conflict",
+                    "cell_update_conflict",
                     "desired configuration changed; replan",
                 ));
             }
@@ -247,7 +247,7 @@ impl Store {
                 .collect::<Vec<_>>();
             if !conflicts.is_empty() {
                 return Err(error(
-                    "lab_update_active_operations",
+                    "cell_update_active_operations",
                     &format!(
                         "finish or cancel affected operations: {}",
                         conflicts.join(", ")
@@ -256,7 +256,7 @@ impl Store {
             }
             for id in &plan.target.delete_retained {
                 let retained: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retained_components WHERE workspace_id=?1 AND instance_id=?2 AND component_id=?3)",params![workspace,plan.target.instance_id,id],|r|r.get(0))?;
-                if !retained || revision.lab.components.iter().any(|c| &c.id == id) {
+                if !retained || revision.cell.components.iter().any(|c| &c.id == id) {
                     return Err(error(
                         "retained_component_conflict",
                         "retained deletion must identify removed data",
@@ -269,19 +269,19 @@ impl Store {
             let generation = current
                 .generation
                 .checked_add(1)
-                .ok_or_else(|| error("generation_exhausted", "lab generation exhausted"))?;
-            tx.execute("INSERT INTO lab_update_state(workspace_id,instance_id,generation,applied_generation) VALUES(?1,?2,?3,1) ON CONFLICT(workspace_id,instance_id) DO UPDATE SET generation=excluded.generation",params![workspace,plan.target.instance_id,sql_version(generation)?])?;
+                .ok_or_else(|| error("generation_exhausted", "cell generation exhausted"))?;
+            tx.execute("INSERT INTO cell_update_state(workspace_id,instance_id,generation,applied_generation) VALUES(?1,?2,?3,1) ON CONFLICT(workspace_id,instance_id) DO UPDATE SET generation=excluded.generation",params![workspace,plan.target.instance_id,sql_version(generation)?])?;
             tx.execute("UPDATE instances SET revision_digest=?1,lock_digest=?2 WHERE workspace_id=?3 AND id=?4",params![revision.digest,revision.lock.digest,workspace,plan.target.instance_id])?;
             tx.execute(
-                "UPDATE lab_handles SET config_digest=?1 WHERE workspace_id=?2 AND instance_id=?3",
+                "UPDATE cell_handles SET config_digest=?1 WHERE workspace_id=?2 AND instance_id=?3",
                 params![
-                    proofstorm_core::digest_json(&revision.lab),
+                    proofstorm_core::digest_json(&revision.cell),
                     workspace,
                     plan.target.instance_id
                 ],
             )?;
             tx.execute(
-                "INSERT INTO lab_updates VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO cell_updates VALUES(?1,?2,?3,?4,?5,?6,?7)",
                 params![
                     workspace,
                     plan.target.instance_id,
@@ -313,7 +313,7 @@ impl Store {
         principal: &str,
         instance: &str,
     ) -> Result<Vec<String>, StoreError> {
-        self.authorize(workspace, principal, Capability::LabStatus)?;
+        self.authorize(workspace, principal, Capability::CellStatus)?;
         let db = self.lock()?;
         let current = state(&db, workspace, instance)?;
         Ok(
@@ -330,9 +330,9 @@ impl Store {
         workspace: &str,
         principal: &str,
         instance: &str,
-    ) -> Result<Option<LabUpdatePlan>, StoreError> {
-        self.authorize(workspace, principal, Capability::LabStatus)?;
-        let row:Option<String>=self.lock()?.query_row("SELECT plan_json FROM lab_updates WHERE workspace_id=?1 AND instance_id=?2 ORDER BY generation DESC LIMIT 1",params![workspace,instance],|r|r.get(0)).optional()?;
+    ) -> Result<Option<CellUpdatePlan>, StoreError> {
+        self.authorize(workspace, principal, Capability::CellStatus)?;
+        let row:Option<String>=self.lock()?.query_row("SELECT plan_json FROM cell_updates WHERE workspace_id=?1 AND instance_id=?2 ORDER BY generation DESC LIMIT 1",params![workspace,instance],|r|r.get(0)).optional()?;
         row.map(|s| serde_json::from_str(&s).map_err(StoreError::from))
             .transpose()
     }
@@ -355,7 +355,7 @@ impl Store {
         {
             tx.execute("DELETE FROM retained_components WHERE workspace_id=?1 AND instance_id=?2 AND component_id=?3",params![workspace,instance,id])?;
         }
-        tx.execute("UPDATE lab_update_state SET applied_generation=MAX(applied_generation,?3),converged_revision=COALESCE(?4,converged_revision) WHERE workspace_id=?1 AND instance_id=?2 AND generation=?3",params![workspace,instance,sql_version(generation)?,converged])?;
+        tx.execute("UPDATE cell_update_state SET applied_generation=MAX(applied_generation,?3),converged_revision=COALESCE(?4,converged_revision) WHERE workspace_id=?1 AND instance_id=?2 AND generation=?3",params![workspace,instance,sql_version(generation)?,converged])?;
         tx.commit()?;
         Ok(())
     }
@@ -365,8 +365,8 @@ impl Store {
         principal: &str,
         instance: &str,
     ) -> Result<(), StoreError> {
-        self.authorize(workspace, principal, Capability::LabClose)?;
-        self.lock()?.execute("INSERT INTO lab_update_state(workspace_id,instance_id,closing) VALUES(?1,?2,1) ON CONFLICT(workspace_id,instance_id) DO UPDATE SET closing=1",params![workspace,instance])?;
+        self.authorize(workspace, principal, Capability::CellClose)?;
+        self.lock()?.execute("INSERT INTO cell_update_state(workspace_id,instance_id,closing) VALUES(?1,?2,1) ON CONFLICT(workspace_id,instance_id) DO UPDATE SET closing=1",params![workspace,instance])?;
         Ok(())
     }
 }
@@ -381,7 +381,7 @@ pub(super) fn admit_operation(
 ) -> Result<String, StoreError> {
     let current = state(tx, workspace, instance)?;
     if current.closing {
-        return Err(error("lab_closing", "new operations are not admitted"));
+        return Err(error("cell_closing", "new operations are not admitted"));
     }
     for plan in pending_plans(tx, workspace, instance, current.applied_generation)? {
         if kind != proofstorm_core::OperationKind::ComponentLogs
@@ -414,8 +414,8 @@ fn pending_plans(
     workspace: &str,
     instance: &str,
     after: u64,
-) -> Result<Vec<LabUpdatePlan>, StoreError> {
-    let rows=db.prepare("SELECT plan_json FROM lab_updates WHERE workspace_id=?1 AND instance_id=?2 AND generation>?3 ORDER BY generation")?.query_map(params![workspace,instance,sql_version(after)?],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+) -> Result<Vec<CellUpdatePlan>, StoreError> {
+    let rows=db.prepare("SELECT plan_json FROM cell_updates WHERE workspace_id=?1 AND instance_id=?2 AND generation>?3 ORDER BY generation")?.query_map(params![workspace,instance,sql_version(after)?],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
     rows.into_iter()
         .map(|s| serde_json::from_str(&s).map_err(StoreError::from))
         .collect()
@@ -426,10 +426,10 @@ fn record_update_receipt(
     workspace: &str,
     principal: &str,
     key: &str,
-    plan: &LabUpdatePlan,
+    plan: &CellUpdatePlan,
 ) -> Result<(), StoreError> {
     tx.execute(
-        "INSERT INTO idempotency VALUES(?1,?2,?3,'lab.update',?4,?5)",
+        "INSERT INTO idempotency VALUES(?1,?2,?3,'cell.update',?4,?5)",
         params![
             workspace,
             principal,

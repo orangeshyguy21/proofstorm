@@ -4,8 +4,8 @@ use k8s_openapi::{
     api::core::v1::{PodSpec, ResourceRequirements},
     apimachinery::pkg::api::resource::Quantity,
 };
-use proofstorm_core::{LabInstance, PublishedRevision};
-use proofstorm_kube::{COMPONENT_LABEL, PROTOCOL_PROBER_NAME, render_lab, render_security_spine};
+use proofstorm_core::{CellInstance, PublishedRevision};
+use proofstorm_kube::{COMPONENT_LABEL, PROTOCOL_PROBER_NAME, render_cell, render_security_spine};
 use proofstorm_view::ReplicaPolicy;
 use std::collections::BTreeMap;
 
@@ -15,16 +15,18 @@ pub use proofstorm_view::{
 
 pub(super) fn include_runtime(
     resources: &mut Option<ResourceDemand>,
-    resource: Option<&proofstorm_kube::ProofstormLab>,
+    resource: Option<&proofstorm_kube::ProofstormCell>,
     prober: Option<(i32, proofstorm_view::WorkloadObservation)>,
 ) {
     let Some(resources) = resources else {
         return;
     };
     if let Some((replicas, observation)) = prober {
-        if let Some(workload) = resources.workloads.iter_mut().find(|w| {
-            w.name == PROTOCOL_PROBER_NAME && w.replica_policy == ReplicaPolicy::ControllerScheduled
-        }) {
+        if let Some(workload) = resources
+            .workloads
+            .iter_mut()
+            .find(|w| w.name == PROTOCOL_PROBER_NAME)
+        {
             workload.replicas = Some(replicas);
             workload.observation = Some(observation);
         }
@@ -40,13 +42,13 @@ pub(super) fn include_runtime(
     reason = "one resource projection keeps workload, storage and endpoint demand consistent"
 )]
 pub(super) fn project(
-    instance: &LabInstance,
+    instance: &CellInstance,
     revision: &PublishedRevision,
 ) -> Result<(ResourceDemand, Vec<Endpoint>), Error> {
-    let rendered = render_lab(
+    let rendered = render_cell(
         &instance.instance_key,
         &revision.digest,
-        &revision.lab,
+        &revision.cell,
         &revision.lock,
     )
     .map_err(|_| {
@@ -71,6 +73,33 @@ pub(super) fn project(
                 &limit_defaults,
             ));
         }
+    }
+    if rendered
+        .plans
+        .iter()
+        .any(|plan| plan.protocol_probe.is_some())
+    {
+        // Helper image is installation-specific; planning shares the runtime resource quantities.
+        let metadata = k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some(PROTOCOL_PROBER_NAME.into()),
+            ..Default::default()
+        };
+        let pod = PodSpec {
+            containers: vec![k8s_openapi::api::core::v1::Container {
+                name: "worker".into(),
+                resources: Some(proofstorm_kube::protocol_prober_resources()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        workloads.push(workload(
+            "Deployment",
+            &metadata,
+            Some(1),
+            Some(&pod),
+            &request_defaults,
+            &limit_defaults,
+        ));
     }
     for set in &rendered.stateful_sets {
         if let Some(spec) = &set.spec {
@@ -137,7 +166,7 @@ pub(super) fn project(
             let local_authentication = connections::endpoint(revision, &component, &name)
                 .ok()
                 .map(|(_, a)| a);
-            endpoints.push(Endpoint {component:component.clone(),name,transport:port.protocol.clone().unwrap_or_else(||"TCP".into()),cluster_host:format!("{}.{}.svc",service.metadata.name.as_deref().unwrap_or_default(),namespace),port:port.port,local_connection_supported:local_authentication.is_some(),local_authentication,access_context:"cluster DNS; use proofstorm connect for supported loopback access; this descriptor does not create a tunnel or assert readiness".into()});
+            endpoints.push(Endpoint {component:component.clone(),name,transport:port.protocol.clone().unwrap_or_else(||"TCP".into()),cluster_host:format!("{}.{}.svc",service.metadata.name.as_deref().unwrap_or_default(),namespace),port:port.port,local_connection_supported:local_authentication.is_some(),local_authentication,access_context:format!("cluster DNS; use {} connect for supported loopback access; this descriptor does not create a tunnel or assert readiness", crate::command_name())});
         }
     }
     endpoints.sort_by(|a, b| (&a.component, &a.name).cmp(&(&b.component, &b.name)));
@@ -206,14 +235,10 @@ fn workload(
         name: meta.name.clone().unwrap_or_default(),
         component: component(meta),
         kind: kind.into(),
-        replicas: (meta.name.as_deref() != Some(PROTOCOL_PROBER_NAME))
-            .then_some(replicas.unwrap_or(1)),
-        replica_policy: if meta.name.as_deref() == Some(PROTOCOL_PROBER_NAME) {
-            ReplicaPolicy::ControllerScheduled
-        } else {
-            ReplicaPolicy::Fixed
-        },
+        replicas: Some(replicas.unwrap_or(1)),
+        replica_policy: ReplicaPolicy::Fixed,
         observation: None,
+        omitted_container_count: 0,
         containers,
     }
 }

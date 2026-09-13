@@ -1,6 +1,6 @@
-//! Lab-owned data lifetime and a crash-releasing, cross-process lifecycle guard.
+//! Cell-owned data lifetime and a crash-releasing, cross-process lifecycle guard.
 use super::{
-    Arc, BTreeSet, Connection, LabInstance, OptionalExtension, Store, StoreError,
+    Arc, BTreeSet, CellInstance, Connection, OptionalExtension, Store, StoreError,
     TransactionBehavior, params,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,18 +26,18 @@ pub struct RuntimeBinding {
 
 pub(super) fn initialize_schema(db: &Connection) -> Result<(), StoreError> {
     db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS lab_runtime_bindings(
+        "CREATE TABLE IF NOT EXISTS cell_runtime_bindings(
         workspace_id TEXT NOT NULL, instance_id TEXT NOT NULL, instance_key TEXT NOT NULL,
         source TEXT NOT NULL, cluster_uid TEXT NOT NULL, resource_uid TEXT,
         PRIMARY KEY(workspace_id,instance_id));",
     )?;
-    db.execute_batch("CREATE TABLE IF NOT EXISTS lab_plan_uses(workspace_id TEXT NOT NULL,instance_id TEXT NOT NULL,instance_key TEXT NOT NULL,plan_id TEXT NOT NULL,PRIMARY KEY(workspace_id,instance_key,plan_id));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS cell_plan_uses(workspace_id TEXT NOT NULL,instance_id TEXT NOT NULL,instance_key TEXT NOT NULL,plan_id TEXT NOT NULL,PRIMARY KEY(workspace_id,instance_key,plan_id));")?;
     Ok(())
 }
 
 impl Store {
     /// Serializes lifecycle transitions across processes sharing this database.
-    /// The sidecar contains no lab records. `SQLite` releases the guard on process death.
+    /// The sidecar contains no cell records. `SQLite` releases the guard on process death.
     pub fn try_lifecycle_guard(&self) -> Result<Option<LifecycleGuard>, StoreError> {
         if self
             .lifecycle_busy
@@ -73,20 +73,20 @@ impl Store {
 
     pub fn runtime_binding(
         &self,
-        instance: &LabInstance,
+        instance: &CellInstance,
     ) -> Result<Option<RuntimeBinding>, StoreError> {
-        Ok(self.lock()?.query_row("SELECT source,cluster_uid,resource_uid FROM lab_runtime_bindings WHERE workspace_id=?1 AND instance_id=?2 AND instance_key=?3",params![instance.workspace_id,instance.id,instance.instance_key],|r|Ok(RuntimeBinding {source:r.get(0)?,cluster_uid:r.get(1)?,resource_uid:r.get(2)?})).optional()?)
+        Ok(self.lock()?.query_row("SELECT source,cluster_uid,resource_uid FROM cell_runtime_bindings WHERE workspace_id=?1 AND instance_id=?2 AND instance_key=?3",params![instance.workspace_id,instance.id,instance.instance_key],|r|Ok(RuntimeBinding {source:r.get(0)?,cluster_uid:r.get(1)?,resource_uid:r.get(2)?})).optional()?)
     }
     pub fn bind_runtime(
         &self,
-        instance: &LabInstance,
+        instance: &CellInstance,
         binding: &RuntimeBinding,
     ) -> Result<(), StoreError> {
         let mut db = self.lock()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_incarnation(&tx, instance)?;
-        tx.execute("INSERT INTO lab_runtime_bindings VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(workspace_id,instance_id) DO UPDATE SET resource_uid=COALESCE(excluded.resource_uid,resource_uid) WHERE instance_key=excluded.instance_key AND source=excluded.source AND cluster_uid=excluded.cluster_uid AND (resource_uid IS NULL OR resource_uid=excluded.resource_uid)",params![instance.workspace_id,instance.id,instance.instance_key,binding.source,binding.cluster_uid,binding.resource_uid])?;
-        let actual=tx.query_row("SELECT source,cluster_uid,resource_uid FROM lab_runtime_bindings WHERE workspace_id=?1 AND instance_id=?2",params![instance.workspace_id,instance.id],|r|Ok(RuntimeBinding {source:r.get(0)?,cluster_uid:r.get(1)?,resource_uid:r.get(2)?}))?;
+        tx.execute("INSERT INTO cell_runtime_bindings VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(workspace_id,instance_id) DO UPDATE SET resource_uid=COALESCE(excluded.resource_uid,resource_uid) WHERE instance_key=excluded.instance_key AND source=excluded.source AND cluster_uid=excluded.cluster_uid AND (resource_uid IS NULL OR resource_uid=excluded.resource_uid)",params![instance.workspace_id,instance.id,instance.instance_key,binding.source,binding.cluster_uid,binding.resource_uid])?;
+        let actual=tx.query_row("SELECT source,cluster_uid,resource_uid FROM cell_runtime_bindings WHERE workspace_id=?1 AND instance_id=?2",params![instance.workspace_id,instance.id],|r|Ok(RuntimeBinding {source:r.get(0)?,cluster_uid:r.get(1)?,resource_uid:r.get(2)?}))?;
         if actual.source != binding.source
             || actual.cluster_uid != binding.cluster_uid
             || binding
@@ -113,7 +113,7 @@ impl Store {
             return Err(stale());
         }
         let removed = tx.execute(
-            "DELETE FROM lab_handles WHERE workspace_id=?1 AND instance_id=?2",
+            "DELETE FROM cell_handles WHERE workspace_id=?1 AND instance_id=?2",
             params![workspace, id],
         )?;
         if removed > 0 {
@@ -131,7 +131,7 @@ impl Store {
 
     pub fn record_plan_use(
         &self,
-        instance: &LabInstance,
+        instance: &CellInstance,
         plan: Option<&str>,
     ) -> Result<(), StoreError> {
         let db = self.lock()?;
@@ -145,7 +145,7 @@ impl Store {
             )?,
         };
         db.execute(
-            "INSERT OR IGNORE INTO lab_plan_uses VALUES(?1,?2,?3,?4)",
+            "INSERT OR IGNORE INTO cell_plan_uses VALUES(?1,?2,?3,?4)",
             params![
                 instance.workspace_id,
                 instance.id,
@@ -161,7 +161,7 @@ impl Store {
         clippy::too_many_lines,
         reason = "all dependent deletions must remain visible in one atomic purge"
     )]
-    pub fn purge_lab(&self, instance: &LabInstance) -> Result<(), StoreError> {
+    pub fn purge_cell(&self, instance: &CellInstance) -> Result<(), StoreError> {
         let mut db = self.lock()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_incarnation(&tx, instance)?;
@@ -177,9 +177,11 @@ impl Store {
                 .collect::<Result<Vec<_>, _>>()?,
             );
         }
-        let revisions=tx.prepare("SELECT revision_digest FROM instances WHERE workspace_id=?1 AND id=?2 UNION SELECT revision_digest FROM operation_revisions WHERE workspace_id=?1 AND operation_id IN (SELECT id FROM actions WHERE workspace_id=?1 AND instance_id=?2) UNION SELECT json_extract(plan_json,'$.base_revision') FROM lab_updates WHERE workspace_id=?1 AND instance_id=?2 UNION SELECT json_extract(plan_json,'$.target_revision') FROM lab_updates WHERE workspace_id=?1 AND instance_id=?2")?.query_map(params![ws,id],|r|r.get::<_,String>(0))?.collect::<Result<BTreeSet<_>,_>>()?;
+        let revisions=tx.prepare("SELECT revision_digest FROM instances WHERE workspace_id=?1 AND id=?2 UNION SELECT revision_digest FROM operation_revisions WHERE workspace_id=?1 AND operation_id IN (SELECT id FROM actions WHERE workspace_id=?1 AND instance_id=?2) UNION SELECT json_extract(plan_json,'$.base_revision') FROM cell_updates WHERE workspace_id=?1 AND instance_id=?2 UNION SELECT json_extract(plan_json,'$.target_revision') FROM cell_updates WHERE workspace_id=?1 AND instance_id=?2")?.query_map(params![ws,id],|r|r.get::<_,String>(0))?.collect::<Result<BTreeSet<_>,_>>()?;
         let mut drafts = tx
-            .prepare("SELECT plan_id FROM lab_plan_uses WHERE workspace_id=?1 AND instance_key=?2")?
+            .prepare(
+                "SELECT plan_id FROM cell_plan_uses WHERE workspace_id=?1 AND instance_key=?2",
+            )?
             .query_map(params![ws, instance.instance_key], |r| {
                 r.get::<_, String>(0)
             })?
@@ -197,10 +199,10 @@ impl Store {
                 drafts.insert(draft);
             }
         }
-        drafts.extend(tx.prepare("SELECT plan_id FROM lab_update_plans WHERE workspace_id=?1 AND json_extract(plan_json,'$.target.instance_id')=?2")?.query_map(params![ws,id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?);
+        drafts.extend(tx.prepare("SELECT plan_id FROM cell_update_plans WHERE workspace_id=?1 AND json_extract(plan_json,'$.target.instance_id')=?2")?.query_map(params![ws,id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?);
         drafts.extend(
             tx.prepare(
-                "SELECT plan_id FROM lab_plan_uses WHERE workspace_id=?1 AND instance_key=?2",
+                "SELECT plan_id FROM cell_plan_uses WHERE workspace_id=?1 AND instance_key=?2",
             )?
             .query_map(params![ws, instance.instance_key], |r| {
                 r.get::<_, String>(0)
@@ -238,19 +240,19 @@ impl Store {
             "actions",
             "sessions",
             "experiments",
-            "lab_updates",
-            "lab_update_state",
+            "cell_updates",
+            "cell_update_state",
             "retained_components",
-            "lab_runtime_bindings",
-            "lab_plan_uses",
-            "lab_handles",
+            "cell_runtime_bindings",
+            "cell_plan_uses",
+            "cell_handles",
         ] {
             tx.execute(
                 &format!("DELETE FROM {table} WHERE workspace_id=?1 AND instance_id=?2"),
                 params![ws, id],
             )?;
         }
-        tx.execute("DELETE FROM lab_update_plans WHERE workspace_id=?1 AND json_extract(plan_json,'$.target.instance_id')=?2",params![ws,id])?;
+        tx.execute("DELETE FROM cell_update_plans WHERE workspace_id=?1 AND json_extract(plan_json,'$.target.instance_id')=?2",params![ws,id])?;
         tx.execute(
             "DELETE FROM instances WHERE workspace_id=?1 AND id=?2 AND instance_key=?3",
             params![ws, id, instance.instance_key],
@@ -263,7 +265,7 @@ impl Store {
             )?;
         }
         for revision in revisions {
-            tx.execute("DELETE FROM revisions WHERE workspace_id=?1 AND digest=?2 AND NOT EXISTS(SELECT 1 FROM instances WHERE revision_digest=?2) AND NOT EXISTS(SELECT 1 FROM operation_revisions WHERE revision_digest=?2) AND NOT EXISTS(SELECT 1 FROM lab_update_plans WHERE json_extract(plan_json,'$.base_revision')=?2 OR json_extract(plan_json,'$.target_revision')=?2) AND NOT EXISTS(SELECT 1 FROM lab_updates WHERE json_extract(plan_json,'$.base_revision')=?2 OR json_extract(plan_json,'$.target_revision')=?2)",params![ws,revision])?;
+            tx.execute("DELETE FROM revisions WHERE workspace_id=?1 AND digest=?2 AND NOT EXISTS(SELECT 1 FROM instances WHERE revision_digest=?2) AND NOT EXISTS(SELECT 1 FROM operation_revisions WHERE revision_digest=?2) AND NOT EXISTS(SELECT 1 FROM cell_update_plans WHERE json_extract(plan_json,'$.base_revision')=?2 OR json_extract(plan_json,'$.target_revision')=?2) AND NOT EXISTS(SELECT 1 FROM cell_updates WHERE json_extract(plan_json,'$.base_revision')=?2 OR json_extract(plan_json,'$.target_revision')=?2)",params![ws,revision])?;
         }
         tx.commit()?;
         Ok(())
@@ -285,7 +287,7 @@ fn references_identity(value: &serde_json::Value, ids: &BTreeSet<String>) -> boo
             ) && v.as_str().is_some_and(|s| ids.contains(s))
                 || (!matches!(
                     k.as_str(),
-                    "artifact" | "request" | "lab" | "lock" | "config"
+                    "artifact" | "request" | "cell" | "lock" | "config"
                 ) && references_identity(v, ids))
         }),
         serde_json::Value::Array(a) => a.iter().any(|v| references_identity(v, ids)),
@@ -293,12 +295,12 @@ fn references_identity(value: &serde_json::Value, ids: &BTreeSet<String>) -> boo
     }
 }
 fn stale() -> StoreError {
-    StoreError::LabUpdate {
+    StoreError::CellUpdate {
         code: "stale_incarnation",
-        message: "Lab incarnation changed; read the current lab and replan".into(),
+        message: "Cell incarnation changed; read the current cell and replan".into(),
     }
 }
-fn require_incarnation(db: &Connection, instance: &LabInstance) -> Result<(), StoreError> {
+fn require_incarnation(db: &Connection, instance: &CellInstance) -> Result<(), StoreError> {
     let key: Option<String> = db
         .query_row(
             "SELECT instance_key FROM instances WHERE workspace_id=?1 AND id=?2",

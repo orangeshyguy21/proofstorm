@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use kube::CustomResourceExt;
-use proofstorm_kube::{ProofstormCandidateBuild, ProofstormLab, ProofstormLabAction};
+use proofstorm_kube::{ProofstormCandidateBuild, ProofstormCell, ProofstormCellAction};
 
 fn main() -> anyhow::Result<()> {
     let output = std::env::args_os()
@@ -9,12 +9,12 @@ fn main() -> anyhow::Result<()> {
         .map_or_else(|| PathBuf::from("charts/proofstorm/crds"), PathBuf::from);
     fs::create_dir_all(&output)?;
     fs::write(
-        output.join("proofstorm.dev_proofstormlabs.yaml"),
-        serde_yaml::to_string(&ProofstormLab::crd())?,
+        output.join("proofstorm.dev_proofstormcells.yaml"),
+        serde_yaml::to_string(&ProofstormCell::crd())?,
     )?;
     fs::write(
-        output.join("proofstorm.dev_proofstormlabactions.yaml"),
-        serde_yaml::to_string(&ProofstormLabAction::crd())?,
+        output.join("proofstorm.dev_proofstormcellactions.yaml"),
+        serde_yaml::to_string(&ProofstormCellAction::crd())?,
     )?;
     fs::write(
         output.join("proofstorm.dev_proofstormcandidatebuilds.yaml"),

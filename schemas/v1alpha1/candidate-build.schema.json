@@ -15,6 +15,7 @@
     "CatalogFeature": {
       "enum": [
         "native_cli",
+        "native_cli_entrypoints",
         "mint_management_rpc",
         "regtest",
         "persistent_state",

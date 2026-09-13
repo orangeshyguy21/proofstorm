@@ -81,7 +81,7 @@ impl Bundle {
         self.info["controller"]["metadata"]["source_sha256"] =
             self.manifest["source"]["sha256"].clone();
         self.info["controller"]["anonymous_verified"] = json!(true);
-        self.info["controller"]["verification"] = json!({"registry_identity":true,"offline_metadata":true,"non_root":true,"helper_startup":true});
+        self.info["controller"]["verification"] = json!({"registry_identity":true,"offline_metadata":true,"non_root":true,"helper_startup":true,"prober_startup":true,"driver_startup":true});
         self.manifest["controller"] = self.info["controller"].clone();
         fs::write(self.root().join("release-info.json"), self.info.to_string()).unwrap();
         self.refresh("release-info.json");

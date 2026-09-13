@@ -24,6 +24,10 @@ while [[ $# -gt 0 ]]; do
     *) usage >&2; exit 2 ;;
   esac
 done
+if [[ -e "$root/.proofstorm-dev/reset-pending.json" || -L "$root/.proofstorm-dev/reset-pending.json" ]]; then
+  printf 'Development reset is unfinished; run .proofstorm-dev/bin/storm dev reset --yes before rebuilding\n' >&2
+  exit 1
+fi
 if [[ "$mode" == --shell && ! -t 0 ]]; then
   printf 'just dev needs an interactive terminal; use just dev-build in automation\n' >&2
   exit 2
@@ -67,12 +71,12 @@ export PROOFSTORM_REQUIRE_WEB_ASSETS=1
 cargo build --locked -p proofstorm-app -p proofstorm-mcp --bins
 cargo build --locked -p proofstorm-kube --example export_crds
 resources=$("$helper" resources "$root")
-"$target/debug/proofstorm" --home "$work/state" checkout-register --source "$root" \
+"$target/debug/proofstorm" --home "$work/state" internal checkout-register --source "$root" \
   --resources "$resources" --mcp "$target/debug/proofstorm-mcp" --web-dist "$work/web" > /dev/null
 "$helper" launchers "$root"
 printf '\nCheckout ready: %s/bin/proofstorm\n' "$work"
-printf '%s\n' 'Use the same commands: setup, doctor, gui, up, attach, open.' \
-  'No Docker runtime was started. After a host rebuild, stop/reopen an existing GUI.'
+printf '%s\n' 'Commands: setup, doctor, gui, up, agent open.' \
+  'Runtime unchanged. Restart an existing GUI: gui stop, then gui.'
 if [[ "$mode" == --shell ]]; then
   printf 'Development shell selected. Run proofstorm setup first. Exit returns to your normal shell.\n'
   exec "$helper" shell "$root"

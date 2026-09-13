@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CatalogResponse, ComponentSpec, LabSpec, LinkSpec, validate_catalog_component, validate_lab,
+    CatalogResponse, CellSpec, ComponentSpec, LinkSpec, validate_catalog_component, validate_cell,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -15,7 +15,7 @@ pub enum DraftMutation {
     RemoveLink { link: LinkSpec },
 }
 
-/// Apply one deterministic authoring mutation to a lab draft.
+/// Apply one deterministic authoring mutation to a cell draft.
 ///
 /// Component and link order is canonicalized after every mutation. Component
 /// removal refuses while links still reference it so an agent cannot
@@ -26,11 +26,11 @@ pub enum DraftMutation {
 /// Returns an error for catalog mismatches, duplicate/missing identities,
 /// dangling links, policy limit violations, or an otherwise invalid result.
 pub fn apply_draft_mutation(
-    lab: &mut LabSpec,
+    cell: &mut CellSpec,
     mutation: &DraftMutation,
     catalog: &CatalogResponse,
 ) -> Result<(), String> {
-    let mut candidate = lab.clone();
+    let mut candidate = cell.clone();
     match mutation {
         DraftMutation::AddComponent { component } => {
             if candidate
@@ -93,13 +93,13 @@ pub fn apply_draft_mutation(
         .components
         .sort_by(|left, right| left.id.cmp(&right.id));
     candidate.links.sort();
-    let report = validate_lab(&candidate);
+    let report = validate_cell(&candidate);
     if report.valid {
-        *lab = candidate;
+        *cell = candidate;
         Ok(())
     } else {
         Err(serde_json::to_string(&report.issues)
-            .unwrap_or_else(|_| "mutated lab is invalid".to_owned()))
+            .unwrap_or_else(|_| "mutated cell is invalid".to_owned()))
     }
 }
 
@@ -107,17 +107,17 @@ pub fn apply_draft_mutation(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::{API_VERSION, ComponentKind, ControlClass, LabPolicy, LinkKind};
+    use crate::{API_VERSION, CellPolicy, ComponentKind, ControlClass, LinkKind};
 
     use super::*;
 
-    fn lab() -> LabSpec {
-        LabSpec {
+    fn cell() -> CellSpec {
+        CellSpec {
             api_version: API_VERSION.into(),
-            name: "composed-lab".into(),
+            name: "composed-cell".into(),
             components: vec![],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
@@ -146,31 +146,31 @@ mod tests {
 
     #[test]
     fn mutations_are_catalog_checked_and_canonically_ordered() {
-        let mut lab = lab();
+        let mut cell = cell();
         let catalog = crate::default_catalog();
         for item in [
             component(
                 "wallet",
                 ComponentKind::Wallet,
                 "nutshell-wallet",
-                ControlClass::Laboratory,
+                ControlClass::Cell,
             ),
             component(
                 "chain",
                 ComponentKind::Bitcoin,
                 "bitcoin-core",
-                ControlClass::Laboratory,
+                ControlClass::Cell,
             ),
         ] {
             apply_draft_mutation(
-                &mut lab,
+                &mut cell,
                 &DraftMutation::AddComponent { component: item },
                 catalog,
             )
             .expect("component mutation");
         }
         assert_eq!(
-            lab.components
+            cell.components
                 .iter()
                 .map(|item| item.id.as_str())
                 .collect::<Vec<_>>(),
@@ -180,11 +180,11 @@ mod tests {
             "fake-wallet",
             ComponentKind::Wallet,
             "bitcoin-core",
-            ControlClass::Laboratory,
+            ControlClass::Cell,
         );
         assert!(
             apply_draft_mutation(
-                &mut lab,
+                &mut cell,
                 &DraftMutation::AddComponent { component: invalid },
                 catalog,
             )
@@ -195,24 +195,19 @@ mod tests {
 
     #[test]
     fn linked_component_removal_refuses_and_link_kinds_are_typed() {
-        let mut lab = lab();
+        let mut cell = cell();
         let catalog = crate::default_catalog();
         for item in [
             component(
                 "chain",
                 ComponentKind::Bitcoin,
                 "bitcoin-core",
-                ControlClass::Laboratory,
+                ControlClass::Cell,
             ),
-            component(
-                "node",
-                ComponentKind::Lightning,
-                "lnd",
-                ControlClass::Laboratory,
-            ),
+            component("node", ComponentKind::Lightning, "lnd", ControlClass::Cell),
         ] {
             apply_draft_mutation(
-                &mut lab,
+                &mut cell,
                 &DraftMutation::AddComponent { component: item },
                 catalog,
             )
@@ -228,14 +223,14 @@ mod tests {
             }),
         };
         apply_draft_mutation(
-            &mut lab,
+            &mut cell,
             &DraftMutation::AddLink { link: link.clone() },
             catalog,
         )
         .expect("typed link");
         assert!(
             apply_draft_mutation(
-                &mut lab,
+                &mut cell,
                 &DraftMutation::RemoveComponent {
                     component_id: "chain".into(),
                 },
@@ -255,10 +250,10 @@ mod tests {
             }),
         };
         assert!(
-            apply_draft_mutation(&mut lab, &DraftMutation::AddLink { link: wrong }, catalog,)
+            apply_draft_mutation(&mut cell, &DraftMutation::AddLink { link: wrong }, catalog,)
                 .expect_err("wrong link kinds")
                 .contains("incompatible_link_kinds")
         );
-        assert_eq!(lab.links, vec![link]);
+        assert_eq!(cell.links, vec![link]);
     }
 }

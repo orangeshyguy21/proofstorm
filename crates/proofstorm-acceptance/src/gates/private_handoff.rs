@@ -3,7 +3,7 @@ use super::{
     cocod_wallet::operation,
     private_transfer::{capture, reserve, transfer},
 };
-use crate::{GateContext, McpClient, lab};
+use crate::{GateContext, McpClient, cell};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -46,9 +46,9 @@ fn child_operation(
     parameters: Value,
 ) -> Result<Value> {
     client.call(tool, scoped(session, id, parameters))?;
-    let receipt = lab::wait_operation(client, id, 60)?;
+    let receipt = cell::wait_operation(client, id, 60)?;
     save(directory, id, &receipt)?;
-    Ok(lab::artifact_content(&receipt)?.clone())
+    Ok(cell::artifact_content(&receipt)?.clone())
 }
 fn refused(
     client: &mut McpClient,
@@ -106,7 +106,6 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         "--allow-untrusted",
         "@proofstorm-private-input"
     ]);
-    let coco_receive = "import sys,json,urllib.request\nfrom pathlib import Path\ntoken=sys.stdin.read();key=Path('/wallet/.cocod/credentials/current/client').read_text().strip()\nr=urllib.request.Request('http://127.0.0.1:62626/receive/cashu',data=json.dumps({'token':token}).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})\nwith urllib.request.urlopen(r,timeout=40) as response: result=json.load(response)\nassert 'error' not in result and 'output' in result";
     for (
         tag,
         principal,
@@ -161,7 +160,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
                 "--amount",
                 "100"
             ]),
-            json!(["python3", "-c", coco_receive]),
+            json!(["/opt/proofstorm/driver", "coco", "receive"]),
             json!({"kind":"stdin"}),
             &mut coco,
         ),
@@ -377,11 +376,7 @@ fn revoked_before_receive(
         "handoff-revoke-capture",
         "wallet-b",
         &reference,
-        json!([
-            "python3",
-            "-c",
-            "import secrets,sys; sys.stdout.buffer.write(secrets.token_bytes(4096))"
-        ]),
+        json!(["dd", "if=/dev/urandom", "bs=4096", "count=1", "status=none"]),
         "bytes",
     )?;
     delegate(
@@ -391,7 +386,7 @@ fn revoked_before_receive(
         "handoff-revoked",
         "wallet-a",
         &reference,
-        &json!({"argv":["python3","-c","import sys; sys.stdin.buffer.read()"],"timeout_seconds":60,"input":{"kind":"stdin"}}),
+        &json!({"argv":["sh","-c","cat >/dev/null"],"timeout_seconds":60,"input":{"kind":"stdin"}}),
     )?;
     transfer(
         parent,

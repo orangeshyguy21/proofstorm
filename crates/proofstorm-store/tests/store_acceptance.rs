@@ -2,19 +2,19 @@ use std::collections::BTreeMap;
 
 use proofstorm_core::{
     API_VERSION, CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, Capability,
-    ComponentKind, ComponentSpec, ControlClass, DraftMutation, LOCK_API_VERSION, LabPolicy,
-    LabSpec, OperationKind, OperationPhase, WalletQuoteDirection, WalletQuoteObservationInput,
-    WalletQuoteObservationRole,
+    CellPolicy, CellSpec, ComponentKind, ComponentSpec, ControlClass, DraftMutation,
+    LOCK_API_VERSION, OperationKind, OperationPhase, WalletQuoteDirection,
+    WalletQuoteObservationInput, WalletQuoteObservationRole,
 };
 use proofstorm_store::{Store, StoreError, Workspace};
 
-fn empty_lab(name: &str) -> LabSpec {
-    LabSpec {
+fn empty_cell(name: &str) -> CellSpec {
+    CellSpec {
         api_version: API_VERSION.into(),
         name: name.into(),
         components: vec![],
         links: vec![],
-        policy: LabPolicy::default(),
+        policy: CellPolicy::default(),
     }
 }
 
@@ -37,9 +37,12 @@ fn successful_candidate_becomes_a_workspace_catalog_version() {
         pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
         resource_name: "candidate-aabbccdd".into(),
         request_digest: "sha256:request".into(),
-        build_features: [proofstorm_core::CatalogFeature::MintManagementRpc]
-            .into_iter()
-            .collect(),
+        build_features: [
+            proofstorm_core::CatalogFeature::MintManagementRpc,
+            proofstorm_core::CatalogFeature::NativeCliEntrypoints,
+        ]
+        .into_iter()
+        .collect(),
         phase: CandidateBuildPhase::Pending,
         accepted_at_unix: 1,
         started_at_unix: None,
@@ -97,22 +100,22 @@ fn seed(store: &Store) {
     }
     for capability in [
         Capability::CatalogRead,
-        Capability::LabRead,
-        Capability::LabCreate,
-        Capability::LabEdit,
-        Capability::LabClone,
-        Capability::LabValidate,
-        Capability::LabPublish,
-        Capability::LabMaterialize,
-        Capability::LabStatus,
-        Capability::LabClose,
+        Capability::CellRead,
+        Capability::CellCreate,
+        Capability::CellEdit,
+        Capability::CellClone,
+        Capability::CellValidate,
+        Capability::CellPublish,
+        Capability::CellMaterialize,
+        Capability::CellStatus,
+        Capability::CellClose,
     ] {
         store
             .grant("alpha", "designer", capability)
             .expect("designer grant");
     }
     store
-        .grant("alpha", "reader", Capability::LabRead)
+        .grant("alpha", "reader", Capability::CellRead)
         .expect("reader grant");
 }
 
@@ -124,8 +127,8 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
         .create_draft(
             "alpha",
             "designer",
-            "lab-a",
-            &empty_lab("lab-a"),
+            "cell-a",
+            &empty_cell("cell-a"),
             "create-1",
         )
         .expect("create");
@@ -135,8 +138,8 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
             .create_draft(
                 "alpha",
                 "designer",
-                "lab-a",
-                &empty_lab("lab-a"),
+                "cell-a",
+                &empty_cell("cell-a"),
                 "create-1"
             )
             .expect("idempotent replay"),
@@ -147,7 +150,7 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
             "alpha",
             "designer",
             "different",
-            &empty_lab("different"),
+            &empty_cell("different"),
             "create-1"
         ),
         Err(StoreError::IdempotencyConflict { .. })
@@ -157,13 +160,13 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
             "alpha",
             "reader",
             "forbidden",
-            &empty_lab("forbidden"),
+            &empty_cell("forbidden"),
             "reader-create"
         ),
         Err(StoreError::AccessDenied { .. })
     ));
     assert!(matches!(
-        store.read_draft("beta", "reader", "lab-a"),
+        store.read_draft("beta", "reader", "cell-a"),
         Err(StoreError::AccessDenied { .. })
     ));
 
@@ -171,9 +174,9 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
         .edit_draft(
             "alpha",
             "designer",
-            "lab-a",
+            "cell-a",
             1,
-            &empty_lab("lab-a-edited"),
+            &empty_cell("cell-a-edited"),
             "edit-1",
         )
         .expect("edit");
@@ -183,9 +186,9 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
             .edit_draft(
                 "alpha",
                 "designer",
-                "lab-a",
+                "cell-a",
                 1,
-                &empty_lab("lab-a-edited"),
+                &empty_cell("cell-a-edited"),
                 "edit-1"
             )
             .expect("idempotent edit replay"),
@@ -195,9 +198,9 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
         store.edit_draft(
             "alpha",
             "designer",
-            "lab-a",
+            "cell-a",
             1,
-            &empty_lab("stale"),
+            &empty_cell("stale"),
             "edit-stale"
         ),
         Err(StoreError::StaleDraft { actual: 2, .. })
@@ -213,7 +216,7 @@ fn composer_mutations_are_idempotent_and_optimistic() {
             "alpha",
             "designer",
             "composed",
-            &empty_lab("composed"),
+            &empty_cell("composed"),
             "create-composed",
         )
         .expect("create");
@@ -225,7 +228,7 @@ fn composer_mutations_are_idempotent_and_optimistic() {
             implementation: "bitcoin-core".into(),
             version: Some("31.1".into()),
             config_version: "bitcoin-core/31/v1".into(),
-            control: ControlClass::Laboratory,
+            control: ControlClass::Cell,
             config: BTreeMap::new(),
         },
     };
@@ -258,14 +261,14 @@ fn composer_mutations_are_idempotent_and_optimistic() {
 fn publication_keeps_requested_draft_and_persists_effective_configuration() {
     let store = Store::memory().expect("store");
     seed(&store);
-    let mut requested = empty_lab("effective-publication");
+    let mut requested = empty_cell("effective-publication");
     requested.components.push(ComponentSpec {
         id: "chain".into(),
         kind: ComponentKind::Bitcoin,
         implementation: "bitcoin-core".into(),
         version: Some("31.1".into()),
         config_version: "bitcoin-core/31/v1".into(),
-        control: ControlClass::Laboratory,
+        control: ControlClass::Cell,
         config: BTreeMap::new(),
     });
     store
@@ -290,9 +293,9 @@ fn publication_keeps_requested_draft_and_persists_effective_configuration() {
         .read_draft("alpha", "designer", "effective-publication")
         .expect("read requested draft");
 
-    assert!(draft.lab.components[0].config.is_empty());
-    assert_eq!(revision.lab.components[0].config["txindex"], true);
-    assert_eq!(revision.lab.components[0].config["fallback_fee"], 0.0002);
+    assert!(draft.cell.components[0].config.is_empty());
+    assert_eq!(revision.cell.components[0].config["txindex"], true);
+    assert_eq!(revision.cell.components[0].config["fallback_fee"], 0.0002);
     assert_eq!(revision.lock.api_version, LOCK_API_VERSION);
     assert!(
         revision.lock.entries[0]
@@ -315,7 +318,7 @@ fn revisions_and_grants_survive_reopen() {
         seed(&store);
         for capability in [
             Capability::ExperimentCreate,
-            Capability::LabOperate,
+            Capability::CellOperate,
             Capability::ExperimentRead,
             Capability::WalletFund,
             Capability::ArtifactRead,
@@ -329,7 +332,7 @@ fn revisions_and_grants_survive_reopen() {
                 "alpha",
                 "designer",
                 "durable",
-                &empty_lab("durable"),
+                &empty_cell("durable"),
                 "create-durable",
             )
             .expect("create");
@@ -370,7 +373,7 @@ fn revisions_and_grants_survive_reopen() {
         reopened
             .capabilities("alpha", "designer")
             .expect("capabilities")
-            .contains(&Capability::LabPublish)
+            .contains(&Capability::CellPublish)
     );
     assert_eq!(
         reopened
@@ -392,7 +395,7 @@ fn revisions_and_grants_survive_reopen() {
     clippy::too_many_lines,
     reason = "one acceptance scenario keeps session admission, sequencing, quota, and artifact bounds visible"
 )]
-fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
+fn operations_admit_large_batches_and_preserve_idempotency_and_terminal_results() {
     let store = Store::memory().expect("store");
     seed(&store);
     for capability in [
@@ -401,7 +404,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
         Capability::ArtifactRead,
         Capability::ExperimentCreate,
         Capability::ExperimentRead,
-        Capability::LabOperate,
+        Capability::CellOperate,
         Capability::ActionCancel,
     ] {
         store
@@ -419,7 +422,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "alpha",
             "designer",
             "operations",
-            &empty_lab("operations"),
+            &empty_cell("operations"),
             "create-operations",
         )
         .expect("create");
@@ -453,7 +456,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "acquire-operations-session",
         )
         .expect("session");
-    for index in 0..8 {
+    for index in 0..12 {
         let operation = store
             .create_operation(
                 "alpha",
@@ -467,7 +470,7 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
                 &format!("create-operation-{index}"),
                 Capability::WalletFund,
             )
-            .expect("bounded operation");
+            .expect("operation admitted without a per-cell count cap");
         assert_eq!(operation.phase, OperationPhase::Pending);
         assert_eq!(operation.sequence, index + 1);
     }
@@ -479,23 +482,23 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             .iter()
             .map(|action| action.sequence)
             .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5, 6, 7, 8]
+        (1..=12).collect::<Vec<_>>()
     );
-    assert!(matches!(
-        store.create_operation(
+    let replay = store
+        .create_operation(
             "alpha",
             "designer",
             "operations-instance",
             "operations-experiment",
             "operations-session",
-            "operation-nine",
+            "operation-9",
             OperationKind::BootstrapLiquidity,
             &serde_json::json!({"index": 9}),
-            "create-operation-nine",
+            "create-operation-9",
             Capability::WalletFund,
-        ),
-        Err(StoreError::OperationLimit { maximum: 8, .. })
-    ));
+        )
+        .expect("exact retry with twelve active operations");
+    assert_eq!(replay.sequence, 10);
     let completed = store
         .record_operation_result(
             "alpha",
@@ -519,7 +522,11 @@ fn operations_are_idempotent_bounded_and_artifacts_are_capped() {
             "operation-4",
             "operation-5",
             "operation-6",
-            "operation-7"
+            "operation-7",
+            "operation-8",
+            "operation-9",
+            "operation-10",
+            "operation-11"
         ],
         "a terminal result leaves the ledger's active set"
     );
@@ -581,7 +588,7 @@ fn quote_observation_store() -> Store {
         Capability::ArtifactRead,
         Capability::ExperimentCreate,
         Capability::ExperimentRead,
-        Capability::LabOperate,
+        Capability::CellOperate,
     ] {
         store
             .grant("alpha", "designer", capability)
@@ -592,7 +599,7 @@ fn quote_observation_store() -> Store {
             "alpha",
             "designer",
             "quote-observations",
-            &empty_lab("quote-observations"),
+            &empty_cell("quote-observations"),
             "create-quote-observations",
         )
         .expect("draft");
@@ -977,7 +984,7 @@ fn overlapping_sessions_do_not_block_control_or_close() {
             Capability::ExperimentCreate,
             Capability::ExperimentRead,
             Capability::ExperimentClose,
-            Capability::LabOperate,
+            Capability::CellOperate,
             Capability::ExperimentRead,
         ] {
             store
@@ -990,7 +997,7 @@ fn overlapping_sessions_do_not_block_control_or_close() {
             "alpha",
             "designer",
             "leased",
-            &empty_lab("leased"),
+            &empty_cell("leased"),
             "create-leased",
         )
         .expect("create");

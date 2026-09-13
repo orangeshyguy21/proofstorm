@@ -1,247 +1,18 @@
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
 use proofstorm_app::{
+    cell::Cells,
     config::{DEFAULT_NAMESPACE, DEFAULT_WORKSPACE},
-    lab::Labs,
 };
 use proofstorm_core::{
-    Capability, InstancePhase, LabSpec, OperationPhase,
+    Capability, CellSpec, InstancePhase, OperationPhase,
     native::{NativeCommand, NativeOutput, OutputMode},
 };
 use proofstorm_store::Store;
 use std::{fmt::Write, path::PathBuf, time::Duration};
 mod cli_output;
-mod server_restart;
 
-#[derive(Parser)]
-#[command(
-    name = "proofstorm",
-    version,
-    about = "Start protocol labs, connect your app, and inspect what happened"
-)]
-struct Args {
-    /// Print machine-readable JSON instead of human-readable results; suppress progress.
-    #[arg(long, global = true)]
-    json: bool,
-    /// Isolated installation home. Initialize with `--home PATH init` first.
-    #[arg(long, global = true, env = "PROOFSTORM_HOME")]
-    home: Option<PathBuf>,
-    /// Read only this kubeconfig; never merge or change the user's current context.
-    #[arg(long, global = true, env = "PROOFSTORM_KUBECONFIG")]
-    kubeconfig: Option<PathBuf>,
-    #[arg(long, global = true, env = "PROOFSTORM_DB")]
-    database: Option<PathBuf>,
-    #[arg(
-        long,
-        global = true,
-        env = "PROOFSTORM_WORKSPACE",
-        default_value = DEFAULT_WORKSPACE
-    )]
-    workspace: String,
-    #[arg(
-        long,
-        global = true,
-        env = "PROOFSTORM_PRINCIPAL",
-        default_value = "developer"
-    )]
-    principal: String,
-    #[arg(long, global = true, env = "PROOFSTORM_CONTEXT")]
-    context: Option<String>,
-    #[arg(
-        long,
-        global = true,
-        env = "PROOFSTORM_CONTROL_NAMESPACE",
-        default_value = DEFAULT_NAMESPACE
-    )]
-    namespace: String,
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Register checkout-built CLI/MCP and resources with a development installation.
-    CheckoutRegister {
-        #[arg(long)]
-        source: PathBuf,
-        #[arg(long)]
-        resources: PathBuf,
-        #[arg(long)]
-        web_dist: PathBuf,
-        #[arg(long)]
-        mcp: PathBuf,
-    },
-    /// Open this installation's GUI in the default browser. Does not attach tools.
-    Gui {
-        /// Prefill this project folder; defaults to the caller's current directory.
-        #[arg(default_value = ".")]
-        project: PathBuf,
-        #[arg(long)]
-        allow_development: bool,
-        /// Start/reuse the GUI without opening a browser (for diagnostics).
-        #[arg(long)]
-        no_open: bool,
-    },
-    /// Stop only this installation's managed GUI. Labs keep running.
-    Stop,
-    #[command(hide = true)]
-    GuiServe {
-        #[arg(long)]
-        instance: String,
-        #[arg(long)]
-        allow_development: bool,
-    },
-    /// Configure project-scoped MCP and verify its server without opening an app.
-    Attach {
-        #[arg(value_enum)]
-        harness: Harness,
-        /// Project directory to connect; defaults to the current directory.
-        #[arg(default_value = ".")]
-        project: PathBuf,
-        /// Show the proposed managed entry without changing files or permissions.
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        allow_development: bool,
-    },
-    /// Attach, then open the agent's CLI at this project.
-    Open {
-        #[arg(value_enum)]
-        harness: Harness,
-        /// Project directory to connect; defaults to the current directory.
-        #[arg(default_value = ".")]
-        project: PathBuf,
-        /// Open the native agent app instead of this terminal (macOS).
-        #[arg(long)]
-        gui: bool,
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        allow_development: bool,
-    },
-    /// Prepare and start this installation's isolated runtime.
-    Setup {
-        /// Explicit opt-in for a local development bundle.
-        #[arg(long)]
-        allow_development: bool,
-        /// Download verified tools and initialize private identity without starting a runtime.
-        #[arg(long)]
-        prepare_only: bool,
-        /// Download the entire catalog now instead of only a lab's images on first use.
-        #[arg(long, conflicts_with = "prepare_only")]
-        prefetch_all: bool,
-    },
-    /// Read-only installation/runtime checks. Does not assert harness discovery.
-    Doctor {},
-    /// Report embedded release contents without reading state or contacting a cluster.
-    ReleaseInfo,
-    /// Install a verified release bundle into a user-owned prefix (no runtime setup).
-    InstallBundle {
-        #[arg(long)]
-        bundle: PathBuf,
-        #[arg(long)]
-        prefix: PathBuf,
-        #[arg(long)]
-        allow_development: bool,
-    },
-    /// Explicitly configure this local developer's permissions (no cluster changes).
-    Init {
-        /// Reserve a port choice in a new installation (requires --home).
-        #[arg(long, requires = "home", value_parser = clap::value_parser!(u16).range(1..))]
-        api_port: Option<u16>,
-        /// Reserve a registry port choice in a new installation (requires --home).
-        #[arg(long, requires = "home", value_parser = clap::value_parser!(u16).range(1..))]
-        registry_port: Option<u16>,
-    },
-    /// Create or update a lab from JSON, preserving unchanged components.
-    Up {
-        /// Preview a live edit without applying it.
-        #[arg(long)]
-        preview: bool,
-        /// Explicitly delete storage and credentials of removed components.
-        #[arg(long)]
-        delete_data: bool,
-        /// Explicitly purge data from components removed by earlier edits.
-        #[arg(long, value_delimiter = ',')]
-        delete_retained: Vec<String>,
-        file: PathBuf,
-        #[arg(long)]
-        name: Option<String>,
-        #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u32).range(0..=120))]
-        wait: u32,
-    },
-    /// Read the environment and cached activity without starting jobs or recording results.
-    Status {
-        name: String,
-        #[arg(long, default_value_t = 0)]
-        after: u64,
-    },
-    /// List current labs; use --json for topology, resource demand, sessions and activity.
-    Environment {
-        #[arg(long)]
-        instance_id: Option<String>,
-        #[arg(long, default_value = "")]
-        cursor: String,
-        #[arg(long, default_value_t = 20)]
-        limit: u32,
-        #[arg(long, default_value = "")]
-        session_cursor: String,
-        #[arg(long, default_value = "")]
-        activity_cursor: String,
-        #[arg(long, default_value = "")]
-        component_cursor: String,
-        #[arg(long, default_value = "")]
-        link_cursor: String,
-    },
-    /// Open the live web app and API on 127.0.0.1; collect runtime receipts in the background.
-    Serve {
-        #[arg(long, default_value_t = 8787)]
-        port: u16,
-        /// Replace this checkout's existing server on the selected port.
-        #[arg(long)]
-        replace: bool,
-    },
-    /// Collect operation receipts; --watch continues collecting while clients disconnect.
-    Sync {
-        name: String,
-        #[arg(long)]
-        watch: bool,
-    },
-    /// Run a bounded native command. Stdout/stderr stay private unless --public-output is set.
-    Exec {
-        name: String,
-        component: String,
-        #[arg(long)]
-        request_id: Option<String>,
-        #[arg(long, default_value_t = 30)]
-        timeout: u32,
-        #[arg(long)]
-        public_output: bool,
-        #[arg(last = true, required = true)]
-        argv: Vec<String>,
-    },
-    /// Read a recorded operation and its bounded artifact, without a runtime action.
-    Result { id: String },
-    /// Revoke admission, cancel/collect owned work and verify lab teardown.
-    Down {
-        name: String,
-        #[arg(long, default_value_t = 120)]
-        wait: u32,
-    },
-    /// Open a loopback connection. Keep this process running while your app uses it.
-    Connect {
-        name: String,
-        component: String,
-        endpoint: String,
-        #[arg(long, default_value_t = 0)]
-        port: u16,
-        /// New private JSON file for application configuration. Removed on normal disconnect.
-        #[arg(long)]
-        config: PathBuf,
-    },
-}
-
-use proofstorm_app::harness::Harness;
+mod cli;
+use cli::Action as Command;
 
 #[allow(
     clippy::too_many_lines,
@@ -249,41 +20,118 @@ use proofstorm_app::harness::Harness;
 )]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
-    let (command, label) = match &args.command {
+    let (args, command) = cli::parse();
+    let (output_kind, label) = match &command {
         Command::Setup { .. } => ("setup", Some("Checking installation")),
-        Command::Gui { .. } => ("gui", Some("Checking Proofstorm files")),
+        Command::Gui { .. } | Command::GuiStart { .. } => {
+            ("gui", Some("Checking Proofstorm files"))
+        }
+        Command::GuiStatus => ("gui-status", None),
         Command::Stop => ("stop", Some("Stopping GUI")),
+        Command::RuntimeDelete { .. } => ("runtime-delete", Some("Verifying runtime ownership")),
         Command::Attach { .. } => ("attach", Some("Checking project connection")),
         Command::Open { .. } => ("open", Some("Preparing coding agent")),
         Command::Doctor { .. } => ("doctor", Some("Checking Proofstorm health")),
         Command::InstallBundle { .. } => ("install", Some("Installing Proofstorm")),
         Command::Init { .. } => ("init", Some("Configuring local permissions")),
-        Command::Up { preview: true, .. } => ("up", Some("Reviewing lab changes")),
-        Command::Up { .. } => ("up", Some("Starting lab; checking images and readiness")),
-        Command::Down { .. } => ("down", Some("Stopping lab and verifying cleanup")),
-        Command::Status { .. } => ("status", Some("Reading lab status")),
-        Command::Environment { .. } => ("environment", Some("Reading environment")),
-        Command::Exec { .. } => ("exec", Some("Running lab command")),
+        Command::DevReset { .. } => ("dev-reset", None),
+        Command::Up { preview: true, .. } => ("up", Some("Reviewing cell changes")),
+        Command::Up { .. } => ("up", Some("Starting cell; checking images and readiness")),
+        Command::Down { .. } => ("down", Some("Removing cell")),
+        Command::Status { .. } => ("status", Some("Reading cell status")),
+        Command::Environment { .. } => ("environment", Some("Reading cells")),
+        Command::OpsList { .. } => ("ops-list", None),
+        Command::Exec { .. } => ("exec", Some("Running cell command")),
         Command::Result { .. } => ("result", Some("Reading operation result")),
-        Command::Sync { .. } => ("sync", Some("Syncing lab activity")),
-        Command::Connect { .. } => ("connect", Some("Opening lab connection")),
-        Command::Serve { .. } => ("serve", Some("Preparing server")),
-        Command::ReleaseInfo | Command::CheckoutRegister { .. } | Command::GuiServe { .. } => {
+        Command::Sync { .. } => ("sync", Some("Syncing cell activity")),
+        Command::Connect { .. } => ("connect", Some("Opening cell connection")),
+        Command::Version { .. } | Command::CheckoutRegister { .. } | Command::GuiServe { .. } => {
             ("internal", None)
         }
     };
-    let mut output = cli_output::Output::new(args.json, command, label);
+    let mut output = cli_output::Output::new(args.json, output_kind, label);
+    if let Command::DevReset { yes } = command {
+        use std::io::{IsTerminal, Write};
+        let home = args
+            .home
+            .as_ref()
+            .context("dev reset requires a checkout; enter just dev first")?;
+        anyhow::ensure!(
+            args.context.is_none()
+                && args.kubeconfig.is_none()
+                && args.database.is_none()
+                && args.workspace == DEFAULT_WORKSPACE
+                && args.principal == "developer"
+                && args.namespace == DEFAULT_NAMESPACE,
+            "dev reset only uses the checkout's private installation; remove runtime overrides"
+        );
+        let target = proofstorm_app::dev_reset::describe(home)?;
+        if !yes {
+            anyhow::ensure!(
+                !args.json && std::io::stdin().is_terminal(),
+                "dev reset deletes all checkout cells and runtime storage; rerun with --yes to confirm"
+            );
+            eprintln!(
+                "Delete all cells and runtime storage for {}?\nBuild caches and other installations are preserved. Close coding-agent sessions first.\nType reset to confirm:",
+                home.display()
+            );
+            std::io::stderr().flush()?;
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            if answer.trim() != "reset" {
+                eprintln!("Reset cancelled. Nothing changed.");
+                return Ok(());
+            }
+        }
+        anyhow::ensure!(
+            proofstorm_app::dev_reset::describe(home)? == target,
+            "reset target changed during confirmation; retry"
+        );
+        output = cli_output::Output::new(
+            args.json,
+            "dev-reset",
+            Some("Resetting development environment"),
+        );
+        return output.show(
+            &proofstorm_app::dev_reset::run(
+                home,
+                target["installation_id"]
+                    .as_str()
+                    .context("reset identity missing")?,
+                &|label| output.update(label),
+            )
+            .await?,
+        );
+    }
     // Metadata and registration must work before a coherent checkout is selected.
-    if matches!(args.command, Command::ReleaseInfo) {
-        return print(&proofstorm_app::release::describe());
+    if let Command::Version { verbose } = command {
+        let info = proofstorm_app::release::describe();
+        if args.json {
+            return print(&info);
+        }
+        println!(
+            "Proofstorm {}",
+            info["version"].as_str().unwrap_or("unknown")
+        );
+        if verbose {
+            for (label, key) in [
+                ("Target", "target"),
+                ("Build", "build_profile"),
+                ("Revision", "source_revision"),
+            ] {
+                if let Some(value) = info[key].as_str() {
+                    println!("{label}: {value}");
+                }
+            }
+        }
+        return Ok(());
     }
     if let Command::CheckoutRegister {
         source,
         resources,
         mcp,
         web_dist,
-    } = &args.command
+    } = &command
     {
         let home = args
             .home
@@ -293,25 +141,46 @@ async fn main() -> Result<()> {
             home, source, resources, mcp, web_dist,
         )?);
     }
+    // Resource retirement must remain available even after a failed/stale build.
+    if let Command::RuntimeDelete { installation_id } = &command {
+        let home = args
+            .home
+            .as_ref()
+            .context("runtime deletion requires an explicit --home")?;
+        proofstorm_app::bootstrap::teardown::retire(home, installation_id, &|label| {
+            output.update(label);
+        })?;
+        return output.show(&serde_json::json!({"deleted":true,"installation_id":installation_id,"diagnostics_retained":true}));
+    }
     // Stopping an owned GUI remains possible even after a checkout was rebuilt.
-    if matches!(args.command, Command::Stop) {
+    if matches!(command, Command::Stop) {
         return output.show(
-            &proofstorm_app::gui::stop(args.home.as_ref().context("stop requires --home")?).await?,
+            &proofstorm_app::gui::stop(args.home.as_ref().context("gui stop requires --home")?)
+                .await?,
+        );
+    }
+    if matches!(command, Command::GuiStatus) {
+        return output.show(
+            &proofstorm_app::gui::status(args.home.as_ref().context("gui status requires --home")?)
+                .await?,
         );
     }
     // GUI startup owns one verified snapshot in each process. Do not repeat its
     // verification here and again while locating resources or checking runtime.
     if !matches!(
-        args.command,
-        Command::InstallBundle { .. } | Command::Gui { .. } | Command::GuiServe { .. }
+        command,
+        Command::InstallBundle { .. }
+            | Command::Gui { .. }
+            | Command::GuiStart { .. }
+            | Command::GuiServe { .. }
     ) {
         if let Some(home) = &args.home {
             proofstorm_app::artifacts::check_checkout(home)?;
         }
     }
     if matches!(
-        args.command,
-        Command::Gui { .. } | Command::GuiServe { .. } | Command::Stop
+        command,
+        Command::Gui { .. } | Command::GuiStart { .. } | Command::GuiServe { .. } | Command::Stop
     ) {
         let home = args
             .home
@@ -326,7 +195,13 @@ async fn main() -> Result<()> {
                 && args.namespace == DEFAULT_NAMESPACE,
             "the managed GUI uses only the installation's private runtime; remove overrides"
         );
-        return match &args.command {
+        return match &command {
+            Command::GuiStart { allow_development } => output.show(
+                &proofstorm_app::gui::start_service(home, *allow_development, &|label| {
+                    output.update(label);
+                })
+                .await?,
+            ),
             Command::Gui {
                 project,
                 allow_development,
@@ -348,6 +223,7 @@ async fn main() -> Result<()> {
     if let Command::Attach {
         harness,
         project,
+        replace,
         dry_run,
         allow_development,
         ..
@@ -355,10 +231,11 @@ async fn main() -> Result<()> {
     | Command::Open {
         harness,
         project,
+        replace,
         dry_run,
         allow_development,
         ..
-    } = &args.command
+    } = &command
     {
         let home = args
             .home
@@ -380,8 +257,9 @@ async fn main() -> Result<()> {
             project,
             &bundle,
             *allow_development,
+            *replace,
         )?;
-        let launch = if let Command::Open { gui, .. } = &args.command {
+        let launch = if let Command::Open { gui, .. } = &command {
             let launch =
                 proofstorm_app::harness::launch::detect_for(*harness, &plan.project, !*gui)?;
             if launch.interface == "cli" && !dry_run {
@@ -403,7 +281,7 @@ async fn main() -> Result<()> {
         }
         return Ok(());
     }
-    if matches!(args.command, Command::Setup { .. } | Command::Doctor { .. }) {
+    if matches!(command, Command::Setup { .. } | Command::Doctor { .. }) {
         let home = args.home.as_ref().context(
             "installed setup/doctor requires --home (installed launchers supply a private default)",
         )?;
@@ -418,7 +296,7 @@ async fn main() -> Result<()> {
                 && args.namespace == DEFAULT_NAMESPACE,
             "installed setup/doctor currently requires the default developer, workspace, and namespace"
         );
-        if let Command::Doctor {} = args.command {
+        if let Command::Doctor {} = command {
             let report = proofstorm_app::bootstrap::doctor(home);
             output.stop();
             if args.json {
@@ -441,7 +319,7 @@ async fn main() -> Result<()> {
                             .map_or_else(String::new, |message| format!(" — {message}"))
                     );
                 }
-                println!("MCP server and harness discovery: not checked.");
+                println!("Agent connections: not checked.");
             }
             anyhow::ensure!(
                 report["ok"] == true,
@@ -453,7 +331,7 @@ async fn main() -> Result<()> {
             allow_development,
             prepare_only,
             prefetch_all,
-        } = args.command
+        } = command
         {
             let bundle = proofstorm_app::artifacts::root(home)?;
             let result = proofstorm_app::bootstrap::setup_with_progress(
@@ -467,14 +345,11 @@ async fn main() -> Result<()> {
             return output.show(&result);
         }
     }
-    if matches!(args.command, Command::ReleaseInfo) {
-        return print(&proofstorm_app::release::describe());
-    }
     if let Command::InstallBundle {
         bundle,
         prefix,
         allow_development,
-    } = &args.command
+    } = &command
     {
         return output.show(&proofstorm_app::installer::install(
             bundle,
@@ -488,7 +363,7 @@ async fn main() -> Result<()> {
             api_port,
             registry_port,
         },
-    ) = (&args.home, &args.command)
+    ) = (&args.home, &command)
     {
         anyhow::ensure!(!home.as_os_str().is_empty(), "--home must not be empty");
         proofstorm_app::installation::Installation::initialize(home, *api_port, *registry_port)?;
@@ -526,25 +401,54 @@ async fn main() -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let store = Store::open(&environment.database)?;
-    if matches!(args.command, Command::Init { .. }) {
+    if matches!(command, Command::Init { .. }) {
         proofstorm_app::developer::configure(&store, &args.workspace, &args.principal)?;
         return output.show(
             &serde_json::json!({"database":environment.database,"workspace":args.workspace,"principal":args.principal,"context":environment.context,"installation":environment.installation,"kubeconfig":environment.kubeconfig,"capabilities":store.capabilities(&args.workspace,&args.principal)?}),
         );
     }
-    if matches!(args.command, Command::Result { .. }) {
-        if let Command::Result { id } = args.command {
+    if matches!(command, Command::Result { .. }) {
+        if let Command::Result { id } = command {
             return output.show(&store.operation(&args.workspace, &args.principal, &id)?);
         }
     }
-    store.authorize(&args.workspace,&args.principal,Capability::LabStatus).context("developer is not configured; run proofstorm init explicitly to configure local permissions")?;
+    if let Command::OpsList {
+        name,
+        cursor,
+        limit,
+    } = &command
+    {
+        let cell = store.resolve_cell(&args.workspace, &args.principal, name)?;
+        let (items, next_cursor) = store.instance_activity(
+            &args.workspace,
+            &args.principal,
+            &cell.instance_id,
+            cursor,
+            *limit,
+        )?;
+        let items: Vec<proofstorm_view::Activity> = items.into_iter().map(Into::into).collect();
+        return output.show(&serde_json::json!({"items":items,"next_cursor":next_cursor}));
+    }
+    store
+        .authorize(&args.workspace, &args.principal, Capability::CellStatus)
+        .with_context(|| {
+            format!(
+                "local permissions missing; run {} dev init",
+                proofstorm_app::command_name()
+            )
+        })?;
     let runtime = environment.runtime().await?;
-    let labs = Labs::new(store, runtime, args.workspace, args.principal)
+    let cells = Cells::new(store, runtime, args.workspace, args.principal)
         .with_installation(environment.installation.clone());
-    match args.command {
-        Command::ReleaseInfo
+    match command {
+        Command::Version { .. }
+        | Command::DevReset { .. }
+        | Command::RuntimeDelete { .. }
         | Command::CheckoutRegister { .. }
         | Command::Gui { .. }
+        | Command::GuiStart { .. }
+        | Command::GuiStatus
+        | Command::OpsList { .. }
         | Command::GuiServe { .. }
         | Command::Stop
         | Command::Attach { .. }
@@ -562,50 +466,54 @@ async fn main() -> Result<()> {
             delete_data,
             delete_retained,
         } => {
-            let spec: LabSpec = serde_json::from_slice(&std::fs::read(file)?)?;
+            let spec: CellSpec = serde_json::from_slice(&std::fs::read(file)?)?;
             let name = name.as_deref().unwrap_or(&spec.name);
             if preview {
-                output.show(&labs.plan_edit(name, &spec, delete_data, &delete_retained)?)?;
+                output.show(&cells.plan_edit(name, &spec, delete_data, &delete_retained)?)?;
                 return Ok(());
             }
             let mut view = if delete_data || !delete_retained.is_empty() {
-                labs.edit(name, &spec, delete_data, &delete_retained)
+                cells
+                    .edit(name, &spec, delete_data, &delete_retained)
                     .await?
             } else {
-                labs.up(name, &spec).await?
+                cells.up(name, &spec).await?
             };
             let recovery = proofstorm_app::updates::start_recovery(
-                labs.runtime.clone(),
-                labs.store.clone(),
-                labs.workspace.clone(),
-                labs.principal.clone(),
+                cells.runtime.clone(),
+                cells.store.clone(),
+                cells.workspace.clone(),
+                cells.principal.clone(),
             );
             let waited = if wait == 0 {
                 Ok(None)
             } else {
                 let instance = view.runtime.as_ref().map(|status| &status.instance);
-                labs.wait(proofstorm_app::lab::WaitRequest {
-                    reference: &view.lab.instance_id,
-                    expected_instance_key: instance.map(|instance| instance.instance_key.as_str()),
-                    expected_generation: instance.map(|instance| instance.generation),
-                    target_phase: InstancePhase::Ready,
-                    timeout_seconds: wait,
-                })
-                .await
-                .map(Some)
+                cells
+                    .wait(proofstorm_app::cell::WaitRequest {
+                        reference: &view.cell.instance_id,
+                        expected_instance_key: instance
+                            .map(|instance| instance.instance_key.as_str()),
+                        expected_generation: instance.map(|instance| instance.generation),
+                        target_phase: InstancePhase::Ready,
+                        timeout_seconds: wait,
+                    })
+                    .await
+                    .map(Some)
             };
             recovery.abort();
             if let Some(waited) = waited? {
                 view.runtime = Some(waited.status);
             }
             output.show(&view)?;
-            if !view
-                .runtime
-                .as_ref()
-                .is_some_and(|r| r.phase == InstancePhase::Ready)
+            if wait != 0
+                && !view
+                    .runtime
+                    .as_ref()
+                    .is_some_and(|r| r.phase == InstancePhase::Ready)
             {
                 bail!(
-                    "lab has not reached Ready; inspect the reported phase and blockers before retrying"
+                    "cell has not reached Ready; inspect the reported phase and blockers before retrying"
                 );
             }
         }
@@ -618,7 +526,7 @@ async fn main() -> Result<()> {
             component_cursor,
             link_cursor,
         } => output.show(
-            &labs
+            &cells
                 .environment(&proofstorm_app::environment::EnvironmentQuery {
                     instance_id,
                     cursor,
@@ -630,24 +538,13 @@ async fn main() -> Result<()> {
                 })
                 .await?,
         )?,
-        Command::Serve { port, replace } => {
-            if replace {
-                anyhow::ensure!(
-                    environment.installation.is_none(),
-                    "--replace is only for the contributor server; an isolated installation must use its own free port"
-                );
-                server_restart::stop_previous(port).await?;
-            }
-            output.stop();
-            proofstorm_app::http::serve(labs, port).await?;
-        }
-        Command::Status { name, after } => output.show(&labs.inspect(&name, after).await?)?,
+        Command::Status { name, after } => output.show(&cells.inspect(&name, after).await?)?,
         Command::Sync { name, watch } => loop {
             // Re-arm after each snapshot, but never animate during the watch interval.
             output.stop();
-            output = cli_output::Output::new(args.json, "sync", Some("Syncing lab activity"));
-            labs.sync(&name).await?;
-            output.show(&labs.inspect(&name, 0).await?)?;
+            output = cli_output::Output::new(args.json, "sync", Some("Syncing cell activity"));
+            cells.sync(&name).await?;
+            output.show(&cells.inspect(&name, 0).await?)?;
             if !watch {
                 break;
             }
@@ -665,7 +562,7 @@ async fn main() -> Result<()> {
             // Preserve retry identity before submission without interleaving with progress.
             output.stop();
             eprintln!("Request: {request_id}; reuse --request-id {request_id} if interrupted");
-            output = cli_output::Output::new(args.json, "exec", Some("Running lab command"));
+            output = cli_output::Output::new(args.json, "exec", Some("Running cell command"));
             let command = NativeCommand {
                 private_io: None,
                 script: String::new(),
@@ -680,16 +577,16 @@ async fn main() -> Result<()> {
                     fields: Vec::new(),
                 },
             };
-            let mut op = labs.exec(&name, &component, command, &request_id).await?;
+            let mut op = cells.exec(&name, &component, command, &request_id).await?;
             let deadline =
                 tokio::time::Instant::now() + Duration::from_secs(u64::from(timeout) + 30);
             while matches!(op.phase, OperationPhase::Pending | OperationPhase::Running)
                 && tokio::time::Instant::now() < deadline
             {
-                labs.sync(&name).await?;
-                op = labs
+                cells.sync(&name).await?;
+                op = cells
                     .store
-                    .operation(&labs.workspace, &labs.principal, &request_id)?;
+                    .operation(&cells.workspace, &cells.principal, &request_id)?;
                 if matches!(op.phase, OperationPhase::Pending | OperationPhase::Running) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
@@ -707,7 +604,7 @@ async fn main() -> Result<()> {
             }
         }
         Command::Down { name, wait } => output.show(
-            &labs
+            &cells
                 .down_with_progress(&name, wait, &|label| output.update(label))
                 .await?,
         )?,
@@ -718,7 +615,7 @@ async fn main() -> Result<()> {
             port,
             config,
         } => {
-            let connection = labs.connect(&name, &component, &endpoint, port).await?;
+            let connection = cells.connect(&name, &component, &endpoint, port).await?;
             connection.write_config(&config)?;
             let _config_guard = ConfigFile(config);
             output.show(&connection.descriptor)?;
@@ -751,70 +648,4 @@ fn new_request_id() -> Result<String> {
 fn print(value: &impl serde::Serialize) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
-}
-
-#[cfg(test)]
-mod attachment_args_tests {
-    use super::*;
-
-    #[test]
-    fn gui_defaults_to_current_directory_and_default_browser() {
-        let args = Args::try_parse_from(["proofstorm", "gui"]).unwrap();
-        assert!(
-            matches!(args.command,Command::Gui {project,no_open:false,..} if project==PathBuf::from("."))
-        );
-        let args = Args::try_parse_from(["proofstorm", "gui", "/a project", "--no-open"]).unwrap();
-        assert!(
-            matches!(args.command,Command::Gui {project,no_open:true,..} if project==PathBuf::from("/a project"))
-        );
-        assert!(matches!(
-            Args::try_parse_from(["proofstorm", "stop"])
-                .unwrap()
-                .command,
-            Command::Stop
-        ));
-        assert!(Args::try_parse_from(["proofstorm", "ui"]).is_err());
-    }
-
-    #[test]
-    fn attachment_defaults_to_current_directory_and_accepts_explicit_paths() {
-        for action in ["open", "attach"] {
-            for path in [None, Some("/a project/with spaces")] {
-                let mut input = vec!["proofstorm", action, "codex"];
-                if let Some(path) = path {
-                    input.push(path);
-                }
-                let args = Args::try_parse_from(input).unwrap();
-                let (Command::Open { project, .. } | Command::Attach { project, .. }) =
-                    args.command
-                else {
-                    panic!("expected attachment command");
-                };
-                assert_eq!(project, PathBuf::from(path.unwrap_or(".")));
-            }
-        }
-    }
-
-    #[test]
-    fn open_defaults_to_cli_and_gui_is_explicit_for_every_agent() {
-        for agent in ["codex", "opencode", "claude", "claude-code"] {
-            for path in [None, Some("/a project/with spaces")] {
-                for gui in [false, true] {
-                    let mut input = vec!["proofstorm", "open", agent];
-                    if let Some(path) = path {
-                        input.push(path);
-                    }
-                    if gui {
-                        input.push("--gui");
-                    }
-                    input.push("--dry-run");
-                    let args = Args::try_parse_from(input).unwrap();
-                    assert!(matches!(args.command,
-                        Command::Open { project, gui: actual, dry_run: true, .. }
-                        if actual == gui && project == PathBuf::from(path.unwrap_or("."))));
-                }
-            }
-            assert!(Args::try_parse_from(["proofstorm", "open", agent, "--cli"]).is_err());
-        }
-    }
 }

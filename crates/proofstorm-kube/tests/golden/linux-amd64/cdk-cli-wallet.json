@@ -59,7 +59,7 @@
         "HOME": "/wallet",
         "PROOFSTORM_WALLET": "{component_id}"
       },
-      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:a02dfc4f849d011737a8a778aecfa8d159c1b9f4c716f8f869590dc810573136",
+      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:613eab7ee578ad733ccd062830190a0905f3192dec1d976bfb72007382f59bff",
       "mounts": [
         {
           "mount_path": "/wallet",
@@ -137,7 +137,7 @@
     ],
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:601cfc3aff9ab9b9fafa5fd6ea0d6f86cb20b69c89d9322913a157328623077a",
+    "rollout_digest": "sha256:89739a2873e7674846092ef32d079b9cdaff45471dcabb74eb23a907ab15664c",
     "storage": [
       {
         "claim_name": "wallet-data"
@@ -193,7 +193,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:601cfc3aff9ab9b9fafa5fd6ea0d6f86cb20b69c89d9322913a157328623077a"
+                "proofstorm.dev/rollout-digest": "sha256:89739a2873e7674846092ef32d079b9cdaff45471dcabb74eb23a907ab15664c"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -235,7 +235,7 @@
                       "value": "wallet"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:a02dfc4f849d011737a8a778aecfa8d159c1b9f4c716f8f869590dc810573136",
+                  "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:613eab7ee578ad733ccd062830190a0905f3192dec1d976bfb72007382f59bff",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
@@ -260,14 +260,53 @@
                     {
                       "mountPath": "/wallet",
                       "name": "wallet"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
                     }
                   ]
                 }
               ],
               "enableServiceLinks": false,
-              "nodeSelector": {
-                "kubernetes.io/arch": "arm64"
-              },
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -284,6 +323,10 @@
                   "persistentVolumeClaim": {
                     "claimName": "wallet-data"
                   }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
                 }
               ]
             }

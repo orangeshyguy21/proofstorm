@@ -1,4 +1,4 @@
-//! The controller schedules this Deployment independently of the zero-scaled template.
+//! Observe the persistent worker Deployment independently of component readiness.
 use k8s_openapi::api::apps::v1::Deployment;
 use kube::{Api, Client};
 use proofstorm_kube::{INSTANCE_LABEL, PROTOCOL_PROBER_NAME, instance_namespace};
@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn ignores_foreign_or_malformed_deployments() {
-        assert!(project(&deployment(), "another-lab").is_none());
+        assert!(project(&deployment(), "another-cell").is_none());
         let mut deployment = deployment();
         deployment.metadata.namespace = Some("foreign".into());
         assert!(project(&deployment, "demo").is_none());

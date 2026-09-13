@@ -5,9 +5,11 @@ members = [
     "crates/proofstorm-web",
     "crates/proofstorm-acceptance",
     "crates/proofstorm-core",
+    "crates/proofstorm-driver",
     "crates/proofstorm-exec",
     "crates/proofstorm-kube",
     "crates/proofstorm-mcp",
+    "crates/proofstorm-prober",
     "crates/proofstorm-store",
     "crates/proofstorm-transfer",
     "crates/proofstormd",
@@ -16,7 +18,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"

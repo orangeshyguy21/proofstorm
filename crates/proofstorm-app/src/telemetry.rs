@@ -3,7 +3,7 @@ mod balances;
 mod channels;
 mod holdings;
 mod retention;
-use crate::{Error, lab::Labs};
+use crate::{Error, cell::Cells};
 use futures::{StreamExt, stream};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
@@ -11,8 +11,8 @@ use kube::{
     api::{ApiResource, DynamicObject, ListParams},
 };
 use proofstorm_core::Capability;
-use proofstorm_kube::{COMPONENT_LABEL, INSTANCE_LABEL, ProofstormLab, instance_namespace};
-use proofstorm_view::{LabUsage, ProcessUsage, SystemView, UsageTotals};
+use proofstorm_kube::{COMPONENT_LABEL, INSTANCE_LABEL, ProofstormCell, instance_namespace};
+use proofstorm_view::{CellUsage, ProcessUsage, SystemView, UsageTotals};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, task::JoinHandle};
 
@@ -23,14 +23,14 @@ pub struct Telemetry {
 
 impl Telemetry {
     #[must_use]
-    pub fn start(labs: Labs) -> Self {
+    pub fn start(cells: Cells) -> Self {
         let (sender, receiver) = watch::channel(SystemView::default());
         let task = tokio::spawn(async move {
             let mut timer = tokio::time::interval(Duration::from_secs(5));
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 timer.tick().await;
-                let mut snapshot = match labs.system().await {
+                let mut snapshot = match cells.system().await {
                     Ok(snapshot) => snapshot,
                     Err(_) => SystemView {
                         error: Some("System measurements unavailable.".into()),
@@ -50,17 +50,17 @@ impl Drop for Telemetry {
     }
 }
 
-impl Labs {
+impl Cells {
     pub async fn system(&self) -> Result<SystemView, Error> {
         for capability in [
-            Capability::LabRead,
-            Capability::LabStatus,
+            Capability::CellRead,
+            Capability::CellStatus,
             Capability::ExperimentRead,
         ] {
             self.store
                 .authorize(&self.workspace, &self.principal, capability)?;
         }
-        let api = Api::<ProofstormLab>::namespaced(
+        let api = Api::<ProofstormCell>::namespaced(
             self.runtime.client.clone(),
             &self.runtime.control_namespace,
         );
@@ -69,67 +69,67 @@ impl Labs {
                 .await
                 .map_err(|_| Error::failure("system inventory timed out", None))??;
         let mut scoped = Vec::new();
-        for lab in resources
+        for cell in resources
             .items
             .into_iter()
-            .filter(|lab| lab.spec.workspace_id == self.workspace)
+            .filter(|cell| cell.spec.workspace_id == self.workspace)
         {
             match self.store.environment_entry(
                 &self.workspace,
                 &self.principal,
-                &lab.spec.instance_id,
+                &cell.spec.instance_id,
             ) {
-                Ok(entry) => scoped.push((lab, entry.handle.map(|handle| handle.name))),
+                Ok(entry) => scoped.push((cell, entry.handle.map(|handle| handle.name))),
                 Err(proofstorm_store::StoreError::NotFound { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
         }
-        let mut labs = stream::iter(scoped)
-            .map(|(lab, name)| {
+        let mut cells = stream::iter(scoped)
+            .map(|(cell, name)| {
                 let service = (*self).clone();
-                async move { service.sample_lab(&lab, name).await }
+                async move { service.sample_cell(&cell, name).await }
             })
             .buffer_unordered(2)
             .collect::<Vec<_>>()
             .await;
-        labs.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
+        cells.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
         let mut totals =
-            UsageTotals::from_processes(labs.iter().flat_map(|lab| lab.processes.iter()));
-        if labs.iter().any(|lab| lab.error.is_some()) {
+            UsageTotals::from_processes(cells.iter().flat_map(|cell| cell.processes.iter()));
+        if cells.iter().any(|cell| cell.error.is_some()) {
             totals.cpu_millicores = None;
             totals.memory_bytes = None;
         }
         Ok(SystemView {
             sampled_at_unix: now(),
             error: None,
-            labs,
+            cells,
             totals,
         })
     }
 
-    async fn sample_lab(&self, lab: &ProofstormLab, name: Option<String>) -> LabUsage {
-        let mut usage = LabUsage {
-            incarnation: format!("{}:{}", lab.spec.workspace_id, lab.spec.instance_key),
-            id: lab.spec.instance_id.clone(),
-            name: name.unwrap_or_else(|| lab.spec.instance_id.clone()),
-            ..LabUsage::default()
+    async fn sample_cell(&self, cell: &ProofstormCell, name: Option<String>) -> CellUsage {
+        let mut usage = CellUsage {
+            incarnation: format!("{}:{}", cell.spec.workspace_id, cell.spec.instance_key),
+            id: cell.spec.instance_id.clone(),
+            name: name.unwrap_or_else(|| cell.spec.instance_id.clone()),
+            ..CellUsage::default()
         };
         if self
             .store
-            .instance(&self.workspace, &self.principal, &lab.spec.instance_id)
+            .instance(&self.workspace, &self.principal, &cell.spec.instance_id)
             .ok()
             .is_none_or(|instance| {
-                instance.instance_key != lab.spec.instance_key
-                    || instance.resource_name != lab.name_any()
+                instance.instance_key != cell.spec.instance_key
+                    || instance.resource_name != cell.name_any()
             })
         {
             usage.error = Some("Runtime identity unavailable.".into());
             return usage;
         }
-        let namespace = instance_namespace(&lab.spec.instance_key);
+        let namespace = instance_namespace(&cell.spec.instance_key);
         let pods = Api::<Pod>::namespaced(self.runtime.client.clone(), &namespace);
         let params =
-            ListParams::default().labels(&format!("{INSTANCE_LABEL}={}", lab.spec.instance_key));
+            ListParams::default().labels(&format!("{INSTANCE_LABEL}={}", cell.spec.instance_key));
         let resource = ApiResource {
             group: "metrics.k8s.io".into(),
             version: "v1beta1".into(),
@@ -177,7 +177,7 @@ impl Labs {
             )
             .is_ok()
         {
-            usage.balances = balances::sample(lab, &pods, &pod_list.items).await;
+            usage.balances = balances::sample(cell, &pods, &pod_list.items).await;
         }
         usage
     }

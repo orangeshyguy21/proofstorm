@@ -12,7 +12,7 @@ pub const MAX_CONDITION_MESSAGE_BYTES: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabInstance {
+pub struct CellInstance {
     #[serde(default = "initial_generation")]
     pub generation: u64,
     pub id: String,
@@ -57,8 +57,26 @@ pub struct ComponentStatus {
     pub conditions: Vec<ComponentCondition>,
     /// Alpha compatibility projection derived only from `ComponentReady`.
     pub ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_observation: Option<ProtocolObservation>,
     pub service: String,
     pub ports: BTreeMap<String, u16>,
+}
+
+/// Freshness of a completed protocol check, independently of condition transition time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolObservation {
+    pub observed_at_unix: i64,
+    pub expires_at_unix: i64,
+    pub elapsed_micros: u64,
+}
+
+impl ProtocolObservation {
+    #[must_use]
+    pub fn is_fresh(&self, now_unix: i64) -> bool {
+        self.observed_at_unix <= now_unix && now_unix < self.expires_at_unix
+    }
 }
 
 impl ComponentStatus {
@@ -92,7 +110,7 @@ pub struct TeardownReceipt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LabInstanceStatus {
+pub struct CellInstanceStatus {
     #[serde(default)]
     pub observed_generation: u64,
     #[serde(default)]
@@ -101,7 +119,7 @@ pub struct LabInstanceStatus {
     pub last_converged_revision: Option<String>,
     #[serde(default)]
     pub retained_storage: BTreeMap<String, String>,
-    pub instance: LabInstance,
+    pub instance: CellInstance,
     pub phase: InstancePhase,
     pub instance_namespace: String,
     pub components: Vec<ComponentStatus>,

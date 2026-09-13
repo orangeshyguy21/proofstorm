@@ -71,7 +71,7 @@ if [[ "$debug" == true ]]; then profile=debug; else host_args+=(--release); fi
 stage='CRD generation'
 (cd "$snapshot"; cargo run --locked -p proofstorm-kube --example export_crds -- "$snapshot/charts/proofstorm/crds") >&2
 stage='host metadata'
-"$target/$profile/proofstorm" release-info > "$scratch/host-info.json"
+"$target/$profile/proofstorm" version --json > "$scratch/host-info.json"
 "$helper" release-host-check "$scratch/host-info.json" "$expected_target"
 if [[ -n "$controller" ]]; then "$helper" release-controller host "$scratch/host-info.json" "$work/controller.json"; fi
 stage='bundle packaging'

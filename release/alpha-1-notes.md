@@ -23,15 +23,15 @@ your user. The installer needs curl, tar/gzip, and sha256sum (or shasum). It doe
 not install Docker, modify your shell profile, or build Proofstorm from source.
 No alpha/development override flag is required.
 
-From your project directory, `proofstorm open codex`, `proofstorm open opencode`,
-or `proofstorm open claude` connects Proofstorm and starts the corresponding
-installed agent CLI. On a headless VM, `proofstorm gui --no-open` keeps the web UI
+From your project directory, `proofstorm agent open codex`, `proofstorm agent open opencode`,
+or `proofstorm agent open claude` connects Proofstorm and starts the corresponding
+installed agent CLI. On a headless VM, `proofstorm gui start` keeps the web UI
 on loopback; use an SSH tunnel rather than exposing it to the internet.
 
 ## Known limitations
 
 - The GitHub download and full runtime flow still need their fresh-VM test.
-- Full catalog/helper image coverage and lab lifecycle are not yet certified.
+- Full catalog/helper image coverage and cell lifecycle are not yet certified.
 - These host binaries use a debug build and a recorded dirty source snapshot.
 - The controller is a digest-pinned preview. Host/controller compatibility and
   bundle integrity passed; these are not claims of production readiness.

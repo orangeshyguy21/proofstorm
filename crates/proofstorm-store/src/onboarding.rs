@@ -86,7 +86,7 @@ mod tests {
         assert!(store.actor_preset("w", "a").unwrap().is_none());
         assert!(
             store
-                .initialize_actor_once("missing", "a", "identity", "v1", &[Capability::LabRead])
+                .initialize_actor_once("missing", "a", "identity", "v1", &[Capability::CellRead])
                 .is_err()
         );
         store
@@ -97,13 +97,13 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .initialize_actor_once("w", "a", "identity", "v1", &[Capability::LabRead])
+                .initialize_actor_once("w", "a", "identity", "v1", &[Capability::CellRead])
                 .unwrap()
         );
-        store.revoke("w", "a", Capability::LabRead).unwrap();
+        store.revoke("w", "a", Capability::CellRead).unwrap();
         assert!(
             !store
-                .initialize_actor_once("w", "a", "identity", "v1", &[Capability::LabRead])
+                .initialize_actor_once("w", "a", "identity", "v1", &[Capability::CellRead])
                 .unwrap()
         );
         assert!(store.capabilities("w", "a").unwrap().is_empty());

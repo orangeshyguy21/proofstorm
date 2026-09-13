@@ -62,7 +62,7 @@
         "HOME": "/wallet",
         "PROOFSTORM_WALLET": "{component_id}"
       },
-      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:7e313c8f020e3f8eb4989e00006516cac325eb29f64ddf2ca7d1996a68203114",
+      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:4c6dfadc79c08a2c2d535859ee750042a28e162c86c2cea788f2b50f7ce39187",
       "mounts": [
         {
           "mount_path": "/wallet",
@@ -140,7 +140,7 @@
     ],
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:a0989953a1b296fdc4a9583ae5cd7cae3a27e56055812d53b70404571d3f9794",
+    "rollout_digest": "sha256:6a0d1321272e02e5744f9f0685c40460b4b62cd64ab7015615c16754c3fcc931",
     "storage": [
       {
         "claim_name": "wallet-data"
@@ -196,7 +196,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:a0989953a1b296fdc4a9583ae5cd7cae3a27e56055812d53b70404571d3f9794"
+                "proofstorm.dev/rollout-digest": "sha256:6a0d1321272e02e5744f9f0685c40460b4b62cd64ab7015615c16754c3fcc931"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -250,15 +250,15 @@
                       "value": "62626"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:7e313c8f020e3f8eb4989e00006516cac325eb29f64ddf2ca7d1996a68203114",
+                  "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:4c6dfadc79c08a2c2d535859ee750042a28e162c86c2cea788f2b50f7ce39187",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
                     "exec": {
                       "command": [
-                        "python3",
-                        "-c",
-                        "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:62626/health',timeout=2)); assert r['status']=='ok' and r['interfaceVersion']=='1'"
+                        "/opt/proofstorm/driver",
+                        "ready",
+                        "cocod"
                       ]
                     },
                     "periodSeconds": 3,
@@ -276,14 +276,53 @@
                     {
                       "mountPath": "/wallet",
                       "name": "wallet"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
                     }
                   ]
                 }
               ],
               "enableServiceLinks": false,
-              "nodeSelector": {
-                "kubernetes.io/arch": "arm64"
-              },
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -301,6 +340,10 @@
                   "persistentVolumeClaim": {
                     "claimName": "wallet-data"
                   }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
                 }
               ]
             }

@@ -10,7 +10,7 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, http, json as expect, lab, postgres};
+use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, http, json as expect, postgres};
 
 const INSTANCE: &str = "cdk-ldk-instance";
 const DRAFT: &str = "cdk-ldk";
@@ -18,14 +18,14 @@ const DATABASE: &str = "proofstorm_ldk";
 const MARKER: &str = "ldk-persistent";
 const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
 
-fn lab_document(postgres_enabled: bool) -> Value {
-    let mut lab = json!({
+fn cell_document(postgres_enabled: bool) -> Value {
+    let mut cell = json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "cdk-ldk-live-lab",
+        "name": "cdk-ldk-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {"txindex": true, "fallback_fee": 0.0002}},
-            {"id": "peer", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "laboratory", "config": {"alias": "proofstorm-ldk-introduction-peer"}},
-            {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.0", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 lab"}}
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "peer", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "cell", "config": {"alias": "proofstorm-ldk-introduction-peer"}},
+            {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.0", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 cell"}}
         ],
         "links": [
             {"id": "peer-chain", "kind": "chain_backend", "from": "peer", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -33,8 +33,8 @@ fn lab_document(postgres_enabled: bool) -> Value {
         ],
         "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
     });
-    postgres::augment_lab(postgres_enabled, &mut lab, DATABASE);
-    lab
+    postgres::augment_cell(postgres_enabled, &mut cell, DATABASE);
+    cell
 }
 
 /// Pull the embedded node's public key out of the mint's bounded startup logs.
@@ -52,22 +52,22 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     let mut client = context.session("cdk-ldk-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(postgres_enabled), "idempotency_key": "create-cdk-ldk"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(postgres_enabled), "idempotency_key": "create-cdk-ldk"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cdk-ldk", "include_revision": true}),
     )?;
-    let entry = lab::lock_entry(&published, "cdk-ldk")?;
+    let entry = cell::lock_entry(&published, "cdk-ldk")?;
     expect::equals(entry, "/version", &Value::from("0.18.0"))?;
     expect::equals(entry, "/image", &Value::from(IMAGE))?;
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cdk-ldk"}),
     )?;
-    let ready = lab::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let config = context.kubectl.exec(
@@ -87,7 +87,7 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
         }
     }
     if config.contains("[lnd]") || config.contains("[cln]") {
-        bail!("embedded-LDK lab rendered an external Lightning stanza");
+        bail!("embedded-LDK cell rendered an external Lightning stanza");
     }
     postgres::assert_materialized(
         postgres_enabled,
@@ -176,8 +176,8 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
 
     drop(forward);
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_closed(&mut client, INSTANCE)?;
 
     if postgres_enabled {
         println!("CDK embedded LDK + PostgreSQL MCP BOLT12 persistence and teardown passed");

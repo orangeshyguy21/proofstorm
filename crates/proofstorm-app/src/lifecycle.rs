@@ -5,8 +5,8 @@ use kube::{
     Api, ResourceExt,
     api::{DeleteParams, ListParams, Preconditions},
 };
-use proofstorm_core::{Capability, LabInstance, LabInstanceStatus, PublishedRevision};
-use proofstorm_kube::ProofstormLab;
+use proofstorm_core::{Capability, CellInstance, CellInstanceStatus, PublishedRevision};
+use proofstorm_kube::ProofstormCell;
 use proofstorm_store::{LifecycleGuard, RuntimeBinding, Store, StoreError};
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ pub async fn guard(store: &Store) -> Result<LifecycleGuard, Error> {
     }
     Err(Error::problem(
         "lifecycle_busy",
-        "Another lab lifecycle transition is in progress; retry this request",
+        "Another cell lifecycle transition is in progress; retry this request",
     ))
 }
 async fn identity(runtime: &Runtime) -> Result<RuntimeBinding, Error> {
@@ -41,7 +41,7 @@ async fn identity(runtime: &Runtime) -> Result<RuntimeBinding, Error> {
 fn mismatch() -> Error {
     Error::problem(
         "stale_incarnation",
-        "This runtime does not match the recorded lab incarnation; read the current lab and replan",
+        "This runtime does not match the recorded cell incarnation; read the current cell and replan",
     )
 }
 
@@ -49,15 +49,15 @@ fn mismatch() -> Error {
 pub(crate) async fn validate_runtime(
     runtime: &Runtime,
     store: &Store,
-    instance: &LabInstance,
+    instance: &CellInstance,
 ) -> Result<(), Error> {
     let current = identity(runtime).await?;
     if store.runtime_binding(instance)?.is_some_and(|binding| {
         binding.source != current.source || binding.cluster_uid != current.cluster_uid
     }) {
         return Err(Error::problem(
-            "lab_cluster_mismatch",
-            "This lab belongs to another cluster; select its context before changing it",
+            "cell_cluster_mismatch",
+            "This cell belongs to another cluster; select its context before changing it",
         ));
     }
     Ok(())
@@ -72,7 +72,7 @@ pub async fn reconcile_name(
     principal: &str,
     id: &str,
 ) -> Result<bool, Error> {
-    store.authorize(workspace, principal, Capability::LabStatus)?;
+    store.authorize(workspace, principal, Capability::CellStatus)?;
     let instance = match store.instance(workspace, principal, id) {
         Ok(i) => i,
         Err(StoreError::NotFound { .. }) => {
@@ -86,19 +86,19 @@ pub async fn reconcile_name(
     let binding = store.runtime_binding(&instance)?;
     if binding.as_ref().is_some_and(|b| b.source != current.source) {
         return Err(Error::problem(
-            "lab_cluster_mismatch",
+            "cell_cluster_mismatch",
             "This name is tracked in another cluster context; select that context or use a separate workspace/database",
         ));
     }
-    let api = Api::<ProofstormLab>::namespaced(runtime.client.clone(), &runtime.control_namespace);
-    if let Some(lab) = api.get_opt(&instance.resource_name).await? {
-        if lab.spec.instance_key != instance.instance_key
-            || lab.spec.instance_id != instance.id
-            || lab.spec.workspace_id != workspace
+    let api = Api::<ProofstormCell>::namespaced(runtime.client.clone(), &runtime.control_namespace);
+    if let Some(cell) = api.get_opt(&instance.resource_name).await? {
+        if cell.spec.instance_key != instance.instance_key
+            || cell.spec.instance_id != instance.id
+            || cell.spec.workspace_id != workspace
         {
             return Err(mismatch());
         }
-        current.resource_uid = lab.uid();
+        current.resource_uid = cell.uid();
         if current.resource_uid.is_none() {
             return Err(mismatch());
         }
@@ -115,23 +115,23 @@ pub async fn reconcile_name(
     }
     runtime.verify_absent(instance.clone()).await?;
     remove_receipts(runtime, &instance, binding.as_ref()).await?;
-    store.purge_lab(&instance)?;
+    store.purge_cell(&instance)?;
     Ok(true)
 }
 
-/// Existing desired revisions are resumable; deleted labs are not resurrected by retries.
+/// Existing desired revisions are resumable; deleted cells are not resurrected by retries.
 pub async fn materialize_locked(
     runtime: &Runtime,
     store: &Store,
-    instance: LabInstance,
+    instance: CellInstance,
     revision: PublishedRevision,
-) -> Result<LabInstanceStatus, Error> {
+) -> Result<CellInstanceStatus, Error> {
     let mut binding = identity(runtime).await?;
     store.bind_runtime(&instance, &binding)?;
     store.record_plan_use(&instance, None)?;
     let status = runtime.materialize(instance.clone(), revision).await?;
     let resource =
-        Api::<ProofstormLab>::namespaced(runtime.client.clone(), &runtime.control_namespace)
+        Api::<ProofstormCell>::namespaced(runtime.client.clone(), &runtime.control_namespace)
             .get(&instance.resource_name)
             .await?;
     binding.resource_uid = resource.uid();
@@ -155,8 +155,8 @@ pub async fn materialize(
     revision: &str,
     key: &str,
     plan: Option<&str>,
-) -> Result<LabInstanceStatus, Error> {
-    store.authorize(workspace, principal, Capability::LabMaterialize)?;
+) -> Result<CellInstanceStatus, Error> {
+    store.authorize(workspace, principal, Capability::CellMaterialize)?;
     let _guard = guard(store).await?;
     reconcile_name(runtime, store, workspace, principal, id).await?;
     if let Some(plan) = plan {
@@ -177,7 +177,7 @@ pub async fn sweep(
     principal: &str,
     cursor: &str,
 ) -> Result<String, Error> {
-    store.authorize(workspace, principal, Capability::LabStatus)?;
+    store.authorize(workspace, principal, Capability::CellStatus)?;
     let Some(_guard) = store.try_lifecycle_guard()? else {
         return Ok(cursor.into());
     };
@@ -195,7 +195,7 @@ pub async fn sweep(
             Ok(Err(e))
                 if e.details
                     .as_ref()
-                    .is_some_and(|d| d["code"] == "lab_cluster_mismatch") => {}
+                    .is_some_and(|d| d["code"] == "cell_cluster_mismatch") => {}
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
                 failure.get_or_insert(error);
@@ -219,16 +219,16 @@ pub async fn sweep(
 
 async fn remove_receipts(
     runtime: &Runtime,
-    instance: &LabInstance,
+    instance: &CellInstance,
     binding: Option<&RuntimeBinding>,
 ) -> Result<(), Error> {
     let api = Api::<ConfigMap>::namespaced(runtime.client.clone(), &runtime.control_namespace);
-    // Namespace deletion collects lab workloads. Snapshots normally disappear via owner GC;
+    // Namespace deletion collects cell workloads. Snapshots normally disappear via owner GC;
     // remove only exact recorded owners, plus the controller's verified teardown receipt.
     let maps = api.list(&ListParams::default()).await?;
     for map in maps {
         let owned = map.owner_references().iter().any(|owner| {
-            owner.kind == "ProofstormLab"
+            owner.kind == "ProofstormCell"
                 && owner.name == instance.resource_name
                 && binding.and_then(|b| b.resource_uid.as_deref()) == Some(owner.uid.as_str())
         });

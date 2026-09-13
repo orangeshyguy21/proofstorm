@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:d779e833119af3b3823691d17350a1bb65fa6d82601c6b6dfc70a81122ddbad5",
+  "catalog_digest": "sha256:2c58b44d99da9f631c4dd559ca22030e59613fe0867928b935878346f5613988",
   "entries": [
     {
       "implementation": "attacker-workspace",
@@ -45,7 +45,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "bitcoin-core/31/v1",
-      "config_schema_digest": "sha256:e92d4055cc8f70b0f1ad1ebc3229a58ed367a745a9994b8cd6db8d0408868666",
+      "config_schema_digest": "sha256:3a41021706a3caf803b5042469743a335c7c6fb20ea64f3fcdb0187da0251a30",
       "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
       "fields": {
         "data_directory": {
@@ -554,7 +554,7 @@
       "support_lifecycle": "preferred",
       "config_version": "cdk-cli-wallet/0.18/v1",
       "config_schema_digest": "sha256:6d88a6e4226ad8e2f1396b819e09879657ebef4a9f7b154015f1ddd0be3bed90",
-      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:bc4ec6943eb505bb7eb5a6d43ddebf0297fe00f70775378e33ae85c26eb6a5a8",
+      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:31e18a419bb3cafcc795a5c99dcfbb07460bba5ad76f2c1d104341e151cb22e9",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",
@@ -909,7 +909,7 @@
       "support_lifecycle": "experimental",
       "config_version": "cocod-wallet/0.0.17/v1",
       "config_schema_digest": "sha256:3dde4aa06c82c0f6da042c21478acf2c9cf3f2de849f68330904a95ce7701366",
-      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:88dc907f64530788280b0ba603b1bd7f361c58281171e74ca25b0676fadfcdc7",
+      "image": "proofstorm-registry.localhost:5000/cocod-wallet@sha256:940d02390f50a7009d5ad50b343663afc042f7af93fdb94ddceec34d1940d29c",
       "fields": {
         "client_credential": {
           "classification": "generated_instance_secret",
@@ -967,7 +967,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "keycloak/25/v1",
-      "config_schema_digest": "sha256:c97d8e8af9c1a96ada4a3592af33d6ad08923284db346a44166d1963dc7e3f60",
+      "config_schema_digest": "sha256:846716297d4fefb554fd7f7361c03d58129637e3fdb3eaedda93985b5ea92ab0",
       "image": "proofstorm-registry.localhost:5000/upstream/quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
       "fields": {
         "access_token_lifespan_seconds": {
@@ -1205,8 +1205,8 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
-      "config_schema_digest": "sha256:220bcdc404f06eeefd4b4ab7ebb8b7f545b294e3167e42be4b59f970b50f432d",
-      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
+      "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
       "fields": {
         "auth_max_blind_tokens": {
           "classification": "agent_authorable",
@@ -1532,7 +1532,7 @@
       "support_lifecycle": "preferred",
       "config_version": "nutshell-wallet/0.20/v1",
       "config_schema_digest": "sha256:c3c3c1cfd04bf63de992267beabe8d2b1927575da11d8508bbe865957115281f",
-      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",
@@ -1581,7 +1581,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "postgresql/17/v1",
-      "config_schema_digest": "sha256:188caa752faa82af523c5ffc15bb48dd248305c73ec100865a5b5d54ba29fe93",
+      "config_schema_digest": "sha256:5010492d9876676ee2ecc93f8fee9581b4d7d9fe7cb8fa7620f7d021f0e025c3",
       "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
       "fields": {
         "credentials": {

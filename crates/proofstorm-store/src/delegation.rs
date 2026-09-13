@@ -1,6 +1,6 @@
 //! Explicit private-transfer permissions, independent of passive sessions.
 use super::{
-    Capability, LabOperation, OperationKind, OptionalExtension, Store, StoreError, is_slug,
+    Capability, CellOperation, OperationKind, OptionalExtension, Store, StoreError, is_slug,
     now_unix, params, validate_session_request,
 };
 use proofstorm_core::{ComponentKind, PrivateAccessGrant, PrivateTransferScope};
@@ -17,7 +17,7 @@ impl Store {
         scope: &PrivateTransferScope,
         key: &str,
     ) -> Result<PrivateAccessGrant, StoreError> {
-        self.authorize(workspace, principal, Capability::LabOperate)?;
+        self.authorize(workspace, principal, Capability::CellOperate)?;
         self.authorize(workspace, principal, Capability::ComponentExecLive)?;
         self.authorize(workspace, recipient, Capability::ComponentExecLive)?;
         validate_session_request(id)?;
@@ -47,13 +47,13 @@ impl Store {
             (&scope.mint, ComponentKind::Mint),
         ] {
             if !revision
-                .lab
+                .cell
                 .components
                 .iter()
                 .any(|c| &c.id == id && c.kind == kind)
             {
                 return Err(StoreError::Validation(
-                    "private scope endpoints must belong to the lab".into(),
+                    "private scope endpoints must belong to the cell".into(),
                 ));
             }
         }
@@ -180,7 +180,7 @@ impl Store {
         request: &serde_json::Value,
     ) -> Result<(), StoreError> {
         if self
-            .authorize(workspace, principal, Capability::LabOperate)
+            .authorize(workspace, principal, Capability::CellOperate)
             .is_ok()
             || self
                 .matching_access(workspace, principal, instance, kind, request)?
@@ -191,12 +191,12 @@ impl Store {
         Err(StoreError::AccessDenied {
             workspace: workspace.into(),
             principal: principal.into(),
-            capability: Capability::LabOperate,
+            capability: Capability::CellOperate,
         })
     }
     pub fn operation_access_scope(
         &self,
-        operation: &LabOperation,
+        operation: &CellOperation,
     ) -> Result<Option<PrivateAccessGrant>, StoreError> {
         self.matching_access(
             &operation.workspace_id,

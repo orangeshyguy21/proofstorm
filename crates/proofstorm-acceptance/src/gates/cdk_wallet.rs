@@ -8,7 +8,7 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, McpClient, json as expect, lab};
+use crate::{GateContext, McpClient, cell, json as expect};
 
 const INSTANCE: &str = "cdk-wallet-instance";
 const EXPERIMENT: &str = "cdk-wallet-experiment";
@@ -16,16 +16,16 @@ const LEASE: &str = "cdk-wallet-session";
 const CLI: &str = "timeout -k 2 45 cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive";
 const LN: &str = "lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=127.0.0.1:10009";
 
-fn document(input_fee_ppk: u64) -> Value {
+pub(super) fn document(input_fee_ppk: u64) -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cdk-wallet-checkpoint",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"laboratory","config":{}},
-            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
-            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"laboratory","config":{}},
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
+            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.0","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":input_fee_ppk}},
-            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}},
-            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"laboratory","config":{}}
+            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}},
+            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],
         "links":[
             {"id":"mint-chain","kind":"chain_backend","from":"mint-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
@@ -66,7 +66,7 @@ fn operation(
     args: Value,
 ) -> Result<Value> {
     client.call(tool, scoped(id, args))?;
-    let result = match lab::wait_operation(client, id, 60) {
+    let result = match cell::wait_operation(client, id, 60) {
         Ok(result) => result,
         Err(error) => {
             if let Ok(failed) = client.call("operation_status", json!({"operation_id": id})) {
@@ -76,7 +76,7 @@ fn operation(
         }
     };
     save(directory, id, &result)?;
-    Ok(lab::artifact_content(&result)?.clone())
+    Ok(cell::artifact_content(&result)?.clone())
 }
 
 fn native(
@@ -190,7 +190,7 @@ fn exercise(
         directory,
         "await-funding-quote",
         "wallet-a",
-        "python3 - <<'PY'\nimport sqlite3,time\nfor _ in range(100):\n c=sqlite3.connect('file:/wallet/cdk/cdk-cli.sqlite?mode=ro',uri=True)\n rows=c.execute(\"SELECT id FROM mint_quote WHERE amount=5000 AND state='UNPAID'\").fetchall(); c.close()\n if len(rows)==1: break\n time.sleep(.1)\nelse: raise SystemExit('unpaid quote not observed')\nprint('real unpaid quote observed')\nPY",
+        "/opt/proofstorm/driver cdk-quote await UNPAID /wallet/cdk/cdk-cli.sqlite http://mint:3338 5000",
     )?;
     balance(client, directory, "passive-during-funding", "wallet-a", 0)?;
     let active = client.call(
@@ -210,14 +210,25 @@ fn exercise(
         json!({"operation_id":"interrupted-funding","timeout_seconds":30}),
     )?;
     save(directory, "funding-cancelled", &cancelled)?;
-    let cancelled = lab::artifact_content(&cancelled)?;
+    let cancelled = cell::artifact_content(&cancelled)?;
     if cancelled.get("cancelled") != Some(&json!(true))
         || cancelled.get("cleanup_verified") != Some(&json!(true))
     {
         bail!("funding interruption lacked verified cleanup");
     }
-    let invoice = context.kubectl.exec(namespace,"deployment/wallet-a", &["python3","-c",
-        "import sqlite3; c=sqlite3.connect('file:/wallet/cdk/cdk-cli.sqlite?mode=ro',uri=True); rows=c.execute(\"SELECT request FROM mint_quote WHERE amount=5000 AND mint_url='http://mint:3338' AND state='UNPAID'\").fetchall(); assert len(rows)==1; print(rows[0][0])"])?;
+    let invoice = context.kubectl.exec(
+        namespace,
+        "deployment/wallet-a",
+        &[
+            "/opt/proofstorm/driver",
+            "cdk-quote",
+            "invoice",
+            "UNPAID",
+            "/wallet/cdk/cdk-cli.sqlite",
+            "http://mint:3338",
+            "5000",
+        ],
+    )?;
     context.kubectl.exec_stdin(
         namespace,
         "statefulset/payer-lnd",
@@ -250,7 +261,7 @@ fn exercise(
         "claim-funding",
         "wallet-a",
         &format!(
-            "quote=$(python3 -c \"import sqlite3; c=sqlite3.connect('file:/wallet/cdk/cdk-cli.sqlite?mode=ro',uri=True); rows=c.execute('SELECT id FROM mint_quote WHERE amount=5000').fetchall(); assert len(rows)==1; print(rows[0][0])\") && {CLI} mint http://mint:3338 --quote-id \"$quote\" --wait-duration 10 >/wallet/claim.log 2>&1 && echo claim_command_completed"
+            "quote=$(/opt/proofstorm/driver cdk-quote id any /wallet/cdk/cdk-cli.sqlite http://mint:3338 5000) && {CLI} mint http://mint:3338 --quote-id \"$quote\" --wait-duration 10 >/wallet/claim.log 2>&1 && echo claim_command_completed"
         ),
     )?;
     balance(client, directory, "funded-wallet-a", "wallet-a", 5000)?;
@@ -290,7 +301,7 @@ fn exercise(
                 "restart-wallet-a",
                 json!({"component":"wallet-a"}),
             )?;
-            lab::wait_ready(client, INSTANCE)?;
+            cell::wait_ready(client, INSTANCE)?;
             let identity = native(
                 client,
                 directory,
@@ -354,7 +365,7 @@ fn exercise(
                 id,
                 "wallet-a",
                 &format!(
-                    "{CLI} melt --mint-url http://mint:3338 --invoice \"$(cat /wallet/recipient.invoice)\" >/wallet/{id}.log 2>&1; code=$?; rm -f /wallet/recipient.invoice; test \"$code\" -eq 0 || exit \"$code\"; python3 - <<'PY'\nimport json,re\nfrom pathlib import Path\nrows=re.findall(r'^Payment successful: state=(\\w+), amount=(\\d+), fee_paid=(\\d+)$',Path('/wallet/{id}.log').read_text(),re.M)\nassert len(rows)==1, 'missing native melt receipt'\nstate,amount,fee=rows[0]\nprint(json.dumps(dict(state=state,amount_sat=int(amount),fee_paid_sat=int(fee))))\nPY"
+                    "{CLI} melt --mint-url http://mint:3338 --invoice \"$(cat /wallet/recipient.invoice)\" >/wallet/{id}.log 2>&1; code=$?; rm -f /wallet/recipient.invoice; test \"$code\" -eq 0 || exit \"$code\"; /opt/proofstorm/driver cdk-melt-receipt /wallet/{id}.log"
                 ),
             )?;
             let native_receipt: Value = serde_json::from_str(&native_receipt)?;
@@ -470,7 +481,7 @@ fn exercise(
         directory,
         "native-process-cleanup",
         "wallet-a",
-        "python3 - <<'PY'\nfrom pathlib import Path\nactive=[]\nfor proc in Path('/proc').iterdir():\n if not proc.name.isdigit(): continue\n try: exe=(proc/'exe').resolve(strict=True).name\n except (OSError,RuntimeError): continue\n if exe=='cdk-cli': active.append(proc.name)\nassert not active, 'native wallet processes still running'\nprint('native wallet processes absent')\nPY",
+        "/opt/proofstorm/driver process-absent cdk-cli",
     )?;
     Ok(())
 }
@@ -493,9 +504,9 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
     // Idempotent transport replay must preserve the original receipt, not
     // perform another potentially fee-bearing native attempt.
     client.call("component_exec_live", scoped(id, args))?;
-    let replay = lab::wait_operation(client, id, 60)?;
+    let replay = cell::wait_operation(client, id, 60)?;
     save(directory, &format!("{id}-idempotent-replay"), &replay)?;
-    if lab::artifact_content(&replay)? != &receipt {
+    if cell::artifact_content(&replay)? != &receipt {
         bail!("idempotent native replay changed the terminal receipt");
     }
     let expected_reason = if id == "already-paid-invoice" {
@@ -509,7 +520,7 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
         &format!("{id}-reason"),
         "wallet-a",
         &format!(
-            "python3 - <<'PY'\nfrom pathlib import Path\ns=Path('/wallet/{id}.log').read_text().lower()\nassert '{expected_reason}' in s, 'unexpected private rejection reason'\nprint('expected native rejection reason verified')\nPY"
+            "grep -Fiq -- '{expected_reason}' /wallet/{id}.log && printf 'expected native rejection reason verified\\n'"
         ),
     )?;
     Ok(())
@@ -533,21 +544,21 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &capabilities,
     )?;
     client.call(
-        "lab_create",
-        json!({"draft_id":"cdk-wallet","lab":document(input_fee_ppk),"idempotency_key":"create"}),
+        "cell_create",
+        json!({"draft_id":"cdk-wallet","cell":document(input_fee_ppk),"idempotency_key":"create"}),
     )?;
-    let published = client.call("lab_publish",json!({"draft_id":"cdk-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published = client.call("cell_publish",json!({"draft_id":"cdk-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
     save(&directory, "published", &published)?;
-    let locked = lab::lock_entry(&published, "cdk-cli-wallet")?;
+    let locked = cell::lock_entry(&published, "cdk-cli-wallet")?;
     if locked.pointer("/build_provenance/commit_sha")
         != Some(&json!("d3dec24c784e8fec1fd65f853241c7a2261c7abd"))
     {
         bail!("wallet lock omitted source provenance");
     }
-    client.call("lab_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
     // Always attempt normal cleanup after materialization, including failed gates.
     let result = (|| -> Result<()> {
-        let ready = lab::wait_ready(&mut client, INSTANCE)?;
+        let ready = cell::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
         client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
@@ -583,8 +594,8 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &json!({"passed": result.is_ok(),
         "error": result.as_ref().err().map(|error| format!("{error:#}"))}),
     )?;
-    client.call("lab_close", json!({"instance_id":INSTANCE}))?;
-    let closed = lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    let closed = cell::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
         bail!("cleanup did not prove absence: {closed}");

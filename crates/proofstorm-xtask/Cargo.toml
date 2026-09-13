@@ -8,7 +8,11 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+proofstorm-driver = { path = "../proofstorm-driver", default-features = false }
+proofstorm-prober = { path = "../proofstorm-prober", default-features = false }
 anyhow.workspace = true
+proofstorm-core = { path = "../proofstorm-core", default-features = false }
+serde.workspace = true
 flate2 = "1.1"
 tar = { version = "0.4", default-features = false }
 toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }

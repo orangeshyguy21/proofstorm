@@ -15,7 +15,7 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect, lab};
+use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const INSTANCE: &str = "nutshell-oidc-instance";
 const DRAFT: &str = "nutshell-oidc";
@@ -23,30 +23,30 @@ const EXPERIMENT: &str = "nutshell-oidc-experiment";
 const LEASE: &str = "nutshell-oidc-session";
 const CAPABILITIES: &[&str] = &[
     "catalog.read",
-    "lab.read",
-    "lab.create",
-    "lab.validate",
-    "lab.publish",
-    "lab.materialize",
-    "lab.status",
-    "lab.close",
+    "cell.read",
+    "cell.create",
+    "cell.validate",
+    "cell.publish",
+    "cell.materialize",
+    "cell.status",
+    "cell.close",
     "experiment.create",
     "experiment.read",
     "experiment.close",
-    "lab.operate",
+    "cell.operate",
     "authentication.test",
     "artifact.read",
 ];
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "nutshell-oidc-live-lab",
+        "name": "nutshell-oidc-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "laboratory", "config": {}},
-            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "laboratory", "config": {"alias": "proofstorm-nutshell-oidc"}},
-            {"id": "identity-db", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "laboratory", "config": {"database_name": "keycloak", "storage_size": "2Gi"}},
-            {"id": "identity", "kind": "identity_provider", "implementation": "keycloak", "version": "25.0.6", "config_version": "keycloak/25/v1", "control": "laboratory", "config": {"access_token_lifespan_seconds": 600}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-nutshell-oidc"}},
+            {"id": "identity-db", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"database_name": "keycloak", "storage_size": "2Gi"}},
+            {"id": "identity", "kind": "identity_provider", "implementation": "keycloak", "version": "25.0.6", "config_version": "keycloak/25/v1", "control": "cell", "config": {"access_token_lifespan_seconds": 600}},
             {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Authenticated Nutshell", "description": "Live NUT-21 and NUT-22 acceptance", "auth_rate_limit_per_minute": 2, "auth_max_blind_tokens": 3}}
         ],
         "links": [
@@ -75,11 +75,11 @@ pub fn run(context: &GateContext) -> Result<()> {
     let kubectl = &context.kubectl;
 
     client.call(
-        "lab_create",
-        json!({"draft_id": DRAFT, "lab": lab_document(), "idempotency_key": "create-nutshell-oidc"}),
+        "cell_create",
+        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-nutshell-oidc"}),
     )?;
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-oidc", "include_revision": true}),
     )?;
     for (catalog_id, version, config_version) in [
@@ -87,7 +87,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         ("keycloak", "25.0.6", "keycloak/25/v1"),
         ("postgresql", "17.11", "postgresql/17/v1"),
     ] {
-        let entry = lab::lock_entry(&published, catalog_id)?;
+        let entry = cell::lock_entry(&published, catalog_id)?;
         if expect::string(entry, "/version")? != version
             || expect::string(entry, "/config_version")? != config_version
         {
@@ -96,10 +96,10 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-oidc"}),
     )?;
-    let status = lab::wait_phase(&mut client, INSTANCE, "ready", 240, Duration::from_secs(3))?;
+    let status = cell::wait_phase(&mut client, INSTANCE, "ready", 240, Duration::from_secs(3))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
     bitcoin(context, &namespace, &["createwallet", "default"])?;
@@ -197,8 +197,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "nutshell-oidc-baseline"
         }),
     )?;
-    let baseline = lab::wait_operation(&mut client, "nutshell-oidc-baseline", 60)?;
-    let baseline = lab::artifact_content(&baseline)?;
+    let baseline = cell::wait_operation(&mut client, "nutshell-oidc-baseline", 60)?;
+    let baseline = cell::artifact_content(&baseline)?;
     expect::equals(
         baseline,
         "/contract",
@@ -207,8 +207,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     expect::equals(baseline, "/mint", &Value::from("mint"))?;
     expect::equals(baseline, "/identity_provider", &Value::from("identity"))?;
     if !expect::boolean(baseline, "/conformant")? {
-        client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-        lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
+        client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+        cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC baseline reported a conformance finding: {baseline}");
     }
 
@@ -241,8 +241,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "nutshell-oidc-protected-spend"
         }),
     )?;
-    let protected = lab::wait_operation(&mut client, "nutshell-oidc-protected-spend", 60)?;
-    let protected = lab::artifact_content(&protected)?;
+    let protected = cell::wait_operation(&mut client, "nutshell-oidc-protected-spend", 60)?;
+    let protected = cell::artifact_content(&protected)?;
     expect::equals(
         protected,
         "/contract",
@@ -251,8 +251,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     if !expect::boolean(protected, "/conformant")?
         || !expect::boolean(protected, "/protected_request")?
     {
-        client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-        lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
+        client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+        cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC protected spend reported a conformance finding: {protected}");
     }
 
@@ -271,23 +271,23 @@ pub fn run(context: &GateContext) -> Result<()> {
             "idempotency_key": "nutshell-oidc-replay"
         }),
     )?;
-    let replay = lab::wait_operation(&mut client, "nutshell-oidc-replay", 60)?;
-    let replay = lab::artifact_content(&replay)?;
+    let replay = cell::wait_operation(&mut client, "nutshell-oidc-replay", 60)?;
+    let replay = cell::artifact_content(&replay)?;
     expect::equals(
         replay,
         "/contract",
         &Value::from("proofstorm/authentication-replay/v1"),
     )?;
     if !expect::boolean(replay, "/conformant")? || !expect::boolean(replay, "/protected_request")? {
-        client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-        lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
+        client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+        cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC replay reported a conformance finding: {replay}");
     }
 
-    lab::wait_phase(&mut client, INSTANCE, "ready", 100, Duration::from_secs(3))?;
+    cell::wait_phase(&mut client, INSTANCE, "ready", 100, Duration::from_secs(3))?;
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
 
     println!(
         "Nutshell 0.20.3 + Keycloak 25.0.6 passed NUT-21/NUT-22 positive and negative limits, replay persistence, restart recovery, and teardown"

@@ -1,37 +1,52 @@
-//! One module per live acceptance gate, each ported from its Python client.
+//! Live acceptance gates sharing the installation-aware runner and MCP client.
 
 use anyhow::{Result, bail};
 
 use crate::GateContext;
 
+pub mod agents;
+pub mod cashu_double_spend;
 pub mod cdk_bdk_stress;
 pub mod cdk_cln;
 pub mod cdk_ldk;
 pub mod cdk_postgres;
 pub mod cdk_wallet;
 pub mod cocod_wallet;
+pub mod cross_cell_scheduler;
 pub mod cross_implementation_wallet;
-pub mod cross_lab_scheduler;
-pub mod dynamic_lab;
+pub mod dynamic_cell;
 pub mod failed_melt;
+pub mod gui;
+pub mod isolation;
 pub mod mint_management;
 pub mod native_exec;
 pub mod nutshell_cln;
 pub mod nutshell_mint;
 pub mod nutshell_oidc;
 pub mod nutshell_postgres;
+pub mod onboarding;
 pub mod private_handoff;
 pub mod private_transfer;
+pub mod progress;
 pub mod quote_composition;
 pub mod reliable_exec;
 pub mod slice2;
 pub mod slice4;
 pub mod slice5;
+pub mod smoke;
 
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
+    "smoke",
+    "onboarding",
+    "gui",
+    "cli-progress",
+    "agent-config",
+    "agent-clients",
+    "installation-isolation",
+    "cashu-double-spend",
     "mint-management",
-    "dynamic-lab",
+    "dynamic-cell",
     "nutshell-mint",
     "cdk-cln",
     "cdk-wallet",
@@ -44,7 +59,7 @@ pub const NAMES: &[&str] = &[
     "nutshell-cln",
     "nutshell-postgres",
     "cdk-postgres",
-    "cross-lab-scheduler",
+    "cross-cell-scheduler",
     "cdk-ldk",
     "cdk-ldk-postgres",
     "cdk-bdk-stress",
@@ -65,8 +80,16 @@ pub const NAMES: &[&str] = &[
 /// Dispatch a gate by the name passed to `just e2e`.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
+        "smoke" => smoke::run(context),
+        "onboarding" => onboarding::run(context),
+        "gui" => gui::run(context),
+        "cli-progress" => progress::run(context),
+        "agent-config" => agents::run(context, false),
+        "agent-clients" => agents::run(context, true),
+        "installation-isolation" => isolation::run(context),
+        "cashu-double-spend" => cashu_double_spend::run(context),
         "mint-management" => mint_management::run(context),
-        "dynamic-lab" => dynamic_lab::run(context),
+        "dynamic-cell" => dynamic_cell::run(context),
         "nutshell-mint" => nutshell_mint::run(context),
         "cdk-cln" => cdk_cln::run(context),
         "cdk-wallet" => cdk_wallet::run(context),
@@ -79,7 +102,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "nutshell-cln" => nutshell_cln::run(context),
         "nutshell-postgres" => nutshell_postgres::run(context),
         "cdk-postgres" => cdk_postgres::run(context),
-        "cross-lab-scheduler" => cross_lab_scheduler::run(context),
+        "cross-cell-scheduler" => cross_cell_scheduler::run(context),
         "cdk-ldk" => cdk_ldk::run(context, crate::postgres::enabled()),
         "cdk-ldk-postgres" => cdk_ldk::run(context, true),
         "cdk-bdk-stress" => cdk_bdk_stress::run(context, crate::postgres::enabled()),

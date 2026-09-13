@@ -16,6 +16,21 @@ use serde_json::{Value, json};
 /// MCP protocol revision the server implements.
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
+/// Prevent a parent shell from choosing live state or authority for test children.
+pub fn clear_runtime_environment(command: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("PROOFSTORM_")
+            || name.starts_with("K3D_")
+            || name.starts_with("HELM_")
+            || name == "KUBECONFIG"
+            || name == "KUBERNETES_MASTER"
+        {
+            command.env_remove(key);
+        }
+    }
+}
+
 /// A spawned `proofstorm-mcp` process with an initialized MCP session.
 ///
 /// The child is killed on drop, so a gate that aborts mid-way never leaks a
@@ -39,20 +54,22 @@ impl McpClient {
     {
         let mut command = Command::new(binary);
         // A hermetic client must not inherit a user's live DB, mode or authority.
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("PROOFSTORM_") {
-                command.env_remove(key);
-            }
-        }
+        clear_runtime_environment(&mut command);
         for (key, value) in env {
             command.env(key, value);
         }
+        Self::from_command(command, client_name)
+    }
+
+    /// Start an explicitly assembled, test-owned attachment command. The caller
+    /// controls its environment so override resistance can be tested end to end.
+    pub fn from_command(mut command: Command, client_name: &str) -> Result<Self> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .with_context(|| format!("spawn {}", binary.display()))?;
+            .context("spawn selected MCP command")?;
         let stdin = child.stdin.take().context("child stdin")?;
         let stdout = BufReader::new(child.stdout.take().context("child stdout")?);
 
@@ -123,7 +140,7 @@ impl McpClient {
     pub fn call(&mut self, tool: &str, mut arguments: Value) -> Result<Value> {
         // Gate convenience: follow the same status -> close -> wait token contract as agents.
         // Raw envelope helpers intentionally do not fill fields, for contract refusal tests.
-        if (tool == "lab_close" || (tool == "lab_wait" && arguments["target_phase"] == "closed"))
+        if (tool == "cell_close" || (tool == "cell_wait" && arguments["target_phase"] == "closed"))
             && arguments.get("expected_instance_key").is_none()
         {
             let id = arguments["instance_id"]
@@ -131,15 +148,15 @@ impl McpClient {
                 .context("instance_id required")?
                 .to_owned();
             if !self.incarnations.contains_key(&id) {
-                self.call("lab_status", json!({"instance_id":id}))?;
+                self.call("cell_status", json!({"instance_id":id}))?;
             }
             arguments["expected_instance_key"] = json!(
                 self.incarnations
                     .get(&id)
-                    .context("lab status did not return instance_key")?
+                    .context("cell status did not return instance_key")?
             );
         }
-        if tool == "lab_materialize" && arguments.get("plan_id").is_none() {
+        if tool == "cell_materialize" && arguments.get("plan_id").is_none() {
             let revision = arguments["revision_digest"]
                 .as_str()
                 .context("revision_digest required")?;
@@ -149,7 +166,7 @@ impl McpClient {
                     .context("publish the plan before materializing")?
             );
         }
-        let published_draft = (tool == "lab_publish")
+        let published_draft = (tool == "cell_publish")
             .then(|| arguments["draft_id"].as_str().map(str::to_owned))
             .flatten();
         let result = self.request("tools/call", tool_params(tool, arguments))?;
@@ -318,7 +335,7 @@ impl Drop for McpClient {
 /// Build a JSON object, moving each value in rather than cloning it.
 ///
 /// `json!` serializes an interpolated `Value` by reference, which would deep
-/// copy every lab document a gate submits.
+/// copy every cell document a gate submits.
 fn frame<const N: usize>(fields: [(&str, Value); N]) -> Value {
     Value::Object(
         fields

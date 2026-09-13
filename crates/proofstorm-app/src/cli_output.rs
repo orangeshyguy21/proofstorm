@@ -131,61 +131,91 @@ fn field<'a>(value: &'a Value, name: &str) -> &'a str {
 
 fn human(command: &str, value: &Value) -> String {
     use std::fmt::Write;
+    let bin = proofstorm_app::command_name();
     match command {
-        "setup" if value["ready"] == true => "Proofstorm is ready.\n\nRun proofstorm gui to get started.\n".into(),
-        "setup" if value["prepared"] == true => "Proofstorm tools are prepared. The runtime has not been started.\n\nRun proofstorm setup to finish.\n".into(),
-        "gui" => format!("GUI {}: {}\nProject: {}\n", match value["browser"].as_str() {
-            Some("existing_tab_focused") => "focused",
-            Some("opened_default_browser") => "opened",
-            _ => "ready",
-        }, field(value, "url"), field(value, "project")),
-        "stop" => format!("GUI {}. Labs keep running.\n", if value["stopped"] == true { "stopped" } else { "is not running" }),
+        "setup" if value["ready"] == true => format!("Runtime ready.\nOpen the GUI: {bin} gui\n"),
+        "setup" if value["prepared"] == true => {
+            format!("Tools prepared. Runtime not started.\nStart it: {bin} setup\n")
+        }
+        "gui" => format!(
+            "GUI {}: {}\nStop the GUI: {bin} gui stop\n",
+            match value["browser"].as_str() {
+                Some("existing_tab_focused") => "focused",
+                Some("opened_default_browser") => "opened",
+                _ => "ready",
+            },
+            field(value, "url")
+        ),
+        "gui-status" => {
+            let mut text = format!("GUI {}.\n", field(value, "state"));
+            if let Some(url) = value["url"].as_str() {
+                let _ = writeln!(text, "{url}");
+            }
+            text
+        }
+        "stop" => format!(
+            "GUI {}. Cells keep running.\n",
+            if value["stopped"] == true {
+                "stopped"
+            } else {
+                "is not running"
+            }
+        ),
         "attach" | "open" if value["attached"] == true => {
-            let mut text = format!("Proofstorm MCP configured for {}.\nConfig: {}\n", field(value, "harness"), field(value, "config"));
+            let mut text = format!(
+                "Proofstorm MCP configured for {}.\nConfig: {}\n",
+                field(value, "harness"),
+                field(value, "config")
+            );
             if let Some(backup) = value["backup"].as_str() {
                 let _ = writeln!(text, "Backup: {backup}");
             }
-            let _ = writeln!(text, "\n{}", field(value, "guidance"));
+            text.push_str("Open a new agent session to load the tools.\n");
             text
         }
         "init" => "Local permissions configured.\n".into(),
-        "install" => format!("Proofstorm {} installed.\n\nRun {} setup to get started.\n", field(value, "version"), field(value, "executable")),
-        "connect" => format!("Connected to {}/{}: {}\nKeep this terminal open. Press Ctrl-C to disconnect.\n", field(value, "lab"), field(value, "component"), field(value, "url")),
-        "environment" => {
+        "dev-reset" => format!(
+            "Development environment reset. Build caches preserved.\nRun {} setup, then {} gui.\nReconnect coding agents after setup.\nOld local state: {}\nCell storage was deleted and cannot be restored from that state.\n",
+            proofstorm_app::command_name(),
+            proofstorm_app::command_name(),
+            value["diagnostics"].as_str().unwrap_or("<unavailable>")
+        ),
+        "install" => installation_summary(value),
+        "connect" => format!(
+            "Connected to {}/{}: {}\nCtrl-C to disconnect.\n",
+            field(value, "cell"),
+            field(value, "component"),
+            field(value, "url")
+        ),
+        "environment" => cells_summary(value),
+        "down" if value["cell"]["phase"] == "closed" => format!(
+            "Removed cell {}.\nDeleted its workloads, storage, and activity history.\n",
+            field(&value["cell"], "name")
+        ),
+        "up" | "down" | "status" | "sync" if value.get("cell").is_some() => cell_summary(value),
+        "ops-list" => {
             let mut text = String::new();
-            if let Some(labs) = value["labs"]["items"].as_array() {
-                if labs.is_empty() { text.push_str("No labs in this environment.\n"); }
-                for lab in labs {
-                    let _ = writeln!(text, "{}: {} ({})", lab["handle"]["name"].as_str().unwrap_or_else(|| field(lab, "id")), lab["runtime"]["phase"].as_str().unwrap_or("unknown"), field(&lab["runtime"], "state"));
-                    for key in ["error", "message"] { describe(&mut text, key, &lab["runtime"][key], 2); }
-                    describe(&mut text, "read error", &lab["read_error"], 2);
+            if let Some(items) = value["items"].as_array() {
+                if items.is_empty() {
+                    text.push_str("No recorded operations.\n");
+                }
+                for item in items {
+                    let _ = writeln!(text, "{}  {}", field(item, "id"), field(item, "phase"));
                 }
             }
-            describe(&mut text, "next cursor", &value["labs"]["next_cursor"], 0);
-            text.push_str("Run proofstorm gui to explore, or use --json for full details.\n");
-            text
-        }
-        "up" | "down" | "status" | "sync" if value.get("lab").is_some() => {
-            let runtime = &value["runtime"];
-            let mut text = format!("Lab {}: {}\n", field(&value["lab"], "name"), runtime["phase"].as_str().unwrap_or_else(|| field(&value["lab"], "phase")));
-            for key in ["message", "retained_storage"] {
-                describe(&mut text, key, &runtime[key], 0);
-            }
-            describe(&mut text, "reconciliation error", &value["reconciliation_error"], 0);
-            if let Some(components) = runtime["components"].as_array() {
-                for component in components {
-                    let _ = writeln!(text, "  {}: {}", field(component, "id"), if component["ready"] == true { "ready" } else { "not ready" });
-                    if component["ready"] != true {
-                        describe(&mut text, "conditions", &component["conditions"], 4);
-                    }
-                }
-            }
-            text.push_str("Use --json for the full receipt.\n");
+            describe(&mut text, "next cursor", &value["next_cursor"], 0);
             text
         }
         "exec" | "result" => {
-            let mut text = format!("Operation {}: {}\n", field(value, "id"), field(value, "phase"));
+            let mut text = format!(
+                "Operation {}: {}\n",
+                field(value, "id"),
+                field(value, "phase")
+            );
             describe(&mut text, "result", &value["artifact"]["content"], 0);
+            if value["artifact"]["content"].get("private_output").is_some() {
+                text.push_str("Command output kept private.\n");
+            }
             text
         }
         _ => {
@@ -195,6 +225,90 @@ fn human(command: &str, value: &Value) -> String {
             text
         }
     }
+}
+
+fn installation_summary(value: &Value) -> String {
+    use std::fmt::Write;
+
+    let executable = value["short_executable"]
+        .as_str()
+        .unwrap_or_else(|| field(value, "executable"));
+    let mut text = format!(
+        "Proofstorm {} installed.\nRun {executable} setup\n",
+        field(value, "version")
+    );
+    if let Some(path) = value["short_command_conflict"].as_str() {
+        let _ = writeln!(text, "Existing storm command kept: {path}");
+    }
+    text
+}
+
+fn cells_summary(value: &Value) -> String {
+    use std::fmt::Write;
+
+    let mut text = String::new();
+    if let Some(cells) = value["cells"]["items"].as_array() {
+        if cells.is_empty() {
+            text.push_str("No cells.\n");
+        }
+        for cell in cells {
+            let _ = writeln!(
+                text,
+                "{}: {} ({})",
+                cell["handle"]["name"]
+                    .as_str()
+                    .unwrap_or_else(|| field(cell, "id")),
+                cell["runtime"]["phase"].as_str().unwrap_or("unknown"),
+                field(&cell["runtime"], "state")
+            );
+            for key in ["error", "message"] {
+                describe(&mut text, key, &cell["runtime"][key], 2);
+            }
+            describe(&mut text, "read error", &cell["read_error"], 2);
+        }
+    }
+    describe(&mut text, "next cursor", &value["cells"]["next_cursor"], 0);
+    text
+}
+
+fn cell_summary(value: &Value) -> String {
+    use std::fmt::Write;
+
+    let runtime = &value["runtime"];
+    let mut text = format!(
+        "Cell {}: {}\n",
+        field(&value["cell"], "name"),
+        runtime["phase"]
+            .as_str()
+            .unwrap_or_else(|| field(&value["cell"], "phase"))
+    );
+    for key in ["message", "retained_storage"] {
+        describe(&mut text, key, &runtime[key], 0);
+    }
+    describe(
+        &mut text,
+        "reconciliation error",
+        &value["reconciliation_error"],
+        0,
+    );
+    if let Some(components) = runtime["components"].as_array() {
+        for component in components {
+            let _ = writeln!(
+                text,
+                "  {}: {}",
+                field(component, "id"),
+                if component["ready"] == true {
+                    "ready"
+                } else {
+                    "not ready"
+                }
+            );
+            if component["ready"] != true {
+                describe(&mut text, "conditions", &component["conditions"], 4);
+            }
+        }
+    }
+    text
 }
 
 fn describe(text: &mut String, label: &str, value: &Value, indent: usize) {
@@ -243,15 +357,109 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn terminal_progress_is_prompt_animated_and_cleared_without_a_timer() {
+        use nix::{
+            fcntl::{FcntlArg, OFlag, fcntl},
+            pty::openpty,
+        };
+        use std::{
+            fs::File,
+            io::{Read, Seek, SeekFrom},
+            os::fd::AsRawFd,
+            process::{Command, Stdio},
+            time::Instant,
+        };
+        let pty = openpty(None, None).unwrap();
+        fcntl(pty.master.as_raw_fd(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).unwrap();
+        let mut master = File::from(pty.master);
+        let mut output = tempfile::tempfile().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "cli_output::tests::terminal_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("PROOFSTORM_PROGRESS_FIXTURE", "1")
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::null())
+            .stdout(output.try_clone().unwrap())
+            .stderr(File::from(pty.slave));
+        let mut child = command.spawn().unwrap();
+        drop(command); // The parent must not retain the slave descriptor.
+        let start = Instant::now();
+        let mut first = None;
+        let mut progress = Vec::new();
+        let status = loop {
+            let mut bytes = [0; 4096];
+            match master.read(&mut bytes) {
+                Ok(n) if n > 0 => {
+                    first.get_or_insert(start.elapsed());
+                    progress.extend_from_slice(&bytes[..n]);
+                }
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(5) => {}
+                Err(error) => panic!("PTY read: {error}"),
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                // Drain final clear-line bytes after the child's output flush.
+                while let Ok(n) = master.read(&mut bytes) {
+                    if n == 0 {
+                        break;
+                    }
+                    progress.extend_from_slice(&bytes[..n]);
+                }
+                break status;
+            }
+            if start.elapsed() > Duration::from_secs(10) {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("PTY fixture timed out");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(status.success());
+        assert!(first.is_some_and(|first| first < Duration::from_secs(5)));
+        let progress = String::from_utf8(progress).unwrap();
+        assert!(
+            progress.contains("| Checking installation")
+                && progress.contains("/ Checking installation")
+        );
+        assert!(progress.contains("Ready") && progress.ends_with('\r'));
+        assert!(!progress.contains(['(', ')', '\x1b']));
+        output.seek(SeekFrom::Start(0)).unwrap();
+        let mut result = String::new();
+        output.read_to_string(&mut result).unwrap();
+        assert!(result.contains("Runtime ready.") && !result.contains("\"ready\""));
+    }
+
+    #[test]
+    #[ignore = "child fixture for the PTY test; not a separate acceptance check"]
+    fn terminal_fixture() {
+        assert_eq!(
+            std::env::var("PROOFSTORM_PROGRESS_FIXTURE").as_deref(),
+            Ok("1")
+        );
+        let mut output = Output::new(false, "setup", Some("Checking installation"));
+        thread::sleep(Duration::from_millis(350));
+        output.update("Ready");
+        thread::sleep(Duration::from_millis(150));
+        output.show(&json!({"ready":true})).unwrap();
+    }
+
+    #[test]
     fn summaries_distinguish_ready_prepared_and_browser_outcomes() {
         assert_eq!(
             human(
                 "setup",
                 &json!({"ready":true,"capacity":{"secret":"noise"}})
             ),
-            "Proofstorm is ready.\n\nRun proofstorm gui to get started.\n"
+            "Runtime ready.\nOpen the GUI: proofstorm gui\n"
         );
-        assert!(human("setup", &json!({"prepared":true})).contains("not been started"));
+        assert!(human("setup", &json!({"prepared":true})).contains("not started"));
         assert!(
             human(
                 "gui",
@@ -279,11 +487,11 @@ mod tests {
 
     #[test]
     fn failures_and_dry_runs_keep_actionable_details() {
-        let lab = human(
+        let cell = human(
             "up",
-            &json!({"lab":{"name":"demo"},"runtime":{"phase":"failed","message":"image unavailable","components":[{"id":"node","ready":false,"conditions":[{"message":"pull failed"}]}]}}),
+            &json!({"cell":{"name":"demo"},"runtime":{"phase":"failed","message":"image unavailable","components":[{"id":"node","ready":false,"conditions":[{"message":"pull failed"}]}]}}),
         );
-        assert!(lab.contains("image unavailable") && lab.contains("pull failed"));
+        assert!(cell.contains("image unavailable") && cell.contains("pull failed"));
         let preview = human(
             "attach",
             &json!({"changes_applied":false,"attachment":{"project":"/project","entry":{"command":"/bin/mcp"}}}),

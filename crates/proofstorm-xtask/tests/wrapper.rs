@@ -30,6 +30,11 @@ fn controller_build_publication_and_transport_use_real_checks_without_docker() {
     check_wrapper("test-controller-build.sh");
 }
 
+#[test]
+fn catalog_image_build_copy_and_publication_keep_typed_receipts_without_docker() {
+    check_wrapper("test-catalog-image.sh");
+}
+
 fn check_wrapper(script: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

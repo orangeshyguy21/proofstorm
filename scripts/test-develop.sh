@@ -47,8 +47,8 @@ chmod +x "$fixture/.tools/bin/git"
 cat > "$fixture/cache/debug/proofstorm" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == release-info ]]; then printf '{"version":"fixture"}\n'; exit 0; fi
-[[ "$1" == --home && "$3" == checkout-register ]]
+if [[ "$1" == version && "$2" == --json ]]; then printf '{"version":"fixture"}\n'; exit 0; fi
+[[ "$1" == --home && "$3" == internal && "$4" == checkout-register ]]
 printf '<register>\n' >> "$TRACE"
 mkdir -p "$2"
 printf '{}\n' > "$2/checkout-artifacts.json"
@@ -96,6 +96,13 @@ if grep -Eq '<register>|<--bins>|<export_crds>' "$TRACE"; then exit 1; fi
 
 if FAIL_BUILD=1 run; then printf 'Build failure did not propagate\n' >&2; exit 1; fi
 if grep -q '<register>' "$TRACE"; then printf 'Registered a failed build\n' >&2; exit 1; fi
+
+# Recovery must finish before any compiler or asset writer touches the build.
+printf '{}\n' > "$fixture/.proofstorm-dev/reset-pending.json"
+if run; then printf 'Built during an unfinished reset\n' >&2; exit 1; fi
+[[ ! -s "$TRACE" ]]
+grep -q 'reset is unfinished' "$scratch/output"
+rm "$fixture/.proofstorm-dev/reset-pending.json"
 
 # Existing foreign markers must never be silently adopted.
 printf '{"source":"/foreign"}\n' > "$fixture/.proofstorm-dev/owner.json"

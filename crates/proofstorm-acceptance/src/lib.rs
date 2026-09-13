@@ -33,16 +33,17 @@
     clippy::too_many_lines
 )]
 
+pub mod cell;
 pub mod client;
-pub mod doctor;
 pub mod gate;
 pub mod gates;
 pub mod http;
-pub mod images;
 pub mod json;
 pub mod kubectl;
-pub mod lab;
 pub mod postgres;
+mod preservation;
+pub mod process;
+pub mod runner;
 
 pub use client::{McpClient, PROTOCOL_VERSION};
 pub use gate::{EXPERIMENT_CAPABILITIES, GateContext, LIFECYCLE_CAPABILITIES};

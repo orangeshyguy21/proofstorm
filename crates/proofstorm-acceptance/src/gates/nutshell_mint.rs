@@ -3,22 +3,18 @@
 //!
 //! Ported from `tests/kubernetes/nutshell_mint_mcp_client.py`.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, json as expect, lab};
-
-/// The driver runs inside the mint's own image, which ships the `cashu` library.
-const SETTINGS_DRIVER: &str = include_str!("../../drivers/nutshell_settings.py");
+use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, json as expect};
 
 const INSTANCE: &str = "nutshell-mint-instance";
 const DRAFT: &str = "nutshell-mint";
-const IMAGE: &str = "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d";
 
-fn lab_document() -> Value {
+fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "nutshell-mint-live-lab",
+        "name": "nutshell-mint-live-cell",
         "components": [
             {
                 "id": "chain",
@@ -26,7 +22,7 @@ fn lab_document() -> Value {
                 "implementation": "bitcoin-core",
                 "version": "31.1",
                 "config_version": "bitcoin-core/31/v1",
-                "control": "laboratory",
+                "control": "cell",
                 "config": {}
             },
             {
@@ -35,7 +31,7 @@ fn lab_document() -> Value {
                 "implementation": "lnd",
                 "version": "0.21.3-beta",
                 "config_version": "lnd/0.20/v1",
-                "control": "laboratory",
+                "control": "cell",
                 "config": {"alias": "proofstorm-nutshell-lnd"}
             },
             {
@@ -47,7 +43,7 @@ fn lab_document() -> Value {
                 "control": "target",
                 "config": {
                     "name": "Proofstorm Nutshell Native",
-                    "description": "Native Nutshell and LND lab",
+                    "description": "Native Nutshell and LND cell",
                     "input_fee_ppk": 123,
                     "mint_quote_ttl_seconds": 321,
                     "melt_quote_ttl_seconds": 123,
@@ -88,7 +84,7 @@ fn expected_settings() -> Value {
     json!({
         "version": "0.20.3",
         "name": "Proofstorm Nutshell Native",
-        "description": "Native Nutshell and LND lab",
+        "description": "Native Nutshell and LND cell",
         "input_fee_ppk": 123,
         "mint_quote_ttl": 321,
         "melt_quote_ttl": 123,
@@ -110,16 +106,16 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.session("nutshell-mint-live", "designer", LIFECYCLE_CAPABILITIES)?;
 
     client.call(
-        "lab_create",
+        "cell_create",
         json!({
             "draft_id": DRAFT,
-            "lab": lab_document(),
+            "cell": cell_document(),
             "idempotency_key": "create-nutshell-mint"
         }),
     )?;
 
     let published = client.call(
-        "lab_publish",
+        "cell_publish",
         json!({
             "draft_id": DRAFT,
             "expected_version": 1,
@@ -128,17 +124,23 @@ pub fn run(context: &GateContext) -> Result<()> {
         }),
     )?;
 
-    let entry = lab::lock_entry(&published, "nutshell")?;
+    let entry = cell::lock_entry(&published, "nutshell")?;
     expect::equals(entry, "/version", &Value::from("0.20.3"))?;
     expect::equals(
         entry,
         "/config_version",
         &Value::from("nutshell-mint/0.20/v1"),
     )?;
-    expect::equals(entry, "/image", &Value::from(IMAGE))?;
+    let image = &proofstorm_core::default_catalog()
+        .entries
+        .iter()
+        .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
+        .context("Nutshell catalog build missing")?
+        .image;
+    expect::equals(entry, "/image", &Value::from(image.clone()))?;
 
     client.call(
-        "lab_materialize",
+        "cell_materialize",
         json!({
             "instance_id": INSTANCE,
             "revision_digest": expect::string(&published, "/digest")?,
@@ -146,13 +148,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         }),
     )?;
 
-    let ready = lab::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let rendered = context.kubectl.exec(
         namespace,
         "deployment/mint",
-        &["python3", "-c", SETTINGS_DRIVER],
+        &["/opt/proofstorm/driver", "nutshell", "settings"],
     )?;
     let settings: Value = serde_json::from_str(rendered.trim())?;
     let expected = expected_settings();
@@ -160,8 +162,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("live Nutshell settings differ: expected={expected} actual={settings}");
     }
 
-    client.call("lab_close", json!({"instance_id": INSTANCE}))?;
-    lab::wait_closed(&mut client, INSTANCE)?;
+    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    cell::wait_closed(&mut client, INSTANCE)?;
 
     println!(
         "Nutshell 0.20.3 + LND MCP materialization, typed configuration, generated key, readiness, and teardown passed"

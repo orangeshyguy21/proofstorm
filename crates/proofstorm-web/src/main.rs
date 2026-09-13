@@ -2,6 +2,8 @@
 mod app;
 mod canvas_model;
 #[cfg(target_arch = "wasm32")]
+mod cell_view;
+#[cfg(target_arch = "wasm32")]
 mod client;
 #[cfg(target_arch = "wasm32")]
 mod edges;
@@ -13,8 +15,6 @@ mod graph;
 mod gui;
 #[cfg(target_arch = "wasm32")]
 mod inspector;
-#[cfg(target_arch = "wasm32")]
-mod lab_view;
 mod model;
 #[cfg(target_arch = "wasm32")]
 mod motion;
@@ -41,5 +41,5 @@ fn main() {
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    eprintln!("Build the browser app with `just web`, then run `proofstorm serve`.");
+    eprintln!("Build the browser app with `just web`, then open it with `just gui`.");
 }

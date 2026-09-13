@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cleanup-blocker
-  namespace: proofstorm-01slice2lab00
+  namespace: proofstorm-01slice2cell00
   finalizers:
     - proofstorm.dev/test-block
 data:

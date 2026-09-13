@@ -80,8 +80,12 @@ fn validate_receipt(installation: &Installation, value: &Value) -> Result<()> {
 }
 
 pub(super) fn current(installation: &Installation, sha: &str) -> Result<Value> {
-    cached(installation, sha)?
-        .context("checkout controller has not been deployed for this build; run proofstorm setup")
+    cached(installation, sha)?.with_context(|| {
+        format!(
+            "checkout controller has not been deployed for this build; run {} setup",
+            crate::command_name()
+        )
+    })
 }
 
 fn manifest(installation: &Installation, image: &str) -> Result<String> {

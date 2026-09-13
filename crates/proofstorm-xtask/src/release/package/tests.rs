@@ -44,7 +44,7 @@ impl Inputs {
     fn binaries(&self) {
         directory(&self.root.path().join("binaries")).unwrap();
         for (name, flag) in [
-            ("proofstorm", "release-info"),
+            ("proofstorm", "version"),
             ("proofstorm-mcp", "--release-info"),
         ] {
             let path = self.root.path().join("binaries").join(name);
@@ -52,7 +52,7 @@ impl Inputs {
             fs::write(
                 &path,
                 format!(
-                    "#!/bin/sh\n[ \"$1\" = '{flag}' ] || exit 97\nprintf '%s\\n' '{payload}'\n"
+                    "#!/bin/sh\n[ \"$1\" = '{flag}' ] || exit 97\nif [ \"$1\" = version ]; then [ \"$2\" = --json ] || exit 97; fi\nprintf '%s\\n' '{payload}'\n"
                 ),
             )
             .unwrap();
@@ -147,13 +147,13 @@ fn binary_mismatch_source_mismatch_and_unready_release_fail_without_archives() {
 #[test]
 fn missing_assets_chart_versions_and_tool_pins_are_checked_before_publication() {
     for name in [
-        "charts/proofstorm/crds/proofstorm.dev_proofstormlabs.yaml",
+        "charts/proofstorm/crds/proofstorm.dev_proofstormcells.yaml",
         "charts/proofstorm/Chart.yaml",
         "tools/versions.env",
     ] {
         let inputs = Inputs::new();
         let path = inputs.root.path().join("source").join(name);
-        if name.ends_with("proofstormlabs.yaml") {
+        if name.ends_with("proofstormcells.yaml") {
             fs::remove_file(path).unwrap();
         } else {
             fs::write(path, "wrong\n").unwrap();

@@ -1,8 +1,8 @@
 //! A single invalidation feed per server, shared by all SSE subscribers.
-use crate::lab::Labs;
+use crate::cell::Cells;
 use kube::{Api, api::ListParams};
 use proofstorm_core::Capability;
-use proofstorm_kube::ProofstormLab;
+use proofstorm_kube::ProofstormCell;
 use proofstorm_view::ObserverStatus;
 use std::{
     collections::BTreeMap,
@@ -16,7 +16,7 @@ pub struct Events {
     task: JoinHandle<()>,
 }
 impl Events {
-    pub fn start(labs: Labs, observer: Arc<RwLock<ObserverStatus>>) -> Self {
+    pub fn start(cells: Cells, observer: Arc<RwLock<ObserverStatus>>) -> Self {
         let (sender, receiver) = watch::channel(0_u64);
         let task = tokio::spawn(async move {
             let mut previous = None;
@@ -28,7 +28,7 @@ impl Events {
                     .read()
                     .ok()
                     .map(|s| (s.state.clone(), s.error.clone()));
-                let token = (signature(&labs).await, status);
+                let token = (signature(&cells).await, status);
                 if previous.as_ref() != Some(&token) {
                     previous = Some(token);
                     sender.send_modify(|version| *version = version.wrapping_add(1));
@@ -43,35 +43,35 @@ impl Drop for Events {
         self.task.abort();
     }
 }
-async fn signature(labs: &Labs) -> (Option<(i64, u64)>, Option<String>) {
-    let journal = labs
+async fn signature(cells: &Cells) -> (Option<(i64, u64)>, Option<String>) {
+    let journal = cells
         .store
-        .observation_token(&labs.workspace, &labs.principal)
+        .observation_token(&cells.workspace, &cells.principal)
         .ok();
-    if labs
+    if cells
         .store
-        .authorize(&labs.workspace, &labs.principal, Capability::LabStatus)
+        .authorize(&cells.workspace, &cells.principal, Capability::CellStatus)
         .is_err()
     {
         return (journal, None);
     }
-    let api = Api::<ProofstormLab>::namespaced(
-        labs.runtime.client.clone(),
-        &labs.runtime.control_namespace,
+    let api = Api::<ProofstormCell>::namespaced(
+        cells.runtime.client.clone(),
+        &cells.runtime.control_namespace,
     );
     let runtime =
         tokio::time::timeout(Duration::from_secs(3), api.list(&ListParams::default())).await;
     let versions = runtime.ok().and_then(Result::ok).map(|list| {
         list.items
             .into_iter()
-            .filter(|lab| lab.spec.workspace_id == labs.workspace)
-            .map(|lab| {
+            .filter(|cell| cell.spec.workspace_id == cells.workspace)
+            .map(|cell| {
                 (
-                    lab.spec.instance_id,
+                    cell.spec.instance_id,
                     (
-                        lab.metadata.resource_version,
-                        lab.metadata.generation,
-                        lab.status,
+                        cell.metadata.resource_version,
+                        cell.metadata.generation,
+                        cell.status,
                     ),
                 )
             })

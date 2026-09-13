@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     CandidateSource, CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogResponse,
-    DatabaseRole, DependencyBinding, LabSpec, LinkKind, LinkSpec, default_backend_registry,
+    CellSpec, DatabaseRole, DependencyBinding, LinkKind, LinkSpec, default_backend_registry,
     validate_catalog_component,
 };
 
@@ -50,7 +50,7 @@ pub struct ResolvedLock {
 pub struct PublishedRevision {
     pub workspace_id: String,
     pub digest: String,
-    pub lab: LabSpec,
+    pub cell: CellSpec,
     pub lock: ResolvedLock,
 }
 
@@ -60,10 +60,13 @@ pub struct PublishedRevision {
 ///
 /// Returns an error when a component is not installed, violates its catalog
 /// contract, or has no registered backend contract.
-pub fn resolve_effective_lab(lab: &LabSpec, catalog: &CatalogResponse) -> Result<LabSpec, String> {
+pub fn resolve_effective_cell(
+    cell: &CellSpec,
+    catalog: &CatalogResponse,
+) -> Result<CellSpec, String> {
     let registry = default_backend_registry();
-    let mut effective = lab.clone();
-    effective.components = lab
+    let mut effective = cell.clone();
+    effective.components = cell
         .components
         .iter()
         .map(|component| {
@@ -80,7 +83,7 @@ pub fn resolve_effective_lab(lab: &LabSpec, catalog: &CatalogResponse) -> Result
     Ok(effective)
 }
 
-/// Resolve every lab component against the installed catalog and return a
+/// Resolve every cell component against the installed catalog and return a
 /// component-order-independent, rollout-aware lock.
 ///
 /// # Errors
@@ -88,14 +91,14 @@ pub fn resolve_effective_lab(lab: &LabSpec, catalog: &CatalogResponse) -> Result
 /// Returns an error when an implementation is not installed or its requested
 /// implementation or configuration version differs from the installed catalog
 /// entry.
-pub fn resolve_lock(lab: &LabSpec, catalog: &CatalogResponse) -> Result<ResolvedLock, String> {
-    let report = crate::validate_lab(lab);
+pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<ResolvedLock, String> {
+    let report = crate::validate_cell(cell);
     if !report.valid {
         let issues = serde_json::to_string(&report.issues)
             .map_err(|error| format!("validation_diagnostic_serialization_failed: {error}"))?;
-        return Err(format!("lab_validation_failed: {issues}"));
+        return Err(format!("cell_validation_failed: {issues}"));
     }
-    let effective = resolve_effective_lab(lab, catalog)?;
+    let effective = resolve_effective_cell(cell, catalog)?;
     let backends = default_backend_registry();
     let mut entries = effective
         .components
@@ -287,15 +290,15 @@ pub fn digest_json<T: Serialize>(value: &T) -> String {
 }
 
 #[must_use]
-pub fn publication_digest(workspace: &str, lab: &LabSpec, lock: &ResolvedLock) -> String {
-    digest_json(&(workspace, lab, lock))
+pub fn publication_digest(workspace: &str, cell: &CellSpec, lock: &ResolvedLock) -> String {
+    digest_json(&(workspace, cell, lock))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        ComponentKind, ComponentSpec, ControlClass, LabPolicy, LinkSpec, SupportLifecycle,
+        CellPolicy, ComponentKind, ComponentSpec, ControlClass, LinkSpec, SupportLifecycle,
         default_catalog,
     };
     use std::collections::BTreeMap;
@@ -312,7 +315,7 @@ mod tests {
         }
     }
 
-    fn payment_lab(method: crate::PaymentMethod, unit: &str) -> LabSpec {
+    fn payment_cell(method: crate::PaymentMethod, unit: &str) -> CellSpec {
         let component = |id: &str, implementation: &str, kind, control| ComponentSpec {
             id: id.into(),
             kind,
@@ -322,7 +325,7 @@ mod tests {
             control,
             config: BTreeMap::new(),
         };
-        LabSpec {
+        CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "payment-contract".into(),
             components: vec![
@@ -331,7 +334,7 @@ mod tests {
                     "lightning",
                     "lnd",
                     ComponentKind::Lightning,
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
             ],
             links: vec![LinkSpec {
@@ -344,7 +347,7 @@ mod tests {
                     unit: unit.into(),
                 }),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         }
     }
 
@@ -356,10 +359,10 @@ mod tests {
             implementation: implementation.into(),
             version: None,
             config_version: test_config_version(implementation).into(),
-            control: ControlClass::Laboratory,
+            control: ControlClass::Cell,
             config: BTreeMap::new(),
         };
-        let mut lab = LabSpec {
+        let mut cell = CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "lock-test".into(),
             components: vec![
@@ -367,24 +370,24 @@ mod tests {
                 component("a-chain", "bitcoin-core", ComponentKind::Bitcoin),
             ],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let first = resolve_lock(&lab, default_catalog()).expect("resolve lock");
-        lab.components.reverse();
-        let second = resolve_lock(&lab, default_catalog()).expect("resolve lock");
+        let first = resolve_lock(&cell, default_catalog()).expect("resolve lock");
+        cell.components.reverse();
+        let second = resolve_lock(&cell, default_catalog()).expect("resolve lock");
         assert_eq!(first, second);
 
-        lab.components[0]
+        cell.components[0]
             .config
             .insert("txindex".into(), serde_json::json!(false));
-        let configured = resolve_lock(&lab, default_catalog()).expect("resolve configured lock");
+        let configured = resolve_lock(&cell, default_catalog()).expect("resolve configured lock");
         assert_ne!(first.digest, configured.digest);
     }
 
     #[test]
     fn payment_binding_tuple_must_be_supported_by_the_exact_mint_version() {
         resolve_lock(
-            &payment_lab(crate::PaymentMethod::Bolt11, "sat"),
+            &payment_cell(crate::PaymentMethod::Bolt11, "sat"),
             default_catalog(),
         )
         .expect("supported payment tuple");
@@ -400,14 +403,14 @@ mod tests {
             .payment_methods
             .insert(crate::PaymentMethod::Bolt12);
         let method_error = resolve_lock(
-            &payment_lab(crate::PaymentMethod::Bolt12, "sat"),
+            &payment_cell(crate::PaymentMethod::Bolt12, "sat"),
             &false_cross_product_catalog,
         )
         .expect_err("unsupported method must refuse publication");
         assert!(method_error.contains("does not support payment tuple method Bolt12"));
 
         let unit_error = resolve_lock(
-            &payment_lab(crate::PaymentMethod::Bolt11, "msat"),
+            &payment_cell(crate::PaymentMethod::Bolt11, "msat"),
             default_catalog(),
         )
         .expect_err("unsupported unit must refuse publication");
@@ -425,7 +428,7 @@ mod tests {
             control,
             config: BTreeMap::new(),
         };
-        let mut lab = LabSpec {
+        let mut cell = CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "database-roles".into(),
             components: vec![
@@ -439,7 +442,7 @@ mod tests {
                     "cache",
                     "redis",
                     ComponentKind::Database,
-                    ControlClass::Laboratory,
+                    ControlClass::Cell,
                 ),
             ],
             links: vec![LinkSpec {
@@ -451,32 +454,32 @@ mod tests {
                     role: DatabaseRole::Cache,
                 }),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        resolve_lock(&lab, default_catalog()).expect("Nutshell Redis cache binding");
+        resolve_lock(&cell, default_catalog()).expect("Nutshell Redis cache binding");
 
-        lab.links[0].binding = Some(DependencyBinding::Database {
+        cell.links[0].binding = Some(DependencyBinding::Database {
             role: DatabaseRole::Primary,
         });
-        let error = resolve_lock(&lab, default_catalog()).expect_err("Redis cannot be primary");
+        let error = resolve_lock(&cell, default_catalog()).expect_err("Redis cannot be primary");
         assert!(error.contains("does not support database role Primary"));
 
-        lab.components[1] = component(
+        cell.components[1] = component(
             "cache",
             "postgresql",
             ComponentKind::Database,
-            ControlClass::Laboratory,
+            ControlClass::Cell,
         );
-        lab.links[0].binding = Some(DependencyBinding::Database {
+        cell.links[0].binding = Some(DependencyBinding::Database {
             role: DatabaseRole::Cache,
         });
-        let error = resolve_lock(&lab, default_catalog()).expect_err("PostgreSQL cannot be cache");
+        let error = resolve_lock(&cell, default_catalog()).expect_err("PostgreSQL cannot be cache");
         assert!(error.contains("does not support database role Cache"));
     }
 
     #[test]
     fn omitted_and_explicit_defaults_publish_identically() {
-        let mut omitted = LabSpec {
+        let mut omitted = CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "effective-defaults".into(),
             components: vec![ComponentSpec {
@@ -485,15 +488,15 @@ mod tests {
                 implementation: "bitcoin-core".into(),
                 version: None,
                 config_version: "bitcoin-core/31/v1".into(),
-                control: ControlClass::Laboratory,
+                control: ControlClass::Cell,
                 config: BTreeMap::new(),
             }],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
         let catalog = default_catalog();
         let effective_omitted =
-            resolve_effective_lab(&omitted, catalog).expect("resolve omitted defaults");
+            resolve_effective_cell(&omitted, catalog).expect("resolve omitted defaults");
         omitted.components[0]
             .config
             .insert("txindex".into(), serde_json::json!(true));
@@ -501,7 +504,7 @@ mod tests {
             .config
             .insert("fallback_fee".into(), serde_json::json!(0.0002));
         let effective_explicit =
-            resolve_effective_lab(&omitted, catalog).expect("resolve explicit defaults");
+            resolve_effective_cell(&omitted, catalog).expect("resolve explicit defaults");
         assert_eq!(effective_omitted, effective_explicit);
         assert_eq!(
             resolve_lock(&effective_omitted, catalog).expect("lock omitted"),
@@ -511,9 +514,9 @@ mod tests {
 
     #[test]
     fn every_cdk_policy_field_is_locked_as_rollout_affecting_input() {
-        let lab = payment_lab(crate::PaymentMethod::Bolt11, "sat");
+        let cell = payment_cell(crate::PaymentMethod::Bolt11, "sat");
         let catalog = default_catalog();
-        let baseline = resolve_lock(&lab, catalog).expect("baseline CDK lock");
+        let baseline = resolve_lock(&cell, catalog).expect("baseline CDK lock");
         let baseline_mint = baseline
             .entries
             .iter()
@@ -558,7 +561,7 @@ mod tests {
         ]);
 
         for (field, value) in cases {
-            let mut configured = lab.clone();
+            let mut configured = cell.clone();
             configured.components[0].config.insert(field.into(), value);
             let lock = resolve_lock(&configured, catalog)
                 .unwrap_or_else(|error| panic!("field {field:?} must publish: {error}"));
@@ -586,10 +589,10 @@ mod tests {
             implementation: implementation.into(),
             version: None,
             config_version: test_config_version(implementation).into(),
-            control: ControlClass::Laboratory,
+            control: ControlClass::Cell,
             config: BTreeMap::new(),
         };
-        let mut lab = LabSpec {
+        let mut cell = CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "rollout-digest".into(),
             components: vec![
@@ -606,10 +609,10 @@ mod tests {
                     network: crate::BitcoinNetwork::Regtest,
                 }),
             }],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
         let catalog = default_catalog();
-        let first = resolve_lock(&lab, catalog).expect("first lock");
+        let first = resolve_lock(&cell, catalog).expect("first lock");
         let first_alice = first
             .entries
             .iter()
@@ -621,12 +624,12 @@ mod tests {
             .find(|entry| entry.component_id == "chain-a")
             .expect("chain lock");
 
-        lab.name = "non-rendering-metadata".into();
-        let renamed = resolve_lock(&lab, catalog).expect("renamed lock");
+        cell.name = "non-rendering-metadata".into();
+        let renamed = resolve_lock(&cell, catalog).expect("renamed lock");
         assert_eq!(first, renamed);
 
-        lab.links[0].to = "chain-b".into();
-        let relinked = resolve_lock(&lab, catalog).expect("relinked lock");
+        cell.links[0].to = "chain-b".into();
+        let relinked = resolve_lock(&cell, catalog).expect("relinked lock");
         let relinked_alice = relinked
             .entries
             .iter()
@@ -648,7 +651,7 @@ mod tests {
             .expect("bitcoin catalog entry")
             .adapter_version = "0.1.0-alpha.2".into();
         let upgraded =
-            resolve_lock(&lab, &upgraded_catalog).expect("upgraded target contract lock");
+            resolve_lock(&cell, &upgraded_catalog).expect("upgraded target contract lock");
         let upgraded_alice = upgraded
             .entries
             .iter()
@@ -668,7 +671,7 @@ mod tests {
             implementation: "bitcoin-core".into(),
             version: None,
             config_version: "bitcoin-core/31/v1".into(),
-            control: ControlClass::Laboratory,
+            control: ControlClass::Cell,
             config,
         };
         let mut first_config = BTreeMap::new();
@@ -677,23 +680,23 @@ mod tests {
         let mut reversed_config = BTreeMap::new();
         reversed_config.insert("fallback_fee".into(), serde_json::json!(0.001));
         reversed_config.insert("txindex".into(), serde_json::json!(false));
-        let lab = |config| LabSpec {
+        let cell = |config| CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "catalog-digest-inputs".into(),
             components: vec![component(config)],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
         let catalog = default_catalog();
-        let baseline = resolve_lock(&lab(first_config), catalog).expect("baseline lock");
+        let baseline = resolve_lock(&cell(first_config), catalog).expect("baseline lock");
         let reordered =
-            resolve_lock(&lab(reversed_config.clone()), catalog).expect("reordered config lock");
+            resolve_lock(&cell(reversed_config.clone()), catalog).expect("reordered config lock");
         assert_eq!(baseline, reordered);
 
         let mut adapter_catalog = catalog.clone();
         adapter_catalog.entries[0].adapter_version = "0.1.0-alpha.2".into();
         let changed_adapter =
-            resolve_lock(&lab(reversed_config.clone()), &adapter_catalog).expect("adapter lock");
+            resolve_lock(&cell(reversed_config.clone()), &adapter_catalog).expect("adapter lock");
         assert_ne!(
             baseline.entries[0].rollout_digest,
             changed_adapter.entries[0].rollout_digest
@@ -707,7 +710,7 @@ mod tests {
         image_catalog.entries[0].image =
             format!("example.invalid/bitcoin@sha256:{}", "1".repeat(64));
         let changed_image =
-            resolve_lock(&lab(reversed_config), &image_catalog).expect("image lock");
+            resolve_lock(&cell(reversed_config), &image_catalog).expect("image lock");
         assert_ne!(
             baseline.entries[0].rollout_digest,
             changed_image.entries[0].rollout_digest
@@ -720,7 +723,7 @@ mod tests {
 
     #[test]
     fn new_lock_contract_is_strict_and_versioned() {
-        let lab = LabSpec {
+        let cell = CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "strict-lock".into(),
             components: vec![ComponentSpec {
@@ -729,13 +732,13 @@ mod tests {
                 implementation: "bitcoin-core".into(),
                 version: None,
                 config_version: "bitcoin-core/31/v1".into(),
-                control: ControlClass::Laboratory,
+                control: ControlClass::Cell,
                 config: BTreeMap::new(),
             }],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("strict lock");
+        let lock = resolve_lock(&cell, default_catalog()).expect("strict lock");
         assert_eq!(lock.api_version, LOCK_API_VERSION);
         assert!(
             lock.entries[0]
@@ -754,7 +757,7 @@ mod tests {
 
     #[test]
     fn unsupported_configuration_version_refuses_publication() {
-        let mut lab = LabSpec {
+        let mut cell = CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "config-version-test".into(),
             components: vec![ComponentSpec {
@@ -763,17 +766,17 @@ mod tests {
                 implementation: "bitcoin-core".into(),
                 version: None,
                 config_version: "v2".into(),
-                control: ControlClass::Laboratory,
+                control: ControlClass::Cell,
                 config: BTreeMap::new(),
             }],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let error = resolve_lock(&lab, default_catalog()).expect_err("unsupported config");
+        let error = resolve_lock(&cell, default_catalog()).expect_err("unsupported config");
         assert!(error.contains("configuration version"));
 
-        lab.components[0].config_version = "bitcoin-core/31/v1".into();
-        resolve_lock(&lab, default_catalog()).expect("supported config");
+        cell.components[0].config_version = "bitcoin-core/31/v1".into();
+        resolve_lock(&cell, default_catalog()).expect("supported config");
     }
 
     #[test]
@@ -795,7 +798,7 @@ mod tests {
             implementation: "bitcoin-core".into(),
             version: None,
             config_version: "bitcoin-core/31/v1".into(),
-            control: ControlClass::Laboratory,
+            control: ControlClass::Cell,
             config: BTreeMap::new(),
         };
 
@@ -825,7 +828,7 @@ mod tests {
 
     #[test]
     fn lock_carries_the_exact_configuration_and_action_contract() {
-        let lab = LabSpec {
+        let cell = CellSpec {
             api_version: crate::API_VERSION.into(),
             name: "support-contract-lock".into(),
             components: vec![ComponentSpec {
@@ -834,13 +837,13 @@ mod tests {
                 implementation: "bitcoin-core".into(),
                 version: None,
                 config_version: "bitcoin-core/31/v1".into(),
-                control: ControlClass::Laboratory,
+                control: ControlClass::Cell,
                 config: BTreeMap::new(),
             }],
             links: vec![],
-            policy: LabPolicy::default(),
+            policy: CellPolicy::default(),
         };
-        let lock = resolve_lock(&lab, default_catalog()).expect("lock");
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
         let entry = &lock.entries[0];
         assert_eq!(entry.version, "31.1");
         assert_eq!(entry.config_version, "bitcoin-core/31/v1");

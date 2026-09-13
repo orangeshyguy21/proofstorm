@@ -40,12 +40,12 @@ impl Drop for ControllerPause<'_> {
 }
 
 pub(super) fn preflight(context: &GateContext) -> Result<()> {
-    let labs = context
+    let cells = context
         .kubectl
-        .get_json(&["get", "proofstormlabs", "-n", CONTROL_NAMESPACE])?;
+        .get_json(&["get", "proofstormcells", "-n", CONTROL_NAMESPACE])?;
     ensure!(
-        expect::array(&labs, "/items")?.is_empty(),
-        "these gates require an idle cluster because recovery scenarios restart the shared controller; no labs were changed"
+        expect::array(&cells, "/items")?.is_empty(),
+        "these gates require an idle cluster because recovery scenarios restart the shared controller; no cells were changed"
     );
     context.kubectl.assert_no_instance_namespaces()?;
     let controller =
@@ -63,14 +63,14 @@ pub(super) fn preflight(context: &GateContext) -> Result<()> {
     Ok(())
 }
 
-fn owns_lab(lab: &Value, workspace: &str, instance: &str) -> bool {
-    lab.pointer("/spec/workspaceId").and_then(Value::as_str) == Some(workspace)
-        && lab.pointer("/spec/instanceId").and_then(Value::as_str) == Some(instance)
+fn owns_cell(cell: &Value, workspace: &str, instance: &str) -> bool {
+    cell.pointer("/spec/workspaceId").and_then(Value::as_str) == Some(workspace)
+        && cell.pointer("/spec/instanceId").and_then(Value::as_str) == Some(instance)
 }
 
 /// This fallback does not depend on a healthy MCP child or its private database.
 /// Unique workspace identity fences cleanup, including partial materialization.
-pub(super) struct LabCleanup<'a> {
+pub(super) struct CellCleanup<'a> {
     context: &'a GateContext,
     workspace: String,
     instance: &'static str,
@@ -78,7 +78,7 @@ pub(super) struct LabCleanup<'a> {
     armed: bool,
 }
 
-impl<'a> LabCleanup<'a> {
+impl<'a> CellCleanup<'a> {
     pub(super) fn new(context: &'a GateContext, workspace: String, instance: &'static str) -> Self {
         Self {
             context,
@@ -95,22 +95,22 @@ impl<'a> LabCleanup<'a> {
 
     pub(super) fn finish(&mut self) -> Result<()> {
         let kubectl = &self.context.kubectl;
-        let labs = kubectl.get_json(&["get", "proofstormlabs", "-n", CONTROL_NAMESPACE])?;
-        for lab in expect::array(&labs, "/items")? {
-            if !owns_lab(lab, &self.workspace, self.instance) {
+        let cells = kubectl.get_json(&["get", "proofstormcells", "-n", CONTROL_NAMESPACE])?;
+        for cell in expect::array(&cells, "/items")? {
+            if !owns_cell(cell, &self.workspace, self.instance) {
                 continue;
             }
-            let key = expect::string(lab, "/spec/instanceKey")?;
+            let key = expect::string(cell, "/spec/instanceKey")?;
             ensure!(
                 self.keys.is_empty() || self.keys.contains(key),
                 "refusing cleanup of a replacement incarnation in workspace {}",
                 self.workspace
             );
             self.keys.insert(key.to_owned());
-            let name = expect::string(lab, "/metadata/name")?;
+            let name = expect::string(cell, "/metadata/name")?;
             kubectl.run(&[
                 "delete",
-                "proofstormlab",
+                "proofstormcell",
                 name,
                 "-n",
                 CONTROL_NAMESPACE,
@@ -120,17 +120,17 @@ impl<'a> LabCleanup<'a> {
         }
         // The controller's finalizer reclaims resources. Never force-remove it.
         for _ in 0..90 {
-            let labs = kubectl.get_json(&["get", "proofstormlabs", "-n", CONTROL_NAMESPACE])?;
-            let mut remains = expect::array(&labs, "/items")?
+            let cells = kubectl.get_json(&["get", "proofstormcells", "-n", CONTROL_NAMESPACE])?;
+            let mut remains = expect::array(&cells, "/items")?
                 .iter()
-                .any(|lab| owns_lab(lab, &self.workspace, self.instance));
+                .any(|cell| owns_cell(cell, &self.workspace, self.instance));
             for key in &self.keys {
                 let selector = format!("proofstorm.dev/instance={key}");
                 for args in [
                     vec!["get", "namespaces", "-l", &selector, "-o", "name"],
                     vec![
                         "get",
-                        "proofstormlabactions",
+                        "proofstormcellactions",
                         "-n",
                         CONTROL_NAMESPACE,
                         "-l",
@@ -156,11 +156,11 @@ impl<'a> LabCleanup<'a> {
     }
 }
 
-impl Drop for LabCleanup<'_> {
+impl Drop for CellCleanup<'_> {
     fn drop(&mut self) {
         if self.armed {
             if let Err(error) = self.finish() {
-                eprintln!("Disposable lab cleanup failed: {error:#}");
+                eprintln!("Disposable cell cleanup failed: {error:#}");
             }
         }
     }
@@ -190,11 +190,11 @@ mod tests {
 
     #[test]
     fn cleanup_requires_both_workspace_and_instance_identity() {
-        let lab = json!({"spec":{"workspaceId":"run-a","instanceId":"lab"}});
-        assert!(owns_lab(&lab, "run-a", "lab"));
-        assert!(!owns_lab(&lab, "run-b", "lab"));
-        assert!(!owns_lab(&lab, "run-a", "other"));
-        assert!(!owns_lab(&json!({}), "run-a", "lab"));
+        let cell = json!({"spec":{"workspaceId":"run-a","instanceId":"cell"}});
+        assert!(owns_cell(&cell, "run-a", "cell"));
+        assert!(!owns_cell(&cell, "run-b", "cell"));
+        assert!(!owns_cell(&cell, "run-a", "other"));
+        assert!(!owns_cell(&json!({}), "run-a", "cell"));
     }
 
     #[test]

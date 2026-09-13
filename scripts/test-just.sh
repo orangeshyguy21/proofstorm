@@ -13,6 +13,8 @@ scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf -- "$scratch"' EXIT
 fixture="$scratch/checkout with spaces"
 mkdir -p "$fixture/.tools/bin" "$fixture/.proofstorm-dev/bin" "$fixture/scripts" "$fixture/target/debug"
+mkdir -p "$fixture/tests"
+mkdir -p "$fixture/tools"
 cp "$root/justfile" "$fixture/justfile"
 export TRACE="$scratch/trace" COMMAND_TRACE="$scratch/commands"
 export PROOFSTORM_HOME=must-not-leak PROOFSTORM_KUBECONFIG=must-not-leak
@@ -25,12 +27,15 @@ printf '<%s>\n' "${0##*/}" "$PWD" "${PROOFSTORM_HOME-unset}" "${PROOFSTORM_KUBEC
 exit "${STUB_EXIT:-0}"
 STUB
 chmod +x "$scratch/stub"
-for tool in rustup sh make cargo; do
+for tool in rustup sh cargo; do
   ln -s "$scratch/stub" "$fixture/.tools/bin/$tool"
 done
 ln -s "$scratch/stub" "$fixture/.proofstorm-dev/bin/proofstorm"
 ln -s "$scratch/stub" "$fixture/scripts/check.sh"
+ln -s "$scratch/stub" "$fixture/scripts/test-component-driver.sh"
 ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
+ln -s "$scratch/stub" "$fixture/scripts/acceptance.sh"
+ln -s "$scratch/stub" "$fixture/tests/cdk18-config-contract.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/ci-linux-bundle.sh"
 ln -s "$scratch/stub" "$fixture/scripts/ci-macos-bundle.sh"
@@ -38,6 +43,8 @@ ln -s "$scratch/stub" "$fixture/scripts/macos-install-smoke.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release-promote.sh"
 ln -s "$scratch/stub" "$fixture/scripts/release.sh"
 ln -s "$scratch/stub" "$fixture/scripts/controller-build.sh"
+ln -s "$scratch/stub" "$fixture/scripts/catalog-image.sh"
+ln -s "$scratch/stub" "$fixture/tools/install-host-tools.sh"
 ln -s "$scratch/stub" "$fixture/scripts/linux-build.sh"
 ln -s "$scratch/stub" "$fixture/scripts/linux-install-smoke.sh"
 ln -s "$scratch/stub" "$fixture/target/debug/proofstorm-acceptance"
@@ -95,21 +102,42 @@ run
 run help
 [[ ! -s "$TRACE" ]] || fail 'Help recipe unexpectedly ran a command'
 
+# Retired fixed-cluster entry points must not be reintroduced by an alias.
+for recipe in legacy-gate-build cluster-up images-build images bitcoin-image-build down compose; do
+  last_recipe=$recipe
+  if just --justfile "$fixture/justfile" --show "$recipe" > "$scratch/retired.stdout" 2> "$scratch/retired.stderr"; then
+    fail "Retired recipe is still present: $recipe"
+  fi
+  grep -q 'does not contain recipe' "$scratch/retired.stderr" || fail "Recipe lookup failed unexpectedly: $recipe"
+done
+
 # Literal arguments survive whitespace, quotes, and shell metacharacters.
 tricky="folder with 'quotes'; \$(touch $scratch/INJECTED)"
 for recipe in gui serve; do
-  run "$recipe" "$tricky" --no-open
-  expect proofstorm "$fixture" unset unset gui "$tricky" --no-open
+  run "$recipe" open --project "$tricky"
+  expect proofstorm "$fixture" unset unset gui open --project "$tricky"
 done
 [[ ! -e "$scratch/INJECTED" ]] || fail 'A literal argument was executed as shell code'
 run doctor --json
 expect proofstorm "$fixture" unset unset doctor --json
 run stop
-expect proofstorm "$fixture" unset unset stop
+expect proofstorm "$fixture" unset unset gui stop
+run dev-reset --yes --json
+expect proofstorm "$fixture" unset unset dev reset --yes --json
 run check-quick
 expect check.sh "$fixture" unset unset quick
 run check-rust
 expect check.sh "$fixture" unset unset rust
+run check-component-driver nutshell driver-image component-image linux/amd64
+expect test-component-driver.sh "$fixture" unset unset nutshell driver-image component-image linux/amd64
+run check-cdk-config
+expect cdk18-config-contract.sh "$fixture" unset unset
+run audit-mcp "$tricky"
+expect cargo "$fixture" unset unset run --locked -p proofstorm-acceptance --example mcp_agent_audit -- "$tricky"
+run catalog-image build cdk-cli-wallet linux/amd64 "$tricky"
+expect catalog-image.sh "$fixture" unset unset build cdk-cli-wallet linux/amd64 "$tricky"
+run tool-pins x86_64-unknown-linux-gnu "$tricky"
+expect install-host-tools.sh "$fixture" unset unset resolve x86_64-unknown-linux-gnu "$tricky"
 run release-check "$tricky" --alpha --json
 expect cargo "$fixture" unset unset run --locked -p proofstorm-xtask -- release-check "$tricky" --alpha --json
 run release-verify "$tricky" --json
@@ -169,22 +197,21 @@ run web-dev
 expect sh "$fixture" unset unset tools/install-trunk.sh \
   rustup "$fixture" unset unset target add wasm32-unknown-unknown \
   develop.sh "$fixture" unset unset --watch-web
-run compose ps
-expect make "$fixture" unset unset -f Makefile.compose ps
 run e2e slice4 controller-recovery
 expect sh "$fixture" unset unset tools/install-trunk.sh \
   rustup "$fixture" unset unset target add wasm32-unknown-unknown \
-  develop.sh "$fixture" unset unset --web-only \
-  cargo "$fixture" unset unset build --locked -p proofstorm-app -p proofstorm-mcp -p proofstorm-acceptance \
-  proofstorm-acceptance "$fixture" unset unset slice4 \
-  proofstorm-acceptance "$fixture" unset unset controller-recovery
-expect_calls proofstorm-acceptance 2
+  develop.sh "$fixture" unset unset \
+  acceptance.sh "$fixture" unset unset slice4 controller-recovery
+expect_calls acceptance.sh 1
 run e2e
-expect_calls proofstorm-acceptance 23
-if grep -Eq '^<(nutshell-oidc|private-handoff)>$' "$TRACE"; then
-  printf 'An opt-in gate unexpectedly ran in the default suite\n' >&2
-  exit 1
-fi
+expect sh "$fixture" unset unset tools/install-trunk.sh \
+  rustup "$fixture" unset unset target add wasm32-unknown-unknown \
+  develop.sh "$fixture" unset unset \
+  acceptance.sh "$fixture" unset unset
+run e2e-cleanup "$tricky"
+expect acceptance.sh "$fixture" unset unset --cleanup "$tricky"
+run e2e-bundle "$tricky" onboarding --allow-development
+expect acceptance.sh "$fixture" unset unset --bundle "$tricky" onboarding --allow-development
 
 # Exit failures reach the caller and failed dependencies stop the build.
 if STUB_EXIT=7 run gui; then
@@ -196,4 +223,24 @@ if STUB_EXIT=7 run dev-build; then
   exit 1
 fi
 expect sh "$fixture" unset unset tools/install-trunk.sh
+
+# Exercise the real acceptance wrapper too, including Bash 3's empty-array/nounset
+# behavior. Only the fake cargo runs; no compilation, runtime or download occurs.
+ln -s "$scratch/stub" "$scratch/cargo"
+last_recipe=acceptance-wrapper
+: > "$TRACE"
+: > "$COMMAND_TRACE"
+PATH="$scratch:$PATH" bash "$root/scripts/acceptance.sh"
+expect cargo "$root" unset unset run --quiet --locked -p proofstorm-acceptance --bin proofstorm-acceptance -- \
+  --checkout-home "$root/.proofstorm-dev/state" --root "$root"
+last_recipe=acceptance-cleanup-wrapper
+: > "$TRACE"
+: > "$COMMAND_TRACE"
+PATH="$scratch:$PATH" bash "$root/scripts/acceptance.sh" --cleanup "$tricky"
+expect cargo "$root" unset unset run --quiet --locked -p proofstorm-acceptance --bin proofstorm-acceptance -- --cleanup "$tricky"
+last_recipe=acceptance-bundle-wrapper
+: > "$TRACE"
+: > "$COMMAND_TRACE"
+PATH="$scratch:$PATH" bash "$root/scripts/acceptance.sh" --bundle "$tricky" onboarding
+expect cargo "$root" unset unset run --quiet --locked -p proofstorm-acceptance --bin proofstorm-acceptance -- --root "$root" --bundle "$tricky" onboarding
 printf 'Just dispatch checks passed\n'

@@ -13,6 +13,89 @@ use std::{
 
 const RECORD: &str = "checkout-artifacts.json";
 
+/// A verified artifact source that can initialize a *new* installation.
+/// It conveys no permission to mutate the source installation's runtime.
+#[derive(Clone)]
+pub struct TestArtifacts {
+    pub cli: PathBuf,
+    pub mcp: PathBuf,
+    pub resources: PathBuf,
+    pub checkout: Option<(PathBuf, PathBuf)>,
+}
+
+impl TestArtifacts {
+    /// Read and verify the registered checkout binaries and immutable resources.
+    pub fn checkout(home: &Path) -> Result<Self> {
+        let record = read(home)?.context("selected home has no checkout registration")?;
+        record.verify_external()?;
+        Ok(Self {
+            cli: record.cli,
+            mcp: record.mcp,
+            resources: record.resources,
+            checkout: Some((record.source, record.web_dist)),
+        })
+    }
+
+    /// Read and verify every member of an explicitly selected unpacked bundle.
+    pub fn bundle(root: &Path, allow_development: bool) -> Result<Self> {
+        let root = root.canonicalize()?;
+        verify_external_bundle(&root, allow_development)?;
+        Ok(Self {
+            cli: root.join("bin/proofstorm"),
+            mcp: root.join("bin/proofstorm-mcp"),
+            resources: root,
+            checkout: None,
+        })
+    }
+
+    /// Recheck the pair before spawning a test session.
+    pub fn verify_for(&self, home: &Path) -> Result<()> {
+        if let Some(record) = read(home)? {
+            ensure!(
+                record.cli == self.cli
+                    && record.mcp == self.mcp
+                    && record.resources == self.resources,
+                "test artifacts differ from the selected installation"
+            );
+            record.verify_external()
+        } else {
+            ensure!(
+                self.checkout.is_none(),
+                "test checkout registration missing"
+            );
+            verify_external_bundle(&self.resources, true)
+        }
+    }
+
+    /// Read installed cell state through the verified CLI without granting an actor permissions.
+    pub fn inspect_cli(
+        &self,
+        home: &Path,
+        workspace: &str,
+        principal: &str,
+        cell: &str,
+    ) -> Result<Value> {
+        self.verify_for(home)?;
+        crate::bootstrap::verify_runtime_identity(&crate::installation::Installation::load(home)?)?;
+        let home = home.to_str().context("non-UTF-8 test home")?;
+        let output = crate::harness::launch::capture(
+            &self.cli,
+            &[
+                "--home",
+                home,
+                "--workspace",
+                workspace,
+                "--principal",
+                principal,
+                "--json",
+                "status",
+                cell,
+            ],
+        )?;
+        Ok(serde_json::from_str(&output)?)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Checkout {
@@ -227,13 +310,18 @@ impl Checkout {
             executable == self.cli || executable == self.mcp,
             "this executable is not registered to the selected checkout installation; use its development launcher"
         );
-        ensure!(
-            hash(&self.cli)? == self.cli_sha256 && hash(&self.mcp)? == self.mcp_sha256,
-            "checkout binaries changed; run just dev-build to register a coherent build"
-        );
+        self.verify_files()?;
         ensure!(
             self.metadata == crate::release::describe(),
             "checkout metadata differs from this executable; rebuild both CLI and MCP together"
+        );
+        Ok(())
+    }
+
+    fn verify_files(&self) -> Result<()> {
+        ensure!(
+            hash(&self.cli)? == self.cli_sha256 && hash(&self.mcp)? == self.mcp_sha256,
+            "checkout binaries changed; run just dev-build to register a coherent build"
         );
         let mut files = BTreeMap::new();
         inventory(&self.resources, &self.resources, &mut files)?;
@@ -243,16 +331,102 @@ impl Checkout {
         );
         Ok(())
     }
+
+    fn verify_external(&self) -> Result<()> {
+        // The acceptance runner need not embed the GUI. Validate the *selected*
+        // binaries against their receipt instead of the runner's own metadata.
+        self.verify_files()?;
+        verify_external_pair(&self.cli, &self.mcp, &self.metadata)
+    }
+}
+
+fn verify_external_bundle(root: &Path, allow_development: bool) -> Result<()> {
+    crate::installer::verify(root, allow_development, false)?;
+    let metadata: Value = serde_json::from_slice(&fs::read(root.join("release-info.json"))?)?;
+    verify_external_pair(
+        &root.join("bin/proofstorm"),
+        &root.join("bin/proofstorm-mcp"),
+        &metadata,
+    )
+}
+
+fn verify_external_pair(cli: &Path, mcp: &Path, expected: &Value) -> Result<()> {
+    for (program, args) in [
+        (cli, vec!["version", "--json"]),
+        (mcp, vec!["--release-info"]),
+    ] {
+        let metadata: Value =
+            serde_json::from_str(&crate::harness::launch::capture(program, &args)?)?;
+        ensure!(
+            metadata == *expected,
+            "selected CLI/MCP metadata differs from its artifact receipt"
+        );
+    }
+    // The runner need not embed the GUI, but must understand this runtime/schema
+    // and verify the exact same host tool pins as the selected CLI.
+    let runner = crate::release::describe();
+    for field in [
+        "runtime_contract_sha256",
+        "version",
+        "target",
+        "bootstrap_tools",
+    ] {
+        ensure!(
+            expected[field] == runner[field],
+            "acceptance runner and selected artifacts differ: {field}"
+        );
+    }
+    Ok(())
 }
 
 /// Enforce checkout identity on every selected CLI/MCP startup. Returns false for
 /// ordinary installations; it never relaxes the release bundle verifier.
 pub fn check_checkout(home: &Path) -> Result<bool> {
+    crate::dev_reset::check_pending(home)?;
     let Some(record) = read(home)? else {
         return Ok(false);
     };
     record.verify(&std::env::current_exe()?.canonicalize()?)?;
     Ok(true)
+}
+
+/// Reset accepts stale binaries, but never a release home or another checkout.
+pub(crate) fn reset_source(home: &Path) -> Result<PathBuf> {
+    Ok(read(home)?
+        .context("dev reset requires a registered checkout, not an installed release")?
+        .source)
+}
+
+pub(crate) fn restore_after_reset(
+    archive: &Path,
+    replacement: &crate::installation::Installation,
+    source: &Path,
+    previous_id: &str,
+) -> Result<()> {
+    let path = archive.join(RECORD);
+    ensure!(
+        fs::symlink_metadata(&path)?.is_file(),
+        "linked checkout registration refused"
+    );
+    let mut record: Checkout = serde_json::from_slice(&fs::read(path)?)?;
+    ensure!(
+        record.source == source && record.installation_id == previous_id,
+        "archived checkout identity changed"
+    );
+    record.installation_id.clone_from(&replacement.id);
+    let mut file = tempfile::NamedTempFile::new_in(&replacement.home)?;
+    file.write_all(&serde_json::to_vec_pretty(&record)?)?;
+    file.as_file().sync_all()?;
+    let target = replacement.home.join(RECORD);
+    if target.try_exists()? {
+        ensure!(
+            fs::read(&target)? == fs::read(file.path())?,
+            "replacement checkout registration changed"
+        );
+    } else {
+        file.persist_noclobber(target)?;
+    }
+    Ok(())
 }
 
 /// Resources for either artifact source; no assumption about checkout bin layout.
@@ -370,8 +544,8 @@ pub fn register(
         "release-info.json",
         "chart/Chart.yaml",
         "chart/values.yaml",
-        "chart/crds/proofstorm.dev_proofstormlabs.yaml",
-        "chart/crds/proofstorm.dev_proofstormlabactions.yaml",
+        "chart/crds/proofstorm.dev_proofstormcells.yaml",
+        "chart/crds/proofstorm.dev_proofstormcellactions.yaml",
         "chart/crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
     ] {
         ensure!(
@@ -443,8 +617,8 @@ mod tests {
             for name in [
                 "Chart.yaml",
                 "values.yaml",
-                "crds/proofstorm.dev_proofstormlabs.yaml",
-                "crds/proofstorm.dev_proofstormlabactions.yaml",
+                "crds/proofstorm.dev_proofstormcells.yaml",
+                "crds/proofstorm.dev_proofstormcellactions.yaml",
                 "crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
             ] {
                 fs::write(resources.join("chart").join(name), "fixture").unwrap();

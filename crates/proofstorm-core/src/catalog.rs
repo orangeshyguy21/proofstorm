@@ -38,6 +38,7 @@ pub enum SupportLifecycle {
 #[serde(rename_all = "snake_case")]
 pub enum CatalogFeature {
     NativeCli,
+    NativeCliEntrypoints,
     MintManagementRpc,
     Regtest,
     PersistentState,
@@ -297,7 +298,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Laboratory, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Attacker],
         ),
         catalog_entry_with_lifecycle(
             amd64,
@@ -330,7 +331,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Laboratory, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Attacker],
         ),
         catalog_entry_with_lifecycle(
             amd64,
@@ -363,7 +364,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Laboratory, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Attacker],
         ),
         catalog_entry(
             amd64,
@@ -395,7 +396,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Laboratory, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Attacker],
         ),
         catalog_entry(
             amd64,
@@ -531,7 +532,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.20.3",
             ReleaseChannel::Stable,
-            "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:d2d4abb09ddb32439b9d9f4b764bec905a6fc58526f742ead4f3bbc60088018d",
+            crate::wallet_builds::nutshell(amd64),
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -594,7 +595,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &["17.11"],
             )],
             support_matrix(&[], &[], &[], &[], &[], &[], vec![]),
-            vec![ControlClass::Laboratory],
+            vec![ControlClass::Cell],
         ),
         catalog_entry(
             amd64,
@@ -617,7 +618,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Laboratory],
+            vec![ControlClass::Cell],
         ),
         catalog_entry(
             amd64,
@@ -644,7 +645,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Laboratory],
+            vec![ControlClass::Cell],
         ),
         catalog_entry(
             amd64,
@@ -655,7 +656,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.20.3",
             ReleaseChannel::Stable,
-            "docker.io/cashubtc/nutshell@sha256:f039b0e61f64d67c7212f5472eb5d021c3703cd9e72170aa924906ce6bd1f2ed",
+            crate::wallet_builds::nutshell(amd64),
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::PersistentState,
@@ -672,7 +673,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[AuthenticationMode::Unauthenticated],
                 vec![],
             ),
-            vec![ControlClass::Laboratory, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Attacker],
         ),
         cdk_cli_wallet_entry(amd64, backends, adapter_version),
         cocod_wallet_entry(amd64, backends, adapter_version),
@@ -701,6 +702,9 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         ),
     ];
     for entry in &mut entries {
+        if matches!(entry.id.as_str(), "nutshell" | "nutshell-wallet") {
+            entry.features.insert(CatalogFeature::NativeCliEntrypoints);
+        }
         if matches!(
             entry.id.as_str(),
             "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
@@ -1152,9 +1156,9 @@ fn cdk_cli_wallet_entry(
         backends,
         ComponentKind::Wallet,
         if amd64 {
-            "CDK CLI 0.18.0 persistent wallet; Linux amd64 laboratory build"
+            "CDK CLI 0.18.0 persistent wallet; Linux amd64 cell build"
         } else {
-            "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 laboratory build"
+            "CDK CLI 0.18.0 persistent wallet; initial Linux arm64 cell build"
         },
         adapter_version,
         "0.18.0",
@@ -1176,7 +1180,7 @@ fn cdk_cli_wallet_entry(
             &[AuthenticationMode::Unauthenticated],
             vec![],
         ),
-        vec![ControlClass::Laboratory, ControlClass::Attacker],
+        vec![ControlClass::Cell, ControlClass::Attacker],
     );
     entry.protocol_action_adapter_version = Some("cdk-cli/0.18/observations/v1".into());
     let provenance: BuildProvenance =
@@ -1198,9 +1202,9 @@ fn cocod_wallet_entry(
         backends,
         ComponentKind::Wallet,
         if amd64 {
-            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux amd64 laboratory build"
+            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux amd64 cell build"
         } else {
-            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux arm64 laboratory build"
+            "Unreleased cocod daemon from Coco 44e5101c; experimental Linux arm64 cell build"
         },
         adapter_version,
         "0.0.17-dev.44e5101c",
@@ -1222,7 +1226,7 @@ fn cocod_wallet_entry(
             &[AuthenticationMode::Unauthenticated],
             vec![],
         ),
-        vec![ControlClass::Laboratory, ControlClass::Attacker],
+        vec![ControlClass::Cell, ControlClass::Attacker],
     );
     entry.support_lifecycle = SupportLifecycle::Experimental;
     entry.protocol_action_adapter_version = Some("cocod/44e5101c/observations/v1".into());
@@ -1279,7 +1283,7 @@ fn runtime_endpoint(
 )]
 fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRuntimeEndpoint> {
     const OBSERVE: &[&str] = &["component_logs", "reachability_oracle"];
-    const CDK_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info; use --help for native commands. Client certificates are mounted in /management-client/tls; never copy their contents into arguments or public output. Invoke through component_exec_live, not forensics. Durable RPC changes survive ordinary restarts; a changed authored lab configuration is applied on the next rollout. Mint quote payment override is disabled by the upstream server policy. CLI success is not proof of the intended state: verify the result independently. Management images support Linux amd64 and arm64.";
+    const CDK_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info; use --help for native commands. Client certificates are mounted in /management-client/tls; never copy their contents into arguments or public output. Invoke through component_exec_live, not forensics. Durable RPC changes survive ordinary restarts; a changed authored cell configuration is applied on the next rollout. Mint quote payment override is disabled by the upstream server policy. CLI success is not proof of the intended state: verify the result independently. Management images support Linux amd64 and arm64.";
     const NUTSHELL_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info; use --help for native commands. Invoke through component_exec_live, not forensics. Never copy credentials into arguments or public output. Nutshell 0.20.3 can print RPC errors while exiting zero: verify state independently. Metadata/settings mutations can be process-local and reset from authored configuration on restart; persistent keyset/quote changes follow upstream database semantics. Management images support Linux amd64 and arm64.";
     let mut endpoints = match implementation {
         "bitcoin-core" => vec![runtime_endpoint(
@@ -1391,10 +1395,10 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
                 "Experimental commit pin; no default version. Native cocod CLI and authenticated loopback HTTP are the mutation surface.",
                 "COCOD_URL=http://127.0.0.1:62626 makes clients strictly client-only. Daemon runs in foreground under native exclusive state lease. Never start another daemon in a Job or forensics pod.",
                 "HOME=/wallet; private state /wallet/.cocod; credentials/current/client contains the administrative bearer. Initialization/recovery output includes mnemonic: use private execution output.",
-                "This pin's initialize CLI/API cannot select a mint. Initialize with a private passphrase (keeps session stopped), configure mintUrl in its native config.json while the protected session is stopped, restart the component, then explicitly start the protected session. Never use its public default mint in a lab.",
+                "This pin's initialize CLI/API cannot select a mint. Initialize with a private passphrase (keeps session stopped), configure mintUrl in its native config.json while the protected session is stopped, restart the component, then explicitly start the protected session. Never use its public default mint in a cell.",
                 "Read catalog and cocod subcommand help first. Prefer direct private payment invocation and independent recipient settlement plus passive balances. No invented parser defaults; failure is not rollback.",
                 "wallet_balance is a read-only SQLite transaction over exact mint/sat proof state. balance_sat is unreserved ready proofs; reserved_sat is reserved ready proofs; inflight_sat is a distinct local category. The native /balance endpoint returns ready total, including reservations. Neither is a mint-side proof-state oracle.",
-                "Health means process reachability, not initialization or running session. Protected sessions remain stopped across restart. NPC external traffic is blocked by the laboratory network policy; NPC is outside this checkpoint.",
+                "Health means process reachability, not initialization or running session. Protected sessions remain stopped across restart. NPC external traffic is blocked by the cell network policy; NPC is outside this checkpoint.",
                 "Observe native status directly with argv [cocod,status] and json_fields selecting seedAccess.state, seedAccess.requiresPassphrase, cocoSession.state. Fixed enums/booleans are validated; null seedAccess produces null leaves for an uninitialized wallet. Use argv [cocod,health] with json_fields field status. No raw status/error output or custom status parser is needed. API reference: /opt/coco/packages/cocod/docs/API.md; structured recovery response: private mnemonic field.",
                 "Use native cocod receive bolt11 <sat> with output mode bolt11. It validates the entire invoice-only response and exposes payment_request/payment_hash, amount_msat, currency, expires_at_unix; raw streams stay private. Check exit_code 0 and projection_succeeded, then intended amount/network/expiry before relaying payment_request as a separate native payer argument. Do not grep invoice output. This public invoice projection is not for spendable Cashu tokens.",
             ],
@@ -1421,7 +1425,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
                 "wallet_pay",
             ],
             &[
-                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; python3 -c 'from cashu.wallet.cli.cli import cli; cli()' --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
+                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; cashu --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
             ],
         )],
         "keycloak" => vec![runtime_endpoint(

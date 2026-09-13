@@ -1,8 +1,7 @@
 //! Host and container targets supported by the alpha. Never infer one from the other.
 use anyhow::{Result, bail};
 
-pub const MAC_ARM64: &str = "aarch64-apple-darwin";
-pub const LINUX_AMD64: &str = "x86_64-unknown-linux-gnu";
+pub use proofstorm_core::tool_pins::{LINUX_AMD64, MAC_ARM64};
 
 #[must_use]
 pub fn target() -> &'static str {
@@ -16,14 +15,6 @@ pub fn bootstrap_pins_for(target: &str) -> Result<&'static str> {
             "../../../release/bootstrap-tools-linux-amd64.json"
         )),
         _ => bail!("no bootstrap tools for this host"),
-    }
-}
-
-pub fn helm_member_for(target: &str) -> Result<&'static str> {
-    match target {
-        MAC_ARM64 => Ok("darwin-arm64/helm"),
-        LINUX_AMD64 => Ok("linux-amd64/helm"),
-        _ => bail!("no Helm archive for this host"),
     }
 }
 

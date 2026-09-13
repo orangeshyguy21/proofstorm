@@ -1,6 +1,134 @@
 use super::*;
 
 #[test]
+fn startup_recovery_hints_keep_the_invoked_command_in_parent_and_worker() {
+    for (hint, expected) in [
+        ("storm", "storm"),
+        ("proofstorm", "proofstorm"),
+        ("untrusted command", "proofstorm"),
+    ] {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "gui::tests::failed_startup_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("PROOFSTORM_GUI_FAILURE_FIXTURE", "1")
+            .env("PROOFSTORM_CLI_NAME", hint)
+            .env("PROOFSTORM_PRINCIPAL", "must-not-forward")
+            .env("PROOFSTORM_KUBECONFIG", "/must-not-forward")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains(&format!("worker command: {expected}")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("Run {expected} doctor, then retry {expected} gui")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("use {expected} agent configure")),
+            "{stderr}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "child fixture for startup command-name and environment isolation checks"]
+async fn failed_startup_fixture() {
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::env::var("PROOFSTORM_GUI_FAILURE_FIXTURE").as_deref(),
+        Ok("1")
+    );
+    let root = tempfile::tempdir().unwrap();
+    let installation = Installation::initialize(&root.path().join("home"), None, None).unwrap();
+    let executable = root.path().join("worker");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+if [ -n "${PROOFSTORM_PRINCIPAL+x}${PROOFSTORM_KUBECONFIG+x}" ]; then
+  printf 'runtime override leaked\n' >&2
+  exit 1
+fi
+printf 'worker command: %s\n' "$PROOFSTORM_CLI_NAME" >&2
+printf 'Error: principal "developer" lacks CellStatus in workspace "local-cell"\n' >&2
+exit 1
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let verified = crate::artifacts::Verified {
+        installation,
+        root: root.path().into(),
+        executable,
+        executable_sha256: "a".repeat(64),
+        allow_development: true,
+        controller_sha256: None,
+    };
+    let error = tokio::time::timeout(Duration::from_secs(5), start(&verified, &|_| {}))
+        .await
+        .unwrap()
+        .err()
+        .expect("fixture worker must fail")
+        .to_string();
+    assert!(!error.contains("runtime override leaked"), "{error}");
+    assert!(error.contains("lacks CellStatus"), "{error}");
+    eprintln!("{error}");
+    eprintln!(
+        "{}",
+        crate::harness::launch::require_terminal().unwrap_err()
+    );
+}
+
+#[tokio::test]
+async fn status_does_not_create_locks_or_remove_stale_records() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = Installation::initialize(&root.path().join("home"), None, None).unwrap();
+    let files = || {
+        let mut names = std::fs::read_dir(&installation.home)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    let before = files();
+    assert_eq!(
+        status(&installation.home).await.unwrap()["state"],
+        "stopped"
+    );
+    assert_eq!(files(), before);
+    let record = Record {
+        format_version: 1,
+        installation_id: installation.id.clone(),
+        instance: "a".repeat(32),
+        token: "b".repeat(64),
+        executable: "/fixture/bin/proofstorm".into(),
+        build_sha256: None,
+        pid: 0,
+        port: 0,
+    };
+    state::save(&installation.home.join(RECORD), &record).unwrap();
+    let before = files();
+    let result = status(&installation.home).await.unwrap();
+    assert_eq!(result["state"], "unresponsive");
+    assert!(!result.to_string().contains(&record.token));
+    assert_eq!(files(), before);
+    assert_eq!(
+        state::record(&installation.home, &installation.id)
+            .unwrap()
+            .unwrap()
+            .health(),
+        record.health()
+    );
+}
+
+#[test]
 fn managed_environment_sets_operator_and_private_paths_explicitly() {
     let root = tempfile::tempdir().unwrap();
     let installation = Installation::initialize(&root.path().join("home"), None, None).unwrap();
@@ -96,7 +224,7 @@ async fn stop_confirms_owned_exit_when_the_last_http_response_is_lost() {
     let result = stop(&installation.home).await.unwrap();
     task.await.unwrap();
     assert_eq!(result["stopped"], true);
-    assert_eq!(result["labs_stopped"], false);
+    assert_eq!(result["cells_stopped"], false);
     assert!(!installation.home.join(RECORD).exists());
 }
 

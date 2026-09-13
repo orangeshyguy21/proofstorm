@@ -1,5 +1,5 @@
 //! Verified controller build inputs and immutable publication evidence.
-mod registry;
+use super::registry;
 use super::{archive::output_path, build, bundle, sha256, text};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
@@ -118,6 +118,20 @@ fn local(work: &Path) -> Result<()> {
             && fs::read_to_string(work.join("helper.status"))?.trim() == "1",
         "controller execution helper failed its startup probe"
     );
+    ensure!(
+        bundle::read_json(&work.join("prober.stdout"))?
+            == json!({"protocol_version": proofstorm_prober::PROTOCOL_VERSION})
+            && fs::read(work.join("prober.stderr"))?.is_empty()
+            && fs::read_to_string(work.join("prober.status"))?.trim() == "0",
+        "controller protocol worker failed its startup probe"
+    );
+    ensure!(
+        bundle::read_json(&work.join("driver.stdout"))?
+            == json!({"driver_version": proofstorm_driver::VERSION})
+            && fs::read(work.join("driver.stderr"))?.is_empty()
+            && fs::read_to_string(work.join("driver.status"))?.trim() == "0",
+        "controller component driver failed its startup probe"
+    );
     if let Some(previous) = receipt.get("local_image_id") {
         ensure!(
             *previous == image["Id"] && receipt["metadata"] == metadata,
@@ -126,7 +140,7 @@ fn local(work: &Path) -> Result<()> {
     }
     receipt["local_image_id"] = json!(id);
     receipt["metadata"] = metadata;
-    receipt["verification"] = json!({"offline_metadata":true,"non_root":true,"helper_startup":true,"cluster_reconciliation":false});
+    receipt["verification"] = json!({"offline_metadata":true,"non_root":true,"helper_startup":true,"prober_startup":true,"driver_startup":true,"cluster_reconciliation":false});
     save(&work.join("build.json"), &receipt)
 }
 
@@ -143,48 +157,79 @@ fn helper_probe(work: &Path, id: &str) -> Result<()> {
     let receipt = bundle::read_json(&work.join("build.json"))?;
     let platform = text(&receipt, "platform")?;
     architecture(platform)?;
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--platform",
-            platform,
-            "--network",
-            "none",
-            "--read-only",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--memory",
-            "128m",
-            "--cpus",
-            "1",
-            "--pids-limit",
-            "128",
-            "--entrypoint",
-            "/usr/local/lib/proofstorm-exec",
-            id,
-        ])
-        .stdout(Stdio::from(fs::File::create(work.join("helper.stdout"))?))
-        .stderr(Stdio::from(fs::File::create(work.join("helper.stderr"))?))
-        .spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            fs::write(
-                work.join("helper.status"),
-                status.code().unwrap_or(-1).to_string(),
-            )?;
-            return Ok(());
+    for (stem, entrypoint, args) in [
+        ("helper", "/usr/local/lib/proofstorm-exec", vec![]),
+        (
+            "driver",
+            "/usr/local/lib/proofstorm-driver",
+            vec!["--self-check"],
+        ),
+        (
+            "prober",
+            "/usr/local/lib/proofstorm-prober",
+            vec!["--self-check"],
+        ),
+    ] {
+        let container = tempfile::tempdir_in(work)?;
+        let cidfile = container.path().join("container.id");
+        let mut child = Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--platform",
+                platform,
+                "--network",
+                "none",
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--memory",
+                "128m",
+                "--cpus",
+                "1",
+                "--pids-limit",
+                "128",
+                "--entrypoint",
+                entrypoint,
+            ])
+            .arg("--cidfile")
+            .arg(&cidfile)
+            .arg(id)
+            .args(args)
+            .stdout(Stdio::from(fs::File::create(
+                work.join(format!("{stem}.stdout")),
+            )?))
+            .stderr(Stdio::from(fs::File::create(
+                work.join(format!("{stem}.stderr")),
+            )?))
+            .spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(status) = child.try_wait()? {
+                fs::write(
+                    work.join(format!("{stem}.status")),
+                    status.code().unwrap_or(-1).to_string(),
+                )?;
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Ok(id) = fs::read_to_string(&cidfile) {
+                    if sha256(id.trim()) {
+                        let _ = Command::new("docker")
+                            .args(["rm", "-f", id.trim()])
+                            .output();
+                    }
+                }
+                bail!("controller {stem} probe timed out");
+            }
+            thread::sleep(Duration::from_millis(25));
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("controller helper probe timed out");
-        }
-        thread::sleep(Duration::from_millis(25));
     }
+    Ok(())
 }
 
 pub(super) fn validate(
@@ -220,7 +265,9 @@ pub(super) fn validate(
             && receipt["verification"]["registry_identity"] == true
             && receipt["verification"]["offline_metadata"] == true
             && receipt["verification"]["non_root"] == true
-            && receipt["verification"]["helper_startup"] == true,
+            && receipt["verification"]["helper_startup"] == true
+            && receipt["verification"]["prober_startup"] == true
+            && receipt["verification"]["driver_startup"] == true,
         "controller publication/startup evidence is incomplete"
     );
     Ok(())
@@ -248,7 +295,12 @@ fn published(work: &Path) -> Result<()> {
         "invalid published digest"
     );
     let platform = text(&receipt, "platform")?.to_owned();
-    registry::verify(digest, text(&receipt, "local_image_id")?, &platform)?;
+    registry::verify(
+        &format!("{REPOSITORY}@{digest}"),
+        Some(text(&receipt, "local_image_id")?),
+        &platform,
+        true,
+    )?;
     receipt["image"] = json!(format!("{REPOSITORY}@{digest}"));
     receipt["anonymous_verified"] = json!(true);
     receipt["verification"]["registry_identity"] = json!(true);

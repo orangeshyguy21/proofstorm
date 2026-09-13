@@ -1,5 +1,5 @@
 //! Background receipt collection; independent from the passive HTTP GET handlers.
-use crate::{journal, lab::Labs};
+use crate::{cell::Cells, journal};
 use futures::{StreamExt, stream};
 use proofstorm_core::Capability;
 use proofstorm_view::ObserverStatus;
@@ -15,7 +15,7 @@ pub struct Observer {
 }
 impl Observer {
     #[must_use]
-    pub fn start(labs: Labs) -> Self {
+    pub fn start(cells: Cells) -> Self {
         let status = Arc::new(RwLock::new(ObserverStatus {
             state: "starting".into(),
             ..Default::default()
@@ -32,14 +32,14 @@ impl Observer {
                     .duration_since(UNIX_EPOCH)
                     .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
                 let cleanup = crate::lifecycle::sweep(
-                    &labs.runtime,
-                    &labs.store,
-                    &labs.workspace,
-                    &labs.principal,
+                    &cells.runtime,
+                    &cells.store,
+                    &cells.workspace,
+                    &cells.principal,
                     &lifecycle_cursor,
                 )
                 .await;
-                let collected = collect(&labs, &cursor).await;
+                let collected = collect(&cells, &cursor).await;
                 let result = match cleanup {
                     Ok(next) => {
                         lifecycle_cursor = next;
@@ -78,13 +78,13 @@ impl Observer {
                         status.last_success_at_unix = Some(now);
                     }
                 } else if let Err(error) = result {
-                    eprintln!("lab observation failed: {error}");
+                    eprintln!("cell observation failed: {error}");
                     status.state = "unavailable".into();
                     status.error = Some(match error.details.as_ref().and_then(|details| details["code"].as_str()) {
-                        Some("access_denied") => "Receipt collection needs lab.status, experiment.read and artifact.read in this workspace.",
+                        Some("access_denied") => "Receipt collection needs cell.status, experiment.read and artifact.read in this workspace.",
                         Some("runtime_failure") => "Receipt collection cannot read the current cluster; retrying automatically.",
-                        Some("cleanup_unverified") => "Lab cleanup is pending: its namespace or runtime resources still exist.",
-                        _ => "Lab reconciliation failed; check the server terminal.",
+                        Some("cleanup_unverified") => "Cell cleanup is pending: its namespace or runtime resources still exist.",
+                        _ => "Cell reconciliation failed; check the server terminal.",
                     }.into());
                 }
             }
@@ -98,53 +98,59 @@ impl Drop for Observer {
     }
 }
 
-async fn collect(labs: &Labs, cursor: &str) -> Result<(String, u64, bool, bool), crate::Error> {
+async fn collect(cells: &Cells, cursor: &str) -> Result<(String, u64, bool, bool), crate::Error> {
     for cap in [
-        Capability::LabStatus,
+        Capability::CellStatus,
         Capability::ExperimentRead,
         Capability::ArtifactRead,
     ] {
-        labs.store
-            .authorize(&labs.workspace, &labs.principal, cap)?;
+        cells
+            .store
+            .authorize(&cells.workspace, &cells.principal, cap)?;
     }
-    if let Ok(pending) = labs.store.pending_updates(&labs.workspace, &labs.principal) {
+    if let Ok(pending) = cells
+        .store
+        .pending_updates(&cells.workspace, &cells.principal)
+    {
         for id in pending {
             let _ = tokio::time::timeout(
                 Duration::from_secs(3),
                 crate::updates::reconcile(
-                    &labs.runtime,
-                    &labs.store,
-                    &labs.workspace,
-                    &labs.principal,
+                    &cells.runtime,
+                    &cells.store,
+                    &cells.workspace,
+                    &cells.principal,
                     &id,
                 ),
             )
             .await;
         }
     }
-    let live = labs.runtime.current_instance_ids(&labs.workspace).await?;
+    let live = cells.runtime.current_instance_ids(&cells.workspace).await?;
     let page =
-        labs.store
-            .pending_observations(&labs.workspace, &labs.principal, cursor, 50, &live)?;
+        cells
+            .store
+            .pending_observations(&cells.workspace, &cells.principal, cursor, 50, &live)?;
     let next = page.next_cursor.unwrap_or_default();
     let results = stream::iter(page.operations)
         .map(|op| async move {
             let observed =
-                tokio::time::timeout(Duration::from_secs(3), labs.runtime.action_status(&op))
+                tokio::time::timeout(Duration::from_secs(3), cells.runtime.action_status(&op))
                     .await
                     .map_err(|_| ())?
                     .map_err(|_| ())?;
             if let Some((phase, artifact)) = observed {
                 for cap in [
-                    Capability::LabStatus,
+                    Capability::CellStatus,
                     Capability::ExperimentRead,
                     Capability::ArtifactRead,
                 ] {
-                    labs.store
-                        .authorize(&labs.workspace, &labs.principal, cap)
+                    cells
+                        .store
+                        .authorize(&cells.workspace, &cells.principal, cap)
                         .map_err(|_| ())?;
                 }
-                journal::record(&labs.store, &labs.workspace, &op, phase, artifact)
+                journal::record(&cells.store, &cells.workspace, &op, phase, artifact)
                     .map_err(|_| ())?;
                 Ok::<bool, ()>(true)
             } else {

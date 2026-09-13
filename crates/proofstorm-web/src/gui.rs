@@ -455,7 +455,7 @@ pub fn EmptyAgentLauncher() -> impl IntoView {
     view! {
         <Show when=move ||managed.get()>
             <div class="empty-agent-launcher">
-                <p class="empty-agent-intro">"Open a coding agent to create your first lab."</p>
+                <p class="empty-agent-intro">"Open a coding agent to create your first cell."</p>
                 <AgentLauncher />
             </div>
         </Show>

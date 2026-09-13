@@ -15,9 +15,10 @@ impl std::fmt::Display for ConnectionConflict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Existing MCP connection '{}' in {} needs your approval to replace it with 'proofstorm'. Open Launch Agent in proofstorm gui to review it. Nothing was overwritten.",
+            "MCP connection '{}' in {} needs replacement approval. Retry with --replace, or review it in {} gui.",
             self.name,
-            self.config.display()
+            self.config.display(),
+            crate::command_name()
         )
     }
 }
@@ -34,7 +35,7 @@ pub(super) fn merge(
     let Some(text) = text else {
         ensure!(
             confirmation.is_none(),
-            "connection changed; click the agent again to review it"
+            "connection changed; review it and retry"
         );
         return agents::merge(harness, path, None, entry, owned);
     };
@@ -55,7 +56,7 @@ pub(super) fn merge(
     if conflicts.is_empty() {
         ensure!(
             confirmation.is_none(),
-            "connection changed; click the agent again to review it"
+            "connection changed; review it and retry"
         );
         return agents::merge(harness, path, Some(text), entry, owned);
     }
@@ -81,7 +82,7 @@ pub(super) fn merge(
     }
     ensure!(
         confirmation == Some(expected.as_str()),
-        "connection changed since confirmation; click the agent again to review it. Nothing was overwritten."
+        "connection changed since confirmation; review it and retry (nothing overwritten)"
     );
     let renamed = if name == "proofstorm" {
         text.to_owned()
