@@ -29,11 +29,12 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
     )?;
 
     submit_idempotent(
+        context,
         client,
-        "network_partition",
+        |_, client, request| client.call("network_partition", request),
         scoped(
             "wallet-mint-partition",
-            json!({"from_component": "wallet", "to_component": "mint", "idempotency_key": "wallet-mint-partition-slice5"}),
+            json!({"from_component": "wallet", "to_component": "mint"}),
         ),
         "network partition",
     )?;
@@ -75,7 +76,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         "network_partition",
         scoped(
             "receiver-wallet-mint-partition",
-            json!({"from_component": "receiver-wallet", "to_component": "mint", "idempotency_key": "receiver-wallet-mint-partition-slice5"}),
+            json!({"from_component": "receiver-wallet", "to_component": "mint"}),
         ),
     )?;
     let receiver_partitioned = cell::wait_operation(client, "receiver-wallet-mint-partition", 120)?;
@@ -164,7 +165,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         "network_heal",
         scoped(
             "wallet-mint-heal",
-            json!({"partition_operation_id": "wallet-mint-partition", "idempotency_key": "wallet-mint-heal-slice5"}),
+            json!({"partition_operation_id": "wallet-mint-partition"}),
         ),
     )?;
     let healed = cell::wait_operation(client, "wallet-mint-heal", 120)?;
@@ -204,7 +205,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         "network_heal",
         scoped(
             "receiver-wallet-mint-heal",
-            json!({"partition_operation_id": "receiver-wallet-mint-partition", "idempotency_key": "receiver-wallet-mint-heal-slice5"}),
+            json!({"partition_operation_id": "receiver-wallet-mint-partition"}),
         ),
     )?;
     let receiver_healed = cell::wait_operation(client, "receiver-wallet-mint-heal", 120)?;

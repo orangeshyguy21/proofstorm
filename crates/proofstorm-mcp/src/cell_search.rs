@@ -19,10 +19,8 @@ pub enum CellSearchSection {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CellSearchRequest {
-    #[serde(default)]
-    pub draft_id: String,
-    #[serde(default)]
-    pub instance_id: Option<String>,
+    #[serde(flatten)]
+    pub target: crate::cell_read::CellTarget,
     /// Match each component/link's compact JSON. Empty matches everything.
     /// For example, literal `"txindex":false` finds explicit disabled settings.
     #[serde(default)]
@@ -238,7 +236,7 @@ mod tests {
     #[test]
     fn search_projects_exact_matches_and_binds_continuation_to_query_and_document() {
         let mut request: CellSearchRequest = serde_json::from_value(serde_json::json!({
-            "draft_id":"fleet","query":"\"txindex\":false","fields":["/id","/config/txindex"],"limit":5
+            "plan_id":"fleet","query":"\"txindex\":false","fields":["/id","/config/txindex"],"limit":5
         })).unwrap();
         let first = search(document(), &request).unwrap();
         assert_eq!(first.matched_count, 12);

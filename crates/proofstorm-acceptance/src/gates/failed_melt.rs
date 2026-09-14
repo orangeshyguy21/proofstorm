@@ -23,33 +23,8 @@ use crate::{GateContext, cell, json as expect};
 
 const INSTANCE: &str = "failed-melt-instance";
 const EXPERIMENT: &str = "failed-melt-experiment";
-const LEASE: &str = "failed-melt-session";
-const DRAFT: &str = "failed-melt";
 const FUNDED_SAT: u64 = 2_000;
 const INVOICE_SAT: u64 = 1_000;
-
-const CAPABILITIES: &[&str] = &[
-    "catalog.read",
-    "cell.read",
-    "cell.create",
-    "cell.validate",
-    "cell.publish",
-    "cell.materialize",
-    "cell.status",
-    "cell.close",
-    "experiment.create",
-    "experiment.read",
-    "experiment.close",
-    "cell.operate",
-    "action.cancel",
-    "wallet.create",
-    "wallet.control",
-    "wallet.fund",
-    "chain.mine",
-    "peer.connect",
-    "channel.open",
-    "artifact.read",
-];
 
 fn cell_document() -> Value {
     json!({
@@ -79,42 +54,31 @@ fn cell_document() -> Value {
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session("failed-melt-live", "experiment-agent", CAPABILITIES)?;
+    let mut client = context.default_session("failed-melt-live", "experiment-agent")?;
 
-    client.call(
-        "cell_create",
-        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-failed-melt"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-failed-melt"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-failed-melt", "include_revision": true}),
-    )?;
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-failed-melt"}),
-    )?;
+    crate::cell::review(&mut client, &preview)?;
+    crate::cell::apply(&mut client, &preview)?;
     cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
 
     client.call(
-        "experiment_create",
-        json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-failed-melt-experiment"}),
-    )?;
-    client.call(
-        "session_start",
-        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-failed-melt-session"}),
+        "run_start",
+        json!({"request_id":"5114","run_id": EXPERIMENT, "name": INSTANCE}),
     )?;
 
     // Liquidity is opened between the funder and the payer only. The island
     // node is funded by nobody and peers with nobody.
-    client.call(
-        "liquidity_bootstrap",
+    crate::driver::liquidity_bootstrap(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-            "operation_id": "failed-melt-bootstrap", "chain": "chain",
+            "name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": "failed-melt-bootstrap", "chain": "chain",
             "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
-            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000,
-            "idempotency_key": "bootstrap-failed-melt"
-        }),
+            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000}),
     )?;
     let bootstrap = cell::wait_operation(&mut client, "failed-melt-bootstrap", 160)?;
     if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
@@ -129,13 +93,12 @@ pub fn run(context: &GateContext) -> Result<()> {
             "failed-melt-init-recipient",
         ),
     ] {
-        client.call(
-            "wallet_initialize",
+        crate::driver::wallet_initialize(
+            context,
+            &mut client,
             json!({
-                "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-                "operation_id": operation, "wallet": wallet, "mint": mint,
-                "idempotency_key": operation
-            }),
+                "name": INSTANCE, "run_id": EXPERIMENT,
+                "request_id": operation, "wallet": wallet, "mint": mint}),
         )?;
         let initialized = cell::wait_operation(&mut client, operation, 160)?;
         if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
@@ -146,14 +109,13 @@ pub fn run(context: &GateContext) -> Result<()> {
     // The funder pays the payer mint's own invoice, so the payer wallet holds
     // real ecash. A later failure therefore cannot be blamed on an empty
     // wallet.
-    client.call(
-        "wallet_fund",
+    crate::driver::wallet_fund(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-            "operation_id": "failed-melt-fund", "wallet": "payer-wallet", "mint": "payer-mint",
-            "payer_lightning": "mint-lnd", "amount_sat": FUNDED_SAT,
-            "idempotency_key": "fund-failed-melt"
-        }),
+            "name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": "failed-melt-fund", "wallet": "payer-wallet", "mint": "payer-mint",
+            "payer_lightning": "mint-lnd", "amount_sat": FUNDED_SAT}),
     )?;
     let funded = cell::wait_operation(&mut client, "failed-melt-fund", 160)?;
     if expect::integer(cell::artifact_content(&funded)?, "/balance_sat")? != FUNDED_SAT {
@@ -163,23 +125,20 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "wallet_balance",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-            "operation_id": "failed-melt-balance-before", "wallet": "payer-wallet", "mint": "payer-mint",
-            "idempotency_key": "balance-before-failed-melt"
-        }),
+            "name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": "failed-melt-balance-before", "wallet": "payer-wallet", "mint": "payer-mint"}),
     )?;
     let balance_before = cell::wait_operation(&mut client, "failed-melt-balance-before", 160)?;
     let before = expect::integer(cell::artifact_content(&balance_before)?, "/balance_sat")?;
 
-    client.call(
-        "wallet_invoice",
+    crate::driver::wallet_invoice(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-            "operation_id": "failed-melt-invoice",
+            "name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": "failed-melt-invoice",
             "wallet": "recipient-wallet", "mint": "recipient-mint",
-            "amount_sat": INVOICE_SAT, "timeout_seconds": 300,
-            "idempotency_key": "invoice-failed-melt"
-        }),
+            "amount_sat": INVOICE_SAT, "timeout_seconds": 300}),
     )?;
     let invoice = cell::wait_operation(&mut client, "failed-melt-invoice", 160)?;
     let invoice_content = cell::artifact_content(&invoice)?;
@@ -191,15 +150,14 @@ pub fn run(context: &GateContext) -> Result<()> {
     // The melt cannot settle: the invoice was issued by a node with no
     // channels. The operation still succeeds, because an authoritative "did
     // not happen" is an observation, not an infrastructure failure.
-    client.call(
-        "wallet_pay",
+    crate::driver::wallet_pay(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-            "operation_id": "failed-melt-pay", "mint_quote_id": mint_quote_id,
+            "name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": "failed-melt-pay", "mint_quote_id": mint_quote_id,
             "wallet": "payer-wallet", "mint": "payer-mint",
-            "recipient_wallet": "recipient-wallet", "recipient_mint": "recipient-mint",
-            "idempotency_key": "pay-failed-melt"
-        }),
+            "recipient_wallet": "recipient-wallet", "recipient_mint": "recipient-mint"}),
     )?;
     let paid = cell::wait_operation(&mut client, "failed-melt-pay", 200)?;
     if expect::string(&paid, "/phase")? != "succeeded" {
@@ -223,10 +181,8 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "wallet_balance",
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-            "operation_id": "failed-melt-balance-after", "wallet": "payer-wallet", "mint": "payer-mint",
-            "idempotency_key": "balance-after-failed-melt"
-        }),
+            "name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": "failed-melt-balance-after", "wallet": "payer-wallet", "mint": "payer-mint"}),
     )?;
     let balance_after = cell::wait_operation(&mut client, "failed-melt-balance-after", 160)?;
     let after = expect::integer(cell::artifact_content(&balance_after)?, "/balance_sat")?;
@@ -236,9 +192,10 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // The recipient's quote must never be promoted by a payment that did not
     // happen. This is the specific corruption the gate exists to prevent.
-    let quote = client.call(
-        "wallet_quote_status",
-        json!({"instance_id": INSTANCE, "wallet": "recipient-wallet", "mint": "recipient-mint", "direction": "receive", "quote_id": mint_quote_id}),
+    let quote = crate::driver::quote_status(
+        context,
+        &mut client,
+        json!({"name": INSTANCE, "wallet": "recipient-wallet", "mint": "recipient-mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
     if quote.get("phase").is_some()
         || expect::string(&quote, "/last_observation/state")? != "UNPAID"
@@ -246,22 +203,18 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("an unsettled melt promoted or reinterpreted the receive quote: {quote}");
     }
 
-    client.call(
-        "session_finish",
-        json!({"session_id": LEASE, "idempotency_key": "release-failed-melt-session"}),
-    )?;
     let closed_experiment = client.call(
-        "experiment_close",
-        json!({"experiment_id": EXPERIMENT, "idempotency_key": "close-failed-melt-experiment"}),
+        "run_finish",
+        json!({"request_id":"11170","run_id": EXPERIMENT}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
-    let evidence = client.call(
-        "artifact_export",
+    let evidence = crate::cell::evidence(
+        &mut client,
         json!({
-            "experiment_id": EXPERIMENT,
+            "run_id": EXPERIMENT,
             "include_oracle_artifacts": false,
-            "include_content": true,
+
             "artifact_operation_ids": ["failed-melt-pay"]
         }),
     )?;
@@ -278,7 +231,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("the exported evidence disagrees with the observation: {exported}");
     }
 
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     let closed = cell::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {
         bail!("failed melt cell teardown was not verified: {closed}");

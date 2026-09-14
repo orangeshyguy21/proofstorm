@@ -98,7 +98,7 @@ fn assert_resource_contract(client: &mut McpClient) {
     expect::equals(
         &templates,
         "/resourceTemplates/0/uriTemplate",
-        &Value::from("proofstorm://evidence/{experiment_id}/{digest}{?oracles,artifacts}"),
+        &Value::from("proofstorm://evidence/{run_id}/{digest}{?oracles,artifacts}"),
     )
     .expect("evidence resource template");
 
@@ -138,6 +138,7 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
             "catalog_config_schema_read",
             "catalog_entry_read",
             "catalog_list",
+            "network_capabilities",
         ]
     );
 
@@ -187,7 +188,6 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
             ("PROOFSTORM_DB", database.as_os_str()),
             ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
-            ("PROOFSTORM_TOOLSET", "all".as_ref()),
             ("PROOFSTORM_CAPABILITIES", "cell.read".as_ref()),
         ],
     )
@@ -199,10 +199,7 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
         .iter()
         .map(|tool| expect::string(tool, "/name").expect("tool name"))
         .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        vec!["cell_diff", "cell_read", "cell_search", "workspace_read"]
-    );
+    assert_eq!(names, vec!["cell_read", "cell_search"]);
 
     let refused = client
         .call_error("cell_create", json!({}))
@@ -265,7 +262,6 @@ fn recorded_search_and_selected_reads_work_over_offline_stdio() {
             ("PROOFSTORM_DB", database.as_os_str()),
             ("PROOFSTORM_WORKSPACE", "test".as_ref()),
             ("PROOFSTORM_PRINCIPAL", "agent".as_ref()),
-            ("PROOFSTORM_TOOLSET", "developer".as_ref()),
         ],
     )
     .unwrap();
@@ -330,7 +326,6 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
                 "PROOFSTORM_CAPABILITIES",
                 "component.exec_live,artifact.read".as_ref(),
             ),
-            ("PROOFSTORM_TOOLSET", "experiment".as_ref()),
         ],
     )
     .expect("spawn configured MCP without Kubernetes");
@@ -342,10 +337,7 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
         .find(|tool| tool["name"] == "private_transfer")
         .unwrap();
     assert_private_transfer_schema(tool);
-    let request = |transfer| {
-        json!({"instance_id":"unmaterialized", "experiment_id":"test",
-        "session_id":"test", "operation_id":"must-not-exist", "idempotency_key":"test", "transfer":transfer})
-    };
+    let request = |transfer| json!({"name":"unmaterialized", "run_id":"test", "request_id":"must-not-exist", "transfer":transfer});
     for (transfer, field) in invalid_private_transfer_requests() {
         let response = client
             .call_response("private_transfer", request(transfer))
@@ -472,18 +464,24 @@ fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
 }
 
 #[test]
-fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
+fn default_surface_exposes_the_complete_registry_without_manual_coordination() {
     let directory = tempfile::tempdir().unwrap();
     let kubeconfig = disconnected_kubeconfig(directory.path());
     let database = directory.path().join("developer.sqlite3");
-    let mut client = McpClient::spawn(binary(), "developer-discovery", &[
-        ("PROOFSTORM_DB", database.as_os_str()),
+    let store = proofstorm_store::Store::open(&database).unwrap();
+    proofstorm_app::developer::configure(&store, "local", "developer").unwrap();
+    let mut client = McpClient::spawn(
+        binary(),
+        "developer-discovery",
+        &[
+            ("PROOFSTORM_DB", database.as_os_str()),
             ("PROOFSTORM_KUBECONFIG", kubeconfig.as_os_str()),
             ("PROOFSTORM_CONTEXT", "disconnected-test".as_ref()),
-        ("PROOFSTORM_WORKSPACE", "local".as_ref()),
-        ("PROOFSTORM_PRINCIPAL", "developer".as_ref()),
-        ("PROOFSTORM_CAPABILITIES", "catalog.read,cell.create,cell.read,cell.publish,cell.materialize,cell.status,cell.close,experiment.read,experiment.close,cell.operate,component.exec_live,artifact.read,action.cancel".as_ref()),
-    ]).unwrap();
+            ("PROOFSTORM_WORKSPACE", "local".as_ref()),
+            ("PROOFSTORM_PRINCIPAL", "developer".as_ref()),
+        ],
+    )
+    .unwrap();
     let listed = client.request("tools/list", json!({})).unwrap();
     let names = listed["tools"]
         .as_array()
@@ -491,7 +489,17 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 18);
+    let expected = proofstorm_core::mcp::TOOLS
+        .iter()
+        .map(|t| t.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        names
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected
+    );
     assert_selectors_advertised(&listed);
     for name in [
         "session_list",
@@ -504,7 +512,7 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         "cell_sync",
         "activity_search",
         "operation_read",
-        "cell_finish",
+        "cell_remove",
     ] {
         assert!(names.contains(&name));
     }
@@ -516,7 +524,12 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
     ] {
         assert!(!names.contains(&name));
     }
-    assert!(serde_json::to_vec(&listed).unwrap().len() < 64 * 1024);
+    assert!(
+        serde_json::to_vec(&json!({"jsonrpc":"2.0","id":1,"result":listed}))
+            .unwrap()
+            .len()
+            < 128 * 1024
+    );
     assert!(
         client.initialize_result()["instructions"]
             .as_str()
@@ -633,7 +646,6 @@ fn offline_mode_uses_existing_grants_without_replacing_them() {
             ("PROOFSTORM_MODE", "offline".as_ref()),
             ("PROOFSTORM_DB", database.as_os_str()),
             ("PROOFSTORM_PRINCIPAL", "reader".as_ref()),
-            ("PROOFSTORM_TOOLSET", "all".as_ref()),
         ],
     )
     .unwrap();
@@ -665,4 +677,46 @@ fn missing_agent_identity_fails_instead_of_starting_an_ephemeral_service() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("PROOFSTORM_PRINCIPAL"));
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn public_calls_recheck_the_entire_registry_after_live_revocation() {
+    let directory = tempfile::tempdir().unwrap();
+    let kubeconfig = disconnected_kubeconfig(directory.path());
+    let database = directory.path().join("proofstorm.sqlite3");
+    let mut client = McpClient::spawn(
+        binary(),
+        "revocation-contract",
+        &[
+            ("PROOFSTORM_DB", database.as_os_str()),
+            ("PROOFSTORM_KUBECONFIG", kubeconfig.as_os_str()),
+            ("PROOFSTORM_CONTEXT", "disconnected-test".as_ref()),
+            ("PROOFSTORM_WORKSPACE", "alpha".as_ref()),
+            ("PROOFSTORM_PRINCIPAL", "agent".as_ref()),
+            (
+                "PROOFSTORM_CAPABILITIES",
+                "experiment.close,experiment.read,artifact.read".as_ref(),
+            ),
+        ],
+    )
+    .unwrap();
+    let discovery = client.request("tools/list", json!({})).unwrap();
+    assert!(
+        discovery["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "run_finish")
+    );
+    proofstorm_store::Store::open(&database)
+        .unwrap()
+        .revoke("alpha", "agent", proofstorm_core::Capability::ArtifactRead)
+        .unwrap();
+    let error = client
+        .call_error(
+            "run_finish",
+            json!({"run_id":"absent-run","request_id":"denied"}),
+        )
+        .unwrap();
+    assert_eq!(error["data"]["code"], "access_denied");
 }

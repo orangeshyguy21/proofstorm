@@ -7,7 +7,9 @@ mod environment;
 pub use environment::{EnvironmentEntry, PendingObservationPage};
 mod delegation;
 mod onboarding;
+mod previews;
 mod runs;
+pub use previews::CellPreview;
 mod session_directory;
 #[cfg(test)]
 mod session_tests;
@@ -427,6 +429,8 @@ impl Store {
              );",
         )?;
         updates::initialize_schema(&connection)?;
+        previews::initialize_schema(&connection)?;
+        runs::initialize_schema(&connection)?;
         lifecycle::initialize_schema(&connection)?;
         Ok(Self {
             lifecycle_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1228,6 +1232,33 @@ impl Store {
         let now = now_unix();
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let active: bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM actions WHERE workspace_id=?1 AND experiment_id=?2 AND phase_json IN ('\"pending\"','\"running\"'))",params![workspace,experiment_id],|row|row.get(0))?;
+        if active {
+            return Err(StoreError::Validation(
+                "run has active operations; wait before finishing".into(),
+            ));
+        }
+        // Seal configuration in the same transaction as closure. Later cell edits cannot change this export.
+        let instance_id: String = transaction.query_row(
+            "SELECT instance_id FROM experiments WHERE workspace_id=?1 AND id=?2",
+            params![workspace, experiment_id],
+            |row| row.get(0),
+        )?;
+        let instance=transaction.query_row("SELECT revision_digest,lock_digest,instance_key,resource_name,COALESCE((SELECT generation FROM cell_update_state s WHERE s.workspace_id=instances.workspace_id AND s.instance_id=instances.id),1) FROM instances WHERE workspace_id=?1 AND id=?2",params![workspace,instance_id],|row|Ok(CellInstance {id:instance_id.clone(),workspace_id:workspace.into(),revision_digest:row.get(0)?,lock_digest:row.get(1)?,instance_key:row.get(2)?,resource_name:row.get(3)?,generation:updates::generation_column(row,4)?}))?;
+        let revision: String = transaction.query_row(
+            "SELECT revision_json FROM revisions WHERE workspace_id=?1 AND digest=?2",
+            params![workspace, instance.revision_digest],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO run_seals VALUES(?1,?2,?3,?4)",
+            params![
+                workspace,
+                experiment_id,
+                serde_json::to_string(&instance)?,
+                revision
+            ],
+        )?;
         transaction.execute(
             "UPDATE experiments SET phase_json = ?1, closed_at = COALESCE(closed_at, ?2)
              WHERE workspace_id = ?3 AND id = ?4",
@@ -1455,18 +1486,32 @@ impl Store {
         self.instance_unchecked(workspace, instance_id)?;
         let implicit = experiment_id.is_empty();
         let resolved_run = if implicit {
-            self.implicit_run_id(workspace, principal, instance_id)?
+            // Replays retain their original sealed run; new work rolls into the next run.
+            match self.operation_unchecked(workspace, operation_id) {
+                Ok(previous)
+                    if previous.principal_id == principal
+                        && previous.instance_id == instance_id =>
+                {
+                    previous.experiment_id
+                }
+                Ok(_) | Err(StoreError::NotFound { .. }) => {
+                    self.implicit_run_id(workspace, principal, instance_id)?
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             experiment_id.to_owned()
         };
         let experiment_id = resolved_run.as_str();
         let mut normalized = request.clone();
         if let Some(fields) = normalized.as_object_mut() {
-            if fields.contains_key("experiment_id") {
-                fields.insert(
-                    "experiment_id".into(),
-                    serde_json::Value::String(resolved_run.clone()),
-                );
+            for field in ["experiment_id", "run_id"] {
+                if fields.contains_key(field) {
+                    fields.insert(
+                        field.into(),
+                        serde_json::Value::String(resolved_run.clone()),
+                    );
+                }
             }
         }
         let request = &normalized;
@@ -1507,6 +1552,12 @@ impl Store {
         let accepted_at = now_unix();
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run_open:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM experiments WHERE workspace_id=?1 AND id=?2 AND instance_id=?3 AND phase_json='\"active\"')",params![workspace,experiment_id,instance_id],|row|row.get(0))?;
+        if !run_open {
+            return Err(StoreError::Validation(
+                "run finished during operation admission; retry the same request".into(),
+            ));
+        }
         let handle_phase: Option<String> = transaction
             .query_row(
                 "SELECT phase FROM cell_handles WHERE workspace_id=?1 AND instance_id=?2",

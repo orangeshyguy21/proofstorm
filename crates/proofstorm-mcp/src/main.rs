@@ -2,7 +2,7 @@ use anyhow::Context;
 use clap::Parser;
 use futures::{StreamExt, future};
 use proofstorm_core::Capability;
-use proofstorm_mcp::{ProofstormMcp, ProofstormToolset};
+use proofstorm_mcp::ProofstormMcp;
 use proofstorm_store::{Store, Workspace};
 use rmcp::{
     RoleServer, ServiceExt,
@@ -68,13 +68,6 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
         proofstorm_app::artifacts::check_checkout(home)?;
     }
     let attached = args.attachment.is_some();
-    let toolset = if attached {
-        "developer".to_owned()
-    } else {
-        std::env::var("PROOFSTORM_TOOLSET").unwrap_or_else(|_| "developer".into())
-    }
-    .parse::<ProofstormToolset>()
-    .map_err(anyhow::Error::msg)?;
     let environment = proofstorm_app::config::Environment::resolve(
         |key| match key {
             "PROOFSTORM_HOME" => args
@@ -106,9 +99,7 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
             [Capability::CatalogRead, Capability::CellValidate],
         )?;
         return Ok(
-            ProofstormMcp::new(store, &environment.workspace, &environment.principal)?
-                .with_toolset(toolset)
-                .offline(),
+            ProofstormMcp::new(store, &environment.workspace, &environment.principal)?.offline(),
         );
     }
     if attached {
@@ -148,8 +139,7 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
             "identity {principal:?} has no configured grants in {workspace:?}; supply operator-owned PROOFSTORM_CAPABILITIES or configure this identity with proofstorm dev init --principal {principal}"
         );
     }
-    let service = ProofstormMcp::new(store.clone(), workspace.clone(), principal.clone())?
-        .with_toolset(toolset);
+    let service = ProofstormMcp::new(store.clone(), workspace.clone(), principal.clone())?;
     if environment.mode == proofstorm_app::config::Mode::Offline {
         return Ok(service.offline());
     }

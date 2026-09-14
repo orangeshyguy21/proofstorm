@@ -17,11 +17,10 @@ pub(super) fn bootstrap(
         "bootstrap",
         json!({
             "chain": "chain", "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
-            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000,
-            "idempotency_key": "bootstrap-slice5"
-        }),
+            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000}),
     );
-    let accepted_bootstrap = client.call("liquidity_bootstrap", bootstrap_request.clone())?;
+    let accepted_bootstrap =
+        crate::driver::liquidity_bootstrap(context, client, bootstrap_request.clone())?;
     let mut items = Value::Null;
     let mut created = false;
     for _ in 0..30 {
@@ -41,7 +40,7 @@ pub(super) fn bootstrap(
     {
         bail!("unexpected typed runtime action: {items}");
     }
-    let retried_bootstrap = client.call("liquidity_bootstrap", bootstrap_request)?;
+    let retried_bootstrap = crate::driver::liquidity_bootstrap(context, client, bootstrap_request)?;
     if expect::string(&retried_bootstrap, "/resource_name")?
         != expect::string(&accepted_bootstrap, "/resource_name")?
         || expect::integer(&retried_bootstrap, "/sequence")?

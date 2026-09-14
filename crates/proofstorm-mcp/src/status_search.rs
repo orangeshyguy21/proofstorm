@@ -185,7 +185,7 @@ mod tests {
     fn component_pages_count_wire_bytes_and_preserve_every_match() {
         let status = status();
         let mut request: CellComponentStatusListRequest =
-            serde_json::from_value(json!({"instance_id":"fleet","limit":50})).unwrap();
+            serde_json::from_value(json!({"name":"fleet","limit":50})).unwrap();
         let mut ids = Vec::new();
         loop {
             let page = components(status.clone(), &request).unwrap();
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn filtered_scans_project_fields_and_fence_matching_membership() {
-        let mut request: CellComponentStatusListRequest = serde_json::from_value(json!({"instance_id":"fleet","ready":false,"query":"NODE-0[0-2]","regex":true,"case_insensitive":true,"scan":true,"limit":2})).unwrap();
+        let mut request: CellComponentStatusListRequest = serde_json::from_value(json!({"name":"fleet","ready":false,"query":"NODE-0[0-2]","regex":true,"case_insensitive":true,"scan":true,"limit":2})).unwrap();
         let first = components(status(), &request).unwrap();
         assert_eq!(first.matched_count, 15);
         assert_eq!(
@@ -248,7 +248,7 @@ mod tests {
         let mut status = status();
         status.components[0].service = "huge".repeat(MAX_AGENT_RESPONSE_BYTES);
         let mut request: CellComponentStatusListRequest =
-            serde_json::from_value(json!({"instance_id":"fleet","component":"node-000"})).unwrap();
+            serde_json::from_value(json!({"name":"fleet","component":"node-000"})).unwrap();
         assert_eq!(
             components(status.clone(), &request)
                 .unwrap_err()
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn inventory_filters_and_projection_are_cursor_bound() {
-        let mut request: CellInventoryListRequest = serde_json::from_value(json!({"instance_id":"fleet","kind":"Pod","namespace":"fleet","query":"node-00","fields":["/name"],"limit":2})).unwrap();
+        let mut request: CellInventoryListRequest = serde_json::from_value(json!({"name":"fleet","kind":"Pod","namespace":"fleet","query":"node-00","fields":["/name"],"limit":2})).unwrap();
         let first = inventory(status(), &request).unwrap();
         assert_eq!(first.matched_count, 5);
         assert_eq!(first.inventory[0], json!({"/name":"node-001"}));

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{OperationReadRequest, Parameters, ProofstormMcp, ProofstormToolset};
+use crate::{OperationReadRequest, Parameters, ProofstormMcp};
 use proofstorm_core::{Capability, CellSpec};
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -12,8 +12,7 @@ fn fixture() -> (Store, ProofstormMcp, String) {
     let instance = cell(&store, "payments");
     let service = ProofstormMcp::new(store.clone(), "test", "alice")
         .unwrap()
-        .offline()
-        .with_toolset(ProofstormToolset::Developer);
+        .offline();
     (store, service, instance)
 }
 

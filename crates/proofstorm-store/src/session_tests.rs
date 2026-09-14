@@ -478,7 +478,7 @@ fn concurrent_default_run_creation_converges_without_ownership_collisions() {
 }
 
 #[test]
-fn denied_and_closed_default_runs_do_not_silently_create_a_new_group() {
+fn denied_calls_do_not_create_runs_and_closed_defaults_roll_forward_explicitly() {
     let store = Store::memory().unwrap();
     seed(&store);
     store.replace_grants("workspace", "stranger", []).unwrap();
@@ -504,11 +504,29 @@ fn denied_and_closed_default_runs_do_not_silently_create_a_new_group() {
             [&op.experiment_id],
         )
         .unwrap();
+    let continued = implicit_submit(&store, "sender", "after-close").unwrap();
+    assert_ne!(continued.experiment_id, op.experiment_id);
+    assert_eq!(
+        implicit_submit(&store, "sender", "after-close").unwrap(),
+        continued
+    );
+    let sealed = store.create_operation(
+        "workspace",
+        "sender",
+        "instance",
+        &op.experiment_id,
+        "",
+        "explicit-closed-run",
+        OperationKind::WalletBalance,
+        &json!({"wallet":"wallet-b","mint":"mint"}),
+        "explicit-closed-run",
+        Capability::WalletControl,
+    );
     assert!(
-        implicit_submit(&store, "sender", "after-close")
+        sealed
             .unwrap_err()
             .to_string()
-            .contains("closed")
+            .contains("action run must be open")
     );
     assert_eq!(
         implicit_submit(&store, "sender", "before-close").unwrap(),

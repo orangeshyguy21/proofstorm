@@ -116,15 +116,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         added == BTreeSet::from(["bitcoin-core", "upstream/docker.io/library/busybox"]),
         "CLI fetched unexpected images: {added:?}"
     );
-    let caps: Vec<String> = serde_json::from_value(json!(proofstorm_app::developer::CAPABILITIES))?;
-    let mut client = context.session(
-        proofstorm_app::config::DEFAULT_WORKSPACE,
-        "onboarding",
-        &caps.iter().map(String::as_str).collect::<Vec<_>>(),
-    )?;
+    let mut client = context.managed_session("onboarding")?;
     example["name"] = json!("onboarding-mcp");
     eprintln!("Creating the MCP Bitcoin/CDK cell and waiting for readiness...");
-    let result = client.call("cell_up", json!({"name":"onboarding-mcp","cell":example}))?;
+    let result = client.call(
+        "cell_up",
+        json!({"name":"onboarding-mcp","request_id":"onboarding-up","cell":example}),
+    )?;
     ensure!(result.get("cell").is_some(), "MCP did not return cell data");
     crate::cell::wait_ready(&mut client, "onboarding-mcp")?;
     let images = repositories(context)?;

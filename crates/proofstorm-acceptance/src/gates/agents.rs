@@ -353,8 +353,7 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
             .env("PROOFSTORM_DB", &poisoned)
             .env("PROOFSTORM_CONTEXT", "foreign")
             .env("PROOFSTORM_KUBECONFIG", work.join("foreign-kubeconfig"))
-            .env("PROOFSTORM_WORKSPACE", "foreign")
-            .env("PROOFSTORM_TOOLSET", "design");
+            .env("PROOFSTORM_WORKSPACE", "foreign");
         let mut client = McpClient::from_command(command, "attachment-verification")?;
         client.call("environment_read", json!({}))?;
         ensure!(
@@ -400,7 +399,7 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
         store.replace_grants(
             proofstorm_app::config::DEFAULT_WORKSPACE,
             actor,
-            proofstorm_app::developer::CAPABILITIES
+            proofstorm_app::developer::capabilities()
                 .into_iter()
                 .filter(|cap| *cap != Capability::CellMaterialize),
         )?;
@@ -428,7 +427,7 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
         store.replace_grants(
             proofstorm_app::config::DEFAULT_WORKSPACE,
             actor,
-            proofstorm_app::developer::CAPABILITIES,
+            proofstorm_app::developer::capabilities(),
         )?;
         // Deliberately edited fixture bytes require explicit replacement consent.
         fs::write(

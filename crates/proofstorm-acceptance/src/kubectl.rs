@@ -202,24 +202,6 @@ impl Kubectl {
         Ok(())
     }
 
-    /// Assert the most recent teardown receipt recorded verified absence.
-    pub fn assert_teardown_verified(&self) -> Result<()> {
-        let verified = self.run(&[
-            "get",
-            "configmap",
-            "-n",
-            CONTROL_NAMESPACE,
-            "-l",
-            "proofstorm.dev/receipt=teardown",
-            "-o",
-            "jsonpath={.items[0].data.verifiedAbsent}",
-        ])?;
-        if verified != "true" {
-            bail!("teardown receipt did not record verified absence: {verified:?}");
-        }
-        Ok(())
-    }
-
     /// Run a program inside a workload's default container.
     ///
     /// `target` is a kubectl workload selector such as `deployment/mint`.

@@ -6,10 +6,9 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, json as expect};
+use crate::{GateContext, cell, json as expect};
 
 const INSTANCE: &str = "nutshell-mint-instance";
-const DRAFT: &str = "nutshell-mint";
 
 fn cell_document() -> Value {
     json!({
@@ -103,26 +102,14 @@ fn expected_settings() -> Value {
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session("nutshell-mint-live", "designer", LIFECYCLE_CAPABILITIES)?;
+    let mut client = context.default_session("nutshell-mint-live", "designer")?;
 
-    client.call(
-        "cell_create",
-        json!({
-            "draft_id": DRAFT,
-            "cell": cell_document(),
-            "idempotency_key": "create-nutshell-mint"
-        }),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-nutshell-mint"}),
     )?;
 
-    let published = client.call(
-        "cell_publish",
-        json!({
-            "draft_id": DRAFT,
-            "expected_version": 1,
-            "idempotency_key": "publish-nutshell-mint",
-            "include_revision": true
-        }),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
 
     let entry = cell::lock_entry(&published, "nutshell")?;
     expect::equals(entry, "/version", &Value::from("0.20.3"))?;
@@ -139,14 +126,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         .image;
     expect::equals(entry, "/image", &Value::from(image.clone()))?;
 
-    client.call(
-        "cell_materialize",
-        json!({
-            "instance_id": INSTANCE,
-            "revision_digest": expect::string(&published, "/digest")?,
-            "idempotency_key": "materialize-nutshell-mint"
-        }),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
 
     let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
@@ -162,7 +142,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("live Nutshell settings differ: expected={expected} actual={settings}");
     }
 
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_closed(&mut client, INSTANCE)?;
 
     println!(

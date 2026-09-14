@@ -11,45 +11,8 @@ use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expec
 
 pub(super) const INSTANCE: &str = "slice5-instance";
 pub(super) const EXPERIMENT: &str = "slice5-experiment";
-pub(super) const SESSION: &str = "slice5-session";
-pub(super) const DRAFT: &str = "slice5";
 /// `ch-` plus a 64-character digest.
 pub(super) const HANDLE_LENGTH: usize = 67;
-
-pub(super) const CAPABILITIES: &[&str] = &[
-    "catalog.read",
-    "cell.read",
-    "cell.create",
-    "cell.edit",
-    "cell.validate",
-    "cell.publish",
-    "cell.materialize",
-    "cell.status",
-    "cell.close",
-    "experiment.create",
-    "experiment.read",
-    "experiment.close",
-    "cell.operate",
-    "action.cancel",
-    "topology.mutate",
-    "node.control",
-    "chain.mine",
-    "wallet.create",
-    "wallet.control",
-    "wallet.fund",
-    "peer.connect",
-    "peer.disconnect",
-    "channel.open",
-    "channel.close",
-    "channel.force_close",
-    "channel.rebalance",
-    "network.delay",
-    "network.drop",
-    "network.partition",
-    "network.heal",
-    "oracle.run",
-    "artifact.read",
-];
 
 pub(super) fn components(scenario: Scenario) -> Vec<Value> {
     let mut components = vec![
@@ -96,10 +59,10 @@ pub(super) fn empty_cell() -> Value {
 /// The instance, experiment and session triple every runtime action carries.
 pub(super) fn scoped(operation: &str, extra: Value) -> Value {
     let mut base = json!({
-        "instance_id": INSTANCE,
-        "experiment_id": EXPERIMENT,
-        "session_id": SESSION,
-        "operation_id": operation
+        "name": INSTANCE,
+        "run_id": EXPERIMENT,
+
+        "request_id": operation
     });
     if let (Some(target), Value::Object(source)) = (base.as_object_mut(), extra) {
         for (key, value) in source {
@@ -111,13 +74,14 @@ pub(super) fn scoped(operation: &str, extra: Value) -> Value {
 
 /// Submit an action twice and prove the retry did not change its identity.
 pub(super) fn submit_idempotent(
+    context: &GateContext,
     client: &mut McpClient,
-    tool: &str,
+    submit: fn(&GateContext, &mut McpClient, Value) -> Result<Value>,
     request: Value,
     label: &str,
 ) -> Result<Value> {
-    let accepted = client.call(tool, request.clone())?;
-    let retried = client.call(tool, request)?;
+    let accepted = submit(context, client, request.clone())?;
+    let retried = submit(context, client, request)?;
     if expect::string(&retried, "/resource_name")? != expect::string(&accepted, "/resource_name")?
         || expect::integer(&retried, "/sequence")? != expect::integer(&accepted, "/sequence")?
     {
@@ -207,7 +171,7 @@ pub(super) fn observe_mint_reachability(
     observations: &mut Vec<String>,
 ) -> Result<()> {
     client.call(
-        "reachability_oracle",
+        "network_probe",
         scoped(
             operation,
             json!({
@@ -215,9 +179,7 @@ pub(super) fn observe_mint_reachability(
                 "to_component": "mint",
                 "service": "http",
                 "timeout_seconds": 2,
-                "attempts": 3,
-                "idempotency_key": format!("{operation}-slice5")
-            }),
+                "attempts": 3}),
         ),
     )?;
     let observed = cell::wait_operation(client, operation, 120)?;

@@ -15,8 +15,7 @@ pub struct SessionListRequest {
     pub instance_id: String,
     /// Exact session ID, distinct from an overlap query.
     pub id: Option<String>,
-    /// Return intervals overlapping this session. The legacy `session_id` input is an alias.
-    #[serde(alias = "session_id")]
+    /// Return intervals overlapping this session.
     pub overlaps_with: Option<String>,
     pub principal_id: Option<String>,
     pub run_id: Option<String>,
@@ -372,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_lookup_and_legacy_overlap_alias_are_distinct_and_scoped() {
+    fn exact_lookup_and_overlap_are_distinct_and_scoped() {
         let store = fixture();
         let exact: SessionListRequest =
             serde_json::from_value(json!({"id":"session-010","scan":true})).unwrap();
@@ -381,7 +380,7 @@ mod tests {
             1
         );
         let overlap: SessionListRequest =
-            serde_json::from_value(json!({"session_id":"session-010","scan":true})).unwrap();
+            serde_json::from_value(json!({"overlaps_with":"session-010","scan":true})).unwrap();
         assert_eq!(overlap.overlaps_with.as_deref(), Some("session-010"));
         assert!(
             page(&store, &overlap)["sessions"]

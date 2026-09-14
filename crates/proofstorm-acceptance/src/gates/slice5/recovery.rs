@@ -9,7 +9,7 @@ fn request(operation: &str) -> Value {
     scoped(
         operation,
         json!({"from_component":"wallet","to_component":"mint","service":"http",
-        "timeout_seconds":2,"attempts":1,"idempotency_key":operation}),
+        "timeout_seconds":2,"attempts":1}),
     )
 }
 
@@ -50,7 +50,7 @@ pub(super) fn run(
         sleep(Duration::from_secs(1));
     }
     ensure!(accounted, "recovery quota did not become active");
-    let lost = client.call("reachability_oracle", request("lost-probe"))?;
+    let lost = client.call("network_probe", request("lost-probe"))?;
     let resource = expect::string(&lost, "/resource_name")?;
     let mut fenced = false;
     for _ in 0..60 {
@@ -128,10 +128,10 @@ pub(super) fn run(
     );
 
     let pause = ControllerPause::stop(kubectl)?;
-    let accepted = client.call("reachability_oracle", request("cancelled-probe"))?;
-    let cancel = json!({"operation_id":"cancelled-probe","idempotency_key":"cancel-probe"});
-    let first = client.call("action_cancel", cancel.clone())?;
-    let retry = client.call("action_cancel", cancel)?;
+    let accepted = client.call("network_probe", request("cancelled-probe"))?;
+    let cancel = json!({"request_id":"cancelled-probe"});
+    let first = client.call("operation_cancel", cancel.clone())?;
+    let retry = client.call("operation_cancel", cancel)?;
     ensure!(
         first["resource_name"] == accepted["resource_name"]
             && retry["resource_name"] == accepted["resource_name"]

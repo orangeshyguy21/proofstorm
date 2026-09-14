@@ -1,11 +1,10 @@
 //! Small installed-runtime acceptance gate: one Bitcoin cell through real MCP.
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell};
+use crate::{GateContext, cell};
 use anyhow::{Result, ensure};
 use serde_json::json;
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client =
-        context.session("acceptance-smoke", "smoke-designer", LIFECYCLE_CAPABILITIES)?;
+    let mut client = context.default_session("acceptance-smoke", "smoke-designer")?;
     let mut spec: serde_json::Value =
         serde_json::from_str(include_str!("../../../../examples/developer-cell.json"))?;
     spec["name"] = json!("acceptance-smoke");
@@ -17,15 +16,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         .unwrap()
         .clone()]);
     spec["links"] = json!([]);
-    client.call(
-        "cell_create",
-        json!({"draft_id":"smoke", "cell":spec,"idempotency_key":"smoke-create"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":"smoke","cell":spec,"request_id":"smoke-create"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id":"smoke","expected_version":1,"idempotency_key":"smoke-publish"}),
-    )?;
-    client.call("cell_materialize", json!({"instance_id":"smoke","revision_digest":published["digest"],"idempotency_key":"smoke-up"}))?;
+    crate::cell::review(&mut client, &preview)?;
+    crate::cell::apply(&mut client, &preview)?;
     let status = cell::wait_ready(&mut client, "smoke")?;
     ensure!(status["phase"] == "ready", "smoke cell not ready");
     // A second, read-only identity cannot create cells; do not widen its grants.
@@ -34,7 +30,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "smoke-reader",
         &["cell.read", "cell.status", "experiment.read"],
     )?;
-    let read = reader.call("cell_status", json!({"instance_id":"smoke"}))?;
+    let read = crate::cell::status(&mut reader, "smoke")?;
     ensure!(
         read["phase"] == "ready",
         "read-only identity did not read back the ready cell"
@@ -44,11 +40,15 @@ pub fn run(context: &GateContext) -> Result<()> {
         cli["runtime"]["phase"] == "ready",
         "CLI and MCP did not read the same ready cell"
     );
-    reader.call_error(
-        "cell_create",
-        json!({"draft_id":"forbidden","cell":spec,"idempotency_key":"forbidden"}),
+    let denied = reader.call_error(
+        "cell_up",
+        json!({"name":"forbidden","request_id":"denied-create","cell":spec}),
     )?;
-    client.call("cell_close", json!({"instance_id":"smoke"}))?;
+    ensure!(
+        denied["data"]["code"] == "access_denied",
+        "restricted caller bypassed creation authority: {denied}"
+    );
+    client.call("cell_remove", json!({"name":"smoke"}))?;
     cell::wait_closed(&mut client, "smoke")?;
     context.kubectl.assert_no_instance_namespaces()?;
     context.kubectl.assert_no_cell_actions()?;

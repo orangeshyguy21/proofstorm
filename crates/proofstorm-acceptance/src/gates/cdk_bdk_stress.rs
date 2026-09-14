@@ -10,10 +10,9 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, http, json as expect, postgres};
+use crate::{GateContext, cell, http, json as expect, postgres};
 
 const INSTANCE: &str = "cdk-bdk-instance";
-const DRAFT: &str = "cdk-bdk";
 const DATABASE: &str = "proofstorm_bdk";
 const MARKER: &str = "bdk-persistent";
 const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
@@ -113,25 +112,16 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
 }
 
 pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
-    let mut client = context.session("cdk-bdk-stress-live", "designer", LIFECYCLE_CAPABILITIES)?;
+    let mut client = context.default_session("cdk-bdk-stress-live", "designer")?;
 
-    client.call(
-        "cell_create",
-        json!({"draft_id": DRAFT, "cell": cell_document(postgres_enabled), "idempotency_key": "create-cdk-bdk"}),
-    )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cdk-bdk", "include_revision": true}),
-    )?;
+    let preview = client.call("cell_plan",json!({"name":INSTANCE,"cell":cell_document(postgres_enabled),"request_id":"create-cdk-bdk"}))?;
+    let published = crate::cell::review(&mut client, &preview)?;
     let entry = cell::lock_entry(&published, "cdk-bdk")?;
     if expect::string(entry, "/version")? != "0.18.0" || expect::string(entry, "/image")? != IMAGE {
         bail!("unexpected CDK-BDK lock: {entry}");
     }
 
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cdk-bdk"}),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
     let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
@@ -322,7 +312,7 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
 
     drop(forward);
 
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_closed(&mut client, INSTANCE)?;
 
     if postgres_enabled {

@@ -30,21 +30,70 @@ fn plan(
     connections: &[Value],
     target: &Value,
 ) -> Result<Value> {
-    client.call("cell_plan",json!({"plan_id":id,"components":components,"connections":connections,"runtime_requirements":[],"update":target,"idempotency_key":id}))
+    let mut authored = Vec::new();
+    for component in components {
+        let listing = client.call(
+            "catalog_list",
+            json!({"implementations":[component["implementation"]]}),
+        )?;
+        let items = listing["items"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("catalog items missing"))?;
+        let entry = if let Some(version) = component["version"].as_str() {
+            items.iter().find(|item| item["version"] == version)
+        } else {
+            items
+                .iter()
+                .find(|item| item["preferred"] == true)
+                .or_else(|| items.first())
+        }
+        .ok_or_else(|| anyhow::anyhow!("catalog release missing: {component}"))?;
+        authored.push(json!({"id":component["id"],"kind":entry["kind"],"implementation":component["implementation"],"version":entry["version"],"config_version":entry["config_version"],"control":component.get("control").unwrap_or(&entry["recommended_control"]),"config":component.get("config").cloned().unwrap_or(json!({}))}));
+    }
+    let mut links = Vec::new();
+    for link in connections {
+        links.push(match link["kind"].as_str() {
+            Some("chain_backend")=>json!({"id":link["id"],"kind":"chain_backend","from":link["component"],"to":link["chain"],"binding":{"type":"chain","network":"regtest"}}),
+            Some("payment_backend")=>json!({"id":link["id"],"kind":"payment_backend","from":link["mint"],"to":link["lightning"],"binding":{"type":"payment","method":"bolt11","unit":"sat"}}),
+            _=>anyhow::bail!("unsupported test fixture connection: {link}"),
+        });
+    }
+    let mut request = json!({"name":INSTANCE,"request_id":id,"cell":{"api_version":"proofstorm/v1alpha1","name":INSTANCE,"components":authored,"links":links,"policy":{"allow":[],"limits":{"max_components":64,"max_links":256,"max_config_bytes":65536}}}});
+    if !target.is_null() {
+        let inspect = client.call("cell_inspect", json!({"name":INSTANCE}))?;
+        request["expected_generation"] = target["expected_generation"].clone();
+        request["expected_instance_key"] = inspect["instance_key"].clone();
+        for key in ["delete_data", "delete_retained"] {
+            if let Some(value) = target.get(key) {
+                request[key] = value.clone();
+            }
+        }
+    }
+    let preview = client.call("cell_plan", request)?;
+    let mut plan = cell::read_document(
+        client,
+        &json!({"plan_id":preview["plan"]["id"]}),
+        "plan",
+        "",
+    )?;
+    plan["plan"] = preview["plan"].clone();
+    Ok(plan)
 }
 fn apply(client: &mut McpClient, plan: &Value, key: &str) -> Result<Value> {
-    client.call("cell_apply",json!({"plan_id":plan["plan_id"],"expected_plan_digest":plan["plan_digest"],"instance_id":INSTANCE,"idempotency_key":key}))
+    client.call(
+        "cell_up",
+        json!({"name":INSTANCE,"request_id":key,"plan":plan["plan"]}),
+    )
 }
 fn ready(client: &mut McpClient, generation: u64) -> Result<Value> {
     println!("Waiting for configuration {generation}");
-    let value=client.call("cell_wait",json!({"instance_id":INSTANCE,"target_phase":"ready","expected_generation":generation,"timeout_seconds":120}))?;
+    let value=client.call("cell_wait",json!({"name":INSTANCE,"target_phase":"ready","expected_generation":generation,"timeout_seconds":120}))?;
     ensure!(value["reached"] == true, "cell did not converge: {value}");
     println!("Configuration {generation} ready");
     Ok(value)
 }
 fn operation(client: &mut McpClient, tool: &str, id: &str, mut fields: Value) -> Result<Value> {
-    let scope =
-        json!({"instance_id":INSTANCE,"experiment_id":RUN,"operation_id":id,"idempotency_key":id});
+    let scope = json!({"name":INSTANCE,"run_id":RUN,"request_id":id});
     fields
         .as_object_mut()
         .unwrap()
@@ -52,6 +101,22 @@ fn operation(client: &mut McpClient, tool: &str, id: &str, mut fields: Value) ->
     client.call(tool, fields)?;
     let result = cell::wait_operation(client, id, 40)?;
     Ok(cell::artifact_content(&result)?.clone())
+}
+fn driver_operation(
+    context: &GateContext,
+    client: &mut McpClient,
+    submit: fn(&GateContext, &mut McpClient, Value) -> Result<Value>,
+    id: &str,
+    mut fields: Value,
+) -> Result<Value> {
+    fields.as_object_mut().unwrap().extend(
+        json!({"name":INSTANCE,"run_id":RUN,"request_id":id})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    submit(context, client, fields)?;
+    Ok(cell::artifact_content(&cell::wait_operation(client, id, 120)?)?.clone())
 }
 fn balance(client: &mut McpClient, id: &str) -> Result<i64> {
     let result = operation(
@@ -114,7 +179,7 @@ fn channels(context: &GateContext, namespace: &str) -> Result<Value> {
     ))
 }
 fn target(generation: u64) -> Value {
-    json!({"instance_id":INSTANCE,"expected_generation":generation})
+    json!({"name":INSTANCE,"expected_generation":generation})
 }
 fn exercise(
     context: &GateContext,
@@ -122,28 +187,31 @@ fn exercise(
     directory: &std::path::Path,
 ) -> Result<()> {
     ready(client, 1)?;
-    let status = client.call("cell_status", json!({"instance_id":INSTANCE}))?;
+    let status = crate::cell::status(client, INSTANCE)?;
     let namespace = status["instance_namespace"].as_str().unwrap();
     context.kubectl.apply_stdin(&serde_json::to_string(&json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"external-app-state","namespace":namespace,"labels":{"proofstorm.dev/instance":namespace.trim_start_matches("proofstorm-"),"app.kubernetes.io/managed-by":"proofstormd","proofstorm.dev/component":"extra-lnd"}},"data":{"sentinel":"keep-me"}}))?)?;
     client.call(
-        "experiment_create",
-        json!({"instance_id":INSTANCE,"experiment_id":RUN,"idempotency_key":"run"}),
+        "run_start",
+        json!({"request_id":"5358","name":INSTANCE,"run_id":RUN}),
     )?;
-    operation(
+    driver_operation(
+        context,
         client,
-        "liquidity_bootstrap",
+        crate::driver::liquidity_bootstrap,
         "bootstrap",
         json!({"chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd","funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000}),
     )?;
-    operation(
+    driver_operation(
+        context,
         client,
-        "wallet_initialize",
+        crate::driver::wallet_initialize,
         "wallet-init",
         json!({"wallet":"wallet","mint":"mint"}),
     )?;
-    operation(
+    driver_operation(
+        context,
         client,
-        "wallet_fund",
+        crate::driver::wallet_fund,
         "wallet-fund",
         json!({"wallet":"wallet","mint":"mint","payer_lightning":"payer-lnd","amount_sat":1000}),
     )?;
@@ -246,7 +314,7 @@ fn exercise(
         "purge",
         &base_components,
         &base_connections,
-        &json!({"instance_id":INSTANCE,"expected_generation":4,"delete_retained":["extra-lnd","extra-mint"]}),
+        &json!({"name":INSTANCE,"expected_generation":4,"delete_retained":["extra-lnd","extra-mint"]}),
     )?;
     apply(client, &purge, "purge-apply")?;
     let purged = ready(client, 5)?;
@@ -292,14 +360,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         .join("dev/dynamic-cell-runs")
         .join(&context.run_id);
     fs::create_dir_all(&directory)?;
-    let mut caps = crate::EXPERIMENT_CAPABILITIES.to_vec();
-    caps.extend([
-        "cell.edit",
-        "component.exec_live",
-        "component.control",
-        "action.cancel",
-    ]);
-    let mut client = context.session(&format!("dynamic-{}", context.run_id), "agent", &caps)?;
+    let mut client = context.default_session(&format!("dynamic-{}", context.run_id), "agent")?;
     let (components, connections) = topology();
     let initial = plan(
         &mut client,
@@ -316,7 +377,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(|e|format!("{e:#}"))}),
         )?,
     )?;
-    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    client.call("cell_remove", json!({"name":INSTANCE}))?;
     let closed = cell::wait_closed(&mut client, INSTANCE)?;
     ensure!(
         closed["teardown_receipt"]["verified_absent"] == true,

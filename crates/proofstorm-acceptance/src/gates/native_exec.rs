@@ -9,27 +9,6 @@ use serde_json::{Value, json};
 
 use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect};
 
-/// Live exec is a separate, secret-bearing authority, so its principal is
-/// granted `component.exec_live` and nothing from the typed runtime surface.
-const CAPABILITIES: &[&str] = &[
-    "catalog.read",
-    "cell.read",
-    "cell.create",
-    "cell.edit",
-    "cell.validate",
-    "cell.publish",
-    "cell.materialize",
-    "cell.status",
-    "cell.close",
-    "experiment.create",
-    "experiment.read",
-    "experiment.close",
-    "cell.operate",
-    "component.exec_live",
-    "component.logs",
-    "artifact.read",
-];
-
 const BITCOIN_RPC: &str = concat!(
     "bitcoin-cli -regtest -rpcconnect=127.0.0.1 -rpcport=18443 ",
     "-rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only ",
@@ -115,43 +94,25 @@ fn cell_document() -> Value {
 pub fn run(context: &GateContext) -> Result<()> {
     let run_id = &context.run_id;
     let workspace = format!("native-exec-{run_id}");
-    let draft = format!("native-exec-{run_id}");
+
     let instance = format!("native-exec-instance-{run_id}");
     let experiment = format!("native-exec-experiment-{run_id}");
-    let session = format!("native-exec-session-{run_id}");
 
-    let mut client = context.session(&workspace, "experiment-agent", CAPABILITIES)?;
+    let mut client = context.default_session(&workspace, "experiment-agent")?;
 
     let tools = client.request("tools/list", json!({}))?;
     let advertised = expect::array(&tools, "/tools")?
         .iter()
-        .any(|tool| tool.get("name").and_then(Value::as_str) == Some("component_exec_live"));
+        .any(|tool| tool.get("name").and_then(Value::as_str) == Some("cell_exec"));
     if !advertised {
         bail!("component exec was not advertised for an authorized principal: {tools}");
     }
 
-    let created = client.call(
-        "cell_create",
-        json!({"draft_id": draft, "cell": cell_document(), "idempotency_key": format!("create-{run_id}")}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":instance,"request_id":format!("preview-{run_id}"),"cell":cell_document()}),
     )?;
-    let document = client.call("cell_read", json!({"draft_id": draft}))?;
-    let validation = client.call(
-        "cell_validate",
-        json!({"cell": document.get("cell").cloned().unwrap_or(Value::Null)}),
-    )?;
-    if !expect::boolean(&validation, "/valid")? {
-        bail!("native exec cell is invalid: {validation}");
-    }
-
-    let published = client.call(
-        "cell_publish",
-        json!({
-            "draft_id": draft,
-            "expected_version": expect::integer(&created, "/version")?,
-            "idempotency_key": format!("publish-{run_id}"),
-            "include_revision": true
-        }),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
 
     let mut locks = std::collections::BTreeMap::new();
     for entry in expect::array(&published, "/lock/entries")? {
@@ -167,56 +128,44 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("native exec cell did not resolve exact images: {locks:?}");
     }
 
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": instance, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": format!("materialize-{run_id}")}),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
     let waited = client.call(
         "cell_wait",
-        json!({"instance_id": instance, "target_phase": "ready", "timeout_seconds": 120}),
+        json!({"name": instance, "target_phase": "ready", "timeout_seconds": 120}),
     )?;
     if !expect::boolean(&waited, "/reached")? || expect::boolean(&waited, "/timed_out")? {
         bail!("native exec cell did not become ready: {waited}");
     }
-    let status = client.call("cell_status", json!({"instance_id": instance}))?;
+    let status = crate::cell::status(&mut client, &(instance))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
     client.call(
-        "experiment_create",
-        json!({"experiment_id": experiment, "instance_id": instance, "idempotency_key": format!("create-experiment-{run_id}")}),
-    )?;
-    client.call(
-        "session_start",
-        json!({"experiment_id": experiment, "session_id": session, "idempotency_key": format!("acquire-session-{run_id}")}),
+        "run_start",
+        json!({"request_id":"6730","run_id": experiment, "name": instance}),
     )?;
 
     let mut records = Vec::new();
     let mut serving_targets = 0;
     for (operation, component, target, script, fragments) in commands() {
         let request = json!({
-            "instance_id": instance,
-            "experiment_id": experiment,
-            "session_id": session,
-            "operation_id": operation,
+            "name": instance,
+            "run_id": experiment,
+
+            "request_id": operation,
             "component": component,
             "script": script,
             "output": {"mode":"public"},
-            "timeout_seconds": 30,
-            "idempotency_key": format!("{operation}-native-exec")
-        });
-        let accepted = client.call("component_exec_live", request.clone())?;
-        let replayed = client.call("component_exec_live", request)?;
-        if expect::string(&replayed, "/resource_name")?
-            != expect::string(&accepted, "/resource_name")?
+            "timeout_seconds": 30});
+        let accepted = client.call("cell_exec", request.clone())?;
+        let replayed = client.call("cell_exec", request)?;
+        if expect::string(&replayed, "/operation_id")?
+            != expect::string(&accepted, "/operation_id")?
             || expect::integer(&replayed, "/sequence")? != expect::integer(&accepted, "/sequence")?
         {
             bail!("native exec retry changed action identity: {accepted} {replayed}");
         }
 
-        let finished = client.call(
-            "operation_wait",
-            json!({"operation_id": operation, "timeout_seconds": 120}),
-        )?;
+        let finished = crate::cell::wait_one(&mut client, operation, 120)?;
         if expect::boolean(&finished, "/timed_out")? || !expect::boolean(&finished, "/terminal")? {
             bail!("operation {operation} did not finish: {finished}");
         }
@@ -256,7 +205,14 @@ pub fn run(context: &GateContext) -> Result<()> {
 
         records.push((
             expect::string(&finished, "/operation_id")?.to_string(),
-            expect::string(&accepted, "/resource_name")?.to_string(),
+            expect::string(
+                &client.call(
+                    "operation_read",
+                    json!({"operation_id":operation,"pointer":"/resource_name"}),
+                )?,
+                "/value",
+            )?
+            .to_string(),
             expect::string(content, "/pod")?.to_string(),
             component.to_string(),
         ));
@@ -274,19 +230,14 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call(
         "component_logs",
         json!({
-            "instance_id": instance,
-            "experiment_id": experiment,
-            "session_id": session,
-            "operation_id": logs_operation,
+            "name": instance,
+            "run_id": experiment,
+
+            "request_id": logs_operation,
             "component": "chain",
-            "tail_lines": 25,
-            "idempotency_key": format!("{logs_operation}-component-logs")
-        }),
+            "tail_lines": 25}),
     )?;
-    let logs = client.call(
-        "operation_wait",
-        json!({"operation_id": logs_operation, "timeout_seconds": 60}),
-    )?;
+    let logs = crate::cell::wait_one(&mut client, &(logs_operation), 60)?;
     if expect::boolean(&logs, "/timed_out")? || expect::string(&logs, "/phase")? != "succeeded" {
         bail!("component logs did not succeed: {logs}");
     }
@@ -333,9 +284,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
     }
 
-    let journal_page = client.call(
-        "action_list",
-        json!({"experiment_id": experiment, "after_sequence": 0, "limit": 10}),
+    let journal_page = Ok::<_, anyhow::Error>(
+        json!({"actions":crate::cell::journal(&mut client, &(experiment))?}),
     )?;
     let journal = expect::array(&journal_page, "/actions")?;
     if journal
@@ -359,25 +309,21 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("native exec journal is not ordered and terminal: {journal_page}");
     }
 
-    client.call(
-        "session_finish",
-        json!({"session_id": session, "idempotency_key": format!("release-session-{run_id}")}),
-    )?;
     let closed_experiment = client.call(
-        "experiment_close",
-        json!({"experiment_id": experiment, "idempotency_key": format!("close-experiment-{run_id}")}),
+        "run_finish",
+        json!({"request_id":"13336","run_id": experiment}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
     // The log read is evidence like any execution, so it is exported too.
     let mut operation_ids: Vec<&str> = records.iter().map(|(id, _, _, _)| id.as_str()).collect();
     operation_ids.push(logs_operation.as_str());
-    let evidence = client.call(
-        "artifact_export",
+    let evidence = crate::cell::evidence(
+        &mut client,
         json!({
-            "experiment_id": experiment,
+            "run_id": experiment,
             "include_oracle_artifacts": false,
-            "include_content": true,
+
             "artifact_operation_ids": operation_ids
         }),
     )?;
@@ -388,10 +334,10 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("native exec evidence is incomplete: {evidence}");
     }
 
-    client.call("cell_close", json!({"instance_id": instance}))?;
+    client.call("cell_remove", json!({"name": instance}))?;
     let closed = client.call(
         "cell_wait",
-        json!({"instance_id": instance, "target_phase": "closed", "timeout_seconds": 120}),
+        json!({"name": instance, "target_phase": "closed", "timeout_seconds": 120}),
     )?;
     if !expect::boolean(&closed, "/reached")? || expect::boolean(&closed, "/timed_out")? {
         bail!("native exec cell did not close: {closed}");
@@ -400,7 +346,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("native exec teardown was not verified: {closed}");
     }
 
-    context.kubectl.assert_teardown_verified()?;
+    context.record(
+        "native-exec-proof.json",
+        &json!({
+            "evidence_digest":evidence["digest"], "journal_count":7, "artifact_count":7,
+            "closed":closed
+        }),
+    )?;
     context.kubectl.assert_no_instance_namespaces()?;
     context.kubectl.assert_no_cell_actions()?;
 

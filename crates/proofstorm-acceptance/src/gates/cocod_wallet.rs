@@ -6,7 +6,6 @@ use std::{fs, path::Path};
 
 const INSTANCE: &str = "cocod-wallet-instance";
 const EXPERIMENT: &str = "cocod-wallet-experiment";
-const LEASE: &str = "cocod-wallet-session";
 
 pub(super) fn relay_invoice(receipt: &Value, amount_sat: u64) -> Result<&str> {
     let now = std::time::SystemTime::now()
@@ -55,8 +54,8 @@ fn scoped(operation: &str, parameters: Value) -> Value {
         panic!("parameters must be an object")
     };
     request.extend(
-        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":LEASE,
-        "operation_id":operation,"idempotency_key":operation})
+        json!({"name":INSTANCE,"run_id":EXPERIMENT,
+        "request_id":operation})
         .as_object()
         .expect("scope")
         .clone(),
@@ -103,7 +102,7 @@ pub(super) fn native(
     let result = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         id,
         json!({"component":wallet,"script":format!("umask 077; {script}"),"timeout_seconds":60,"output":{"mode":"public"}}),
     )?;
@@ -133,7 +132,7 @@ pub(super) fn private(
     let mut args = args;
     args["component"] = json!(wallet);
     args["timeout_seconds"] = json!(60);
-    let receipt = operation(client, directory, "component_exec_live", id, args)?;
+    let receipt = operation(client, directory, "cell_exec", id, args)?;
     if receipt["exit_code"] != exit
         || receipt["cleanup_verified"] != true
         || receipt["timed_out"] != false
@@ -303,25 +302,23 @@ fn exercise(
         "wallet-a",
         &coco("session running"),
     )?;
-    client.call_refused(
-        "wallet_initialize",
-        scoped(
-            "unsupported-initialize",
-            json!({"wallet":"wallet-a","mint":"mint"}),
-        ),
-        "runtime_control_unsupported",
-    )?;
-    operation(
+    crate::cell::assert_retired_wallet_routes(client)?;
+    crate::native::bootstrap(
         client,
-        directory,
-        "liquidity_bootstrap",
+        INSTANCE,
+        EXPERIMENT,
         "bootstrap",
-        json!({"chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd","funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000}),
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
     let invoice = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "funding-invoice",
         json!({"component":"wallet-a","argv":["cocod","receive","bolt11","5000","--mint-url","http://mint:3338"],"timeout_seconds":60,"output":{"mode":"bolt11"}}),
     )?;
@@ -329,7 +326,7 @@ fn exercise(
     let paid = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "funding-payment",
         json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","payinvoice","--force","--json",request],"timeout_seconds":60,"output":{"mode":"json_fields","fields":["status","value_sat"]}}),
     )?;
@@ -382,7 +379,7 @@ fn exercise(
         let invoice = operation(
             client,
             directory,
-            "component_exec_live",
+            "cell_exec",
             &format!("{id}-invoice"),
             json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","addinvoice",format!("--amt={amount}")],"timeout_seconds":60,"output":{"mode":"lnd_invoice"}}),
         )?;
@@ -399,7 +396,7 @@ fn exercise(
         let settled = operation(
             client,
             directory,
-            "component_exec_live",
+            "cell_exec",
             &format!("{id}-recipient"),
             json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","lookupinvoice","--rhash",hash],"timeout_seconds":60,"output":{"mode":"json_fields","fields":["state","settled"]}}),
         )?;
@@ -475,7 +472,7 @@ fn projection_checkpoint(client: &mut McpClient, directory: &Path) -> Result<()>
         let receipt = operation(
             client,
             directory,
-            "component_exec_live",
+            "cell_exec",
             id,
             json!({"component":"wallet-a","argv":argv,"timeout_seconds":30,"output":{"mode":"json_fields","fields":fields}}),
         )?;
@@ -493,7 +490,7 @@ fn projection_checkpoint(client: &mut McpClient, directory: &Path) -> Result<()>
     let receipt = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "project-locked",
         json!({"component":"wallet-a","argv":["cocod","status"],"timeout_seconds":30,"output":{"mode":"json_fields","fields":["seedAccess.state","seedAccess.requiresPassphrase","cocoSession.state"]}}),
     )?;
@@ -505,7 +502,7 @@ fn projection_checkpoint(client: &mut McpClient, directory: &Path) -> Result<()>
     let failed = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "project-fail-closed",
         json!({"component":"wallet-a","script":"printf '%s' '{\"cocoSession\":{\"state\":\"unknown-canary\",\"lastFailure\":{\"message\":\"private-canary\"}}}'; exit 3","timeout_seconds":30,"output":{"mode":"json_fields","fields":["cocoSession.state"]}}),
     )?;
@@ -560,12 +557,9 @@ fn run_scoped(
         .join("dev/wallet-integration-runs")
         .join(&context.run_id);
     fs::create_dir_all(&directory)?;
-    let mut capabilities = crate::EXPERIMENT_CAPABILITIES.to_vec();
-    capabilities.extend(["component.exec_live", "component.control"]);
-    let mut client = context.session(
+    let mut client = context.default_session(
         &format!("cocod-wallet-{}", context.run_id),
         "experiment-agent",
-        &capabilities,
     )?;
     let mut document = document();
     if transfer {
@@ -578,11 +572,11 @@ fn run_scoped(
             .retain(|component| component["id"] == "wallet-a");
         document["links"] = json!([]);
     }
-    client.call(
-        "cell_create",
-        json!({"draft_id":"cocod-wallet","cell":document,"idempotency_key":"create"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":document,"request_id":"create"}),
     )?;
-    let published=client.call("cell_publish",json!({"draft_id":"cocod-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published = crate::cell::review(&mut client, &preview)?;
     save(&directory, "published", &published)?;
     let lock = cell::lock_entry(&published, "cocod-wallet")?;
     if lock.pointer("/build_provenance/commit_sha")
@@ -590,15 +584,15 @@ fn run_scoped(
     {
         bail!("cocod provenance lost from lock");
     }
-    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    crate::cell::apply(&mut client, &preview)?;
     let result = (|| -> Result<()> {
         let ready = cell::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
-        client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
-            "session_start",
-            json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
+            "run_start",
+            json!({"request_id":"20100","run_id":EXPERIMENT,"name":INSTANCE}),
         )?;
+
         if transfer {
             super::private_transfer::exercise(
                 context,
@@ -621,18 +615,12 @@ fn run_scoped(
             expect::string(&ready, "/instance_namespace")?,
         )
     })();
+
     let _ = client.call(
-        "session_finish",
-        json!({"session_id":LEASE,"idempotency_key":"release"}),
+        "run_finish",
+        json!({"request_id":"20852","run_id":EXPERIMENT}),
     );
-    let _ = client.call(
-        "experiment_close",
-        json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
-    );
-    let evidence = client.call(
-        "artifact_export",
-        json!({"experiment_id":EXPERIMENT,"include_content":true}),
-    );
+    let evidence = crate::cell::evidence(&mut client, json!({"run_id":EXPERIMENT,}));
     if let Ok(value) = &evidence {
         save(&directory, "evidence", value)?;
     }
@@ -641,7 +629,7 @@ fn run_scoped(
         "outcome",
         &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(ToString::to_string)}),
     )?;
-    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    client.call("cell_remove", json!({"name":INSTANCE}))?;
     let closed = cell::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {

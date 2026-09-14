@@ -18,25 +18,7 @@ use serde_json::{Value, json};
 use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const INSTANCE: &str = "nutshell-oidc-instance";
-const DRAFT: &str = "nutshell-oidc";
 const EXPERIMENT: &str = "nutshell-oidc-experiment";
-const LEASE: &str = "nutshell-oidc-session";
-const CAPABILITIES: &[&str] = &[
-    "catalog.read",
-    "cell.read",
-    "cell.create",
-    "cell.validate",
-    "cell.publish",
-    "cell.materialize",
-    "cell.status",
-    "cell.close",
-    "experiment.create",
-    "experiment.read",
-    "experiment.close",
-    "cell.operate",
-    "authentication.test",
-    "artifact.read",
-];
 
 fn cell_document() -> Value {
     json!({
@@ -71,17 +53,14 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session("nutshell-oidc-live", "designer", CAPABILITIES)?;
+    let mut client = context.default_session("nutshell-oidc-live", "designer")?;
     let kubectl = &context.kubectl;
 
-    client.call(
-        "cell_create",
-        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-nutshell-oidc"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-nutshell-oidc"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-oidc", "include_revision": true}),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
     for (catalog_id, version, config_version) in [
         ("nutshell", "0.20.3", "nutshell-mint/0.20/v1"),
         ("keycloak", "25.0.6", "keycloak/25/v1"),
@@ -95,10 +74,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
     }
 
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-oidc"}),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
     let status = cell::wait_phase(&mut client, INSTANCE, "ready", 240, Duration::from_secs(3))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
@@ -178,24 +154,20 @@ pub fn run(context: &GateContext) -> Result<()> {
     let database_digest = kubectl.digest(&database_args)?;
 
     client.call(
-        "experiment_create",
-        json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-nutshell-oidc-experiment"}),
+        "run_start",
+        json!({"request_id":"7035","run_id": EXPERIMENT, "name": INSTANCE}),
     )?;
-    client.call(
-        "session_start",
-        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-nutshell-oidc-session"}),
-    )?;
-    client.call(
-        "authentication_conformance",
+
+    crate::driver::authentication_conformance(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE,
-            "experiment_id": EXPERIMENT,
-            "session_id": LEASE,
-            "operation_id": "nutshell-oidc-baseline",
+            "name": INSTANCE,
+            "run_id": EXPERIMENT,
+
+            "request_id": "nutshell-oidc-baseline",
             "mint": "mint",
-            "identity_provider": "identity",
-            "idempotency_key": "nutshell-oidc-baseline"
-        }),
+            "identity_provider": "identity"}),
     )?;
     let baseline = cell::wait_operation(&mut client, "nutshell-oidc-baseline", 60)?;
     let baseline = cell::artifact_content(&baseline)?;
@@ -207,7 +179,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     expect::equals(baseline, "/mint", &Value::from("mint"))?;
     expect::equals(baseline, "/identity_provider", &Value::from("identity"))?;
     if !expect::boolean(baseline, "/conformant")? {
-        client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+        client.call("cell_remove", json!({"name": INSTANCE}))?;
         cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC baseline reported a conformance finding: {baseline}");
     }
@@ -229,17 +201,16 @@ pub fn run(context: &GateContext) -> Result<()> {
         kubectl.rollout_restart(&namespace, target)?;
     }
 
-    client.call(
-        "authentication_protected_spend",
+    crate::driver::authentication_protected_spend(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE,
-            "experiment_id": EXPERIMENT,
-            "session_id": LEASE,
-            "operation_id": "nutshell-oidc-protected-spend",
+            "name": INSTANCE,
+            "run_id": EXPERIMENT,
+
+            "request_id": "nutshell-oidc-protected-spend",
             "mint": "mint",
-            "identity_provider": "identity",
-            "idempotency_key": "nutshell-oidc-protected-spend"
-        }),
+            "identity_provider": "identity"}),
     )?;
     let protected = cell::wait_operation(&mut client, "nutshell-oidc-protected-spend", 60)?;
     let protected = cell::artifact_content(&protected)?;
@@ -251,25 +222,24 @@ pub fn run(context: &GateContext) -> Result<()> {
     if !expect::boolean(protected, "/conformant")?
         || !expect::boolean(protected, "/protected_request")?
     {
-        client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+        client.call("cell_remove", json!({"name": INSTANCE}))?;
         cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC protected spend reported a conformance finding: {protected}");
     }
 
     kubectl.rollout_restart(&namespace, "deployment/mint")?;
 
-    client.call(
-        "authentication_replay",
+    crate::driver::authentication_replay(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE,
-            "experiment_id": EXPERIMENT,
-            "session_id": LEASE,
-            "operation_id": "nutshell-oidc-replay",
+            "name": INSTANCE,
+            "run_id": EXPERIMENT,
+
+            "request_id": "nutshell-oidc-replay",
             "mint": "mint",
             "identity_provider": "identity",
-            "source_operation_id": "nutshell-oidc-protected-spend",
-            "idempotency_key": "nutshell-oidc-replay"
-        }),
+            "source_operation_id": "nutshell-oidc-protected-spend"}),
     )?;
     let replay = cell::wait_operation(&mut client, "nutshell-oidc-replay", 60)?;
     let replay = cell::artifact_content(&replay)?;
@@ -279,14 +249,14 @@ pub fn run(context: &GateContext) -> Result<()> {
         &Value::from("proofstorm/authentication-replay/v1"),
     )?;
     if !expect::boolean(replay, "/conformant")? || !expect::boolean(replay, "/protected_request")? {
-        client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+        client.call("cell_remove", json!({"name": INSTANCE}))?;
         cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
         bail!("Nutshell OIDC replay reported a conformance finding: {replay}");
     }
 
     cell::wait_phase(&mut client, INSTANCE, "ready", 100, Duration::from_secs(3))?;
 
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
 
     println!(

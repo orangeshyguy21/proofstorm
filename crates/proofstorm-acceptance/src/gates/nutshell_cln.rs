@@ -6,12 +6,10 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{EXPERIMENT_CAPABILITIES, GateContext, cell, json as expect};
+use crate::{GateContext, cell, json as expect};
 
 const INSTANCE: &str = "nutshell-cln-instance";
 const EXPERIMENT: &str = "nutshell-cln-experiment";
-const LEASE: &str = "nutshell-cln-session";
-const DRAFT: &str = "nutshell-cln";
 
 fn cell_document() -> Value {
     json!({
@@ -37,10 +35,10 @@ fn cell_document() -> Value {
 
 fn common(operation: &str) -> Value {
     json!({
-        "instance_id": INSTANCE,
-        "experiment_id": EXPERIMENT,
-        "session_id": LEASE,
-        "operation_id": operation
+        "name": INSTANCE,
+        "run_id": EXPERIMENT,
+
+        "request_id": operation
     })
 }
 
@@ -54,11 +52,7 @@ fn with(mut base: Value, extra: Value) -> Value {
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session(
-        "nutshell-cln-live",
-        "experiment-agent",
-        EXPERIMENT_CAPABILITIES,
-    )?;
+    let mut client = context.default_session("nutshell-cln-live", "experiment-agent")?;
 
     let catalog = client.call("catalog_list", json!({"implementations": ["nutshell"]}))?;
     let summary = &expect::array(&catalog, "/items")?[0];
@@ -93,14 +87,11 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("Nutshell does not advertise its exact Core Lightning binding");
     }
 
-    client.call(
-        "cell_create",
-        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-nutshell-cln"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-nutshell-cln"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-nutshell-cln", "include_revision": true}),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
 
     for (component, catalog_id) in [("mint", "nutshell"), ("mint-cln", "cln")] {
         let entry = expect::array(&published, "/lock/entries")?
@@ -114,10 +105,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
     }
 
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-nutshell-cln"}),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
     let ready = cell::wait_phase(
         &mut client,
         INSTANCE,
@@ -199,19 +187,16 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "experiment_create",
-        json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-nutshell-cln-experiment"}),
-    )?;
-    client.call(
-        "session_start",
-        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-nutshell-cln-session"}),
+        "run_start",
+        json!({"request_id":"8067","run_id": EXPERIMENT, "name": INSTANCE}),
     )?;
 
-    client.call(
-        "liquidity_bootstrap",
+    crate::driver::liquidity_bootstrap(
+        context,
+        &mut client,
         with(
             common("nutshell-cln-bootstrap"),
-            json!({"chain": "chain", "mint_lightning": "seed-lnd", "payer_lightning": "payer-lnd", "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 1_000_000, "idempotency_key": "bootstrap-nutshell-cln"}),
+            json!({"chain": "chain", "mint_lightning": "seed-lnd", "payer_lightning": "payer-lnd", "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 1_000_000}),
         ),
     )?;
     let bootstrap = cell::wait_succeeded(&mut client, "nutshell-cln-bootstrap")?;
@@ -222,11 +207,12 @@ pub fn run(context: &GateContext) -> Result<()> {
     // observation. Wait for the current cell before admitting the next mutation.
     cell::wait_ready(&mut client, INSTANCE)?;
 
-    client.call(
-        "peer_connect",
+    crate::driver::peer_connect(
+        context,
+        &mut client,
         with(
             common("nutshell-cln-peer"),
-            json!({"from_lightning": "payer-lnd", "to_lightning": "mint-cln", "idempotency_key": "peer-nutshell-cln"}),
+            json!({"from_lightning": "payer-lnd", "to_lightning": "mint-cln"}),
         ),
     )?;
     let peer = cell::wait_succeeded(&mut client, "nutshell-cln-peer")?;
@@ -234,11 +220,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("LND-to-CLN peer connection failed: {peer}");
     }
 
-    client.call(
-        "channel_open",
+    crate::driver::channel_open(
+        context,
+        &mut client,
         with(
             common("nutshell-cln-channel"),
-            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-cln", "channel_sat": 4_000_000, "push_sat": 1_000_000, "idempotency_key": "channel-nutshell-cln"}),
+            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-cln", "channel_sat": 4_000_000, "push_sat": 1_000_000}),
         ),
     )?;
     let channel = cell::wait_succeeded(&mut client, "nutshell-cln-channel")?;
@@ -248,11 +235,12 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let wallet = json!({"wallet": "wallet", "mint": "mint"});
 
-    client.call(
-        "wallet_initialize",
+    crate::driver::wallet_initialize(
+        context,
+        &mut client,
         with(
             with(common("nutshell-cln-initialize"), wallet.clone()),
-            json!({"idempotency_key": "initialize-nutshell-cln"}),
+            json!({}),
         ),
     )?;
     let initialized = cell::wait_succeeded(&mut client, "nutshell-cln-initialize")?;
@@ -264,7 +252,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "wallet_balance",
         with(
             with(common("nutshell-cln-balance"), wallet.clone()),
-            json!({"idempotency_key": "balance-nutshell-cln"}),
+            json!({}),
         ),
     )?;
     let balance = cell::wait_succeeded(&mut client, "nutshell-cln-balance")?;
@@ -272,11 +260,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("Nutshell CLN wallet did not start empty: {balance}");
     }
 
-    client.call(
-        "wallet_fund",
+    crate::driver::wallet_fund(
+        context,
+        &mut client,
         with(
             with(common("nutshell-cln-fund"), wallet.clone()),
-            json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": "fund-nutshell-cln"}),
+            json!({"payer_lightning": "payer-lnd", "amount_sat": 1000}),
         ),
     )?;
     let funded = cell::wait_succeeded(&mut client, "nutshell-cln-fund")?;
@@ -294,7 +283,7 @@ pub fn run(context: &GateContext) -> Result<()> {
                 common("nutshell-cln-balance-before-round-trip"),
                 wallet.clone(),
             ),
-            json!({"idempotency_key": "balance-before-round-trip-nutshell-cln"}),
+            json!({}),
         ),
     )?;
     let baseline = cell::wait_succeeded(&mut client, "nutshell-cln-balance-before-round-trip")?;
@@ -302,11 +291,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("Nutshell CLN wallet baseline is invalid: {baseline}");
     }
 
-    client.call(
-        "wallet_round_trip",
+    crate::driver::wallet_round_trip(
+        context,
+        &mut client,
         with(
             with(common("nutshell-cln-round-trip"), wallet.clone()),
-            json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": "round-trip-nutshell-cln"}),
+            json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100}),
         ),
     )?;
     let round_trip = cell::wait_succeeded(&mut client, "nutshell-cln-round-trip")?;
@@ -319,27 +309,28 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // Round trip mints external value before selfpay. It is intentionally not
     // an admissible wallet_pay treatment for the conservation oracle.
-    let rejected = client.call_error(
-        "conservation_oracle",
+    let rejected = crate::conservation::check(
+        context,
+        &mut client,
         with(
             with(common("nutshell-cln-conservation"), wallet.clone()),
             json!({
                 "baseline_operation_id": "nutshell-cln-balance-before-round-trip",
-                "treatment_operation_id": "nutshell-cln-round-trip",
-                "idempotency_key": "conservation-nutshell-cln"
-            }),
+                "treatment_operation_id": "nutshell-cln-round-trip"}),
         ),
-    )?;
-    expect::equals(
-        &rejected,
-        "/data/code",
-        &json!("conservation_treatment_invalid"),
-    )?;
+    )
+    .expect_err("a round trip must not be accepted as a payment treatment");
+    anyhow::ensure!(
+        rejected
+            .to_string()
+            .starts_with("conservation_treatment_invalid:"),
+        "unexpected conservation refusal: {rejected}"
+    );
     client.call(
         "wallet_balance",
         with(
             with(common("nutshell-cln-balance-after-round-trip"), wallet),
-            json!({"idempotency_key":"balance-after-round-trip-nutshell-cln"}),
+            json!({}),
         ),
     )?;
     let after = cell::wait_succeeded(&mut client, "nutshell-cln-balance-after-round-trip")?;
@@ -353,17 +344,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("Nutshell CLN round-trip balance accounting failed: {after}");
     }
 
-    client.call(
-        "session_finish",
-        json!({"session_id": LEASE, "idempotency_key": "release-nutshell-cln-session"}),
-    )?;
     let closed_experiment = client.call(
-        "experiment_close",
-        json!({"experiment_id": EXPERIMENT, "idempotency_key": "close-nutshell-cln-experiment"}),
+        "run_finish",
+        json!({"request_id":"13781","run_id": EXPERIMENT}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_phase(
         &mut client,
         INSTANCE,

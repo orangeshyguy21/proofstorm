@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{EXPERIMENT_CAPABILITIES, GateContext, McpClient, cell, json as expect};
+use crate::{GateContext, McpClient, cell, json as expect};
 
 const INSTANCE: &str = "proof-spend";
 const DRIVER: &str = include_str!("../../drivers/cashu_double_spend.sh");
@@ -96,9 +96,8 @@ fn document(implementation: &str) -> Value {
 fn scoped(id: &str, mut args: Value) -> Value {
     args.as_object_mut().unwrap().extend(
         json!({
-            "instance_id":INSTANCE,"experiment_id":"proof-spend","session_id":"proof-spend",
-            "operation_id":id,"idempotency_key":id
-        })
+            "name":INSTANCE,"run_id":"proof-spend",
+            "request_id":id})
         .as_object()
         .unwrap()
         .clone(),
@@ -143,19 +142,21 @@ fn exercise(
     directory: &Path,
     namespace: &str,
 ) -> Result<()> {
-    operation(
+    crate::native::bootstrap(
         client,
-        directory,
-        "liquidity_bootstrap",
+        INSTANCE,
+        INSTANCE,
         "bootstrap",
-        json!({
-            "chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd",
-            "funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000
-        }),
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
     // One real invoice, kept in the owned wallet volume. Pay it while the native
     // mint command waits; never create a replacement quote on a retry.
-    client.call("component_exec_live", scoped("fund", json!({"component":"wallet-a",
+    client.call("cell_exec", scoped("fund", json!({"component":"wallet-a",
         "script":"umask 077; exec cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive mint http://mint:3338 64 --wait-duration 120 >/wallet/proof-spend-fund.log 2>&1",
         "timeout_seconds":150})))?;
     let mut invoice = String::new();
@@ -177,7 +178,7 @@ fn exercise(
     let paid = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "pay",
         json!({"component":"payer-lnd",
         "argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","sendpayment","--force","--json","--timeout=30s",format!("--pay_req={invoice}")],
@@ -207,7 +208,7 @@ fn exercise(
     let result = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "proof-spend",
         json!({
             "component":"wallet-a","script":DRIVER,"timeout_seconds":240,"output":{"mode":"public"}
@@ -227,31 +228,25 @@ pub fn run(context: &GateContext) -> Result<()> {
             .join("acceptance/cashu-double-spend")
             .join(implementation);
         fs::create_dir_all(&directory)?;
-        let mut capabilities = EXPERIMENT_CAPABILITIES.to_vec();
-        capabilities.push("component.exec_live");
-        let mut client = context.session(
+        let mut client = context.default_session(
             &format!("proof-spend-{implementation}"),
             "proof-spend-agent",
-            &capabilities,
         )?;
-        client.call(
-            "cell_create",
-            json!({"draft_id":INSTANCE,"cell":document(implementation),"idempotency_key":"create"}),
+        let preview = client.call(
+            "cell_plan",
+            json!({"name":INSTANCE,"cell":document(implementation),"request_id":"create"}),
         )?;
-        let published = client.call(
-            "cell_publish",
-            json!({"draft_id":INSTANCE,"expected_version":1,"idempotency_key":"publish"}),
-        )?;
+        crate::cell::review(&mut client, &preview)?;
         println!("{implementation}: preparing images and materializing...");
-        client.call("cell_materialize", json!({"instance_id":INSTANCE,"revision_digest":published["digest"],"idempotency_key":"materialize"}))?;
+        crate::cell::apply(&mut client, &preview)?;
         let result = (|| -> Result<()> {
             let ready = cell::wait_ready(&mut client, INSTANCE)?;
             println!("{implementation}: funding wallets and checking replay/race...");
-            client.call("experiment_create", json!({"experiment_id":INSTANCE,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
             client.call(
-                "session_start",
-                json!({"experiment_id":INSTANCE,"session_id":INSTANCE,"idempotency_key":"session"}),
+                "run_start",
+                json!({"request_id":"8367","run_id":INSTANCE,"name":INSTANCE}),
             )?;
+
             exercise(
                 context,
                 &mut client,
@@ -261,7 +256,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         })();
         println!("{implementation}: removing test cell...");
         let cleanup = (|| -> Result<()> {
-            client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+            client.call("cell_remove", json!({"name":INSTANCE}))?;
             cell::wait_closed(&mut client, INSTANCE)?;
             context.kubectl.assert_no_instance_namespaces()?;
             Ok(())

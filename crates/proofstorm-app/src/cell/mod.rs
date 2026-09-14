@@ -24,6 +24,7 @@ mod edit;
 mod execute;
 mod identity;
 mod observe;
+mod preview;
 mod wait;
 pub use wait::{WaitRequest, WaitResult, wait_terminal};
 

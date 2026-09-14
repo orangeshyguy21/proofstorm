@@ -17,8 +17,9 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
     };
 
     submit_idempotent(
+        context,
         client,
-        "node_stop",
+        |_, client, request| client.call("component_stop", request),
         node_scoped("payer-stop", "payer-stop-slice5"),
         "node stop",
     )?;
@@ -32,10 +33,10 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
     }
     let mut degraded_ok = false;
     for _ in 0..60 {
-        let stopped_cell = client.call("cell_status", json!({"instance_id": INSTANCE}))?;
+        let stopped_cell = crate::cell::status(client, INSTANCE)?;
         let stopped_components = client.call(
             "cell_component_status_list",
-            json!({"instance_id": INSTANCE, "limit": 50}),
+            json!({"name": INSTANCE, "limit": 50}),
         )?;
         let payer = expect::array(&stopped_components, "/components")?
             .iter()
@@ -53,7 +54,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
     }
 
     client.call(
-        "node_start",
+        "component_start",
         node_scoped("payer-start", "payer-start-slice5"),
     )?;
     let started = cell::wait_operation(client, "payer-start", 120)?;
@@ -69,7 +70,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         "jsonpath={.metadata.uid}",
     ])?;
     client.call(
-        "node_restart",
+        "component_restart",
         node_scoped("payer-restart", "payer-restart-slice5"),
     )?;
     let restarted = cell::wait_operation(client, "payer-restart", 120)?;

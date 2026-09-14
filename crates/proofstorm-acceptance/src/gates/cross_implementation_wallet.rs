@@ -10,12 +10,10 @@ use std::{fs, thread::sleep, time::Duration};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{EXPERIMENT_CAPABILITIES, GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
+use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const INSTANCE: &str = "cross-mint-wallet-instance";
 const EXPERIMENT: &str = "cross-mint-experiment";
-const LEASE: &str = "cross-mint-session";
-const DRAFT: &str = "cross-mint-wallet";
 
 fn cell_document() -> Value {
     json!({
@@ -58,23 +56,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         .join(&context.run_id);
     fs::create_dir_all(&directory)?;
     let result = exercise(context);
-    let mut client = context.session(
-        "cross-mint-wallet-live",
-        "experiment-agent",
-        EXPERIMENT_CAPABILITIES,
-    )?;
+    let mut client = context.default_session("cross-mint-wallet-live", "experiment-agent")?;
+
     let _ = client.call(
-        "session_finish",
-        json!({"session_id":LEASE,"idempotency_key":"release-cross-mint-session"}),
+        "run_finish",
+        json!({"request_id":"4597","run_id":EXPERIMENT}),
     );
-    let _ = client.call(
-        "experiment_close",
-        json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-cross-mint-experiment"}),
-    );
-    if let Ok(export) = client.call(
-        "artifact_export",
-        json!({"experiment_id":EXPERIMENT,"include_content":true}),
-    ) {
+    if let Ok(export) = crate::cell::evidence(&mut client, json!({"run_id":EXPERIMENT,})) {
         fs::write(
             directory.join("evidence.json"),
             serde_json::to_vec_pretty(&export)?,
@@ -87,7 +75,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?,
     )?;
     // A failed assertion must still retire the disposable cell through its finalizer.
-    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    client.call("cell_remove", json!({"name":INSTANCE}))?;
     let closed = cell::wait_closed(&mut client, INSTANCE)?;
     fs::write(
         directory.join("closed.json"),
@@ -100,20 +88,13 @@ pub fn run(context: &GateContext) -> Result<()> {
 }
 
 fn exercise(context: &GateContext) -> Result<()> {
-    let mut client = context.session(
-        "cross-mint-wallet-live",
-        "experiment-agent",
-        EXPERIMENT_CAPABILITIES,
-    )?;
+    let mut client = context.default_session("cross-mint-wallet-live", "experiment-agent")?;
 
-    client.call(
-        "cell_create",
-        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-cross-mint-wallet"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-cross-mint-wallet"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cross-mint-wallet", "include_revision": true}),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
 
     for (component, catalog_id, version, config_version) in [
         ("cache", "redis", "8.10.1", "redis/8.10/v1"),
@@ -138,16 +119,13 @@ fn exercise(context: &GateContext) -> Result<()> {
         }
     }
 
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cross-mint-wallet"}),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
     let ready = cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
     let components = client.call(
         "cell_component_status_list",
-        json!({"instance_id": INSTANCE, "limit": 50}),
+        json!({"name": INSTANCE, "limit": 50}),
     )?;
     let mut actual: Vec<&str> = expect::array(&components, "/components")?
         .iter()
@@ -232,23 +210,18 @@ fn exercise(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "experiment_create",
-        json!({"experiment_id": EXPERIMENT, "instance_id": INSTANCE, "idempotency_key": "create-cross-mint-experiment"}),
-    )?;
-    client.call(
-        "session_start",
-        json!({"experiment_id": EXPERIMENT, "session_id": LEASE, "idempotency_key": "acquire-cross-mint-session"}),
+        "run_start",
+        json!({"request_id":"10001","run_id": EXPERIMENT, "name": INSTANCE}),
     )?;
 
-    client.call(
-        "liquidity_bootstrap",
+    crate::driver::liquidity_bootstrap(
+        context,
+        &mut client,
         json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
-            "operation_id": "cross-mint-bootstrap", "chain": "chain",
+            "name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": "cross-mint-bootstrap", "chain": "chain",
             "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
-            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000,
-            "idempotency_key": "bootstrap-cross-mint"
-        }),
+            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000}),
     )?;
     let bootstrap = cell::wait_operation(&mut client, "cross-mint-bootstrap", 160)?;
     if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
@@ -261,7 +234,7 @@ fn exercise(context: &GateContext) -> Result<()> {
     ] {
         let prefix = format!("{implementation}-wallet");
         let common = json!({
-            "instance_id": INSTANCE, "experiment_id": EXPERIMENT, "session_id": LEASE,
+            "name": INSTANCE, "run_id": EXPERIMENT,
             "wallet": wallet, "mint": mint
         });
         let merge = |extra: Value| -> Value {
@@ -274,9 +247,10 @@ fn exercise(context: &GateContext) -> Result<()> {
             base
         };
 
-        client.call(
-            "wallet_initialize",
-            merge(json!({"operation_id": format!("{prefix}-initialize"), "idempotency_key": format!("{prefix}-initialize")})),
+        crate::driver::wallet_initialize(
+            context,
+            &mut client,
+            merge(json!({"request_id": format!("{prefix}-initialize")})),
         )?;
         let initialized = cell::wait_operation(&mut client, &format!("{prefix}-initialize"), 160)?;
         if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
@@ -285,16 +259,19 @@ fn exercise(context: &GateContext) -> Result<()> {
 
         client.call(
             "wallet_balance",
-            merge(json!({"operation_id": format!("{prefix}-balance"), "idempotency_key": format!("{prefix}-balance")})),
+            merge(json!({"request_id": format!("{prefix}-balance")})),
         )?;
         let balance = cell::wait_operation(&mut client, &format!("{prefix}-balance"), 160)?;
         if expect::integer(cell::artifact_content(&balance)?, "/balance_sat")? != 0 {
             bail!("{implementation} wallet did not start empty: {balance}");
         }
 
-        client.call(
-            "wallet_fund",
-            merge(json!({"operation_id": format!("{prefix}-fund"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": format!("{prefix}-fund")})),
+        crate::driver::wallet_fund(
+            context,
+            &mut client,
+            merge(
+                json!({"request_id": format!("{prefix}-fund"), "payer_lightning": "payer-lnd", "amount_sat": 1000}),
+            ),
         )?;
         let funded = cell::wait_operation(&mut client, &format!("{prefix}-fund"), 160)?;
         let fund_content = cell::artifact_content(&funded)?;
@@ -305,10 +282,7 @@ fn exercise(context: &GateContext) -> Result<()> {
         }
 
         let baseline_id = format!("{prefix}-balance-before-round-trip");
-        client.call(
-            "wallet_balance",
-            merge(json!({"operation_id": baseline_id, "idempotency_key": format!("{prefix}-balance-before-round-trip")})),
-        )?;
+        client.call("wallet_balance", merge(json!({"request_id": baseline_id})))?;
         let baseline = cell::wait_operation(
             &mut client,
             &format!("{prefix}-balance-before-round-trip"),
@@ -318,9 +292,12 @@ fn exercise(context: &GateContext) -> Result<()> {
             bail!("{implementation} wallet baseline is invalid: {baseline}");
         }
 
-        client.call(
-            "wallet_round_trip",
-            merge(json!({"operation_id": format!("{prefix}-round-trip"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": format!("{prefix}-round-trip")})),
+        crate::driver::wallet_round_trip(
+            context,
+            &mut client,
+            merge(
+                json!({"request_id": format!("{prefix}-round-trip"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100}),
+            ),
         )?;
         let round_trip = cell::wait_operation(&mut client, &format!("{prefix}-round-trip"), 160)?;
         let round_content = cell::artifact_content(&round_trip)?;
@@ -334,21 +311,35 @@ fn exercise(context: &GateContext) -> Result<()> {
         // that funds and spends in one action. Keep the round-trip assertion and
         // give conservation its own immediately preceding baseline/payment.
         let recipient = format!("{implementation}-recipient");
-        client.call("wallet_initialize", merge(json!({"wallet":recipient,
-            "operation_id":format!("{prefix}-recipient-initialize"),"idempotency_key":format!("{prefix}-recipient-initialize")})))?;
+        crate::driver::wallet_initialize(
+            context,
+            &mut client,
+            merge(json!({"wallet":recipient,
+            "request_id":format!("{prefix}-recipient-initialize")})),
+        )?;
         cell::wait_operation(&mut client, &format!("{prefix}-recipient-initialize"), 160)?;
-        client.call("wallet_invoice",merge(json!({"wallet":recipient,"amount_sat":100,"timeout_seconds":30,
-            "operation_id":format!("{prefix}-recipient-invoice"),"idempotency_key":format!("{prefix}-recipient-invoice")})))?;
+        crate::driver::wallet_invoice(
+            context,
+            &mut client,
+            merge(
+                json!({"wallet":recipient,"amount_sat":100,"timeout_seconds":30,
+            "request_id":format!("{prefix}-recipient-invoice")}),
+            ),
+        )?;
         let invoice =
             cell::wait_operation(&mut client, &format!("{prefix}-recipient-invoice"), 160)?;
         let quote = expect::string(cell::artifact_content(&invoice)?, "/mint_quote_id")?;
-        client.call("wallet_balance",merge(json!({"operation_id":format!("{prefix}-balance-before-pay"),"idempotency_key":format!("{prefix}-balance-before-pay")})))?;
-        cell::wait_operation(&mut client, &format!("{prefix}-balance-before-pay"), 160)?;
         client.call(
-            "wallet_pay",
+            "wallet_balance",
+            merge(json!({"request_id":format!("{prefix}-balance-before-pay")})),
+        )?;
+        cell::wait_operation(&mut client, &format!("{prefix}-balance-before-pay"), 160)?;
+        crate::driver::wallet_pay(
+            context,
+            &mut client,
             merge(
                 json!({"recipient_wallet":recipient,"recipient_mint":mint,"mint_quote_id":quote,
-            "operation_id":format!("{prefix}-pay"),"idempotency_key":format!("{prefix}-pay")}),
+            "request_id":format!("{prefix}-pay")}),
             ),
         )?;
         let paid = cell::wait_operation(&mut client, &format!("{prefix}-pay"), 160)?;
@@ -362,11 +353,9 @@ fn exercise(context: &GateContext) -> Result<()> {
             bail!("conservation treatment did not pay recipient");
         }
         let oracle_request = merge(json!({
-            "operation_id": format!("{prefix}-conservation"),
+            "request_id": format!("{prefix}-conservation"),
             "baseline_operation_id": format!("{prefix}-balance-before-pay"),
-            "treatment_operation_id": format!("{prefix}-pay"),
-            "idempotency_key": format!("{prefix}-conservation")
-        }));
+            "treatment_operation_id": format!("{prefix}-pay")}));
         let oracle = if implementation == "cdk" {
             // The existing mint-fee reader supports Nutshell SQLite only.
             // Preserve its explicit unknown for CDK instead of fabricating a
@@ -378,15 +367,18 @@ fn exercise(context: &GateContext) -> Result<()> {
             if melt.get("fee_paid_sat") != Some(&Value::Null) {
                 bail!("CDK authoritative fee support changed; review this boundary fixture");
             }
-            client.call_refused(
-                "conservation_oracle",
-                oracle_request,
-                "conservation_treatment_artifact_invalid",
-            )?;
+            let refusal = crate::conservation::check(context, &mut client, oracle_request)
+                .expect_err("unknown authoritative fee must fail closed");
+            anyhow::ensure!(
+                refusal
+                    .to_string()
+                    .starts_with("conservation_treatment_artifact_invalid:"),
+                "unexpected conservation refusal: {refusal}"
+            );
             json!({"refused":true,"code":"conservation_treatment_artifact_invalid",
                 "reason":"authoritative_mint_fee_unavailable","conservation_claimed":false})
         } else {
-            client.call("conservation_oracle", oracle_request)?;
+            crate::conservation::check(context, &mut client, oracle_request)?;
             let oracle = cell::wait_operation(&mut client, &format!("{prefix}-conservation"), 160)?;
             if !expect::boolean(cell::artifact_content(&oracle)?, "/conserved")? {
                 bail!("{implementation} conservation check failed: {oracle}");
@@ -434,13 +426,9 @@ fn exercise(context: &GateContext) -> Result<()> {
         .rollout_restart(namespace, "deployment/nutshell-mint")?;
     cell::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
 
-    client.call(
-        "session_finish",
-        json!({"session_id": LEASE, "idempotency_key": "release-cross-mint-session"}),
-    )?;
     let closed_experiment = client.call(
-        "experiment_close",
-        json!({"experiment_id": EXPERIMENT, "idempotency_key": "close-cross-mint-experiment"}),
+        "run_finish",
+        json!({"request_id":"18796","run_id": EXPERIMENT}),
     )?;
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 

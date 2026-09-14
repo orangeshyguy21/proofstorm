@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, gate::CONTROL_NAMESPACE, json as expect};
+use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect};
 
 /// The scheduler must never run more than this many probers at once.
 const ACTIVE_CAP: usize = 4;
@@ -142,35 +142,13 @@ fn prober_snapshot(context: &GateContext) -> Result<Snapshot> {
 
 pub fn run(context: &GateContext) -> Result<()> {
     let run_id = &context.run_id;
-    let mut client = context.session(
-        &format!("cross-cell-{run_id}"),
-        "designer",
-        LIFECYCLE_CAPABILITIES,
-    )?;
-
-    let draft = format!("cross-cell-{run_id}");
-    client.call(
-        "cell_create",
-        json!({"draft_id": draft, "cell": cell_document(), "idempotency_key": format!("create-{run_id}")}),
-    )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": draft, "expected_version": 1, "idempotency_key": format!("publish-{run_id}")}),
-    )?;
-    let digest = expect::string(&published, "/digest")?.to_string();
+    let mut client = context.default_session(&format!("cross-cell-{run_id}"), "designer")?;
 
     let instances: Vec<String> = (0..CELLS)
         .map(|index| format!("cross-cell-{index}-{run_id}"))
         .collect();
     for (index, instance) in instances.iter().enumerate() {
-        client.call(
-            "cell_materialize",
-            json!({
-                "instance_id": instance,
-                "revision_digest": digest,
-                "idempotency_key": format!("materialize-{index}-{run_id}")
-            }),
-        )?;
+        client.call("cell_up",json!({"name":instance,"request_id":format!("create-{index}-{run_id}"),"cell":cell_document()}))?;
     }
 
     let mut observed: BTreeSet<String> = BTreeSet::new();
@@ -245,12 +223,12 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     for instance in &instances {
-        client.call("cell_close", json!({"instance_id": instance}))?;
+        client.call("cell_remove", json!({"name": instance}))?;
     }
     for instance in &instances {
         let mut closed = false;
         for _ in 0..60 {
-            let status = client.call("cell_status", json!({"instance_id": instance}))?;
+            let status = crate::cell::status(&mut client, instance)?;
             if expect::string(&status, "/phase")? == "closed" {
                 if !expect::boolean(&status, "/teardown_receipt/verified_absent")? {
                     bail!("cell {instance} closed without verified teardown: {status}");

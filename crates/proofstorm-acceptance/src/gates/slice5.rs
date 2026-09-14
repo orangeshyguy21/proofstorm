@@ -15,7 +15,7 @@ mod recovery;
 mod smoke;
 mod support;
 
-use common::{CAPABILITIES, EXPERIMENT, INSTANCE, SESSION};
+use common::{EXPERIMENT, INSTANCE};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Scenario {
@@ -42,7 +42,7 @@ pub fn run(context: &GateContext, scenario: Scenario) -> Result<()> {
     let mut cleanup = support::CellCleanup::new(context, workspace.clone(), INSTANCE);
     // Stop the MCP child before fallback cleanup, also on panic unwinding,
     // so it cannot admit work while its cell is being reclaimed.
-    let mut client = context.session(&workspace, "experiment-agent", CAPABILITIES)?;
+    let mut client = context.default_session(&workspace, "experiment-agent")?;
     let result = exercise(context, &mut client, &mut cleanup, &workspace, scenario);
     if let Err(error) = &result {
         eprintln!(
@@ -72,13 +72,10 @@ fn exercise(
         compose::conformance(context, client, &state.namespace, workspace)?;
     }
     client.call(
-        "experiment_create",
-        json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"create-run"}),
+        "run_start",
+        json!({"request_id":"2182","run_id":EXPERIMENT,"name":INSTANCE}),
     )?;
-    client.call(
-        "session_start",
-        json!({"experiment_id":EXPERIMENT,"session_id":SESSION,"idempotency_key":"start-session"}),
-    )?;
+
     println!("{}: exercising scenario", scenario.name());
     let ns = &state.namespace;
     let key = &state.instance_key;
@@ -95,27 +92,29 @@ fn exercise(
         Scenario::Network => network::run(context, client, ns)?,
         Scenario::Channels => {
             let channel = bootstrap::bootstrap(context, client, ns, key, false)?;
-            channels::run(client, &channel)?;
+            channels::run(context, client, &channel)?;
         }
     }
     evidence::verify(context, client, &state, scenario)?;
     // Test the current close contract after exporting evidence. A fresh active
     // session cannot lease the cell, but a stale incarnation must still refuse.
-    client.call("experiment_create", json!({"experiment_id":"close-contract","instance_id":INSTANCE,"idempotency_key":"close-contract"}))?;
-    let session = client.call("session_start", json!({"experiment_id":"close-contract","session_id":"active-at-close","idempotency_key":"active-at-close"}))?;
-    ensure!(
-        session["phase"] == "active",
-        "close-contract session is not active"
-    );
-    client.call_refused("cell_close", json!({"instance_id":INSTANCE,"expected_instance_key":format!("{}-stale", state.instance_key)}), "stale_incarnation")?;
-    let still_open = client.call("cell_status", json!({"instance_id":INSTANCE}))?;
+    client.call(
+        "run_start",
+        json!({"request_id":"3259","run_id":"close-contract","name":INSTANCE}),
+    )?;
+    client.call_refused(
+        "cell_remove",
+        json!({"name":INSTANCE,"expected_instance_key":format!("{}-stale", state.instance_key)}),
+        "stale_incarnation",
+    )?;
+    let still_open = crate::cell::status(client, INSTANCE)?;
     ensure!(
         still_open["instance_key"] == state.instance_key && still_open["phase"] == "ready",
         "stale close changed the cell"
     );
     client.call(
-        "cell_close",
-        json!({"instance_id":INSTANCE,"expected_instance_key":state.instance_key}),
+        "cell_remove",
+        json!({"name":INSTANCE,"expected_instance_key":state.instance_key}),
     )?;
     cell::wait_closed(client, INSTANCE)?;
     Ok(())

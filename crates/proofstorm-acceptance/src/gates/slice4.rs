@@ -6,10 +6,9 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, json as expect};
+use crate::{GateContext, cell, json as expect};
 
 const INSTANCE: &str = "slice4-instance";
-const DRAFT: &str = "slice4";
 
 fn cell_document() -> Value {
     json!({
@@ -71,26 +70,14 @@ fn cell_document() -> Value {
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session("slice4-live", "designer", LIFECYCLE_CAPABILITIES)?;
+    let mut client = context.default_session("slice4-live", "designer")?;
 
-    client.call(
-        "cell_create",
-        json!({
-            "draft_id": DRAFT,
-            "cell": cell_document(),
-            "idempotency_key": "create-slice4"
-        }),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-slice4"}),
     )?;
 
-    let published = client.call(
-        "cell_publish",
-        json!({
-            "draft_id": DRAFT,
-            "expected_version": 1,
-            "idempotency_key": "publish-slice4",
-            "include_revision": true
-        }),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
 
     for entry in expect::array(&published, "/lock/entries")? {
         let image = expect::string(entry, "/image")?;
@@ -99,20 +86,13 @@ pub fn run(context: &GateContext) -> Result<()> {
         }
     }
 
-    client.call(
-        "cell_materialize",
-        json!({
-            "instance_id": INSTANCE,
-            "revision_digest": expect::string(&published, "/digest")?,
-            "idempotency_key": "materialize-slice4"
-        }),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
 
     let ready = cell::wait_ready(&mut client, INSTANCE)?;
 
     let components = client.call(
         "cell_component_status_list",
-        json!({"instance_id": INSTANCE, "limit": 50}),
+        json!({"name": INSTANCE, "limit": 50}),
     )?;
     let mut ready_ids = Vec::new();
     for component in expect::array(&components, "/components")? {
@@ -130,7 +110,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("sanitized status leaked a credential");
     }
 
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     let closed = cell::wait_closed(&mut client, INSTANCE)?;
 
     if !expect::boolean(&closed, "/teardown_receipt/verified_absent")? {

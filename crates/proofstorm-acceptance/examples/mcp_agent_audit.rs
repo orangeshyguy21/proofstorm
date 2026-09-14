@@ -29,7 +29,6 @@ impl Client {
                 ("PROOFSTORM_MODE", "offline"),
                 ("PROOFSTORM_WORKSPACE", "audit"),
                 ("PROOFSTORM_PRINCIPAL", "audit"),
-                ("PROOFSTORM_TOOLSET", "all"),
                 (
                     "PROOFSTORM_CAPABILITIES",
                     "catalog.read,cell.create,cell.read,cell.validate",

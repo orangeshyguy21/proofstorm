@@ -35,16 +35,19 @@
 
 pub mod cell;
 pub mod client;
+mod conservation;
+mod driver;
 pub mod gate;
 pub mod gates;
 pub mod http;
 pub mod json;
 pub mod kubectl;
+pub mod native;
 pub mod postgres;
 mod preservation;
 pub mod process;
 pub mod runner;
 
 pub use client::{McpClient, PROTOCOL_VERSION};
-pub use gate::{EXPERIMENT_CAPABILITIES, GateContext, LIFECYCLE_CAPABILITIES};
+pub use gate::GateContext;
 pub use kubectl::Kubectl;
