@@ -23,6 +23,8 @@ FROM ${NUTSHELL_IMAGE} AS nutshell
 USER root
 COPY --from=driver /proofstorm-driver /opt/proofstorm/driver
 COPY nutshell.sh /contract.sh
+COPY nutshell-wallet.sh /wallet-contract.sh
 RUN mkdir -p /wallet /app/data /management-client/tls && chown -R 1000:1000 /wallet /app/data /management-client
 USER 1000:1000
 RUN --network=none timeout 90 bash /contract.sh
+RUN --network=none timeout 120 bash /wallet-contract.sh

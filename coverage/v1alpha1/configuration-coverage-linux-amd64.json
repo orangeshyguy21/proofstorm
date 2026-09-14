@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:f1e1c40b330d568a8326399bc85953ff4641633f023a2fdeba4d218639f565a3",
+  "catalog_digest": "sha256:5a8a9969a4b54c6d4c49d3515ece4fc1ea1f8332c85b043618e272fb64a97566",
   "entries": [
     {
       "implementation": "attacker-workspace",

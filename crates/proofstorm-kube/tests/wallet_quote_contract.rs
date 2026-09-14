@@ -7,7 +7,7 @@ use serde_json::json;
 #[test]
 fn native_wallet_quotes_satisfy_the_public_contract_without_private_material() {
     let root = tempfile::tempdir().unwrap();
-    let directory = root.path().join(".cashu/recipient");
+    let directory = root.path().join(".cashu/wallet");
     std::fs::create_dir_all(&directory).unwrap();
     let db = Connection::open(directory.join("wallet.sqlite3")).unwrap();
     db.execute_batch("CREATE TABLE bolt11_mint_quotes (quote TEXT,mint TEXT,state TEXT,amount INTEGER,

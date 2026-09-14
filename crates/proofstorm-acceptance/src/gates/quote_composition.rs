@@ -180,7 +180,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     cell::wait_operation(&mut client, "fund-payer", 160)?;
 
-    let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; cashu -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
+    let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; cashu -h http://mint:3338 -u sat -w wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
     client.call(
         "component_forensics",
         scoped(&instance, &experiment, &session, "compose-invoice", json!({

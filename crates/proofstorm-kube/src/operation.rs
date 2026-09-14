@@ -3049,7 +3049,7 @@ pub fn render_wallet_initialize_job(spec: &WalletJobSpec<'_>) -> Result<Job, ser
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let script = format!(
-        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"initialized\":true,\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"initialized\":true,\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3082,7 +3082,7 @@ pub fn render_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let script = format!(
-        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
+        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3124,7 +3124,7 @@ pub fn render_wallet_fund_job(spec: &WalletFundJobSpec<'_>) -> Result<Job, serde
     let completion_script = format!(
         "balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\" || fail balance balance_unavailable; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"funded_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log; touch /shared/done"
     );
-    let wallet_script = wallet_receive_script(wallet, mint, amount_sat, &completion_script);
+    let wallet_script = wallet_receive_script(mint, amount_sat, &completion_script);
     let payer_script = wallet_payer_script(payer_lightning);
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3170,7 +3170,7 @@ pub fn render_wallet_invoice_job(
     let namespace = instance_namespace(instance_key);
     let deadline_seconds = timeout_seconds.saturating_add(30);
     let script = format!(
-        "set -eu; umask 077; cd /app; output=$(mktemp /tmp/proofstorm-invoice.XXXXXX); cleanup() {{ rm -f \"$output\"; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; cashu() {{ HOME=/wallet command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; cashu invoice {amount_sat} --no-check >\"$output\" 2>&1; PROOFSTORM_INVOICE_OUTPUT_PATH=\"$output\" /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log"
+        "set -eu; umask 077; cd /app; output=$(mktemp /tmp/proofstorm-invoice.XXXXXX); cleanup() {{ rm -f \"$output\"; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; cashu() {{ HOME=/wallet command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; cashu invoice {amount_sat} --no-check >\"$output\" 2>&1; PROOFSTORM_INVOICE_OUTPUT_PATH=\"$output\" /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3331,7 +3331,7 @@ pub fn render_wallet_round_trip_job(
     let completion_script = format!(
         "before=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$before\" || fail balance balance_unavailable; cashu selfpay >/shared/swap.log 2>&1 || fail selfpay selfpay_failed; after=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$after\" || fail balance balance_unavailable_after_selfpay; test \"$after\" -le \"$before\" || fail conservation balance_increased; test $((before-after)) -le {tolerance_sat} || fail conservation tolerance_exceeded; printf '{{\"minted_sat\":%s,\"balance_before_swap_sat\":%s,\"balance_after_swap_sat\":%s,\"inflation\":false}}' '{amount_sat}' \"$before\" \"$after\" >/dev/termination-log; touch /shared/done"
     );
-    let wallet_script = wallet_receive_script(wallet, mint, amount_sat, &completion_script);
+    let wallet_script = wallet_receive_script(mint, amount_sat, &completion_script);
     let payer_script = wallet_payer_script(payer_lightning);
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -3356,12 +3356,7 @@ pub fn render_wallet_round_trip_job(
     )
 }
 
-fn wallet_receive_script(
-    wallet: &str,
-    mint: &str,
-    amount_sat: u64,
-    completion_script: &str,
-) -> String {
+fn wallet_receive_script(mint: &str, amount_sat: u64, completion_script: &str) -> String {
     format!(
         concat!(
             "set -eu; cd /app; pid=; watchdog_pid=; ",
@@ -3370,7 +3365,7 @@ fn wallet_receive_script(
             "fail() {{ stage=\"$1\"; reason=\"$2\"; printf '{{\"code\":\"wallet_orchestration_failed\",\"stage\":\"%s\",\"reason\":\"%s\"}}' \"$stage\" \"$reason\" >/dev/termination-log; printf '%s:%s\\n' \"$stage\" \"$reason\" >/shared/wallet.failed; exit 1; }}; ",
             "classify_log() {{ log=\"$1\"; last=$(tail -n 1 \"$log\"); if printf '%s' \"$last\" | grep -Eqi 'quote.*(not found|unknown)'; then printf quote_not_found; elif printf '%s' \"$last\" | grep -Eqi 'quote.*not paid|not paid.*quote'; then printf quote_not_paid; elif printf '%s' \"$last\" | grep -Eqi 'already.*issued|quote.*issued'; then printf quote_already_issued; elif printf '%s' \"$last\" | grep -Eqi 'database.*locked|locked.*database'; then printf wallet_database_locked; elif printf '%s' \"$last\" | grep -Eqi 'invalid.*signature|signature.*invalid'; then printf invalid_quote_signature; elif printf '%s' \"$last\" | grep -Eqi 'blind'; then printf invalid_blinded_output; elif printf '%s' \"$last\" | grep -Eqi 'proof'; then printf proof_error; elif printf '%s' \"$last\" | grep -Eqi 'keyset'; then printf keyset_error; elif printf '%s' \"$last\" | grep -Eqi 'amount|unit'; then printf amount_or_unit_error; elif printf '%s' \"$last\" | grep -Eqi 'connect|connection|timed out|timeout'; then printf mint_connection_failed; else printf command_failed; fi; }}; ",
             "run_bounded() {{ duration=\"$1\"; marker=\"$2\"; shift 2; rm -f \"$marker\"; \"$@\" & pid=$!; (sleep \"$duration\"; if kill -0 \"$pid\" 2>/dev/null; then touch \"$marker\"; kill \"$pid\" 2>/dev/null || true; sleep 2; kill -9 \"$pid\" 2>/dev/null || true; fi) & watchdog_pid=$!; if wait \"$pid\"; then command_rc=0; else command_rc=$?; fi; pid=; kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; watchdog_pid=; return \"$command_rc\"; }}; ",
-            "cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; ",
+            "cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; ",
             "if run_bounded 30 /shared/invoice-request.timed-out cashu invoice {amount_sat} --no-check >/shared/invoice.log 2>&1; then :; else test ! -f /shared/invoice-request.timed-out || fail invoice invoice_request_timeout; invoice_reason=$(classify_log /shared/invoice.log); fail invoice \"$invoice_reason\"; fi; ",
             "quote_id=$(sed -n 's/.*--id \\([^[:space:]]*\\).*/\\1/p' /shared/invoice.log | tail -1); test -n \"$quote_id\" || fail invoice quote_id_not_observed; ",
             "elapsed=0; until test -f /shared/paid; do test ! -f /shared/payer.failed || fail payment payer_failed; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 105 || fail payment payment_wait_timeout; sleep 1; done; ",
@@ -3378,7 +3373,6 @@ fn wallet_receive_script(
             "{completion_script}"
         ),
         mint = mint,
-        wallet = wallet,
         amount_sat = amount_sat,
         completion_script = completion_script
     )
@@ -3411,7 +3405,7 @@ pub fn render_conservation_oracle_job(
     } = spec;
     let namespace = instance_namespace(instance_key);
     let script = format!(
-        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w {wallet} -t -y \"$@\"; }}; actual=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$actual\"; delta=$((actual-{expected_sat})); test \"$delta\" -ge 0 || delta=$((-delta)); conserved=false; test \"$delta\" -le {tolerance_sat} && conserved=true; printf '{{\"baseline_operation_id\":\"{baseline_operation_id}\",\"treatment_operation_id\":\"{treatment_operation_id}\",\"expected_sat\":{expected_sat},\"actual_sat\":%s,\"tolerance_sat\":{tolerance_sat},\"conserved\":%s}}' \"$actual\" \"$conserved\" >/dev/termination-log"
+        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; actual=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$actual\"; delta=$((actual-{expected_sat})); test \"$delta\" -ge 0 || delta=$((-delta)); conserved=false; test \"$delta\" -le {tolerance_sat} && conserved=true; printf '{{\"baseline_operation_id\":\"{baseline_operation_id}\",\"treatment_operation_id\":\"{treatment_operation_id}\",\"expected_sat\":{expected_sat},\"actual_sat\":%s,\"tolerance_sat\":{tolerance_sat},\"conserved\":%s}}' \"$actual\" \"$conserved\" >/dev/termination-log"
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
@@ -4789,6 +4783,66 @@ mod tests {
             render_cell_action_job(&action, &cell),
             Err(ActionRenderError::UnsupportedAdapter { .. })
         ));
+    }
+
+    #[test]
+    fn nutshell_default_name_is_independent_of_component_storage_and_receipts() {
+        for wallet in ["alice", "bob"] {
+            let spec = WalletJobSpec {
+                resource_name: "op-wallet",
+                instance_key: "i0123456789012345678",
+                wallet,
+                mint: "mint",
+                wallet_image: "nutshell",
+            };
+            let jobs = [
+                render_wallet_initialize_job(&spec).unwrap(),
+                render_wallet_balance_job(&spec).unwrap(),
+                render_wallet_invoice_job(&WalletInvoiceJobSpec {
+                    resource_name: spec.resource_name,
+                    instance_key: spec.instance_key,
+                    wallet,
+                    mint: spec.mint,
+                    wallet_image: spec.wallet_image,
+                    amount_sat: 100,
+                    timeout_seconds: 30,
+                })
+                .unwrap(),
+                render_conservation_oracle_job(&ConservationOracleJobSpec {
+                    resource_name: spec.resource_name,
+                    instance_key: spec.instance_key,
+                    wallet,
+                    mint: spec.mint,
+                    wallet_image: spec.wallet_image,
+                    baseline_operation_id: "baseline",
+                    treatment_operation_id: "treatment",
+                    expected_sat: 100,
+                    tolerance_sat: 0,
+                })
+                .unwrap(),
+            ];
+            for job in jobs {
+                let pod = job.spec.unwrap().template.spec.unwrap();
+                let script = pod.containers[0].command.as_ref().unwrap().last().unwrap();
+                assert!(script.contains("-w wallet -t -y"));
+                assert!(!script.contains(&format!("-w {wallet} ")));
+                assert!(pod.volumes.unwrap().iter().any(|volume| {
+                    volume
+                        .persistent_volume_claim
+                        .as_ref()
+                        .is_some_and(|claim| claim.claim_name == format!("{wallet}-data"))
+                }));
+                if let Some(identity) = pod.containers[0]
+                    .env
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .find(|variable| variable.name == "PROOFSTORM_WALLET")
+                {
+                    assert_eq!(identity.value.as_deref(), Some(wallet));
+                }
+            }
+        }
     }
 
     #[test]

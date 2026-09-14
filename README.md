@@ -103,6 +103,15 @@ catalog for full configuration and compatibility details.
 | Keycloak | `keycloak` | 25.0.6 | Test OIDC provider |
 | Workspace | `attacker-workspace` | 0.1.0-alpha.1 | General-purpose shell for commands and testing cell services |
 
+Nutshell CLI wallet components use the default internal name `wallet`. Component
+IDs such as `alice` and `bob` have separate persistent storage. Inside either
+component, use `export HOME=/wallet; cd /app` and
+`cashu -w wallet -h http://<mint-component>:3338 balance`; use the same name and
+mint URL for receive and send. Nutshell 0.20.3 mishandles custom wallet names.
+Existing named-wallet data is not migrated automatically; recover it separately
+before replacing a validation cell. This convention applies only to Nutshell
+CLI wallets.
+
 ## CLI in a minute
 
 Save the [example cell](examples/developer-cell.json) as `cell.json`: one Bitcoin

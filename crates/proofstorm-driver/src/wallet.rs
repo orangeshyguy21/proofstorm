@@ -4,7 +4,7 @@ use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -184,58 +184,53 @@ pub fn holdings(implementation: &str, root: &Path, wallet: &str) -> Result<Value
     Ok(json!({"mints":rows}))
 }
 
+// The component ID labels its volume/receipts; it is never a Nutshell wallet name.
+// Nutshell 0.20.3 receive/listing only agree with balance/send for this default.
+pub(crate) const NUTSHELL_WALLET_NAME: &str = "wallet";
+
+pub(crate) fn nutshell_directory(home: &Path) -> PathBuf {
+    home.join(".cashu").join(NUTSHELL_WALLET_NAME)
+}
+
 fn nutshell_holdings(root: &Path) -> Result<Value> {
-    let mut found = false;
+    let path = nutshell_directory(root).join("wallet.sqlite3");
+    ensure!(path.is_file(), "wallet not initialized");
     let mut holdings: BTreeMap<String, (u64, u64)> = BTreeMap::new();
-    for entry in std::fs::read_dir(root.join(".cashu"))? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let path = entry
-            .path()
-            .join(format!("{}.sqlite3", entry.file_name().to_string_lossy()));
-        if !path.is_file() {
-            continue;
-        }
-        found = true;
-        let db = database(&path)?;
-        let mut statement = db.prepare("SELECT id, mint_url FROM keysets WHERE unit='sat'")?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut keysets = BTreeMap::new();
-        for row in rows {
-            let (id, url) = row?;
-            ensure!(!url.is_empty(), "mint unavailable");
-            if let Some(previous) = keysets.insert(id, url.clone()) {
-                ensure!(previous == url, "ambiguous keyset");
-            }
-        }
-        let mut proofs = db.prepare("SELECT id, amount, COALESCE(reserved,0) FROM proofs")?;
-        let mut rows = proofs.query([])?;
-        while let Some(row) = rows.next()? {
-            let id: String = row.get(0)?;
-            let Some(url) = keysets.get(&id) else {
-                ensure!(
-                    db.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM keysets WHERE id=?1)",
-                        params![id],
-                        |row| row.get::<_, bool>(0)
-                    )?,
-                    "unknown keyset"
-                );
-                continue;
-            };
-            let amount = u64::try_from(row.get::<_, i64>(1)?).context("invalid amount")?;
-            let held = row.get::<_, i64>(2)? != 0;
-            let totals = holdings.entry(url.clone()).or_default();
-            let selected = if held { &mut totals.1 } else { &mut totals.0 };
-            *selected = selected.checked_add(amount).context("balance overflow")?;
-            totals.0.checked_add(totals.1).context("balance overflow")?;
+    let db = database(&path)?;
+    let mut statement = db.prepare("SELECT id, mint_url FROM keysets WHERE unit='sat'")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut keysets = BTreeMap::new();
+    for row in rows {
+        let (id, url) = row?;
+        ensure!(!url.is_empty(), "mint unavailable");
+        if let Some(previous) = keysets.insert(id, url.clone()) {
+            ensure!(previous == url, "ambiguous keyset");
         }
     }
-    ensure!(found, "wallet not initialized");
+    let mut proofs = db.prepare("SELECT id, amount, COALESCE(reserved,0) FROM proofs")?;
+    let mut rows = proofs.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let Some(url) = keysets.get(&id) else {
+            ensure!(
+                db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM keysets WHERE id=?1)",
+                    params![id],
+                    |row| row.get::<_, bool>(0)
+                )?,
+                "unknown keyset"
+            );
+            continue;
+        };
+        let amount = u64::try_from(row.get::<_, i64>(1)?).context("invalid amount")?;
+        let held = row.get::<_, i64>(2)? != 0;
+        let totals = holdings.entry(url.clone()).or_default();
+        let selected = if held { &mut totals.1 } else { &mut totals.0 };
+        *selected = selected.checked_add(amount).context("balance overflow")?;
+        totals.0.checked_add(totals.1).context("balance overflow")?;
+    }
     Ok(
         json!({"mints":holdings.into_iter().map(|(url,(available,reserved))|
         json!({"mint_url":url,"balance_sat":available,"reserved_sat":reserved})).collect::<Vec<_>>()}),
