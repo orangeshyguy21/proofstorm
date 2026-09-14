@@ -8,7 +8,7 @@
     </picture>
   </a>
 </p>
-<p align="center">Local test cells for Bitcoin, Lightning &amp; Cashu.</p>
+<p align="center">Dynamic test environments for Bitcoin, Lightning &amp; Cashu.</p>
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#supported-environments">Environments</a> ·
@@ -16,9 +16,9 @@
   <a href="#development">Development</a>
 </p>
 
-Build a cell, connect your application, and test it through a CLI, a browser, or
-your coding agent. Proofstorm runs the services in a private local Kubernetes
-runtime and downloads prebuilt images as you need them.
+Proofstorm allows any coding agent to build regtest networks on the fly,
+and drive them through native CLIs. Proofstorm runs the services in a private local Kubernetes
+runtime with an optional web GUI for viewing your networks.
 
 **Alpha:** for local development and disposable test data—not production or real funds.
 
@@ -39,22 +39,16 @@ storm setup
 storm doctor
 ```
 
-No Rust, source checkout, or compilation required. The installer does not change
-your shell profile, start a runtime, or configure an agent. `setup` downloads the
-tools and controller, then starts the private runtime. Cell images download on
-first use. Add the PATH line to your shell profile if you want it to persist.
-
-From your application's directory, launch an installed, authenticated coding agent:
+From your desired directory, launch an installed, authenticated coding agent:
 
 ```sh
 storm agent open codex
-# or: storm agent open opencode
-# or: storm agent open claude
+storm agent open opencode
+storm agent open claude
 ```
 
-Ask it: “Use Proofstorm to create a cell named demo with one Bitcoin Core regtest
-node. Wait for it to be ready, then read it back.” The MCP connection is named
-`proofstorm`. Opening an agent configures its connection; ordinary setup does not.
+Prompt the agent to build your desired regtest, or use it alongside regular reviews and scans
+to build and test proofs of concept.
 
 Prefer a browser? Run `storm gui`. It opens your default browser and offers
 launch buttons for detected native apps on macOS. Add `--desktop` to an `agent open`
@@ -64,26 +58,14 @@ command to launch a native app instead of its CLI.
 
 | Host | Public installer | Status |
 | --- | --- | --- |
-| Linux x86-64 / AMD64 | Available | Docker Engine + Buildx required; recorded Linux smoke test below |
-| macOS Apple Silicon / ARM64 | Available | Docker Desktop required; packaged clean-Mac runtime test pending |
-| Linux ARM64 | Not yet | No published host bundle |
-| macOS Intel | Not supported | No host bundle |
-| Windows / WSL | Not supported yet | No validated installation flow |
+| Linux x86-64 / AMD64 | Available | Docker Engine + Buildx required |
+| macOS Apple Silicon / ARM64 | Available | Docker Desktop required |
 
-The recorded alpha.2 Linux smoke test covered installation, setup, one Bitcoin
-cell through Codex and OpenCode, headless GUI startup, reinstall, and cleanup. It did **not** cover
-every component, transactions, or visual GUI behavior. See the
-[acceptance summary](release/alpha-2-linux-smoke.md).
-
-On a headless host, use `storm gui start` and forward its loopback port
-over SSH; do not expose the GUI publicly. Native app launch is macOS-only.
-OpenCode's current desktop launch may still require selecting the project folder
-inside the app; its CLI opens in the requested directory.
 
 ## Components
 
 These are the versions and integrations in the built-in catalog—not a claim that
-every combination has passed the fresh-VM test. A connected agent can read the
+every combination will work. A connected agent can read the
 catalog for full configuration and compatibility details.
 
 | Component | Catalog ID | Version | Integration |
@@ -102,93 +84,6 @@ catalog for full configuration and compatibility details.
 | Redis | `redis` | 8.10.1 | Ephemeral cache |
 | Keycloak | `keycloak` | 25.0.6 | Test OIDC provider |
 | Workspace | `attacker-workspace` | 0.1.0-alpha.1 | General-purpose shell for commands and testing cell services |
-
-Nutshell CLI wallet components use the default internal name `wallet`. Component
-IDs such as `alice` and `bob` have separate persistent storage. Inside either
-component, use `export HOME=/wallet; cd /app` and
-`cashu -w wallet -h http://<mint-component>:3338 balance`; use the same name and
-mint URL for receive and send. Nutshell 0.20.3 mishandles custom wallet names.
-Existing named-wallet data is not migrated automatically; recover it separately
-before replacing a validation cell. This convention applies only to Nutshell
-CLI wallets.
-
-## CLI in a minute
-
-Save the [example cell](examples/developer-cell.json) as `cell.json`: one Bitcoin
-node and a CDK mint with an on-chain backend.
-
-```sh
-storm up cell.json --name demo
-storm status demo
-storm ls
-```
-
-Connect your app to the mint in another terminal:
-
-```sh
-storm connect demo mint http --config connection.json
-```
-
-Keep that command running. `connection.json` contains the local URL your app can
-use. It is private to your user and removed on normal disconnect; an existing
-file is never overwritten. Use `chain rpc` instead of `mint http` for Bitcoin RPC.
-
-When you're finished:
-
-```sh
-storm rm demo          # Deletes the cell, its data, and history
-storm gui stop         # Stops the GUI service; cells keep running
-storm gui status       # Shows GUI service status
-```
-
-Commands show progress and readable results. Add `--json` for scripts, or
-`--help` to any command for options. Cells are not automatically funded.
-
-## Search recorded results with an agent
-
-Agents can use `activity_search` to find operations across every actor and run
-in a cell. Search text literally or with regex, filter by component, operation
-phase, native exit code, actor, run/session, or acceptance time, and request
-only the JSON fields needed. For example, these MCP arguments find Bob's
-recorded output mentioning a database and return the exit codes:
-
-```json
-{
-  "name": "alpha-payments",
-  "component": "bob",
-  "query": "database",
-  "case_insensitive": true,
-  "fields": ["/artifact/content/exit_code"],
-  "limit": 10
-}
-```
-
-Matches include operation IDs and digests, JSON pointers, and short excerpts
-with character offsets. Large selected values are explicitly marked as omitted.
-Use `operation_read` to retrieve a particular field or a slice of longer output:
-
-```json
-{
-  "operation_id": "<operation_id from the match>",
-  "expected_digest": "<operation_digest from the match>",
-  "pointer": "/artifact/content/stdout",
-  "offset": 0,
-  "limit": 1000
-}
-```
-
-Both tools read saved history without running commands or polling components.
-Use `cell_sync` first when fresh receipts are needed. Searches match recorded
-JSON scalar values and return the first excerpt per matching field. They scan
-at most 200 operations per call: follow `next_cursor` even after an empty page,
-until it is null. A cursor is invalidated when that cell's history changes;
-repeat the search without it. Reads use `next_offset` for Unicode character or
-array-element slices; keep the returned digest to detect changes between reads.
-Private or previously truncated output cannot be recovered through search.
-
-`cell_search` provides the same search-and-select workflow for desired component
-configuration and connections. Catalog filters and `catalog_config_schema_read`
-provide focused component and configuration-schema discovery.
 
 ## Development
 
