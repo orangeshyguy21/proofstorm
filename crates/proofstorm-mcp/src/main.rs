@@ -103,6 +103,17 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
         );
     }
     if attached {
+        proofstorm_app::bootstrap::check_installed_runtime(
+            environment
+                .installation
+                .as_ref()
+                .context("managed attachment requires an installation")?,
+        )?;
+    }
+    if let Some(installation) = &environment.installation {
+        proofstorm_app::bootstrap::check_deployed_release(installation)?;
+    }
+    if attached {
         anyhow::ensure!(
             std::fs::symlink_metadata(&environment.database)?.is_file(),
             "managed attachment needs an existing installation database"
@@ -142,14 +153,6 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
     let service = ProofstormMcp::new(store.clone(), workspace.clone(), principal.clone())?;
     if environment.mode == proofstorm_app::config::Mode::Offline {
         return Ok(service.offline());
-    }
-    if attached {
-        proofstorm_app::bootstrap::check_installed_runtime(
-            environment
-                .installation
-                .as_ref()
-                .context("managed attachment requires an installation")?,
-        )?;
     }
     let runtime = environment.runtime().await?;
     // Managed startup/verification stays passive. Explicit mutations reconcile their

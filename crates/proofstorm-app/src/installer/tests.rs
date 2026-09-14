@@ -87,7 +87,7 @@ fn fixture(root: &Path) -> PathBuf {
     fixture_with_info(root, &crate::release::describe())
 }
 
-fn fixture_with_info(root: &Path, info: &Value) -> PathBuf {
+pub(crate) fn fixture_with_info(root: &Path, info: &Value) -> PathBuf {
     let bundle = root.join("bundle");
     fs::create_dir(&bundle).unwrap();
     for name in REQUIRED {
@@ -121,7 +121,7 @@ fn fixture_with_info(root: &Path, info: &Value) -> PathBuf {
     bundle
 }
 
-fn alpha_info() -> Value {
+pub(crate) fn alpha_info() -> Value {
     let mut info = crate::release::describe();
     // Explicit synthetic image evidence, not a relabelled checked-in release.
     info["controller"] = json!({"image":format!("ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:{}", "a".repeat(64)),"platform":crate::platform::container_platform().unwrap(),"release_ready":false,"metadata":{"version":info["version"],"runtime_contract_sha256":info["runtime_contract_sha256"]}});
@@ -309,4 +309,28 @@ fn launcher_quotes_paths_and_respects_explicit_home() {
         String::from_utf8(output.stdout).unwrap(),
         "/explicit home\narg\n"
     );
+}
+
+#[test]
+fn updater_precondition_prevents_stale_activation_and_repairs_missing_launcher() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = fixture(root.path());
+    let prefix = root.path().join("prefix");
+    let first = install(&bundle, &prefix, true).unwrap();
+    let id = first["bundle_id"].as_str().unwrap();
+    let prefix = prefix.canonicalize().unwrap();
+    let managed = prefix.join("lib/proofstorm");
+    let active = fs::read_link(managed.join("current")).unwrap();
+    assert!(install_checked(&bundle, &prefix, true, Some(&"f".repeat(64))).is_err());
+    assert_eq!(active, fs::read_link(managed.join("current")).unwrap());
+    fs::remove_file(prefix.join("bin/proofstorm-mcp")).unwrap();
+    install_checked(&bundle, &prefix, true, Some(id)).unwrap();
+    check_launchers(&managed, &prefix, true).unwrap();
+    // The child must acquire the existing lock itself; a parent never holds it.
+    let guard = crate::installation::Installation::lock(&managed).unwrap();
+    assert!(install_checked(&bundle, &prefix, true, Some(id)).is_err());
+    assert_eq!(active, fs::read_link(managed.join("current")).unwrap());
+    drop(guard);
+    assert!(install_checked(&bundle, &root.path().join("missing"), true, Some(id)).is_err());
+    assert!(!root.path().join("missing").exists());
 }

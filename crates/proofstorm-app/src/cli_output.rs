@@ -133,6 +133,7 @@ fn human(command: &str, value: &Value) -> String {
     use std::fmt::Write;
     let bin = proofstorm_app::command_name();
     match command {
+        "update" => update_summary(value),
         "setup" if value["ready"] == true => format!("Runtime ready.\nOpen the GUI: {bin} gui\n"),
         "setup" if value["prepared"] == true => {
             format!("Tools prepared. Runtime not started.\nStart it: {bin} setup\n")
@@ -404,6 +405,43 @@ fn describe(text: &mut String, label: &str, value: &Value, indent: usize) {
             );
         }
     }
+}
+
+fn update_summary(value: &Value) -> String {
+    use std::fmt::Write;
+    let mut text = format!(
+        "Proofstorm update: {}.\nInstalled: {} | Available: {}\n",
+        field(value, "status").replace('_', " "),
+        field(value, "installed_version"),
+        field(value, "available_version")
+    );
+    if let Some(message) = value["error"]["message"].as_str() {
+        let _ = writeln!(text, "{message}");
+    }
+    if value["activation_changed"] == true {
+        text.push_str("Active files changed. Runtime refresh is separate.\n");
+    }
+    if value["status"] == "update_available" {
+        let _ = writeln!(
+            text,
+            "Run {} update to install it.",
+            proofstorm_app::command_name()
+        );
+    }
+    if let Some(actions) = value["required_actions"].as_array() {
+        for action in actions {
+            let _ = writeln!(text, "{}", field(action, "message"));
+            if let Some(command) = action["command"].as_array() {
+                let quoted: Vec<_> = command
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|s| format!("'{}'", s.replace('\'', "'\"'\"'")))
+                    .collect();
+                let _ = writeln!(text, "  {}", quoted.join(" "));
+            }
+        }
+    }
+    text
 }
 
 #[cfg(test)]

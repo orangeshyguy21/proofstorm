@@ -8,7 +8,24 @@ for tool in cargo rustc trunk; do
 done
 for attempt in first reinstall; do
   printf 'Checking %s Mac install\n' "$attempt"
-  /bin/sh "$work/input/install.sh" --artifact-dir "$work/input" --archive "$archive" --prefix "$HOME/.local"
+  if [[ "$attempt" == first ]]; then
+    /bin/sh "$work/input/install.sh" --artifact-dir "$work/input" --archive "$archive" --prefix "$HOME/.local"
+  else
+    observed=$(readlink "$HOME/.local/lib/proofstorm/current")
+    digest=$(awk '{print $1}' "$work/input/$archive.sha256")
+    bytes=$(wc -c < "$work/input/$archive" | tr -d ' ')
+    if /bin/sh "$work/input/install.sh" --artifact-dir "$work/input" --archive "$archive" --prefix "$HOME/.local" \
+      --expected-current ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff \
+      --expected-sha256 "$digest" --expected-bytes "$bytes" --report-json > "$work/stale-receipt.json" 2> "$work/stale-error"; then
+      printf 'Stale activation precondition was accepted\n' >&2; exit 1
+    fi
+    [[ "$observed" == "$(readlink "$HOME/.local/lib/proofstorm/current")" ]]
+    /bin/sh "$work/input/install.sh" --artifact-dir "$work/input" --archive "$archive" --prefix "$HOME/.local" \
+      --expected-current "${observed#versions/}" --expected-sha256 "$digest" --expected-bytes "$bytes" --report-json > "$work/update-receipt.json"
+    grep -Fq "\"bundle_id\": \"${observed#versions/}\"" "$work/update-receipt.json"
+    "$HOME/.local/bin/proofstorm" update --help | grep -q -- --check
+    "$HOME/.local/bin/proofstorm" upgrade --help >/dev/null
+  fi
   "$HOME/.local/bin/proofstorm" --version
   "$HOME/.local/bin/proofstorm" --help >/dev/null
   "$HOME/.local/bin/proofstorm" version --json > "$work/cli-info.json"

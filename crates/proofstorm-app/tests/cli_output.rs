@@ -312,3 +312,28 @@ fn native_result_headlines_preserve_inspection_exit_status_and_json_receipts() {
     }
     assert!(!root.path().join("missing-kubeconfig").exists());
 }
+
+#[test]
+fn updater_alias_and_json_refuse_unmanaged_binaries_without_initializing_state() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("custom home");
+    for action in ["update", "upgrade"] {
+        for check in [false, true] {
+            let mut command = cli();
+            command.arg("--home").arg(&home).args([action, "--json"]);
+            if check {
+                command.arg("--check");
+            }
+            let output = command.output().unwrap();
+            assert!(!output.status.success());
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["status"], "failed");
+            assert_eq!(result["error"]["code"], "update_unavailable");
+            assert!(!output.stdout.contains(&b'\x1b'));
+            assert!(!home.exists());
+        }
+    }
+    let help = cli().arg("--help").output().unwrap();
+    let text = String::from_utf8(help.stdout).unwrap();
+    assert!(text.contains("update") && text.contains("upgrade"));
+}

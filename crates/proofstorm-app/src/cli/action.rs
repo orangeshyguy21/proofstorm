@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum Action {
+    Update {
+        check: bool,
+    },
     DevReset {
         yes: bool,
     },
@@ -48,6 +51,7 @@ pub enum Action {
     },
     Doctor {},
     InstallBundle {
+        expected_current: Option<String>,
         bundle: PathBuf,
         prefix: PathBuf,
         allow_development: bool,

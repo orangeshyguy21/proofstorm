@@ -59,6 +59,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Update this installation from the official release feed.
+    #[command(
+        visible_alias = "upgrade",
+        long_about = "Update the files in this managed installation from proofstorm.com. Running cells and services keep their current versions until you follow the reported runtime refresh steps."
+    )]
+    Update {
+        /// Only check availability; do not download or install release files.
+        #[arg(long)]
+        check: bool,
+    },
     /// Prepare and start the local runtime.
     Setup(SetupArgs),
     /// Diagnose installation and runtime problems.
@@ -373,6 +383,9 @@ struct RegisterArgs {
 
 #[derive(ClapArgs)]
 struct InstallArgs {
+    /// Require this active bundle ID under the installation lock.
+    #[arg(long)]
+    expected_current: Option<String>,
     /// Unpacked, verified bundle directory.
     #[arg(long)]
     bundle: PathBuf,
@@ -428,6 +441,7 @@ impl Command {
     )]
     fn action(self) -> Result<Action, clap::Error> {
         Ok(match self {
+            Self::Update { check } => Action::Update { check },
             Self::Setup(SetupArgs {
                 allow_development,
                 prepare_only,
@@ -597,11 +611,13 @@ impl Command {
             Self::Internal {
                 command:
                     InternalCommand::InstallBundle(InstallArgs {
+                        expected_current,
                         bundle,
                         prefix,
                         allow_development,
                     }),
             } => Action::InstallBundle {
+                expected_current,
                 bundle,
                 prefix,
                 allow_development,

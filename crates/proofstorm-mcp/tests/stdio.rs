@@ -720,3 +720,34 @@ fn public_calls_recheck_the_entire_registry_after_live_revocation() {
         .unwrap();
     assert_eq!(error["data"]["code"], "access_denied");
 }
+
+#[test]
+fn incompatible_managed_startup_refuses_before_opening_shared_database() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = proofstorm_app::installation::Installation::initialize(
+        root.path(),
+        Some(12341),
+        Some(12342),
+    )
+    .unwrap();
+    let sentinel = b"not a database: prove startup never opens it";
+    std::fs::write(installation.database(), sentinel).unwrap();
+    let mut command = std::process::Command::new(binary());
+    proofstorm_acceptance::client::clear_runtime_environment(&mut command);
+    let output = command
+        .arg("--home")
+        .arg(root.path())
+        .args(["--attachment", "unconfigured-test"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(!error.contains("not a database"), "{error}");
+    assert_eq!(std::fs::read(installation.database()).unwrap(), sentinel);
+    assert!(
+        !installation
+            .database()
+            .with_extension("sqlite3-wal")
+            .exists()
+    );
+}

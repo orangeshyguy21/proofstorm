@@ -33,7 +33,7 @@ while [[ $# -gt 0 ]]; do
     --output) output=$2; shift 2 ;;
     --proto|--proto-redir) [[ "$2" == '=https' ]] || exit 97; protocols=$((protocols+1)); shift 2 ;;
     --write-out) [[ "$2" == '%{http_code}' ]] || exit 97; shift 2 ;;
-    --retry) shift 2 ;;
+    --retry|--connect-timeout|--max-time|--max-filesize) shift 2 ;;
     --fail|--location|--silent|--show-error) shift ;;
     *) exit 97 ;;
   esac
@@ -75,6 +75,17 @@ for system in Linux Darwin; do
   grep -Fxq "proofstorm-0.1.0-alpha.1-$legacy.tar.gz.sha256" "$INSTALL_TEST_LOG"
   run --artifact-dir "$scratch/server" || fail 'Local friendly install failed'
   [[ ! -s "$INSTALL_TEST_LOG" && -s "$INSTALL_TEST_MARKER" ]]
+  selected="$scratch/server/proofstorm-0.1.0-alpha.1-$platform.tar.gz"
+  selected_sha=$(awk '{print $1}' "$selected.sha256")
+  selected_bytes=$(wc -c < "$selected" | tr -d ' ')
+  run --artifact-dir "$scratch/server" --expected-current "$selected_sha" --expected-sha256 "$selected_sha" --expected-bytes "$selected_bytes" --report-json || fail 'Update protocol failed'
+  grep -Fxq -- --expected-current "$INSTALL_TEST_MARKER"
+  grep -Fxq -- --json "$INSTALL_TEST_MARKER"
+  if run --artifact-dir "$scratch/server" --expected-current "$selected_sha" --expected-sha256 "$selected_sha" --expected-bytes "$((selected_bytes + 1))"; then fail 'Accepted wrong captured size'; fi
+  [[ ! -s "$INSTALL_TEST_MARKER" ]]
+  wrong_sha=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  if run --artifact-dir "$scratch/server" --expected-current "$selected_sha" --expected-sha256 "$wrong_sha" --expected-bytes "$selected_bytes"; then fail 'Accepted wrong captured digest'; fi
+  [[ ! -s "$INSTALL_TEST_MARKER" ]]
   mkdir "$scratch/legacy-$system"
   cp "$scratch/server/proofstorm-0.1.0-alpha.1-$legacy.tar.gz"* "$scratch/legacy-$system/"
   run --artifact-dir "$scratch/legacy-$system" || fail 'Local legacy install failed'

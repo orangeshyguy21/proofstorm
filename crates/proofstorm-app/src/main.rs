@@ -22,6 +22,7 @@ use cli::Action as Command;
 async fn main() -> Result<()> {
     let (args, command) = cli::parse();
     let (output_kind, label) = match &command {
+        Command::Update { .. } => ("update", Some("Checking official release")),
         Command::Setup { .. } => ("setup", Some("Checking installation")),
         Command::Gui { .. } | Command::GuiStart { .. } => {
             ("gui", Some("Checking Proofstorm files"))
@@ -50,6 +51,18 @@ async fn main() -> Result<()> {
         }
     };
     let mut output = cli_output::Output::new(args.json, output_kind, label);
+    if let Command::Update { check } = command {
+        let result = proofstorm_app::self_update::run(check, args.home.as_deref(), &|label| {
+            output.update(label);
+        })
+        .await;
+        output.show(&result)?;
+        anyhow::ensure!(
+            result.success(),
+            "Proofstorm update did not complete; see the update result above"
+        );
+        return Ok(());
+    }
     if let Command::DevReset { yes } = command {
         use std::io::{IsTerminal, Write};
         let home = args
@@ -346,15 +359,17 @@ async fn main() -> Result<()> {
         }
     }
     if let Command::InstallBundle {
+        expected_current,
         bundle,
         prefix,
         allow_development,
     } = &command
     {
-        return output.show(&proofstorm_app::installer::install(
+        return output.show(&proofstorm_app::installer::install_checked(
             bundle,
             prefix,
             *allow_development,
+            expected_current.as_deref(),
         )?);
     }
     if let (
@@ -392,6 +407,9 @@ async fn main() -> Result<()> {
     )?;
     if args.json {
         environment.report();
+    }
+    if let Some(installation) = &environment.installation {
+        proofstorm_app::bootstrap::check_deployed_release(installation)?;
     }
     if let Some(parent) = environment
         .database
@@ -442,6 +460,7 @@ async fn main() -> Result<()> {
         .with_installation(environment.installation.clone());
     match command {
         Command::Version { .. }
+        | Command::Update { .. }
         | Command::DevReset { .. }
         | Command::RuntimeDelete { .. }
         | Command::CheckoutRegister { .. }

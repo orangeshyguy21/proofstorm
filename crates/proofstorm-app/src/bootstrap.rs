@@ -207,6 +207,41 @@ pub fn check_installed_runtime(installation: &Installation) -> Result<()> {
     healthy(installation, &controller)
 }
 
+/// Refuse a different managed release before opening its shared database.
+/// This is a passive version gate; live runtime checks still establish readiness.
+pub fn check_deployed_release(installation: &Installation) -> Result<()> {
+    let executable = std::env::current_exe()?.canonicalize()?;
+    let bundle = executable.parent().and_then(Path::parent);
+    // Unpackaged development/manual clients keep their existing configuration
+    // rules. Installed clients (including retained older bundles) are gated.
+    if bundle
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .is_none_or(|name| name != "versions")
+    {
+        return Ok(());
+    }
+    check_deployed_image(installation, &crate::release::describe())
+}
+
+fn check_deployed_image(installation: &Installation, info: &Value) -> Result<()> {
+    // Development checkouts use their existing source/build coherence checks.
+    if installation.home.join("checkout-artifacts.json").exists()
+        || info["controller"]["image"].is_null()
+    {
+        return Ok(());
+    }
+    let bytes = std::fs::read(installation.home.join("deployment-inputs.json"))
+        .context("runtime compatibility is unknown; disconnect old MCP sessions, stop the GUI, and run setup before reconnecting")?;
+    let deployed: Value = serde_json::from_slice(&bytes)?;
+    ensure!(
+        deployed["installation_id"] == installation.id
+            && deployed["image"] == info["controller"]["image"],
+        "installed client differs from the deployed runtime; disconnect old MCP sessions, stop the GUI, and run setup before reconnecting"
+    );
+    Ok(())
+}
+
 /// Startup consumes a verified artifact snapshot; runtime ownership/health remain live checks.
 pub(crate) fn check_verified_runtime(
     verified: &crate::artifacts::Verified,
@@ -652,3 +687,33 @@ fn healthy(installation: &Installation, controller: &Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod update_compatibility_tests {
+    use super::*;
+    #[test]
+    fn deployed_version_gate_is_passive_and_refuses_missing_or_mismatched_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let installation = Installation::initialize(root.path(), None, None).unwrap();
+        let info = json!({"controller":{"image":"ghcr.io/example/controller@sha256:new"}});
+        let sentinel = b"shared state must not be opened";
+        std::fs::write(installation.database(), sentinel).unwrap();
+        assert!(check_deployed_image(&installation, &info).is_err());
+        for image in [
+            "ghcr.io/example/controller@sha256:old",
+            "ghcr.io/example/controller@sha256:new",
+        ] {
+            std::fs::write(
+                root.path().join("deployment-inputs.json"),
+                serde_json::to_vec(&json!({"installation_id":installation.id,"image":image}))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                check_deployed_image(&installation, &info).is_ok(),
+                image.ends_with(":new")
+            );
+            assert_eq!(std::fs::read(installation.database()).unwrap(), sentinel);
+        }
+    }
+}

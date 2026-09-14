@@ -85,6 +85,15 @@ catalog for full configuration and compatibility details.
 | Keycloak | `keycloak` | 25.0.6 | Test OIDC provider |
 | Workspace | `attacker-workspace` | 0.1.0-alpha.1 | General-purpose shell for commands and testing cell services |
 
+## Updates
+
+```sh
+storm update --check
+storm update
+```
+
+Follow the reported steps to refresh the runtime and reconnect agents; the command only installs files.
+
 ## Development
 
 Contributors also need Rust and just. Docker is required for the runtime in both
