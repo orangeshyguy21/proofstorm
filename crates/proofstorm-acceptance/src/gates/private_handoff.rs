@@ -10,7 +10,6 @@ use std::{fs, path::Path};
 
 const INSTANCE: &str = "cocod-wallet-instance";
 const EXPERIMENT: &str = "cocod-wallet-experiment";
-const PARENT: &str = "cocod-wallet-session";
 const RECIPIENT_CAPABILITIES: &[&str] = &[
     "catalog.read",
     "component.exec_live",
@@ -27,10 +26,10 @@ fn save(directory: &Path, id: &str, value: &Value) -> Result<()> {
     )?;
     Ok(())
 }
-fn scoped(session: &str, id: &str, mut parameters: Value) -> Value {
+fn scoped(id: &str, mut parameters: Value) -> Value {
     parameters.as_object_mut().expect("parameters").extend(
-        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,
-        "session_id":session,"operation_id":id,"idempotency_key":id})
+        json!({"name":INSTANCE,"run_id":EXPERIMENT,
+        "request_id":id})
         .as_object()
         .unwrap()
         .clone(),
@@ -40,12 +39,11 @@ fn scoped(session: &str, id: &str, mut parameters: Value) -> Value {
 fn child_operation(
     client: &mut McpClient,
     directory: &Path,
-    session: &str,
     id: &str,
     tool: &str,
     parameters: Value,
 ) -> Result<Value> {
-    client.call(tool, scoped(session, id, parameters))?;
+    client.call(tool, scoped(id, parameters))?;
     let receipt = cell::wait_operation(client, id, 60)?;
     save(directory, id, &receipt)?;
     Ok(cell::artifact_content(&receipt)?.clone())
@@ -77,9 +75,9 @@ fn delegate(
 ) -> Result<()> {
     let value = client.call(
         "private_access_issue",
-        json!({"instance_id":INSTANCE,"recipient_principal_id":principal,
+        json!({"request_id":session,"name":INSTANCE,"recipient_principal_id":principal,
         "recipient_grant_id":session,"component":wallet,"mint":"mint","reference":reference,
-        "receive":receive,"idempotency_key":session}),
+        "receive":receive}),
     )?;
     if value["principal_id"] != principal || value["scope"]["reference"] != reference {
         bail!("recipient session binding differs");
@@ -192,15 +190,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             &reference,
             &json!({"argv":receive,"timeout_seconds":60,"input":input}),
         )?;
-        // A child cannot clear the parent's runtime session before ownership is checked.
-        refused(
-            recipient,
-            directory,
-            &id("parent-release-denied"),
-            "validation_failed",
-            "session_finish",
-            json!({"session_id":PARENT,"idempotency_key":id("parent-release-denied")}),
-        )?;
+        cell::assert_tool_absent(recipient, "session_finish")?;
         refused(
             recipient,
             directory,
@@ -208,7 +198,6 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             "access_denied",
             "wallet_balance",
             scoped(
-                session,
                 &id("sender-balance-denied"),
                 json!({"wallet":source,"mint":"mint"}),
             ),
@@ -218,9 +207,8 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             &id("unbound-exec-denied"),
             "access_denied",
-            "component_exec_live",
+            "cell_exec",
             scoped(
-                session,
                 &id("unbound-exec-denied"),
                 json!({"component":destination,"argv":["true"],"timeout_seconds":10}),
             ),
@@ -243,9 +231,8 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             &id("command-denied"),
             "access_denied",
-            "component_exec_live",
+            "cell_exec",
             scoped(
-                session,
                 &id("command-denied"),
                 json!({
             "component":destination,"argv":substituted,"timeout_seconds":60,"output":{"mode":"private"},
@@ -257,7 +244,6 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         let delivered = child_operation(
             recipient,
             directory,
-            session,
             &id("deliver"),
             "private_transfer",
             json!({"transfer":{"transferMethod":"deliver","component":destination,"reference":reference}}),
@@ -268,9 +254,8 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         let native = child_operation(
             recipient,
             directory,
-            session,
             &id("receive"),
-            "component_exec_live",
+            "cell_exec",
             json!({"component":destination,"argv":receive,"timeout_seconds":60,"output":{"mode":"private"},
             "private_payload":{"kind":"consume","reference":reference,"input":input}}),
         )?;
@@ -287,7 +272,6 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         let balance = child_operation(
             recipient,
             directory,
-            session,
             &id("balance"),
             "wallet_balance",
             json!({"wallet":destination,"mint":"mint"}),
@@ -304,7 +288,6 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             "access_denied",
             "wallet_balance",
             scoped(
-                session,
                 &id("revoked-balance-denied"),
                 json!({"wallet":destination,"mint":"mint"}),
             ),
@@ -436,7 +419,6 @@ fn revoked_before_receive(
     let restored = child_operation(
         recipient,
         directory,
-        "handoff-revoked",
         "handoff-after-restart",
         "private_transfer",
         json!({"transfer":{"transferMethod":"status","component":"wallet-a","reference":reference}}),
@@ -457,7 +439,6 @@ fn revoked_before_receive(
         "access_denied",
         "private_transfer",
         scoped(
-            "handoff-revoked",
             "handoff-revoked-deliver",
             json!({"transfer":{"transferMethod":"deliver","component":"wallet-a","reference":reference}}),
         ),

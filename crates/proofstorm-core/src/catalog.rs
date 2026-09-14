@@ -679,10 +679,10 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         cocod_wallet_entry(amd64, backends, adapter_version),
         catalog_entry(
             amd64,
-            "attacker-workspace",
+            "workspace",
             backends,
             ComponentKind::Attacker,
-            "Disposable adversarial client workspace",
+            "General-purpose shell workspace for running commands and testing cell services",
             adapter_version,
             "0.1.0-alpha.1",
             ReleaseChannel::Prerelease,
@@ -1425,7 +1425,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
                 "wallet_pay",
             ],
             &[
-                "live Nutshell CLI entrypoint: export HOME=/wallet; cd /app; cashu --help. Use CLI help to discover commands and set the wallet name and mint URL explicitly when operating a wallet. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
+                "Native Nutshell CLI entrypoint: export HOME=/wallet; cd /app; cashu -w wallet --help. Use the default internal name wallet (-w wallet) and set the mint URL explicitly on every command. Proofstorm component IDs such as alice and bob identify separate persistent volumes, not Nutshell wallet names. All native and typed operations use /wallet/.cashu/wallet/wallet.sqlite3. Named wallets are unsupported in this pinned release because receive and balance disagree about their database paths. Existing named-wallet state is not migrated automatically; recover it separately before replacing a validation cell. Use cashu -w wallet -h <mint-url> balance to read the native balance. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
             ],
         )],
         "keycloak" => vec![runtime_endpoint(
@@ -1439,7 +1439,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             ],
             &[],
         )],
-        "redis" | "postgresql" | "attacker-workspace" => {
+        "redis" | "postgresql" | "workspace" => {
             vec![runtime_endpoint("component", "service", OBSERVE, &[])]
         }
         _ => vec![runtime_endpoint(

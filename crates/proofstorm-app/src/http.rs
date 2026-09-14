@@ -1,5 +1,5 @@
 //! Local, read-only HTTP transport. Uses the same workspace/principal as the CLI.
-use crate::{Error, cell::Cells, environment::EnvironmentQuery};
+use crate::{Error, cell::Cells};
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::Frame;
 use tokio::sync::{Semaphore, watch};
@@ -141,12 +141,12 @@ async fn handle(
             Ok(json(StatusCode::OK, &snapshot))
         }
         "/v1/environment" => {
-            let Ok(query) = serde_urlencoded::from_str::<EnvironmentQuery>(
+            let Ok(query) = serde_urlencoded::from_str::<crate::environment::EnvironmentReadQuery>(
                 request.uri().query().unwrap_or_default(),
             ) else {
                 return Ok(error(StatusCode::BAD_REQUEST, "invalid_query"));
             };
-            match cells.environment(&query).await {
+            match cells.environment_read(&query, 24 * 1024).await {
                 Ok(view) => Ok(json(StatusCode::OK, &view)),
                 Err(e) => {
                     eprintln!("environment read failed: {e}");

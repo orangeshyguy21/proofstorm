@@ -1,16 +1,39 @@
 //! Named-cell convenience: prepare a specification and enter the shared apply path.
-use super::{CellView, Cells};
+use super::{AppliedCell, CellView, Cells};
 use crate::{Error, ErrorKind};
 use proofstorm_core::{Capability, CellSpec};
-use proofstorm_store::{CellHandlePhase, StoreError};
+use proofstorm_store::{CellHandle, CellHandlePhase, StoreError};
+
+/// Durable admission, without fetching status, activity or sessions for presentation.
+#[derive(Debug)]
+pub struct UpResult {
+    pub cell: CellHandle,
+    pub applied: AppliedCell,
+    pub activity_ready: bool,
+}
 
 impl Cells {
+    pub async fn up(&self, name: &str, spec: &CellSpec) -> Result<CellView, Error> {
+        let accepted = self.up_accepted(name, spec, None, None).await?;
+        let mut view = self.inspect(name, 0).await?;
+        view.reconciliation_error = accepted.applied.reconciliation_error;
+        Ok(view)
+    }
+
     /// Stages are idempotent and resumable, not a cross-system transaction.
+    /// Preconditions fence an existing cell; omit them for creation. Supplying
+    /// the instance key as well as the generation also fences replacement.
     #[allow(
         clippy::too_many_lines,
         reason = "creation stages share one lifecycle guard"
     )]
-    pub async fn up(&self, name: &str, spec: &CellSpec) -> Result<CellView, Error> {
+    pub async fn up_accepted(
+        &self,
+        name: &str,
+        spec: &CellSpec,
+        expected_generation: Option<u64>,
+        expected_instance_key: Option<&str>,
+    ) -> Result<UpResult, Error> {
         self.authorize(&[
             Capability::CellCreate,
             Capability::CellRead,
@@ -22,6 +45,34 @@ impl Cells {
             Capability::CellOperate,
         ])?;
         let _lifecycle = crate::lifecycle::guard(&self.store).await?;
+        if expected_generation.is_some() || expected_instance_key.is_some() {
+            let cell = self
+                .resolve(name)
+                .and_then(|cell| self.instance(&cell).map(|instance| (cell, instance)))
+                .map_err(|error| {
+                    if error.kind == ErrorKind::Missing {
+                        Error::problem(
+                            "cell_update_conflict",
+                            "Expected an existing cell; no change accepted",
+                        )
+                    } else {
+                        error
+                    }
+                })?;
+            if expected_generation == Some(0) {
+                return Err(Error::problem(
+                    "cell_generation_invalid",
+                    "expected_generation must be positive",
+                ));
+            }
+            if expected_instance_key.is_some_and(|key| key != cell.1.instance_key) {
+                return Err(Error::problem(
+                    "stale_incarnation",
+                    "This name refers to a different cell incarnation; inspect it before editing",
+                ));
+            }
+            return self.up_edit(&cell.0, spec, expected_generation).await;
+        }
         match self.resolve(name) {
             Ok(handle) => {
                 crate::lifecycle::reconcile_name(
@@ -47,8 +98,7 @@ impl Cells {
                                     "finish closing this cell before starting it again",
                                 ));
                             }
-                            self.ensure_run(&current)?;
-                            return self.edit(name, spec, false, &[]).await;
+                            return self.up_edit(&current, spec, None).await;
                         }
                         Err(error) if error.kind == ErrorKind::Missing => {}
                         Err(error) => return Err(error),
@@ -109,13 +159,43 @@ impl Cells {
             }
             Err(e) => return Err(e.into()),
         }
-        self.apply_draft_locked(&cell.instance_id, &draft_id, &digest, &cell.instance_id)
+        let applied = self.apply_draft_locked(&cell.instance_id, &draft_id, &digest, &cell.instance_id)
             .await.map_err(|mut error| {
                 error.details = Some(serde_json::json!({"code":"cell_materialization_incomplete",
                     "cell":name,"stage":"published","recovery":"repeat up with the same name and configuration"}));
                 error
             })?;
-        self.ensure_run(&cell)?;
-        self.inspect(name, 0).await
+        // Activity setup cannot turn already accepted configuration into a
+        // failed mutation. The receipt exposes whether it needs another try.
+        let activity_ready = self.ensure_run(&cell).is_ok();
+        Ok(UpResult {
+            cell,
+            applied,
+            activity_ready,
+        })
+    }
+
+    async fn up_edit(
+        &self,
+        cell: &CellHandle,
+        spec: &CellSpec,
+        expected_generation: Option<u64>,
+    ) -> Result<UpResult, Error> {
+        if cell.phase != CellHandlePhase::Open {
+            return Err(Error::problem(
+                "cell_closing",
+                "finish closing this cell before editing it",
+            ));
+        }
+        let plan = self.plan_edit_at(&cell.name, spec, false, &[], expected_generation)?;
+        let applied = self
+            .apply_update("", &plan, &format!("edit:{}", plan.digest))
+            .await?;
+        let activity_ready = self.ensure_run(cell).is_ok();
+        Ok(UpResult {
+            cell: cell.clone(),
+            applied,
+            activity_ready,
+        })
     }
 }

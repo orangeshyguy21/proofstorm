@@ -58,6 +58,141 @@ fn seed(store: &Store) {
         .unwrap();
 }
 
+#[test]
+fn directory_filters_before_limit_and_does_not_decode_unrelated_sessions_or_write() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    {
+        let db = store.lock().unwrap();
+        for index in 0..2000 {
+            db.execute("INSERT INTO sessions(workspace_id,id,experiment_id,instance_id,principal_id,phase_json,started_at,last_activity_at,finished_at) VALUES('workspace',?1,'experiment','instance',?2,?3,?4,?4,?5)",
+                params![format!("session-{index:04}"),if index<1990 {"sender"} else {"receiver"},if index<1990 {"malformed unrelated record"} else {"\"finished\""},index,if index<1990 {None} else {Some(3000)}]).unwrap();
+        }
+    }
+    let before = store.observation_token("workspace", "sender").unwrap();
+    let digest = store
+        .session_observation_digest("workspace", "sender", "instance")
+        .unwrap();
+    let filter = SessionFilters {
+        principal_id: Some("receiver".into()),
+        run_id: Some("experiment".into()),
+        phase: Some(SessionPhase::Finished),
+        started_after_unix: Some(1992),
+        started_before_unix: Some(1998),
+        ..SessionFilters::default()
+    };
+    let page = store
+        .session_candidates(
+            "workspace",
+            "sender",
+            "instance",
+            &filter,
+            SessionWindow {
+                after_id: "",
+                limit: 3,
+                observed_at: 4000,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        page.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["session-1992", "session-1993", "session-1994"]
+    );
+    let next = store
+        .session_candidates(
+            "workspace",
+            "sender",
+            "instance",
+            &filter,
+            SessionWindow {
+                after_id: &page.last().unwrap().id,
+                limit: 3,
+                observed_at: 4000,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        next.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["session-1995", "session-1996", "session-1997"]
+    );
+    assert_eq!(
+        store.observation_token("workspace", "sender").unwrap(),
+        before
+    );
+    assert_eq!(
+        store
+            .session_observation_digest("workspace", "sender", "instance")
+            .unwrap(),
+        digest
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE sessions SET last_activity_at=last_activity_at+1 WHERE id='session-1992'",
+            [],
+        )
+        .unwrap();
+    assert_ne!(
+        store
+            .session_observation_digest("workspace", "sender", "instance")
+            .unwrap(),
+        digest
+    );
+}
+
+#[test]
+fn directory_overlap_uses_a_fixed_observation_time_and_cell_scope() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let db = store.lock().unwrap();
+    for (id, start, end) in [
+        ("anchor", 10, None),
+        ("earlier", 1, Some(9)),
+        ("intersects", 5, Some(12)),
+        ("future", 30, None),
+    ] {
+        db.execute("INSERT INTO sessions(workspace_id,id,experiment_id,instance_id,principal_id,phase_json,started_at,last_activity_at,finished_at) VALUES('workspace',?1,'experiment','instance','sender','\"active\"',?2,?2,?3)",params![id,start,end]).unwrap();
+    }
+    drop(db);
+    let filter = SessionFilters {
+        overlaps_with: Some("anchor".into()),
+        ..SessionFilters::default()
+    };
+    let matches = store
+        .session_candidates(
+            "workspace",
+            "sender",
+            "instance",
+            &filter,
+            SessionWindow {
+                after_id: "",
+                limit: 20,
+                observed_at: 20,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        matches.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["intersects"]
+    );
+    assert!(
+        store
+            .session_candidates(
+                "workspace",
+                "sender",
+                "another-cell",
+                &filter,
+                SessionWindow {
+                    after_id: "",
+                    limit: 20,
+                    observed_at: 20
+                }
+            )
+            .is_err()
+    );
+}
+
 fn submit(store: &Store, actor: &str, session: &str, id: &str) -> CellOperation {
     store
         .create_operation(
@@ -343,7 +478,7 @@ fn concurrent_default_run_creation_converges_without_ownership_collisions() {
 }
 
 #[test]
-fn denied_and_closed_default_runs_do_not_silently_create_a_new_group() {
+fn denied_calls_do_not_create_runs_and_closed_defaults_roll_forward_explicitly() {
     let store = Store::memory().unwrap();
     seed(&store);
     store.replace_grants("workspace", "stranger", []).unwrap();
@@ -369,11 +504,29 @@ fn denied_and_closed_default_runs_do_not_silently_create_a_new_group() {
             [&op.experiment_id],
         )
         .unwrap();
+    let continued = implicit_submit(&store, "sender", "after-close").unwrap();
+    assert_ne!(continued.experiment_id, op.experiment_id);
+    assert_eq!(
+        implicit_submit(&store, "sender", "after-close").unwrap(),
+        continued
+    );
+    let sealed = store.create_operation(
+        "workspace",
+        "sender",
+        "instance",
+        &op.experiment_id,
+        "",
+        "explicit-closed-run",
+        OperationKind::WalletBalance,
+        &json!({"wallet":"wallet-b","mint":"mint"}),
+        "explicit-closed-run",
+        Capability::WalletControl,
+    );
     assert!(
-        implicit_submit(&store, "sender", "after-close")
+        sealed
             .unwrap_err()
             .to_string()
-            .contains("closed")
+            .contains("action run must be open")
     );
     assert_eq!(
         implicit_submit(&store, "sender", "before-close").unwrap(),

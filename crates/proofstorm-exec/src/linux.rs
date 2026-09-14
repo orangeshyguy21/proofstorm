@@ -7,7 +7,9 @@ use nix::{
     },
     unistd::Pid,
 };
-use proofstorm_core::native::{NativeCommand, OutputMode, project_invoice, project_receipt};
+use proofstorm_core::native::{
+    NativeCommand, OutputMode, cap_public_streams, project_invoice, project_receipt,
+};
 use proofstorm_core::private_io::{InputBinding, MAX_PRIVATE_BYTES, PrivateIo, select_capture};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -444,5 +446,6 @@ fn supervise(directory: &Path) -> Result<()> {
             Err(error) => receipt["payload_error"] = json!(error),
         }
     }
-    finish(directory, &receipt)
+    // Bound encoded streams before status transport; control bytes can expand sixfold in JSON.
+    finish(directory, &cap_public_streams(receipt))
 }

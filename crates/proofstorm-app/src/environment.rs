@@ -1,7 +1,9 @@
 //! A credential-free read model shared by CLI, MCP and HTTP.
+mod directory;
 mod prober;
 mod resources;
 use crate::{Error, cell::Cells};
+pub use directory::EnvironmentReadQuery;
 use futures::{StreamExt, stream};
 use kube::{Api, ResourceExt};
 use proofstorm_core::Capability;
@@ -240,7 +242,7 @@ impl Cells {
             self.runtime.client.clone(),
             &self.runtime.control_namespace,
         );
-        let mut resource = match tokio::time::timeout(
+        let resource = match tokio::time::timeout(
             Duration::from_secs(3),
             cells.get_opt(&instance.resource_name),
         )
@@ -263,56 +265,63 @@ impl Cells {
                 );
             }
         };
-        if resource.spec.workspace_id != instance.workspace_id
-            || resource.spec.instance_id != instance.id
-            || resource.spec.instance_key != instance.instance_key
-        {
-            return (
-                empty_runtime(
-                    ObservationState::Unavailable,
-                    Some("runtime_identity_mismatch"),
-                ),
-                None,
-            );
-        }
-        proofstorm_kube::probes::expire_cell_status(&mut resource, now());
-        let status = resource.status.as_ref();
-        let current = status.is_some_and(|s| {
-            s.observed_desired_generation == instance.generation
-                && s.observed_revision_digest == instance.revision_digest
-                && resource.metadata.generation.is_some()
-                && s.observed_generation == resource.metadata.generation
-        });
-        let phase = status.map(|_| {
-            crate::runtime::status_from_current_resource(instance.clone(), &resource).phase
-        });
-        let observation = RuntimeObservation {
-            message: status.and_then(|s| s.message.clone()),
-            observed_desired_generation: status.map(|s| s.observed_desired_generation),
-            state: if current {
-                ObservationState::Available
-            } else {
-                ObservationState::Stale
-            },
-            fetched_at_unix: now(),
-            source_updated_at_unix: resource
-                .metadata
-                .managed_fields
-                .as_ref()
-                .into_iter()
-                .flatten()
-                .filter(|f| f.subresource.as_deref() == Some("status"))
-                .filter_map(|f| f.time.as_ref().map(|t| t.0.as_second()))
-                .max(),
-            resource_version: resource.resource_version(),
-            generation: resource.metadata.generation,
-            observed_generation: status.and_then(|s| s.observed_generation),
-            phase,
-            error: None,
-        };
-        (observation, Some(resource))
+        observe_resource(instance, resource)
     }
 }
+
+fn observe_resource(
+    instance: &proofstorm_core::CellInstance,
+    mut resource: ProofstormCell,
+) -> (RuntimeObservation, Option<ProofstormCell>) {
+    if resource.spec.workspace_id != instance.workspace_id
+        || resource.spec.instance_id != instance.id
+        || resource.spec.instance_key != instance.instance_key
+    {
+        return (
+            empty_runtime(
+                ObservationState::Unavailable,
+                Some("runtime_identity_mismatch"),
+            ),
+            None,
+        );
+    }
+    proofstorm_kube::probes::expire_cell_status(&mut resource, now());
+    let status = resource.status.as_ref();
+    let current = status.is_some_and(|s| {
+        s.observed_desired_generation == instance.generation
+            && s.observed_revision_digest == instance.revision_digest
+            && resource.metadata.generation.is_some()
+            && s.observed_generation == resource.metadata.generation
+    });
+    let phase = status
+        .map(|_| crate::runtime::status_from_current_resource(instance.clone(), &resource).phase);
+    let observation = RuntimeObservation {
+        message: status.and_then(|s| s.message.clone()),
+        observed_desired_generation: status.map(|s| s.observed_desired_generation),
+        state: if current {
+            ObservationState::Available
+        } else {
+            ObservationState::Stale
+        },
+        fetched_at_unix: now(),
+        source_updated_at_unix: resource
+            .metadata
+            .managed_fields
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .filter(|f| f.subresource.as_deref() == Some("status"))
+            .filter_map(|f| f.time.as_ref().map(|t| t.0.as_second()))
+            .max(),
+        resource_version: resource.resource_version(),
+        generation: resource.metadata.generation,
+        observed_generation: status.and_then(|s| s.observed_generation),
+        phase,
+        error: None,
+    };
+    (observation, Some(resource))
+}
+
 fn unreadable_cell(id: String, handle: Option<proofstorm_store::CellHandle>) -> EnvironmentCell {
     EnvironmentCell {
         layout_id: None,
@@ -421,7 +430,19 @@ fn topology(
     current: bool,
     endpoints: &[Endpoint],
 ) -> (Vec<ComponentView>, Vec<LinkView>) {
-    let components: Vec<ComponentView> = revision
+    (
+        component_views(revision, resource, current, endpoints),
+        link_views(revision),
+    )
+}
+
+fn component_views(
+    revision: Option<&proofstorm_core::PublishedRevision>,
+    resource: Option<&ProofstormCell>,
+    current: bool,
+    endpoints: &[Endpoint],
+) -> Vec<ComponentView> {
+    revision
         .map(|r| {
             r.cell
                 .components
@@ -483,8 +504,11 @@ fn topology(
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    let links: Vec<LinkView> = revision
+        .unwrap_or_default()
+}
+
+fn link_views(revision: Option<&proofstorm_core::PublishedRevision>) -> Vec<LinkView> {
+    revision
         .map(|r| {
             r.cell
                 .links
@@ -497,9 +521,7 @@ fn topology(
                 })
                 .collect()
         })
-        .unwrap_or_default();
-
-    (components, links)
+        .unwrap_or_default()
 }
 
 fn empty_runtime(state: ObservationState, error: Option<&str>) -> RuntimeObservation {

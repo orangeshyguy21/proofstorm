@@ -4,7 +4,7 @@ use rusqlite::OptionalExtension;
 
 pub use proofstorm_view::{CellHandle, CellHandlePhase};
 
-fn read(
+pub(super) fn read(
     db: &rusqlite::Connection,
     workspace: &str,
     name: &str,
@@ -27,6 +27,42 @@ fn read(
 }
 
 impl Store {
+    /// Resolve only identity under the requested tool authority. The operation's
+    /// existing scope checks still authorize its cell, component and private binding.
+    pub fn resolve_cell_reference_for(
+        &self,
+        workspace: &str,
+        principal: &str,
+        reference: &str,
+        capability: Capability,
+    ) -> Result<String, StoreError> {
+        self.authorize(workspace, principal, capability)?;
+        let db = self.lock()?;
+        let named = read(&db, workspace, reference)?;
+        let exact: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM instances WHERE workspace_id=?1 AND id=?2)",
+            params![workspace, reference],
+            |row| row.get(0),
+        )?;
+        if let Some(handle) = named {
+            if exact && handle.instance_id != reference {
+                return Err(StoreError::CellUpdate {
+                    code: "cell_reference_ambiguous",
+                    message: "Name also identifies another instance; use its canonical instance ID"
+                        .into(),
+                });
+            }
+            return Ok(handle.instance_id);
+        }
+        if exact {
+            return Ok(reference.into());
+        }
+        Err(StoreError::NotFound {
+            resource: "cell",
+            id: reference.into(),
+        })
+    }
+
     /// Resolve a display name or canonical instance ID without creating bookkeeping.
     /// An unnamed instance has no recorded name owner; the empty owner is informational.
     /// Authority always comes from workspace capabilities, not this display projection.

@@ -1,43 +1,7 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:fff5ea9a5cd8ec111a261e7608dfbdab57b53f820aa2771b50c9f85a2353cbde",
+  "catalog_digest": "sha256:c3d3041d5ffd27ea5fc7e91c28f875299e39987b9546f258c4c59d6a4a330a56",
   "entries": [
-    {
-      "implementation": "attacker-workspace",
-      "kind": "attacker",
-      "upstream_version": "0.1.0-alpha.1",
-      "release_channel": "prerelease",
-      "support_lifecycle": "preferred",
-      "config_version": "attacker-workspace/0.1/v1",
-      "config_schema_digest": "sha256:1bdbb8299f99be6f022604fc2cc62f6e464a1b50c185401880a760525b69c930",
-      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-      "fields": {
-        "idle_process": {
-          "classification": "runtime_policy",
-          "required": true
-        },
-        "service_account_access": {
-          "classification": "runtime_policy",
-          "required": true
-        },
-        "workspace_profile": {
-          "classification": "runtime_policy",
-          "required": true
-        }
-      },
-      "support": {
-        "storage": [
-          "ephemeral"
-        ],
-        "payment_methods": [],
-        "payment_backends": [],
-        "units": [],
-        "payment_bindings": [],
-        "authentication": [],
-        "compatible_wallet_adapters": []
-      },
-      "compatible_dependencies": []
-    },
     {
       "implementation": "bitcoin-core",
       "kind": "bitcoin",
@@ -1649,6 +1613,42 @@
           "required": true
         },
         "persistence": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "ephemeral"
+        ],
+        "payment_methods": [],
+        "payment_backends": [],
+        "units": [],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
+    },
+    {
+      "implementation": "workspace",
+      "kind": "attacker",
+      "upstream_version": "0.1.0-alpha.1",
+      "release_channel": "prerelease",
+      "support_lifecycle": "preferred",
+      "config_version": "workspace/0.1/v1",
+      "config_schema_digest": "sha256:2663c06fb602ee4ed1ad7551f3e689bdd8722bf0dc170509b39e983bc4398be4",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "fields": {
+        "idle_process": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "service_account_access": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "workspace_profile": {
           "classification": "runtime_policy",
           "required": true
         }

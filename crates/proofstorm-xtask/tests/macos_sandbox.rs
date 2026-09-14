@@ -108,14 +108,23 @@ fn native_worker_reinstalls_fixture_payload_inside_the_verified_policy() {
     // Only the payload is fake: exercise the real worker, policy, staging and receipt helper.
     let installer = r#"#!/bin/sh
 set -eu
+id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 case "$1" in
   --version) echo fixture ;;
   --help) : ;;
+  update|upgrade) [ "$2" = --help ]; echo 'Update --check' ;;
   version) [ "$2" = --json ]; echo '{"fixture":true}' ;;
   --release-info) echo '{"fixture":true}' ;;
   --artifact-dir)
-    [ "$#" = 6 ] && [ "$3" = --archive ] && [ "$5" = --prefix ]
-    mkdir -p "$6/bin"
+    [ "$3" = --archive ] && [ "$5" = --prefix ]
+    if [ "$#" -gt 6 ]; then
+      [ "$#" = 13 ] && [ "$7" = --expected-current ] && [ "$8" = "$id" ]
+      [ "$9" = --expected-sha256 ] && [ "${11}" = --expected-bytes ] && [ "${13}" = --report-json ]
+      printf '{"bundle_id": "%s"}\n' "$id"
+      exit 0
+    fi
+    mkdir -p "$6/bin" "$6/lib/proofstorm/versions/$id"
+    ln -s "versions/$id" "$6/lib/proofstorm/current"
     cp "$0" "$6/bin/proofstorm"
     cp "$0" "$6/bin/proofstorm-mcp"
     chmod 755 "$6/bin/proofstorm" "$6/bin/proofstorm-mcp" ;;

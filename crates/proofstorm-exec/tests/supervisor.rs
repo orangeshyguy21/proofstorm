@@ -435,3 +435,25 @@ fn streams_are_drained_with_bounded_retention() {
         assert_eq!(receipt["private_output"][stream]["retained_bytes"], 16_384);
     }
 }
+
+#[test]
+fn escaped_public_streams_fit_the_supervisor_status_transport() {
+    let mut harness = Harness::new();
+    let directory = harness.start(
+        fixture(&["binary", "40000"]),
+        json!({"output":{"mode":"public"}}),
+        None,
+    );
+    let receipt = Harness::receipt(&directory);
+    assert_eq!(receipt["exit_code"], 0);
+    assert_eq!(receipt["cleanup_verified"], true);
+    assert_eq!(receipt["streams_complete"], true);
+    assert_eq!(receipt["output_truncated"], true);
+    for stream in ["stdout", "stderr"] {
+        assert_eq!(receipt["private_output"][stream]["bytes_observed"], 40000);
+        assert_eq!(receipt["private_output"][stream]["retained_bytes"], 16384);
+        let text = receipt[stream].as_str().unwrap();
+        assert!(!text.is_empty() && text.bytes().all(|byte| byte == 0));
+    }
+    assert!(fs::metadata(directory.join("receipt.json")).unwrap().len() < 32 * 1024);
+}

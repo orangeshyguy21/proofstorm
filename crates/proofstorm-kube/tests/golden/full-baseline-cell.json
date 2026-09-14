@@ -326,7 +326,7 @@
         "component_ready",
         "experiment_controllable"
       ],
-      "backend_id": "attacker-workspace",
+      "backend_id": "workspace",
       "component_id": "attacker",
       "condition_aggregation": [
         {
@@ -365,7 +365,7 @@
       },
       "credentials": [],
       "effective_config": {
-        "implementation": "attacker-workspace"
+        "implementation": "workspace"
       },
       "execution_context": {
         "component_id": "attacker",
@@ -374,7 +374,7 @@
         },
         "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
         "mounts": [],
-        "state_contract": "proofstorm/attacker-workspace-state/v1"
+        "state_contract": "proofstorm/workspace-state/v1"
       },
       "instance_key": "i-golden-b2",
       "kind": "attacker",
@@ -441,10 +441,10 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:d3d09eea9e2987cbc21e946e328f19f3fd3953457734bfacdd7687af90247c50",
+      "rollout_digest": "sha256:c118506f4d0919d71a89f282817b8361bbd93395810c6e4f62376d1738bd89b9",
       "storage": [],
       "target_descriptor": {
-        "backend_id": "attacker-workspace",
+        "backend_id": "workspace",
         "component_id": "attacker",
         "kind": "attacker",
         "ports": {},
@@ -1699,8 +1699,8 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/backend-id": "attacker-workspace",
-            "proofstorm.dev/execution-state-contract": "proofstorm/attacker-workspace-state/v1",
+            "proofstorm.dev/backend-id": "workspace",
+            "proofstorm.dev/execution-state-contract": "proofstorm/workspace-state/v1",
             "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
           },
           "labels": {
@@ -1725,7 +1725,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:d3d09eea9e2987cbc21e946e328f19f3fd3953457734bfacdd7687af90247c50"
+                "proofstorm.dev/rollout-digest": "sha256:c118506f4d0919d71a89f282817b8361bbd93395810c6e4f62376d1738bd89b9"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

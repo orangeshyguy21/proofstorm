@@ -7,7 +7,6 @@ use crate::{GateContext, McpClient, cell, json as expect};
 
 const INSTANCE: &str = "mint-management";
 const EXPERIMENT: &str = "mint-management-experiment";
-const SESSION: &str = "mint-management-session";
 const MINTS: &[&str] = &["cdk", "cdk-ldk", "cdk-bdk", "nutshell"];
 
 fn document() -> Value {
@@ -69,12 +68,9 @@ fn cli(component: &str) -> Vec<String> {
 }
 
 fn execute(client: &mut McpClient, component: &str, id: &str, mut command: Value) -> Result<Value> {
-    command.as_object_mut().unwrap().extend(json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":SESSION,"operation_id":id,"idempotency_key":id,"component":component,"timeout_seconds":15,"output":{"mode":"public"}}).as_object().unwrap().clone());
-    client.call("component_exec_live", command)?;
-    let finished = client.call(
-        "operation_wait",
-        json!({"operation_id":id,"timeout_seconds":120}),
-    )?;
+    command.as_object_mut().unwrap().extend(json!({"name":INSTANCE,"run_id":EXPERIMENT,"request_id":id,"component":component,"timeout_seconds":15,"output":{"mode":"public"}}).as_object().unwrap().clone());
+    client.call("cell_exec", command)?;
+    let finished = crate::cell::wait_one(client, id, 120)?;
     let content = cell::artifact_content(&finished)?.clone();
     if finished["phase"] != "succeeded" || content["cleanup_verified"] != true {
         bail!("management execution failed: {finished}");
@@ -123,30 +119,24 @@ fn secret_fingerprint(context: &GateContext, namespace: &str, component: &str) -
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut capabilities = crate::EXPERIMENT_CAPABILITIES.to_vec();
-    capabilities.extend(["component.exec_live", "component.control"]);
-    let mut client = context.session(
+    let mut client = context.default_session(
         &format!("management-{}", context.run_id),
         "management-agent",
-        &capabilities,
     )?;
-    client.call(
-        "cell_create",
-        json!({"draft_id":INSTANCE,"cell":document(),"idempotency_key":"create"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":document(),"request_id":"create"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id":INSTANCE,"expected_version":1,"idempotency_key":"publish"}),
-    )?;
-    client.call("cell_materialize", json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    crate::cell::review(&mut client, &preview)?;
+    crate::cell::apply(&mut client, &preview)?;
     let result = (|| -> Result<()> {
         let ready = cell::wait_ready(&mut client, INSTANCE)?;
         let namespace = expect::string(&ready, "/instance_namespace")?;
-        client.call("experiment_create", json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
-            "session_start",
-            json!({"experiment_id":EXPERIMENT,"session_id":SESSION,"idempotency_key":"session"}),
+            "run_start",
+            json!({"request_id":"6137","run_id":EXPERIMENT,"name":INSTANCE}),
         )?;
+
         for component in MINTS {
             println!("Checking {component}: native management, TLS and restart persistence");
             let fingerprint = secret_fingerprint(context, namespace, component)?;
@@ -230,7 +220,7 @@ cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir "$dir" get-info
             }
 
             let restart = format!("{component}-restart");
-            client.call("component_restart", json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":SESSION,"operation_id":restart,"idempotency_key":restart,"component":component}))?;
+            client.call("component_restart", json!({"name":INSTANCE,"run_id":EXPERIMENT,"request_id":restart,"component":component}))?;
             cell::wait_succeeded(&mut client, &restart)?;
             cell::wait_ready(&mut client, INSTANCE)?;
             if fingerprint != secret_fingerprint(context, namespace, component)? {
@@ -303,7 +293,7 @@ cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir "$dir" get-info
     if let Err(error) = &result {
         eprintln!("Management checks failed before teardown: {error:#}");
     }
-    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    client.call("cell_remove", json!({"name":INSTANCE}))?;
     let closed = cell::wait_closed(&mut client, INSTANCE)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
         bail!("management cell teardown was not verified");

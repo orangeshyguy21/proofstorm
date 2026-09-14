@@ -216,6 +216,18 @@ no cluster. It validates generated CDK configs and tests initializer edits,
 restart retries and failed-edit recovery without network access in containers.
 It may download the pinned public images if they are not cached.
 
+`just check-component-driver nutshell DRIVER_IMAGE NUTSHELL_IMAGE PLATFORM` also
+checks the native Nutshell CLI wallet workflow in a disposable container. Alice
+and Bob use the default internal name `wallet` with separate HOME/CASHU_DIR
+directories. The check funds Alice, transfers 250 sats to Bob, checks Bob's balance
+and wallet listing in fresh CLI processes, sends 50 sats back, and verifies final
+balances of 800/200. It uses Nutshell's FakeWallet Lightning backend and zero
+input fees with external networking disabled. Balance and spending are verified
+through the CLI; the test does not query or edit databases. This isolates the
+wallet contract and makes no real Lightning settlement claim. Funding claims use
+the compiled driver's native CLI invocation, verifying that quote lookup and CLI
+storage agree while the resulting receipt keeps Alice's component identity.
+
 At the end, the runner removes only the recorded runtime containers, network,
 and volumes. It compares preexisting Docker resources and configuration before
 and after, excluding the shared image cache. Avoid unrelated Docker/configuration

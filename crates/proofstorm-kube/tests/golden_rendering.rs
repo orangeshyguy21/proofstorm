@@ -52,7 +52,7 @@ fn component(
             "nutshell-wallet" => "nutshell-wallet/0.20/v1",
             "cdk-cli-wallet" => "cdk-cli-wallet/0.18/v1",
             "cocod-wallet" => "cocod-wallet/0.0.17/v1",
-            "attacker-workspace" => "attacker-workspace/0.1/v1",
+            "workspace" => "workspace/0.1/v1",
             _ => panic!("unknown test implementation {implementation:?}"),
         }
         .into(),
@@ -289,13 +289,13 @@ fn backend_cell(backend_id: &str) -> (CellSpec, &'static str) {
             ),
             "identity",
         ),
-        "attacker-workspace" => (
+        "workspace" => (
             cell(
                 "golden-attacker",
                 vec![component(
                     "attacker",
                     ComponentKind::Attacker,
-                    "attacker-workspace",
+                    "workspace",
                     ControlClass::Attacker,
                 )],
                 vec![],
@@ -369,7 +369,7 @@ fn render_backend_with_catalog(backend_id: &str, catalog: &CatalogResponse) -> V
         "postgresql" => render_postgres_component(plan),
         "redis" => render_redis_component(plan),
         "keycloak" => render_keycloak_component(plan),
-        "attacker-workspace" => render_attacker_component(plan),
+        "workspace" => render_attacker_component(plan),
         _ => panic!("uncharacterized backend {backend_id}"),
     }
     .expect("backend render");
@@ -470,7 +470,7 @@ fn full_baseline_cell() -> CellSpec {
             component(
                 "attacker",
                 ComponentKind::Attacker,
-                "attacker-workspace",
+                "workspace",
                 ControlClass::Attacker,
             ),
         ],
@@ -1222,7 +1222,6 @@ fn every_registered_backend_matches_its_golden_contract() {
 
 fn assert_backend_goldens(platform: CatalogPlatform) {
     let characterized = [
-        "attacker-workspace",
         "bitcoin-core",
         "cdk",
         "cdk-bdk",
@@ -1236,6 +1235,7 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
         "nutshell-wallet",
         "postgresql",
         "redis",
+        "workspace",
     ];
     assert_eq!(
         default_backend_registry().ids().collect::<Vec<_>>(),

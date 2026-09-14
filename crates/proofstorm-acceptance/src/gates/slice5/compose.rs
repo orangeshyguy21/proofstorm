@@ -1,5 +1,5 @@
 use super::{
-    common::{DRAFT, INSTANCE, components, empty_cell, links, now_unix},
+    common::{INSTANCE, components, empty_cell, links, now_unix},
     support::CellCleanup,
 };
 use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
@@ -35,85 +35,30 @@ pub(super) fn compose(
         bail!("network backend discovery is not explicit and bounded: {backend}");
     }
 
-    // --- compose the cell one mutation at a time ----------------------------
-    let mut draft = client.call(
-        "cell_create",
-        json!({"draft_id": DRAFT, "cell": empty_cell(), "idempotency_key": "create-slice5"}),
+    // Preflight the complete specification once, then inspect its immutable lock.
+    // Atomic stable-ID patch/retry coverage lives in the canonical surface gate and MCP tests.
+    let mut document = empty_cell();
+    document["components"] = json!(components(scenario));
+    document["links"] = json!(links());
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"request_id":"preview-slice5","cell":document}),
     )?;
-    for component in components(scenario) {
-        let id = expect::string(&component, "/id")?.to_string();
-        let mutation = json!({
-            "draft_id": DRAFT,
-            "expected_version": expect::integer(&draft, "/version")?,
-            "component": component,
-            "idempotency_key": format!("add-component-{id}")
-        });
-        draft = client.call("component_add", mutation.clone())?;
-        if id == "chain" {
-            let replayed = client.call("component_add", mutation)?;
-            if replayed != draft {
-                bail!("component mutation replay was not idempotent");
-            }
-        }
-    }
-    for link in links() {
-        let key = format!(
-            "add-link-{}-{}-{}",
-            expect::string(&link, "/kind")?,
-            expect::string(&link, "/from")?,
-            expect::string(&link, "/to")?
-        );
-        draft = client.call(
-            "link_add",
-            json!({
-                "draft_id": DRAFT,
-                "expected_version": expect::integer(&draft, "/version")?,
-                "link": link,
-                "idempotency_key": key
-            }),
-        )?;
-    }
-
-    let document = client.call("cell_read", json!({"draft_id": DRAFT}))?;
-    let composed: Vec<&str> = expect::array(&document, "/cell/components")?
-        .iter()
-        .map(|component| expect::string(component, "/id"))
-        .collect::<Result<_>>()?;
-    let mut canonical: Vec<String> = components(scenario)
-        .iter()
-        .map(|component| expect::string(component, "/id").map(str::to_owned))
-        .collect::<Result<_>>()?;
-    canonical.sort();
-    if composed != canonical {
-        bail!("component composer did not produce canonical ordering: {composed:?}");
-    }
-    let validation = client.call(
-        "cell_validate",
-        json!({"cell": document.get("cell").cloned().unwrap_or(Value::Null)}),
+    let repeated = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"request_id":"preview-slice5","cell":document}),
     )?;
-    if !expect::boolean(&validation, "/valid")? {
-        bail!("agent-composed draft is invalid: {validation}");
+    if preview != repeated {
+        bail!("exact preview retry changed the immutable plan");
     }
-
-    let published = client.call(
-        "cell_publish",
-        json!({
-            "draft_id": DRAFT,
-            "expected_version": expect::integer(&draft, "/version")?,
-            "idempotency_key": "publish-slice5",
-            "include_revision": true
-        }),
-    )?;
+    let published = cell::review(client, &preview)?;
     for entry in expect::array(&published, "/lock/entries")? {
         if !expect::string(entry, "/image")?.contains("@sha256:") {
             bail!("published lock contains an unpinned image: {entry}");
         }
     }
 
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-slice5"}),
-    )?;
+    cell::apply(client, &preview)?;
     let status = cell::wait_phase(client, INSTANCE, "ready", 180, Duration::from_secs(3))?;
     let instance_key = expect::string(&status, "/instance_key")?.to_string();
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
@@ -123,7 +68,7 @@ pub(super) fn compose(
 
     let component_status = client.call(
         "cell_component_status_list",
-        json!({"instance_id": INSTANCE, "limit": 50}),
+        json!({"name": INSTANCE, "limit": 50}),
     )?;
     let mut ready: Vec<&str> = expect::array(&component_status, "/components")?
         .iter()
@@ -167,26 +112,8 @@ pub(super) fn conformance(
     let invalid_name = &invalid_name[..50];
     let invalid_action = invalid_name;
     // --- unsupported fault kinds are refused before any action -------------
-    client.call_refused(
-        "network_delay",
-        json!({
-            "instance_id": INSTANCE, "experiment_id": "unsupported-network-experiment",
-            "session_id": "unsupported-network-session", "operation_id": "unsupported-network-delay",
-            "from_component": "wallet", "to_component": "mint", "direction": "from_to",
-            "delay_ms": 100, "jitter_ms": 10, "idempotency_key": "unsupported-network-delay-slice5"
-        }),
-        "network_fault_unsupported",
-    )?;
-    client.call_refused(
-        "network_loss",
-        json!({
-            "instance_id": INSTANCE, "experiment_id": "unsupported-network-experiment",
-            "session_id": "unsupported-network-session", "operation_id": "unsupported-network-loss",
-            "from_component": "wallet", "to_component": "mint", "direction": "bidirectional",
-            "loss_basis_points": 250, "idempotency_key": "unsupported-network-loss-slice5"
-        }),
-        "network_fault_unsupported",
-    )?;
+    cell::assert_tool_absent(client, "network_delay")?;
+    cell::assert_tool_absent(client, "network_loss")?;
 
     // --- a hand-written invalid action must fail closed with no Job --------
     let cells = kubectl.get_json(&[

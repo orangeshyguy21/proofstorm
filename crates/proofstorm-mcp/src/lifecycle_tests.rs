@@ -2,7 +2,7 @@
 use super::*;
 use std::sync::{Arc, Mutex};
 
-fn cluster_client() -> Client {
+pub(super) fn cluster_client() -> Client {
     let objects = Arc::new(Mutex::new(BTreeMap::<String, serde_json::Value>::new()));
     Client::new(
         tower::service_fn(move |request: http::Request<kube::client::Body>| {
@@ -25,6 +25,10 @@ fn cluster_client() -> Client {
                     http::Method::GET if path.ends_with("/proofstormcellactions") => (
                         200,
                         serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":[]}),
+                    ),
+                    http::Method::GET if path.ends_with("/proofstormcells") => (
+                        200,
+                        serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":objects.values().filter(|v|v["kind"]=="ProofstormCell").collect::<Vec<_>>()}),
                     ),
                     http::Method::GET => objects
                         .get(&path)
@@ -75,6 +79,158 @@ fn cluster_client() -> Client {
     )
 }
 
+fn populate_history(store: &Store, instance: &str) {
+    let run = store.default_run_id("alpha", "designer", instance).unwrap();
+    for index in 0..20 {
+        let session = format!("session-{index:02}-{}", "s".repeat(52));
+        let operation = format!("payment-{index:02}-{}", "p".repeat(52));
+        store
+            .create_operation(
+                "alpha",
+                "designer",
+                instance,
+                &run,
+                &session,
+                &operation,
+                OperationKind::ComponentExecLive,
+                &serde_json::json!({"component":"chain","argv":["bitcoin-cli","getblockcount"]}),
+                &operation,
+                Capability::ComponentExecLive,
+            )
+            .unwrap();
+        store
+            .record_operation_result(
+                "alpha",
+                &operation,
+                OperationPhase::Succeeded,
+                serde_json::json!({"exit_code":0,"cleanup_verified":true}),
+            )
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn environment_directory_handler_has_bounded_matching_text_and_structured_pages() {
+    let store = tests::seeded_store();
+    proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+    for cap in [Capability::ExperimentRead, Capability::CellOperate] {
+        store.grant("alpha", "designer", cap).unwrap();
+    }
+    let service = ProofstormMcp::new(store, "alpha", "designer")
+        .unwrap()
+        .with_kubernetes(cluster_client(), "system");
+    let request:SubmissionRequest=serde_json::from_value(serde_json::json!({"name":"directory-cell","request_id":"directory-create","cell":{"api_version":"proofstorm/v1alpha1","name":"directory","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]}})).unwrap();
+    service
+        .proofstorm_cell_up(Parameters(request))
+        .await
+        .unwrap();
+    let response = service
+        .proofstorm_environment_read(Parameters(
+            serde_json::from_value(
+                serde_json::json!({"scan":true,"owner":"designer","implementation":"bitcoin-core"}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(serialized_size(&response).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
+    let wire = serde_json::to_value(&response).unwrap();
+    let structured = response.structured_content.unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(wire["content"][0]["text"].as_str().unwrap())
+            .unwrap(),
+        structured
+    );
+    assert_eq!(structured["matched_count"], 1);
+    assert_eq!(structured["cells"]["items"][0]["name"], "directory-cell");
+    assert!(structured["cells"]["items"][0].get("sessions").is_none());
+}
+
+#[tokio::test]
+async fn named_up_receipt_stays_small_after_history_grows_and_fences_edits() {
+    let store = tests::seeded_store();
+    proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+    for cap in [
+        Capability::ExperimentRead,
+        Capability::CellOperate,
+        Capability::ComponentExecLive,
+    ] {
+        store.grant("alpha", "designer", cap).unwrap();
+    }
+    let mcp = ProofstormMcp::new(store.clone(), "alpha", "designer")
+        .unwrap()
+        .with_kubernetes(cluster_client(), "system");
+    let spec = serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"retries","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]});
+    let mut request: SubmissionRequest = serde_json::from_value(
+        serde_json::json!({"name":"alpha-retries","request_id":"retries-create","cell":spec}),
+    )
+    .unwrap();
+    let first = mcp
+        .proofstorm_cell_up(Parameters(request.clone()))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    let instance = first["cell"]["instance_id"].as_str().unwrap();
+    populate_history(&store, instance);
+    let view = mcp
+        .cells()
+        .unwrap()
+        .inspect("alpha-retries", 0)
+        .await
+        .unwrap();
+    assert!(
+        read_query::wire_size(&compact_developer_view(view)).unwrap() > MAX_AGENT_RESPONSE_BYTES,
+        "must reproduce the reported post-mutation response failure"
+    );
+    let mut changed = spec.clone();
+    changed["components"][0]["config"]["txindex"] = serde_json::json!(false);
+    request.cell = Some(serde_json::from_value(changed).unwrap());
+    request.request_id = "retries-edit".into();
+    request.expected_generation = Some(1);
+    request.expected_instance_key = first["instance_key"].as_str().map(str::to_owned);
+    for _ in 0..2 {
+        let response = mcp
+            .proofstorm_cell_up(Parameters(request.clone()))
+            .await
+            .unwrap();
+        assert!(serialized_size(&response).unwrap() < 4096);
+        let value = response.structured_content.as_ref().unwrap();
+        let wire = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            &serde_json::from_str::<serde_json::Value>(
+                wire["content"][0]["text"].as_str().unwrap()
+            )
+            .unwrap(),
+            value
+        );
+        assert_eq!(value["accepted"], true);
+        assert_eq!(value["desired_generation"], 2);
+        assert_eq!(value["cell"]["incarnation_generation"], 1);
+        assert!(value.get("activity").is_none());
+    }
+    request.cell = Some(serde_json::from_value(spec).unwrap());
+    request.request_id = "stale-edit".into();
+    let error = mcp
+        .proofstorm_cell_up(Parameters(request))
+        .await
+        .unwrap_err();
+    assert_eq!(error.data.unwrap()["code"], "cell_update_conflict");
+    let inspection = mcp
+        .proofstorm_cell_inspect(Parameters(
+            serde_json::from_value(
+                serde_json::json!({"name":"alpha-retries","fields":["/runtime/generation"]}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(serialized_size(&inspection).unwrap() < 4096);
+    let inspected = inspection.structured_content.unwrap();
+    assert_eq!(inspected["desired_generation"], 2);
+    assert_eq!(inspected["selected"]["/runtime/generation"], 2);
+}
+
 #[tokio::test]
 #[allow(
     clippy::too_many_lines,
@@ -82,6 +238,7 @@ fn cluster_client() -> Client {
 )]
 async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     let store = tests::seeded_store();
+    proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
     for cap in [Capability::ExperimentRead, Capability::CellOperate] {
         store.grant("alpha", "designer", cap).unwrap();
     }
@@ -89,41 +246,23 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
         .unwrap()
         .with_kubernetes(cluster_client(), "system");
     let cli = mcp.cells().unwrap();
-    let plan = mcp
-        .proofstorm_cell_plan(Parameters(
-            serde_json::from_value(serde_json::json!({
-                "plan_id":"transport-plan","idempotency_key":"transport-plan",
-                "components":[{"id":"chain","implementation":"bitcoin-core"}],
-                "connections":[],"runtime_requirements":[]
-            }))
-            .unwrap(),
-        ))
-        .unwrap()
-        .0;
-    let applied = mcp
-        .proofstorm_cell_apply(Parameters(CellApplyRequest {
-            instance_id: "transport-cell".into(),
-            plan_id: plan.plan_id,
-            expected_plan_digest: plan.plan_digest,
-            idempotency_key: "transport-apply".into(),
-        }))
-        .await
-        .unwrap()
-        .0;
+    let spec: CellSpec =
+        serde_json::from_str(include_str!("../../../examples/developer-cell.json")).unwrap();
+    let plan=mcp.proofstorm_cell_plan(Parameters(serde_json::from_value(serde_json::json!({"name":"transport-cell","request_id":"transport-plan","cell":spec})).unwrap())).unwrap().structured_content.unwrap();
+    let applied=mcp.proofstorm_cell_up(Parameters(serde_json::from_value(serde_json::json!({"name":"transport-cell","request_id":"transport-apply","plan":plan["plan"]})).unwrap())).await.unwrap().structured_content.unwrap();
     let view = cli.inspect("transport-cell", 0).await.unwrap();
-    assert_eq!(view.cell.instance_id, applied.instance_id);
+    assert_eq!(view.cell.instance_id, applied["cell"]["instance_id"]);
     assert!(
         store
             .cell_handle("alpha", "designer", "transport-cell")
-            .is_err()
+            .is_ok()
     );
     let read = mcp
-        .proofstorm_cell_read(Parameters(ReadDraftRequest {
-            instance_id: Some("transport-cell".into()),
-            draft_id: String::new(),
-        }))
-        .unwrap()
-        .0;
+        .cell_document(&cell_read::CellTarget {
+            name: Some("transport-cell".into()),
+            plan_id: None,
+        })
+        .unwrap();
     let closed = cli.down("transport-cell", 2).await.unwrap();
     let key = closed.runtime.unwrap().instance.instance_key;
     assert!(
@@ -148,30 +287,22 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
         .unwrap()
         .instance;
     let status = mcp
-        .proofstorm_cell_status(Parameters(InstanceRequest {
-            instance_id: "cli-name".into(),
-        }))
+        .proofstorm_cell_inspect(Parameters(
+            serde_json::from_value(serde_json::json!({"name":"cli-name"})).unwrap(),
+        ))
         .await
         .unwrap()
-        .0;
-    assert_eq!(status.instance_id, named.id);
-    assert_eq!(status.instance_key, named.instance_key);
-    let closing = mcp
-        .proofstorm_cell_close(Parameters(CloseCellRequest {
-            instance_id: "cli-name".into(),
-            expected_instance_key: named.instance_key.clone(),
-        }))
-        .await
-        .unwrap()
-        .0;
-    assert_eq!(closing.phase, InstancePhase::Closing);
-    let finish = DeveloperFinishRequest {
+        .structured_content
+        .unwrap();
+    assert_eq!(status["cell"]["instance_id"], named.id);
+    assert_eq!(status["instance_key"], named.instance_key);
+    let finish = CellRemoveRequest {
         name: "cli-name".into(),
         expected_instance_key: named.instance_key.clone(),
         timeout_seconds: 2,
     };
     let closed = mcp
-        .proofstorm_cell_finish(Parameters(finish.clone()))
+        .proofstorm_cell_remove(Parameters(finish.clone()))
         .await
         .unwrap();
     assert_eq!(
@@ -180,7 +311,7 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     );
     assert!(store.cell_handle("alpha", "designer", "cli-name").is_err());
     let replay = mcp
-        .proofstorm_cell_finish(Parameters(finish.clone()))
+        .proofstorm_cell_remove(Parameters(finish.clone()))
         .await
         .unwrap();
     assert_eq!(
@@ -198,7 +329,7 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
         Some(named.instance_key.as_str())
     );
     let error = mcp
-        .proofstorm_cell_finish(Parameters(finish))
+        .proofstorm_cell_remove(Parameters(finish))
         .await
         .unwrap_err();
     assert_eq!(error.data.unwrap()["code"], "stale_incarnation");

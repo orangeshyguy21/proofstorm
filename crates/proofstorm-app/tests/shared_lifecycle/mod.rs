@@ -393,3 +393,4 @@ async fn ambiguous_names_fail_without_selecting_or_mutating_either_cell() {
 }
 
 mod components;
+mod deletion_reporting;

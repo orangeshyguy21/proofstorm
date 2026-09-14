@@ -167,3 +167,21 @@ For k3d/kubectl/Helm updates, generate and review both platform manifests with
 [`just tool-pins`](DEVELOPMENT.md#maintainer-host-tools). Setup and `just tools`
 share pin validation, not installation directories. None of these maintenance
 commands alter the seven release assets or authorize a GitHub Release.
+
+## Self-update compatibility
+
+The first release containing `storm update` also introduces a permanent installer
+argument contract. See [the updater contract](../release/self-update.md).
+The native Mac/Linux install workers exercise the captured archive identity,
+activation precondition, JSON receipt, and stale-precondition refusal on reinstall.
+They still run with networking disabled and do not claim live feed throughput or
+cross-version runtime preservation.
+
+Before publishing a successor to the first updater release, validate that the
+previous updater consumes the candidate installer unchanged. Keep both bundles,
+use distinct versions, verify retained old files and custom runtime state, and
+record CLI/MCP metadata after activation. File activation must not open the runtime
+database. A fresh managed MCP connection must refuse a mismatched runtime before
+opening that database; stop old clients before running setup. After publication,
+repeat discovery and update through the official feed on a fresh VM. The first
+updater release is installed using the existing official installer.

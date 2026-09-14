@@ -279,6 +279,9 @@ pub enum CellHandlePhase {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CellHandle {
     pub name: String,
+    /// Name-handle counter, independent of desired configuration generation.
+    /// Verified teardown can reset it; use `instance_key` to identify an incarnation.
+    #[serde(rename = "incarnation_generation", alias = "generation")]
     pub generation: u32,
     pub owner: String,
     pub config_digest: String,

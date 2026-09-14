@@ -9,10 +9,9 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, gate::CONTROL_NAMESPACE, json as expect};
+use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const INSTANCE: &str = "cdk-postgres-instance";
-const DRAFT: &str = "cdk-postgres";
 const MARKER: &str = "persistent";
 
 fn cell_document() -> Value {
@@ -44,7 +43,7 @@ fn psql(context: &GateContext, namespace: &str, statement: &str) -> Result<Strin
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session("cdk-postgres-live", "designer", LIFECYCLE_CAPABILITIES)?;
+    let mut client = context.default_session("cdk-postgres-live", "designer")?;
 
     let catalog = client.call(
         "catalog_list",
@@ -84,14 +83,11 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("CDK does not advertise its typed PostgreSQL support");
     }
 
-    client.call(
-        "cell_create",
-        json!({"draft_id": DRAFT, "cell": cell_document(), "idempotency_key": "create-cdk-postgres"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-cdk-postgres"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": DRAFT, "expected_version": 1, "idempotency_key": "publish-cdk-postgres", "include_revision": true}),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
 
     let database_lock = cell::lock_entry(&published, "postgresql")?;
     let locked_image = expect::string(database_lock, "/image")?;
@@ -101,10 +97,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("PostgreSQL lock is not the catalog-pinned image: {database_lock}");
     }
 
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": INSTANCE, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": "materialize-cdk-postgres"}),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
     let ready = cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
@@ -259,7 +252,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     cell::wait_phase(&mut client, INSTANCE, "ready", 60, Duration::from_secs(3))?;
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_phase(&mut client, INSTANCE, "closed", 60, Duration::from_secs(3))?;
 
     println!(

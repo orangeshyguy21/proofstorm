@@ -20,7 +20,7 @@ struct Fixture {
 impl Fixture {
     fn new(name: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join(".cashu").join(name);
+        let directory = root.path().join(".cashu/wallet");
         fs::create_dir_all(&directory).unwrap();
         let db = Connection::open(directory.join("wallet.sqlite3")).unwrap();
         db.execute_batch("CREATE TABLE bolt11_mint_quotes (
@@ -155,18 +155,13 @@ impl WalletCli for FakeCli {
     async fn run(
         &self,
         home: &str,
-        wallet: &str,
+        _wallet: &str,
         _mint: &str,
         args: &[&str],
         _duration: Duration,
     ) -> Result<Output> {
         self.calls.set(self.calls.get() + 1);
-        let db = Connection::open(
-            Path::new(home)
-                .join(".cashu")
-                .join(wallet)
-                .join("wallet.sqlite3"),
-        )?;
+        let db = Connection::open(Path::new(home).join(".cashu/wallet").join("wallet.sqlite3"))?;
         let mut code = 0;
         match args {
             ["pay", invoice] => {
@@ -321,7 +316,7 @@ async fn refresh_fixture_changed(
     );
     fixture.melt();
     fixture.reserve();
-    let database = fixture.root.path().join(".cashu/recipient/wallet.sqlite3");
+    let database = fixture.root.path().join(".cashu/wallet/wallet.sqlite3");
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut request = Vec::new();
@@ -394,7 +389,7 @@ async fn refresh_unpaid_releases_only_the_matching_wallet_reservations() {
     let (fixture, server) =
         refresh_fixture(json!({"quote":MELT,"state":"UNPAID","amount":100,"fee_reserve":2})).await;
     // An auth wallet sorts first but its independent proofs must not be used.
-    let auth = Connection::open(fixture.root.path().join(".cashu/recipient/auth.sqlite3")).unwrap();
+    let auth = Connection::open(fixture.root.path().join(".cashu/wallet/auth.sqlite3")).unwrap();
     auth.execute_batch("CREATE TABLE proofs(amount INTEGER); INSERT INTO proofs VALUES(999)")
         .unwrap();
     let result = refresh::run(&fixture.config).await.unwrap();
@@ -503,7 +498,7 @@ fn wallet_names_and_duplicate_database_quotes_fail_closed() {
     fixture.set("PROOFSTORM_WALLET", "../recipient");
     assert!(fixture.config.wallet(None, None).is_err());
     fixture.set("PROOFSTORM_WALLET", "recipient");
-    let path = fixture.root.path().join(".cashu/recipient");
+    let path = fixture.root.path().join(".cashu/wallet");
     fs::copy(path.join("wallet.sqlite3"), path.join("duplicate.sqlite3")).unwrap();
     assert_eq!(
         Receive::read(&fixture.config.wallet(None, None).unwrap(), RECEIVE, None)
@@ -512,4 +507,18 @@ fn wallet_names_and_duplicate_database_quotes_fail_closed() {
             .0,
         "wallet_quote_ambiguous"
     );
+}
+
+#[test]
+fn legacy_named_wallets_are_not_silently_selected_or_migrated() {
+    let fixture = Fixture::new("recipient");
+    let canonical = fixture.root.path().join(".cashu/wallet");
+    let legacy = fixture.root.path().join(".cashu/recipient");
+    fs::rename(&canonical, &legacy).unwrap();
+    assert_eq!(
+        fixture.config.wallet(None, None).err().unwrap().0,
+        "wallet_database_missing"
+    );
+    assert!(!canonical.exists());
+    assert!(legacy.join("wallet.sqlite3").is_file());
 }

@@ -6,10 +6,9 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, LIFECYCLE_CAPABILITIES, cell, json as expect};
+use crate::{GateContext, cell, json as expect};
 
 const INSTANCE: &str = "cdk-cln-instance";
-const DRAFT: &str = "cdk-cln";
 const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
 
 fn cell_document() -> Value {
@@ -72,39 +71,20 @@ fn cell_document() -> Value {
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.session("cdk-cln-live", "designer", LIFECYCLE_CAPABILITIES)?;
+    let mut client = context.default_session("cdk-cln-live", "designer")?;
 
-    client.call(
-        "cell_create",
-        json!({
-            "draft_id": DRAFT,
-            "cell": cell_document(),
-            "idempotency_key": "create-cdk-cln"
-        }),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-cdk-cln"}),
     )?;
 
-    let published = client.call(
-        "cell_publish",
-        json!({
-            "draft_id": DRAFT,
-            "expected_version": 1,
-            "idempotency_key": "publish-cdk-cln",
-            "include_revision": true
-        }),
-    )?;
+    let published = crate::cell::review(&mut client, &preview)?;
 
     let entry = cell::lock_entry(&published, "cdk")?;
     expect::equals(entry, "/version", &Value::from("0.18.0"))?;
     expect::equals(entry, "/image", &Value::from(IMAGE))?;
 
-    client.call(
-        "cell_materialize",
-        json!({
-            "instance_id": INSTANCE,
-            "revision_digest": expect::string(&published, "/digest")?,
-            "idempotency_key": "materialize-cdk-cln"
-        }),
-    )?;
+    crate::cell::apply(&mut client, &preview)?;
 
     let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
@@ -135,7 +115,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
-    client.call("cell_close", json!({"instance_id": INSTANCE}))?;
+    client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_closed(&mut client, INSTANCE)?;
 
     println!(

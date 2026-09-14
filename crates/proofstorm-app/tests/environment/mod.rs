@@ -1,5 +1,6 @@
 use super::*;
 use proofstorm_app::environment::{EnvironmentQuery, ObservationState};
+mod directory;
 mod prober;
 
 fn observer(cells: &Cells) -> Cells {

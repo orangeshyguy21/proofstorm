@@ -42,7 +42,6 @@ pub struct McpClient {
     next_id: u64,
     initialize_result: Value,
     incarnations: std::collections::BTreeMap<String, String>,
-    published_plans: std::collections::BTreeMap<String, String>,
 }
 
 impl McpClient {
@@ -80,7 +79,6 @@ impl McpClient {
             next_id: 0,
             initialize_result: Value::Null,
             incarnations: std::collections::BTreeMap::default(),
-            published_plans: std::collections::BTreeMap::default(),
         };
         client.initialize_result = client.request(
             "initialize",
@@ -140,54 +138,39 @@ impl McpClient {
     pub fn call(&mut self, tool: &str, mut arguments: Value) -> Result<Value> {
         // Gate convenience: follow the same status -> close -> wait token contract as agents.
         // Raw envelope helpers intentionally do not fill fields, for contract refusal tests.
-        if (tool == "cell_close" || (tool == "cell_wait" && arguments["target_phase"] == "closed"))
+        if (tool == "cell_remove" || (tool == "cell_wait" && arguments["target_phase"] == "closed"))
             && arguments.get("expected_instance_key").is_none()
         {
-            let id = arguments["instance_id"]
+            let name = arguments["name"]
                 .as_str()
-                .context("instance_id required")?
+                .context("name required")?
                 .to_owned();
-            if !self.incarnations.contains_key(&id) {
-                self.call("cell_status", json!({"instance_id":id}))?;
+            if !self.incarnations.contains_key(&name) {
+                let inspected = self.call("cell_inspect", json!({"name":name}))?;
+                let key = inspected["instance_key"]
+                    .as_str()
+                    .context("cell has no incarnation")?;
+                self.incarnations.insert(name.clone(), key.to_owned());
             }
-            arguments["expected_instance_key"] = json!(
-                self.incarnations
-                    .get(&id)
-                    .context("cell status did not return instance_key")?
-            );
+            arguments["expected_instance_key"] = json!(self.incarnations[&name]);
         }
-        if tool == "cell_materialize" && arguments.get("plan_id").is_none() {
-            let revision = arguments["revision_digest"]
-                .as_str()
-                .context("revision_digest required")?;
-            arguments["plan_id"] = json!(
-                self.published_plans
-                    .get(revision)
-                    .context("publish the plan before materializing")?
-            );
-        }
-        let published_draft = (tool == "cell_publish")
-            .then(|| arguments["draft_id"].as_str().map(str::to_owned))
-            .flatten();
         let result = self.request("tools/call", tool_params(tool, arguments))?;
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
             bail!("tool {tool} failed: {result}");
         }
+        crate::json::within_bytes(&result, 32 * 1024, &format!("{tool} MCP result envelope"))?;
         let value = tool_content(tool, &result)?;
-        if let (Some(draft), Some(digest)) = (
-            published_draft,
-            value["revision_digest"]
-                .as_str()
-                .or_else(|| value["digest"].as_str()),
-        ) {
-            self.published_plans.insert(digest.into(), draft);
-        }
-
-        if let (Some(id), Some(key)) = (
-            value["instance_id"].as_str(),
-            value["instance_key"].as_str(),
-        ) {
-            self.incarnations.insert(id.into(), key.into());
+        if let Some(key) = value["instance_key"].as_str() {
+            for id in [
+                value["cell"]["name"].as_str(),
+                value["cell"]["instance_id"].as_str(),
+                value["name"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                self.incarnations.insert(id.to_owned(), key.to_owned());
+            }
         }
         Ok(value)
     }

@@ -343,20 +343,57 @@ fn write_new(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
 
 /// All files are verified before activation. One symlink switch activates both binaries.
 pub fn install(bundle: &Path, prefix: &Path, allow_development: bool) -> Result<Value> {
-    install_with_metadata(
+    install_checked(bundle, prefix, allow_development, None)
+}
+
+pub fn install_checked(
+    bundle: &Path,
+    prefix: &Path,
+    allow_development: bool,
+    expected_current: Option<&str>,
+) -> Result<Value> {
+    install_with_precondition(
         bundle,
         prefix,
         allow_development,
         &crate::release::describe(),
+        expected_current,
     )
 }
 
-fn install_with_metadata(
+#[cfg(test)]
+pub(crate) fn install_with_metadata(
     bundle: &Path,
     prefix: &Path,
     allow_development: bool,
     expected: &Value,
 ) -> Result<Value> {
+    install_with_precondition(bundle, prefix, allow_development, expected, None)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep verification, ownership and activation under one installation lock"
+)]
+fn install_with_precondition(
+    bundle: &Path,
+    prefix: &Path,
+    allow_development: bool,
+    expected: &Value,
+    expected_current: Option<&str>,
+) -> Result<Value> {
+    if let Some(id) = expected_current {
+        ensure!(
+            id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid activation precondition"
+        );
+        // An updater only acts on an already owned installation. Do not create
+        // parents or lock files at a replaced/missing prefix.
+        ensure!(
+            prefix.join("lib/proofstorm/install.json").is_file(),
+            "installation disappeared; retry from its current launcher"
+        );
+    }
     let manifest = verify_with_metadata(bundle, allow_development, Some(expected))?;
     ensure!(prefix.is_absolute(), "installation prefix must be absolute");
     shell_quote(prefix)?;
@@ -391,6 +428,19 @@ fn install_with_metadata(
     }
     directory(&managed)?;
     let _guard = crate::installation::Installation::lock(&managed)?;
+    if let Some(id) = expected_current {
+        ensure!(
+            fs::read_link(managed.join("current"))? == PathBuf::from("versions").join(id),
+            "active installation changed during update; retry from its current launcher"
+        );
+        ensure!(
+            serde_json::from_slice::<Value>(&fs::read(managed.join("install.json"))?)?
+                == json!({"format_version":1,"prefix":prefix}),
+            "installation ownership changed during update"
+        );
+        // Revalidate launcher ownership under the same lock as activation.
+        check_launchers(&managed, &prefix, false)?;
+    }
     if !existed {
         write_new(
             &managed.join("install.json"),
@@ -451,10 +501,50 @@ fn install_with_metadata(
     let (short_executable, short_command_conflict) =
         install_short_command(&managed, &prefix, path_directories())?;
     Ok(
-        json!({"installed":true,"version":manifest["version"],"prefix":prefix,"executable":prefix.join("bin/proofstorm"),
+        json!({"installed":true,"bundle_id":id,"version":manifest["version"],"prefix":prefix,"executable":prefix.join("bin/proofstorm"),
         "short_executable":short_executable,"short_command_conflict":short_command_conflict,
         "home":managed.join("state"),"release_ready":manifest["release_ready"],"runtime_initialized":false}),
     )
+}
+
+pub(crate) fn check_launchers(managed: &Path, prefix: &Path, require_present: bool) -> Result<()> {
+    for name in ["proofstorm", "proofstorm-mcp"] {
+        let path = prefix.join("bin").join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(meta) => {
+                ensure!(
+                    meta.is_file() && fs::read(&path)? == launcher(managed, name)?.as_bytes(),
+                    "unowned or changed launcher: {}",
+                    path.display()
+                );
+                if require_present {
+                    use std::os::unix::fs::PermissionsExt;
+                    ensure!(
+                        meta.permissions().mode() & 0o111 != 0,
+                        "launcher is not executable: {}",
+                        path.display()
+                    );
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !require_present => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("missing launcher: {}", path.display()));
+            }
+        }
+    }
+    if require_present && fs::symlink_metadata(prefix.join("bin/storm")).is_err() {
+        // A foreign command on PATH is an intentional short-name opt-out.
+        let expected = short_launcher(managed)?;
+        let conflict = path_directories()
+            .into_iter()
+            .map(|p| p.join("storm"))
+            .any(|p| {
+                fs::symlink_metadata(&p).is_ok()
+                    && fs::read(&p).ok().as_deref() != Some(expected.as_bytes())
+            });
+        ensure!(conflict, "short launcher is missing; retry installation");
+    }
+    Ok(())
 }
 
 fn activate(managed: &Path, id: &str) -> Result<()> {
@@ -471,4 +561,4 @@ fn activate(managed: &Path, id: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -140,9 +140,9 @@ fn coco_preserves_transactions_and_refuses_future_schema_or_noncanonical_amounts
 #[test]
 fn nutshell_holdings_count_sat_proofs_without_starting_wallets() {
     let directory = tempfile::tempdir().unwrap();
-    let native = directory.path().join(".cashu/native-wallet");
+    let native = directory.path().join(".cashu/wallet");
     fs::create_dir_all(&native).unwrap();
-    let db = Connection::open(native.join("native-wallet.sqlite3")).unwrap();
+    let db = Connection::open(native.join("wallet.sqlite3")).unwrap();
     db.execute_batch("CREATE TABLE keysets(id TEXT,mint_url TEXT,unit TEXT);
         CREATE TABLE proofs(id TEXT,amount INTEGER,reserved INTEGER,secret TEXT);
         INSERT INTO keysets VALUES('sat','http://mint:3338','sat'),('msat','http://mint:3338','msat');
@@ -158,6 +158,20 @@ fn nutshell_holdings_count_sat_proofs_without_starting_wallets() {
     assert_eq!(value["mints"][0]["balance_sat"], 64);
     assert_eq!(value["mints"][0]["reserved_sat"], 32);
     assert!(!value.to_string().contains("private-proof-canary"));
+    // Old component-named state must neither be combined with the default nor
+    // selected instead of it. Missing default state must remain an error.
+    let legacy = directory.path().join(".cashu/different-component-name");
+    fs::create_dir_all(&legacy).unwrap();
+    fs::copy(
+        native.join("wallet.sqlite3"),
+        legacy.join("different-component-name.sqlite3"),
+    )
+    .unwrap();
+    assert_eq!(read().unwrap()["mints"][0]["balance_sat"], 64);
+    fs::rename(native.join("wallet.sqlite3"), native.join("saved.sqlite3")).unwrap();
+    assert!(read().is_err());
+    assert!(!native.join("wallet.sqlite3").exists());
+    fs::rename(native.join("saved.sqlite3"), native.join("wallet.sqlite3")).unwrap();
     db.execute_batch("INSERT INTO proofs VALUES('missing',1,0,'private-proof-canary')")
         .unwrap();
     assert!(read().is_err());

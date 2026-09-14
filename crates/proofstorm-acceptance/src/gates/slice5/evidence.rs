@@ -27,9 +27,9 @@ fn expected(scenario: Scenario) -> BTreeMap<&'static str, &'static str> {
             ("bootstrap", "bootstrap_liquidity"),
             ("lost-probe", "reachability_oracle"),
             ("cancelled-probe", "reachability_oracle"),
-            ("payer-stop", "node_stop"),
-            ("payer-start", "node_start"),
-            ("payer-restart", "node_restart"),
+            ("payer-stop", "component_stop"),
+            ("payer-start", "component_start"),
+            ("payer-restart", "component_restart"),
         ],
         Scenario::Network => &[
             ("reachability-baseline", "reachability_oracle"),
@@ -130,40 +130,21 @@ pub(super) fn verify(
             == runtime_wanted,
         "scenario did not create exactly its expected typed runtime actions: {runtime:?}"
     );
-    let mut journal = Vec::new();
-    let mut after = 0;
-    loop {
-        let page = client.call(
-            "action_list",
-            json!({"experiment_id":EXPERIMENT,"after_sequence":after,"limit":100}),
-        )?;
-        let items = expect::array(&page, "/actions")?;
-        if items.is_empty() {
-            break;
-        }
-        let next = expect::integer(items.last().unwrap(), "/sequence")?;
-        ensure!(next > after, "journal pagination did not advance");
-        after = next;
-        journal.extend_from_slice(items);
-        ensure!(
-            journal.len() <= wanted.len(),
-            "journal contains excess operations"
-        );
-    }
+    let journal = crate::cell::journal(client, EXPERIMENT)?;
     let sequences = validate_journal(&journal, &wanted)?;
     client.call(
-        "experiment_close",
-        json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-evidence-run"}),
+        "run_finish",
+        json!({"request_id":"6161","run_id":EXPERIMENT}),
     )?;
     let explicit = if matches!(scenario, Scenario::Smoke) {
         vec!["wallet-pay"]
     } else {
         vec![]
     };
-    let request = json!({"experiment_id":EXPERIMENT,"include_oracle_artifacts":true,
-        "artifact_operation_ids":explicit,"include_content":true});
-    let evidence = client.call("artifact_export", request.clone())?;
-    let replay = client.call("artifact_export", request)?;
+    let request = json!({"run_id":EXPERIMENT,"include_oracle_artifacts":true,
+        "artifact_operation_ids":explicit,});
+    let evidence = crate::cell::evidence(client, request.clone())?;
+    let replay = crate::cell::evidence(client, request)?;
     ensure!(
         evidence["digest"] == replay["digest"]
             && evidence["byte_length"] == replay["byte_length"]
@@ -228,7 +209,7 @@ mod tests {
     use super::*;
     #[test]
     fn journal_is_complete_unique_ordered_and_terminal() {
-        let wanted = BTreeMap::from([("first", "node_start"), ("second", "node_stop")]);
+        let wanted = BTreeMap::from([("first", "component_start"), ("second", "component_stop")]);
         let valid = vec![
             json!({"id":"first","sequence":1,"phase":"succeeded"}),
             json!({"id":"second","sequence":2,"phase":"succeeded"}),

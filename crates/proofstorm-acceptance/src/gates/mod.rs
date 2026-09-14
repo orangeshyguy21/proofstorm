@@ -34,10 +34,12 @@ pub mod slice2;
 pub mod slice4;
 pub mod slice5;
 pub mod smoke;
+pub mod surface;
 
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
     "smoke",
+    "mcp-surface",
     "onboarding",
     "gui",
     "cli-progress",
@@ -81,6 +83,7 @@ pub const NAMES: &[&str] = &[
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
         "smoke" => smoke::run(context),
+        "mcp-surface" => surface::run(context),
         "onboarding" => onboarding::run(context),
         "gui" => gui::run(context),
         "cli-progress" => progress::run(context),

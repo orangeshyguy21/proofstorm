@@ -9,29 +9,6 @@ use serde_json::{Value, json};
 
 use crate::{GateContext, cell, json as expect};
 
-const CAPABILITIES: &[&str] = &[
-    "catalog.read",
-    "cell.read",
-    "cell.create",
-    "cell.validate",
-    "cell.publish",
-    "cell.materialize",
-    "cell.status",
-    "cell.close",
-    "experiment.create",
-    "experiment.read",
-    "experiment.close",
-    "cell.operate",
-    "wallet.create",
-    "wallet.control",
-    "wallet.fund",
-    "chain.mine",
-    "peer.connect",
-    "channel.open",
-    "component.forensics",
-    "artifact.read",
-];
-
 fn cell_document() -> Value {
     json!({
         "api_version": "proofstorm/v1alpha1",
@@ -79,12 +56,12 @@ fn invoice_from(output: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("native output contains no regtest invoice"))
 }
 
-fn scoped(instance: &str, experiment: &str, session: &str, operation: &str, extra: Value) -> Value {
+fn scoped(instance: &str, experiment: &str, operation: &str, extra: Value) -> Value {
     let mut request = json!({
-        "instance_id": instance,
-        "experiment_id": experiment,
-        "session_id": session,
-        "operation_id": operation
+        "name": instance,
+        "run_id": experiment,
+
+        "request_id": operation
     });
     let Value::Object(fields) = extra else {
         panic!("scoped fields must be an object");
@@ -107,48 +84,37 @@ fn assert_no_invoice(value: &Value, label: &str) -> Result<()> {
 pub fn run(context: &GateContext) -> Result<()> {
     let run = &context.run_id;
     let workspace = format!("quote-composition-{run}");
-    let draft = format!("quote-composition-{run}");
+
     let instance = format!("quote-composition-instance-{run}");
     let experiment = format!("quote-composition-experiment-{run}");
-    let session = format!("quote-composition-session-{run}");
-    let mut client = context.session(&workspace, "quote-agent", CAPABILITIES)?;
 
-    client.call(
-        "cell_create",
-        json!({"draft_id": draft, "cell": cell_document(), "idempotency_key": format!("create-{run}")}),
+    let mut client = context.default_session(&workspace, "quote-agent")?;
+
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":instance,"cell":cell_document(),"request_id":format!("create-{run}")}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id": draft, "expected_version": 1, "idempotency_key": format!("publish-{run}"), "include_revision": true}),
-    )?;
-    client.call(
-        "cell_materialize",
-        json!({"instance_id": instance, "revision_digest": expect::string(&published, "/digest")?, "idempotency_key": format!("materialize-{run}")}),
-    )?;
+    crate::cell::review(&mut client, &preview)?;
+    crate::cell::apply(&mut client, &preview)?;
     cell::wait_phase(&mut client, &instance, "ready", 200, Duration::from_secs(3))?;
-    let status = client.call("cell_status", json!({"instance_id": instance}))?;
+    let status = crate::cell::status(&mut client, &(instance))?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_owned();
 
     client.call(
-        "experiment_create",
-        json!({"experiment_id": experiment, "instance_id": instance, "idempotency_key": format!("experiment-{run}")}),
+        "run_start",
+        json!({"request_id":"5413","run_id": experiment, "name": instance}),
     )?;
-    client.call(
-        "session_start",
-        json!({"experiment_id": experiment, "session_id": session, "idempotency_key": format!("session-{run}")}),
-    )?;
-    client.call(
-        "liquidity_bootstrap",
+
+    crate::driver::liquidity_bootstrap(
+        context,
+        &mut client,
         scoped(
             &instance,
             &experiment,
-            &session,
             "bootstrap",
             json!({
                 "chain": "chain", "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
-                "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000,
-                "idempotency_key": format!("bootstrap-{run}")
-            }),
+                "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000}),
         ),
     )?;
     cell::wait_operation(&mut client, "bootstrap", 180)?;
@@ -157,36 +123,44 @@ pub fn run(context: &GateContext) -> Result<()> {
         ("initialize-payer", "payer-wallet"),
         ("initialize-recipient", "recipient-wallet"),
     ] {
-        client.call(
-            "wallet_initialize",
-            scoped(&instance, &experiment, &session, operation, json!({
-                "wallet": wallet, "mint": "mint", "idempotency_key": format!("{operation}-{run}")
-            })),
+        crate::driver::wallet_initialize(
+            context,
+            &mut client,
+            scoped(
+                &instance,
+                &experiment,
+                operation,
+                json!({
+                "wallet": wallet, "mint": "mint"}),
+            ),
         )?;
         cell::wait_operation(&mut client, operation, 120)?;
     }
-    client.call(
-        "wallet_fund",
+    crate::driver::wallet_fund(
+        context,
+        &mut client,
         scoped(
             &instance,
             &experiment,
-            &session,
             "fund-payer",
             json!({
                 "wallet": "payer-wallet", "mint": "mint", "payer_lightning": "payer-lnd",
-                "amount_sat": 1_000, "idempotency_key": format!("fund-{run}")
-            }),
+                "amount_sat": 1_000}),
         ),
     )?;
     cell::wait_operation(&mut client, "fund-payer", 160)?;
 
-    let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; cashu -h http://mint:3338 -u sat -w recipient-wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
+    let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; cashu -h http://mint:3338 -u sat -w wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
     client.call(
         "component_forensics",
-        scoped(&instance, &experiment, &session, "compose-invoice", json!({
-            "component": "recipient-wallet", "target_component": "mint", "script": compose_script,
-            "timeout_seconds": 60, "idempotency_key": format!("compose-{run}")
-        })),
+        scoped(
+            &instance,
+            &experiment,
+            "compose-invoice",
+            json!({
+            "component": "recipient-wallet", "script": compose_script,
+            "timeout_seconds": 60}),
+        ),
     )?;
     let composed = cell::wait_operation(&mut client, "compose-invoice", 120)?;
     let composed_quote = uuid_from(native_output(&composed)?)?;
@@ -194,30 +168,31 @@ pub fn run(context: &GateContext) -> Result<()> {
     let pay_request = scoped(
         &instance,
         &experiment,
-        &session,
         "compose-pay",
         json!({
             "wallet": "payer-wallet", "mint": "mint", "recipient_wallet": "recipient-wallet",
-            "recipient_mint": "mint", "mint_quote_id": composed_quote,
-            "idempotency_key": format!("compose-pay-{run}")
-        }),
+            "recipient_mint": "mint", "mint_quote_id": composed_quote}),
     );
-    let accepted_pay = client.call("wallet_pay", pay_request)?;
-    client.call_refused(
-        "wallet_pay",
+    let accepted_pay = crate::driver::wallet_pay(context, &mut client, pay_request)?;
+    let refusal = crate::driver::wallet_pay(
+        context,
+        &mut client,
         scoped(
             &instance,
             &experiment,
-            &session,
             "compose-pay-racer",
             json!({
                 "wallet": "payer-wallet", "mint": "mint", "recipient_wallet": "recipient-wallet",
-                "recipient_mint": "mint", "mint_quote_id": composed_quote,
-                "idempotency_key": format!("compose-pay-racer-{run}")
-            }),
+                "recipient_mint": "mint", "mint_quote_id": composed_quote}),
         ),
-        "quote_payment_already_claimed",
-    )?;
+    )
+    .expect_err("an already claimed quote must reject a second payer");
+    anyhow::ensure!(
+        refusal
+            .downcast_ref::<proofstorm_store::StoreError>()
+            .is_some_and(|error| error.code() == "quote_payment_already_claimed"),
+        "unexpected claim refusal: {refusal}"
+    );
     let paid = cell::wait_operation(&mut client, "compose-pay", 160)?;
     let paid_content = cell::artifact_content(&paid)?;
     if expect::string(paid_content, "/quote_observations/0/state")? != "PAID"
@@ -239,17 +214,16 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("single-flight admission created more than one payment job: {pay_jobs}");
     }
 
-    let accepted_invoice = client.call(
-        "wallet_invoice",
+    let accepted_invoice = crate::driver::wallet_invoice(
+        context,
+        &mut client,
         scoped(
             &instance,
             &experiment,
-            &session,
             "external-invoice",
             json!({
                 "wallet": "recipient-wallet", "mint": "mint", "amount_sat": 200,
-                "timeout_seconds": 300, "idempotency_key": format!("external-invoice-{run}")
-            }),
+                "timeout_seconds": 300}),
         ),
     )?;
     let invoice_operation = cell::wait_operation(&mut client, "external-invoice", 120)?;
@@ -265,12 +239,9 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &session,
             "read-private-invoice",
             json!({
-                "component": "recipient-wallet", "script": read_script, "timeout_seconds": 30,
-                "idempotency_key": format!("read-private-{run}")
-            }),
+                "component": "recipient-wallet", "script": read_script, "timeout_seconds": 30}),
         ),
     )?;
     let private_read = cell::wait_operation(&mut client, "read-private-invoice", 90)?;
@@ -286,12 +257,9 @@ pub fn run(context: &GateContext) -> Result<()> {
         scoped(
             &instance,
             &experiment,
-            &session,
             "external-lightning-pay",
             json!({
-                "component": "payer-lnd", "script": pay_invoice_script, "timeout_seconds": 60,
-                "idempotency_key": format!("external-pay-{run}")
-            }),
+                "component": "payer-lnd", "script": pay_invoice_script, "timeout_seconds": 60}),
         ),
     )?;
     let external_payment = cell::wait_operation(&mut client, "external-lightning-pay", 120)?;
@@ -299,17 +267,16 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("external Lightning payment failed: {external_payment}");
     }
 
-    let accepted_claim = client.call(
-        "wallet_quote_claim",
+    let accepted_claim = crate::driver::wallet_quote_claim(
+        context,
+        &mut client,
         scoped(
             &instance,
             &experiment,
-            &session,
             "external-claim",
             json!({
                 "wallet": "recipient-wallet", "mint": "mint", "mint_quote_id": external_quote,
-                "timeout_seconds": 30, "idempotency_key": format!("external-claim-{run}")
-            }),
+                "timeout_seconds": 30}),
         ),
     )?;
     let claimed = cell::wait_operation(&mut client, "external-claim", 120)?;
@@ -318,17 +285,18 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("externally paid quote was not issued by explicit claim: {claimed}");
     }
 
-    let quote_status = client.call(
-        "wallet_quote_status",
-        json!({"instance_id": instance, "wallet": "recipient-wallet", "mint": "mint", "direction": "receive", "quote_id": external_quote}),
+    let quote_status = crate::driver::quote_status(
+        context,
+        &mut client,
+        json!({"name": instance, "wallet": "recipient-wallet", "mint": "mint", "direction": "receive", "quote_id": external_quote}),
     )?;
-    let quote_list = client.call(
-        "wallet_quote_list",
-        json!({"experiment_id": experiment, "limit": 20}),
+    let quote_list = crate::driver::quote_observations(
+        context,
+        &mut client,
+        json!({"run_id": experiment, "limit": 20}),
     )?;
-    let journal = client.call(
-        "action_list",
-        json!({"experiment_id": experiment, "after_sequence": 0, "limit": 100}),
+    let journal = Ok::<_, anyhow::Error>(
+        json!({"actions":crate::cell::journal(&mut client, &(experiment))?}),
     )?;
     for (value, label) in [
         (&paid, "typed pay operation"),
@@ -368,17 +336,13 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     client.call(
-        "session_finish",
-        json!({"session_id": session, "idempotency_key": format!("release-{run}")}),
+        "run_finish",
+        json!({"request_id":"13809","run_id": experiment}),
     )?;
-    client.call(
-        "experiment_close",
-        json!({"experiment_id": experiment, "idempotency_key": format!("close-experiment-{run}")}),
-    )?;
-    let evidence = client.call(
-        "artifact_export",
+    let evidence = crate::cell::evidence(
+        &mut client,
         json!({
-            "experiment_id": experiment, "include_oracle_artifacts": false, "include_content": true,
+            "run_id": experiment, "include_oracle_artifacts": false,
             "artifact_operation_ids": ["compose-pay", "external-invoice", "external-claim"]
         }),
     )?;
@@ -399,7 +363,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "typed evidence outside component_forensics requests",
     )?;
 
-    client.call("cell_close", json!({"instance_id": instance}))?;
+    client.call("cell_remove", json!({"name": instance}))?;
     let closed = cell::wait_phase(
         &mut client,
         &instance,

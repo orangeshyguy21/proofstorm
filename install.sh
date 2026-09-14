@@ -10,26 +10,44 @@ usage() {
 }
 
 install_prefix="${HOME:?HOME is required}/.local"
-install_version="0.1.0-alpha.4"
+install_version="0.1.0-alpha.5"
 artifact_dir=""
 archive_name=""
 allow_development=false
+expected_current=""
+expected_sha256=""
+expected_bytes=""
+report_json=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --prefix|--version|--artifact-dir|--archive)
+    --prefix|--version|--artifact-dir|--archive|--expected-current|--expected-sha256|--expected-bytes)
       [ "$#" -ge 2 ] || fail "$1 needs a value"
       case "$1" in
         --prefix) install_prefix=$2 ;;
         --version) install_version=$2 ;;
         --artifact-dir) artifact_dir=$2 ;;
         --archive) archive_name=$2 ;;
+        --expected-current) expected_current=$2 ;;
+        --expected-sha256) expected_sha256=$2 ;;
+        --expected-bytes) expected_bytes=$2 ;;
       esac
       shift 2 ;;
     --allow-development) allow_development=true; shift ;;
+    --report-json) report_json=true; shift ;;
     --help|-h) usage; exit 0 ;;
     *) fail "unknown option: $1" ;;
   esac
 done
+if [ -n "$expected_current$expected_sha256$expected_bytes" ]; then
+  if [ "${#expected_current}" -ne 64 ] || [ "${#expected_sha256}" -ne 64 ]; then
+    fail 'invalid update identity'
+  fi
+  case "$expected_current$expected_sha256" in *[!0-9a-f]*) fail 'invalid update digest' ;; esac
+  case "$expected_bytes" in ''|*[!0-9]*) fail 'invalid update byte count' ;; esac
+  if ! [ "$expected_bytes" -gt 0 ] || ! [ "$expected_bytes" -le 536870912 ]; then
+    fail 'update archive size exceeds limit'
+  fi
+fi
 case "$install_prefix" in /*) ;; *) fail '--prefix must be an absolute path' ;; esac
 case "$install_version" in ''|*[!A-Za-z0-9.+-]*) fail 'invalid version' ;; esac
 case "$(uname -s)-$(uname -m)" in
@@ -62,10 +80,10 @@ if [ -n "$artifact_dir" ]; then
   cp "$artifact_dir/$archive_name.sha256" "$install_scratch/checksum"
 else
   release_url="https://github.com/orangeshyguy21/proofstorm/releases/download/v$install_version"
-  printf 'Downloading Proofstorm %s…\n' "$install_version"
+  printf 'Downloading Proofstorm %s…\n' "$install_version" >&2
   download() {
     download_status=0
-    download_http=$(curl --fail --location --retry 3 --silent --show-error --proto '=https' --proto-redir '=https' \
+    download_http=$(curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 --max-filesize 536870912 --silent --show-error --proto '=https' --proto-redir '=https' \
       "$release_url/$1" --output "$install_scratch/$2" --write-out '%{http_code}' 2> "$install_scratch/download-error") || download_status=$?
     [ "$download_status" -eq 0 ] && [ "$download_http" = 200 ]
   }
@@ -96,6 +114,10 @@ else
   fail 'install sha256sum or shasum to verify the download'
 fi
 [ "$actual" = "$expected" ] || fail 'archive checksum mismatch; nothing was installed'
+if [ -n "$expected_sha256" ]; then
+  [ "$actual" = "$expected_sha256" ] || fail 'archive differs from the selected release metadata'
+  [ "$(wc -c < "$install_scratch/archive.tar.gz" | tr -d ' ')" = "$expected_bytes" ] || fail 'archive byte count differs from the selected release metadata'
+fi
 
 # Published archives contain regular files only. Refuse links, traversal, and duplicates.
 tar -tzf "$install_scratch/archive.tar.gz" > "$install_scratch/names" || fail 'invalid archive'
@@ -113,8 +135,11 @@ tar -xpzf "$install_scratch/archive.tar.gz" -C "$install_scratch/unpacked"
 bundle="$install_scratch/unpacked/proofstorm"
 [ -x "$bundle/bin/proofstorm" ] || fail 'bundle executable missing'
 set -- "$bundle/bin/proofstorm" internal install-bundle --bundle "$bundle" --prefix "$install_prefix"
+if [ -n "$expected_current" ]; then set -- "$@" --expected-current "$expected_current"; fi
+if [ "$report_json" = true ]; then set -- "$@" --json; fi
 if [ "$allow_development" = true ]; then set -- "$@" --allow-development; fi
 "$@" > "$install_scratch/install-result.json"
+if [ "$report_json" = true ]; then cat "$install_scratch/install-result.json"; exit 0; fi
 printf '\nInstalled. Check it with: "%s/bin/proofstorm" --version\n' "$install_prefix"
 case ":${PATH:-}:" in *":$install_prefix/bin:"*) ;; *) printf 'PATH was not changed. Add %s/bin to PATH when ready.\n' "$install_prefix" ;; esac
 printf '%s\n' 'No cluster, shell profile, or agent configuration was changed.'

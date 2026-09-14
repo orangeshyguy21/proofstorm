@@ -41,16 +41,26 @@ impl WalletCli for Native {
     async fn run(
         &self,
         home: &str,
-        wallet: &str,
+        _wallet: &str,
         mint: &str,
         args: &[&str],
         duration: Duration,
     ) -> Result<Output> {
         let mut command = Command::new("cashu");
         command
-            .args(["-h", mint, "-u", "sat", "-w", wallet, "-t", "-y"])
+            .args([
+                "-h",
+                mint,
+                "-u",
+                "sat",
+                "-w",
+                crate::wallet::NUTSHELL_WALLET_NAME,
+                "-t",
+                "-y",
+            ])
             .args(args)
-            .env("HOME", home);
+            .env("HOME", home)
+            .env("CASHU_DIR", std::path::Path::new(home).join(".cashu"));
         execute(command, duration).await
     }
 }

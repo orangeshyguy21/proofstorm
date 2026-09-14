@@ -13,11 +13,12 @@ pub(super) fn run(
 ) -> Result<()> {
     let kubectl = &context.kubectl;
     submit_idempotent(
+        context,
         client,
-        "wallet_initialize",
+        crate::driver::wallet_initialize,
         scoped(
             "wallet-initialize",
-            json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-initialize-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint"}),
         ),
         "wallet-initialize",
     )?;
@@ -30,7 +31,7 @@ pub(super) fn run(
         "wallet_balance",
         scoped(
             "wallet-balance",
-            json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-balance-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint"}),
         ),
     )?;
     let balance = cell::wait_operation(client, "wallet-balance", 120)?;
@@ -39,11 +40,12 @@ pub(super) fn run(
     }
 
     submit_idempotent(
+        context,
         client,
-        "wallet_fund",
+        crate::driver::wallet_fund,
         scoped(
             "wallet-fund",
-            json!({"wallet": "wallet", "mint": "mint", "payer_lightning": "payer-lnd", "amount_sat": 1000, "idempotency_key": "wallet-fund-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "payer_lightning": "payer-lnd", "amount_sat": 1000}),
         ),
         "wallet-fund",
     )?;
@@ -56,11 +58,12 @@ pub(super) fn run(
     }
 
     let accepted_wallet = submit_idempotent(
+        context,
         client,
-        "wallet_round_trip",
+        crate::driver::wallet_round_trip,
         scoped(
             "round-trip",
-            json!({"wallet": "wallet", "mint": "mint", "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100, "idempotency_key": "round-trip-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100}),
         ),
         "wallet",
     )?;
@@ -88,11 +91,12 @@ pub(super) fn run(
     }
 
     // --- private invoice and pay -------------------------------------------
-    client.call(
-        "wallet_initialize",
+    crate::driver::wallet_initialize(
+        context,
+        client,
         scoped(
             "receiver-initialize",
-            json!({"wallet": "receiver-wallet", "mint": "mint", "idempotency_key": "receiver-initialize-slice5"}),
+            json!({"wallet": "receiver-wallet", "mint": "mint"}),
         ),
     )?;
     let receiver_initialized = cell::wait_operation(client, "receiver-initialize", 120)?;
@@ -105,11 +109,12 @@ pub(super) fn run(
     }
 
     submit_idempotent(
+        context,
         client,
-        "wallet_invoice",
+        crate::driver::wallet_invoice,
         scoped(
             "wallet-invoice",
-            json!({"wallet": "receiver-wallet", "mint": "mint", "amount_sat": 100, "timeout_seconds": 300, "idempotency_key": "wallet-invoice-slice5"}),
+            json!({"wallet": "receiver-wallet", "mint": "mint", "amount_sat": 100, "timeout_seconds": 300}),
         ),
         "invoice",
     )?;
@@ -123,9 +128,10 @@ pub(super) fn run(
     {
         bail!("non-blocking wallet invoice artifact is invalid: {invoice}");
     }
-    let quote = client.call(
-        "wallet_quote_status",
-        json!({"instance_id": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
+    let quote = crate::driver::quote_status(
+        context,
+        client,
+        json!({"name": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
     if expect::string(&quote, "/last_observation/state")? != "UNPAID"
         || expect::integer(&quote, "/last_observation/amount_sat")? != 100
@@ -137,7 +143,7 @@ pub(super) fn run(
         "wallet_balance",
         scoped(
             "wallet-balance-before-pay",
-            json!({"wallet": "wallet", "mint": "mint", "idempotency_key": "wallet-balance-before-pay-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint"}),
         ),
     )?;
     let baseline = cell::wait_operation(client, "wallet-balance-before-pay", 120)?;
@@ -146,11 +152,12 @@ pub(super) fn run(
     }
 
     submit_idempotent(
+        context,
         client,
-        "wallet_pay",
+        crate::driver::wallet_pay,
         scoped(
             "wallet-pay",
-            json!({"wallet": "wallet", "mint": "mint", "recipient_wallet": "receiver-wallet", "recipient_mint": "mint", "mint_quote_id": mint_quote_id, "idempotency_key": "wallet-pay-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "recipient_wallet": "receiver-wallet", "recipient_mint": "mint", "mint_quote_id": mint_quote_id}),
         ),
         "pay",
     )?;
@@ -164,16 +171,18 @@ pub(super) fn run(
     {
         bail!("wallet pay artifact is invalid: {paid}");
     }
-    let quote = client.call(
-        "wallet_quote_status",
-        json!({"instance_id": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
+    let quote = crate::driver::quote_status(
+        context,
+        client,
+        json!({"name": INSTANCE, "wallet": "receiver-wallet", "mint": "mint", "direction": "receive", "quote_id": mint_quote_id}),
     )?;
     if expect::string(&quote, "/last_observation/state")? != "ISSUED" {
         bail!("receive quote was not observed as issued: {quote}");
     }
-    let quote_list = client.call(
-        "wallet_quote_list",
-        json!({"experiment_id": EXPERIMENT, "limit": 10}),
+    let quote_list = crate::driver::quote_observations(
+        context,
+        client,
+        json!({"run_id": EXPERIMENT, "limit": 10}),
     )?;
     let listed = expect::array(&quote_list, "/last_observations")?;
     if listed.len() != 2
@@ -200,11 +209,12 @@ pub(super) fn run(
 
     // --- conservation oracle ------------------------------------------------
     let accepted_oracle = submit_idempotent(
+        context,
         client,
-        "conservation_oracle",
+        crate::conservation::check,
         scoped(
             "conservation",
-            json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-pay", "treatment_operation_id": "wallet-pay", "idempotency_key": "conservation-slice5"}),
+            json!({"wallet": "wallet", "mint": "mint", "baseline_operation_id": "wallet-balance-before-pay", "treatment_operation_id": "wallet-pay"}),
         ),
         "oracle",
     )?;

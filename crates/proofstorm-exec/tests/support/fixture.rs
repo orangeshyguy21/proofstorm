@@ -29,6 +29,11 @@ fn main() {
                 .write_all(args[3].repeat(args[4].parse().unwrap()).as_bytes())
                 .unwrap();
         }
+        "binary" => {
+            let bytes = vec![0; args[1].parse().unwrap()];
+            std::io::stdout().write_all(&bytes).unwrap();
+            std::io::stderr().write_all(&bytes).unwrap();
+        }
         "stdin" => {
             let mut input = Vec::new();
             std::io::stdin().read_to_end(&mut input).unwrap();

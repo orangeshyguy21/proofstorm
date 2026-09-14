@@ -85,11 +85,11 @@ impl Config {
     fn wallet(&self, home: Option<&str>, name: Option<&str>) -> Result<Wallet> {
         let home = home.map_or_else(|| self.get("HOME"), Ok)?;
         let name = name.map_or_else(|| self.get("PROOFSTORM_WALLET"), Ok)?;
-        // Wallet identities are single path components, never arbitrary filesystem paths.
+        // Preserve the logical component identity in receipts, independently of the native name.
         if !valid_id(name) {
             return Err(fail("wallet_name_invalid"));
         }
-        let directory = Path::new(home).join(".cashu").join(name);
+        let directory = crate::wallet::nutshell_directory(Path::new(home));
         let mut paths = Vec::new();
         for entry in fs::read_dir(&directory).map_err(|_| fail("wallet_database_missing"))? {
             let entry = entry?;

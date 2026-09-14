@@ -12,7 +12,6 @@ use crate::{GateContext, McpClient, cell, json as expect};
 
 const INSTANCE: &str = "cdk-wallet-instance";
 const EXPERIMENT: &str = "cdk-wallet-experiment";
-const LEASE: &str = "cdk-wallet-session";
 const CLI: &str = "timeout -k 2 45 cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive";
 const LN: &str = "lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=127.0.0.1:10009";
 
@@ -41,8 +40,8 @@ fn scoped(operation: &str, parameters: Value) -> Value {
         panic!("parameters must be an object")
     };
     request.extend(
-        json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":LEASE,
-        "operation_id":operation,"idempotency_key":operation})
+        json!({"name":INSTANCE,"run_id":EXPERIMENT,
+        "request_id":operation})
         .as_object()
         .expect("scope")
         .clone(),
@@ -89,7 +88,7 @@ fn native(
     let result = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         id,
         json!({"component":wallet,"script":format!("umask 077; {script}"),"timeout_seconds":60,"output":{"mode":"public"}}),
     )?;
@@ -156,32 +155,25 @@ fn exercise(
     if identities[0] == identities[1] {
         bail!("wallets share seed identity");
     }
-    client.call_refused(
-        "wallet_initialize",
-        scoped(
-            "unsupported-initialize",
-            json!({"wallet":"wallet-a","mint":"mint"}),
-        ),
-        "runtime_control_unsupported",
-    )?;
-    client.call_refused("wallet_fund",
-        scoped("unsupported-fund",json!({"wallet":"wallet-a","mint":"mint","payer_lightning":"payer-lnd","amount_sat":1000})),
-        "runtime_control_unsupported")?;
+    crate::cell::assert_retired_wallet_routes(client)?;
+    crate::cell::assert_retired_wallet_routes(client)?;
 
-    operation(
+    crate::native::bootstrap(
         client,
-        directory,
-        "liquidity_bootstrap",
+        INSTANCE,
+        EXPERIMENT,
         "bootstrap",
-        json!({
-            "chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd",
-            "funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000
-        }),
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
 
     // Interrupt a genuinely started CLI while its real quote is unpaid. Passive
     // observation must work during the command; resumption uses that exact quote.
-    client.call("component_exec_live", scoped("interrupted-funding", json!({
+    client.call("cell_exec", scoped("interrupted-funding", json!({
         "component":"wallet-a", "argv":["cdk-cli","--work-dir","/wallet/cdk","--unit","sat","--non-interactive","mint","http://mint:3338","5000","--wait-duration","240"],
         "timeout_seconds":300
     })))?;
@@ -202,13 +194,10 @@ fn exercise(
         bail!("funding CLI was not live at interruption");
     }
     client.call(
-        "action_cancel",
-        json!({"operation_id":"interrupted-funding","idempotency_key":"cancel-interrupted-funding"}),
+        "operation_cancel",
+        json!({"request_id":"7634","operation_id":"interrupted-funding"}),
     )?;
-    let cancelled = client.call(
-        "operation_wait",
-        json!({"operation_id":"interrupted-funding","timeout_seconds":30}),
-    )?;
+    let cancelled = crate::cell::wait_one(client, "interrupted-funding", 30)?;
     save(directory, "funding-cancelled", &cancelled)?;
     let cancelled = cell::artifact_content(&cancelled)?;
     if cancelled.get("cancelled") != Some(&json!(true))
@@ -238,7 +227,7 @@ fn exercise(
     let payment = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "funding-payment",
         json!({
             "component":"payer-lnd", "script":format!("exec {LN} sendpayment --force --json --timeout=30s --pay_req=\"$(cat /tmp/funding.invoice)\""),
@@ -333,7 +322,7 @@ fn exercise(
             let receipt = operation(
                 client,
                 directory,
-                "component_exec_live",
+                "cell_exec",
                 id,
                 json!({"component":"wallet-a",
                     "argv":["cdk-cli","--work-dir","/wallet/cdk","--unit","sat","--non-interactive",
@@ -491,7 +480,7 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
         "component":"wallet-a", "script":format!("cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive melt --mint-url http://mint:3338 --invoice \"$(cat /wallet/rejected.invoice)\" > /wallet/{id}.log 2>&1"),
         "timeout_seconds":45
     });
-    let receipt = operation(client, directory, "component_exec_live", id, args.clone())?;
+    let receipt = operation(client, directory, "cell_exec", id, args.clone())?;
     if receipt
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -503,7 +492,7 @@ fn rejected_payment(client: &mut McpClient, directory: &Path, id: &str) -> Resul
     }
     // Idempotent transport replay must preserve the original receipt, not
     // perform another potentially fee-bearing native attempt.
-    client.call("component_exec_live", scoped(id, args))?;
+    client.call("cell_exec", scoped(id, args))?;
     let replay = cell::wait_operation(client, id, 60)?;
     save(directory, &format!("{id}-idempotent-replay"), &replay)?;
     if cell::artifact_content(&replay)? != &receipt {
@@ -536,18 +525,15 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         .join("dev/wallet-integration-runs")
         .join(&context.run_id);
     fs::create_dir_all(&directory)?;
-    let mut capabilities = crate::EXPERIMENT_CAPABILITIES.to_vec();
-    capabilities.extend(["component.exec_live", "component.control", "action.cancel"]);
-    let mut client = context.session(
+    let mut client = context.default_session(
         &format!("cdk-wallet-{}", context.run_id),
         "experiment-agent",
-        &capabilities,
     )?;
-    client.call(
-        "cell_create",
-        json!({"draft_id":"cdk-wallet","cell":document(input_fee_ppk),"idempotency_key":"create"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":document(input_fee_ppk),"request_id":"create"}),
     )?;
-    let published = client.call("cell_publish",json!({"draft_id":"cdk-wallet","expected_version":1,"idempotency_key":"publish","include_revision":true}))?;
+    let published = crate::cell::review(&mut client, &preview)?;
     save(&directory, "published", &published)?;
     let locked = cell::lock_entry(&published, "cdk-cli-wallet")?;
     if locked.pointer("/build_provenance/commit_sha")
@@ -555,16 +541,16 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     {
         bail!("wallet lock omitted source provenance");
     }
-    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"materialize"}))?;
+    crate::cell::apply(&mut client, &preview)?;
     // Always attempt normal cleanup after materialization, including failed gates.
     let result = (|| -> Result<()> {
         let ready = cell::wait_ready(&mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
-        client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
-            "session_start",
-            json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
+            "run_start",
+            json!({"request_id":"21795","run_id":EXPERIMENT,"name":INSTANCE}),
         )?;
+
         exercise(
             context,
             &mut client,
@@ -573,18 +559,12 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
             input_fee_ppk,
         )
     })();
+
     let _ = client.call(
-        "session_finish",
-        json!({"session_id":LEASE,"idempotency_key":"release"}),
+        "run_finish",
+        json!({"request_id":"22076","run_id":EXPERIMENT}),
     );
-    let _ = client.call(
-        "experiment_close",
-        json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
-    );
-    let evidence = client.call(
-        "artifact_export",
-        json!({"experiment_id":EXPERIMENT,"include_content":true}),
-    );
+    let evidence = crate::cell::evidence(&mut client, json!({"run_id":EXPERIMENT,}));
     if let Ok(export) = &evidence {
         save(&directory, "evidence", export)?;
     }
@@ -594,7 +574,7 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &json!({"passed": result.is_ok(),
         "error": result.as_ref().err().map(|error| format!("{error:#}"))}),
     )?;
-    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    client.call("cell_remove", json!({"name":INSTANCE}))?;
     let closed = cell::wait_closed(&mut client, INSTANCE)?;
     save(&directory, "closed", &closed)?;
     if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {

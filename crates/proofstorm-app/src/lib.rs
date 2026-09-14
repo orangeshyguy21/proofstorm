@@ -26,6 +26,7 @@ pub mod observer;
 pub mod platform;
 pub mod release;
 pub mod runtime;
+pub mod self_update;
 pub mod telemetry;
 pub mod updates;
 

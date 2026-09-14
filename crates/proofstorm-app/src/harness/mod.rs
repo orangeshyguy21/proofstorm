@@ -274,7 +274,7 @@ pub async fn apply(plan: AttachmentPlan) -> Result<Value> {
         &plan.actor,
         &plan.identity,
         plan.preset,
-        &crate::developer::CAPABILITIES,
+        &crate::developer::capabilities(),
     )?;
     let server = verify::server(&plan.server_entry).await.context("MCP verification failed; no project configuration was changed. Fix doctor/grants and retry attachment")?;
     unchanged(&plan)?;

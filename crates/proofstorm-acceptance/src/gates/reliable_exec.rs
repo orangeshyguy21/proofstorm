@@ -6,11 +6,10 @@ use std::fs;
 
 const INSTANCE: &str = "reliable-exec-instance";
 const EXPERIMENT: &str = "reliable-exec-experiment";
-const LEASE: &str = "reliable-exec-session";
 
 fn request(id: &str, command: Value) -> Value {
-    let mut value = json!({"instance_id":INSTANCE,"experiment_id":EXPERIMENT,"session_id":LEASE,
-        "operation_id":id,"idempotency_key":id,"component":"wallet","timeout_seconds":10});
+    let mut value = json!({"name":INSTANCE,"run_id":EXPERIMENT,
+        "request_id":id,"component":"wallet","timeout_seconds":10});
     let Value::Object(fields) = command else {
         panic!("command must be an object")
     };
@@ -19,10 +18,7 @@ fn request(id: &str, command: Value) -> Value {
 }
 
 fn terminal(client: &mut McpClient, root: &std::path::Path, id: &str) -> Result<Value> {
-    let result = client.call(
-        "operation_wait",
-        json!({"operation_id":id,"timeout_seconds":120}),
-    )?;
+    let result = crate::cell::wait_one(client, id, 120)?;
     fs::write(
         root.join(format!("{id}.json")),
         serde_json::to_vec_pretty(&result)?,
@@ -30,10 +26,34 @@ fn terminal(client: &mut McpClient, root: &std::path::Path, id: &str) -> Result<
     if result.get("terminal") != Some(&json!(true)) {
         bail!("operation did not finish: {result}");
     }
-    let receipt = result
+    let mut receipt = result
         .pointer("/artifact/content")
-        .ok_or_else(|| anyhow::anyhow!("receipt missing: {result}"))?
-        .clone();
+        .cloned()
+        .unwrap_or_else(|| result["native_result"].clone());
+    if result.get("artifact").is_none() || result["artifact"].is_null() {
+        // Compact waits retain outcome facts; read the two large streams in digest-bound slices.
+        for stream in ["stdout", "stderr"] {
+            let mut offset = 0;
+            let mut text = String::new();
+            loop {
+                let page = client.call(
+                    "operation_read",
+                    json!({"operation_id":id,
+                    "expected_digest":result["operation_digest"],
+                    "pointer":format!("/artifact/content/{stream}"),"offset":offset,"limit":1000}),
+                )?;
+                text.push_str(expect::string(&page, "/value")?);
+                let Some(next) = page["next_offset"].as_u64() else {
+                    break;
+                };
+                if next <= offset {
+                    bail!("native stream read did not advance: {page}");
+                }
+                offset = next;
+            }
+            receipt[stream] = json!(text);
+        }
+    }
     if receipt.get("cleanup_verified") != Some(&json!(true)) {
         bail!("cleanup unverified: {receipt}");
     }
@@ -46,7 +66,7 @@ fn execute(
     id: &str,
     command: Value,
 ) -> Result<Value> {
-    client.call("component_exec_live", request(id, command))?;
+    client.call("cell_exec", request(id, command))?;
     terminal(client, root, id)
 }
 
@@ -70,12 +90,9 @@ pub fn run(context: &GateContext) -> Result<()> {
         .join("dev/native-execution-runs")
         .join(&context.run_id);
     fs::create_dir_all(&root)?;
-    let mut capabilities = crate::EXPERIMENT_CAPABILITIES.to_vec();
-    capabilities.extend(["component.exec_live", "action.cancel"]);
-    let mut client = context.session(
+    let mut client = context.default_session(
         &format!("reliable-exec-{}", context.run_id),
         "experiment-agent",
-        &capabilities,
     )?;
     let document = json!({"api_version":"proofstorm/v1alpha1","name":"reliable-exec",
         "components":[
@@ -84,23 +101,20 @@ pub fn run(context: &GateContext) -> Result<()> {
             {"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],"links":[{"id":"chain-link","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}],
         "policy":{"allow":["component.exec_live"],"limits":{"max_components":4,"max_links":4,"max_config_bytes":16384}}});
-    client.call(
-        "cell_create",
-        json!({"draft_id":"reliable-exec","cell":document,"idempotency_key":"create"}),
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":document,"request_id":"create"}),
     )?;
-    let published = client.call(
-        "cell_publish",
-        json!({"draft_id":"reliable-exec","expected_version":1,"idempotency_key":"publish"}),
-    )?;
-    client.call("cell_materialize",json!({"instance_id":INSTANCE,"revision_digest":expect::string(&published,"/digest")?,"idempotency_key":"apply"}))?;
+    crate::cell::review(&mut client, &preview)?;
+    crate::cell::apply(&mut client, &preview)?;
     let result = (|| -> Result<()> {
         let ready = cell::wait_ready(&mut client, INSTANCE)?;
         let namespace = expect::string(&ready, "/instance_namespace")?;
-        client.call("experiment_create",json!({"experiment_id":EXPERIMENT,"instance_id":INSTANCE,"idempotency_key":"experiment"}))?;
         client.call(
-            "session_start",
-            json!({"experiment_id":EXPERIMENT,"session_id":LEASE,"idempotency_key":"session"}),
+            "run_start",
+            json!({"request_id":"3755","run_id":EXPERIMENT,"name":INSTANCE}),
         )?;
+
         for (id, component, argv) in [
             ("musl-help", "lightning", vec!["lncli", "--version"]),
             ("glibc-help", "wallet", vec!["cdk-cli", "--version"]),
@@ -182,7 +196,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             bail!("deadline missing: {timeout}");
         }
         client.call(
-            "component_exec_live",
+            "cell_exec",
             request(
                 "cancel",
                 json!({"argv":["sh","-c","printf x > /tmp/reliable-cancel-started; exec sleep 120"],"timeout_seconds":120}),
@@ -190,8 +204,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?;
         wait_for_marker(context, namespace, "/tmp/reliable-cancel-started")?;
         client.call(
-            "action_cancel",
-            json!({"operation_id":"cancel","idempotency_key":"cancel-owned"}),
+            "operation_cancel",
+            json!({"request_id":"7281","operation_id":"cancel"}),
         )?;
         let cancelled = terminal(&mut client, &root, "cancel")?;
         if cancelled["cancelled"] != true {
@@ -201,8 +215,8 @@ pub fn run(context: &GateContext) -> Result<()> {
             "once",
             json!({"script":"printf x >> /tmp/reliable-once; sleep 20", "timeout_seconds":30}),
         );
-        let first = client.call("component_exec_live", once.clone())?;
-        let replay = client.call("component_exec_live", once)?;
+        let first = client.call("cell_exec", once.clone())?;
+        let replay = client.call("cell_exec", once)?;
         if first["resource_name"] != replay["resource_name"] {
             bail!("replay identity changed");
         }
@@ -220,15 +234,15 @@ pub fn run(context: &GateContext) -> Result<()> {
         if !expect::string(&count, "/stdout")?.trim().starts_with("1 ") {
             bail!("native command replayed: {count}");
         }
+
         client.call(
-            "session_finish",
-            json!({"session_id":LEASE,"idempotency_key":"release"}),
+            "run_finish",
+            json!({"request_id":"8498","run_id":EXPERIMENT}),
         )?;
-        client.call(
-            "experiment_close",
-            json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
+        let evidence = crate::cell::evidence(
+            &mut client,
+            json!({"run_id":EXPERIMENT,"artifact_operation_ids":["private","projection","format-failure","native-exit","deadline","cancel","once"]}),
         )?;
-        let evidence=client.call("artifact_export",json!({"experiment_id":EXPERIMENT,"include_content":true,"artifact_operation_ids":["private","projection","format-failure","native-exit","deadline","cancel","once"]}))?;
         if evidence.to_string().contains(canary) {
             bail!("evidence export disclosed private output");
         }
@@ -238,15 +252,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?;
         Ok(())
     })();
+
     let _ = client.call(
-        "session_finish",
-        json!({"session_id":LEASE,"idempotency_key":"release"}),
+        "run_finish",
+        json!({"request_id":"9089","run_id":EXPERIMENT}),
     );
-    let _ = client.call(
-        "experiment_close",
-        json!({"experiment_id":EXPERIMENT,"idempotency_key":"close-experiment"}),
-    );
-    client.call("cell_close", json!({"instance_id":INSTANCE}))?;
+    client.call("cell_remove", json!({"name":INSTANCE}))?;
     let closed = cell::wait_closed(&mut client, INSTANCE)?;
     fs::write(
         root.join("closed.json"),

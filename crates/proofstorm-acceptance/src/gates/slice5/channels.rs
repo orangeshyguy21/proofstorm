@@ -3,14 +3,19 @@ use crate::{McpClient, cell, json as expect};
 use anyhow::{Result, bail};
 use serde_json::json;
 
-pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<()> {
+pub(super) fn run(
+    context: &crate::GateContext,
+    client: &mut McpClient,
+    bootstrap_channel_id: &str,
+) -> Result<()> {
     // --- peer, channel, wallet ---------------------------------------------
     submit_idempotent(
+        context,
         client,
-        "peer_connect",
+        crate::driver::peer_connect,
         scoped(
             "peer-connect",
-            json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "idempotency_key": "peer-connect-slice5"}),
+            json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd"}),
         ),
         "peer",
     )?;
@@ -20,11 +25,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
     }
 
     submit_idempotent(
+        context,
         client,
-        "channel_open",
+        crate::driver::channel_open,
         scoped(
             "channel-open",
-            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_sat": 2_000_000, "push_sat": 0, "idempotency_key": "channel-open-slice5"}),
+            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_sat": 2_000_000, "push_sat": 0}),
         ),
         "channel",
     )?;
@@ -36,11 +42,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
     let channel_id = assert_handle(channel_content, "channel open")?;
 
     // --- CLN interoperability and rebalance --------------------------------
-    client.call(
-        "peer_connect",
+    crate::driver::peer_connect(
+        context,
+        client,
         scoped(
             "cln-peer-connect",
-            json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "idempotency_key": "cln-peer-connect-slice5"}),
+            json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd"}),
         ),
     )?;
     let cln_peer = cell::wait_operation(client, "cln-peer-connect", 120)?;
@@ -48,22 +55,24 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("CLN to LND peer connection artifact is invalid: {cln_peer}");
     }
 
-    client.call(
-        "channel_open",
+    crate::driver::channel_open(
+        context,
+        client,
         scoped(
             "cln-channel-open",
-            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 300_000, "idempotency_key": "cln-channel-open-slice5"}),
+            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 300_000}),
         ),
     )?;
     let cln_channel = cell::wait_operation(client, "cln-channel-open", 120)?;
     let cln_channel_id =
         assert_handle(cell::artifact_content(&cln_channel)?, "LND to CLN channel")?;
 
-    client.call(
-        "peer_connect",
+    crate::driver::peer_connect(
+        context,
+        client,
         scoped(
             "rebalance-bridge-peer-connect",
-            json!({"from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "idempotency_key": "rebalance-bridge-peer-connect-slice5"}),
+            json!({"from_lightning": "payer-lnd", "to_lightning": "attacker-cln"}),
         ),
     )?;
     let bridge_peer = cell::wait_operation(client, "rebalance-bridge-peer-connect", 120)?;
@@ -71,11 +80,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("rebalance bridge peer artifact is invalid: {bridge_peer}");
     }
 
-    client.call(
-        "channel_open",
+    crate::driver::channel_open(
+        context,
+        client,
         scoped(
             "rebalance-bridge-channel-open",
-            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 0, "idempotency_key": "rebalance-bridge-channel-open-slice5"}),
+            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 0}),
         ),
     )?;
     let bridge_channel = cell::wait_operation(client, "rebalance-bridge-channel-open", 120)?;
@@ -83,11 +93,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         assert_handle(cell::artifact_content(&bridge_channel)?, "rebalance bridge")?;
 
     submit_idempotent(
+        context,
         client,
-        "channel_rebalance",
+        crate::driver::channel_rebalance,
         scoped(
             "channel-rebalance",
-            json!({"lightning": "mint-lnd", "outgoing_channel_id": channel_id, "incoming_channel_id": cln_channel_id, "amount_sat": 100_000, "max_fee_sat": 100, "idempotency_key": "channel-rebalance-slice5"}),
+            json!({"lightning": "mint-lnd", "outgoing_channel_id": channel_id, "incoming_channel_id": cln_channel_id, "amount_sat": 100_000, "max_fee_sat": 100}),
         ),
         "channel rebalance",
     )?;
@@ -107,11 +118,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
     }
 
     // --- topology teardown --------------------------------------------------
-    client.call(
-        "channel_close",
+    crate::driver::channel_close(
+        context,
+        client,
         scoped(
             "rebalance-bridge-channel-close",
-            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "channel_id": bridge_channel_id, "idempotency_key": "rebalance-bridge-channel-close-slice5"}),
+            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "attacker-cln", "channel_id": bridge_channel_id}),
         ),
     )?;
     let bridge_closed = cell::wait_operation(client, "rebalance-bridge-channel-close", 120)?;
@@ -121,11 +133,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
     }
 
     submit_idempotent(
+        context,
         client,
-        "channel_close",
+        crate::driver::channel_close,
         scoped(
             "channel-close",
-            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_id": channel_id, "idempotency_key": "channel-close-slice5"}),
+            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_id": channel_id}),
         ),
         "channel close",
     )?;
@@ -140,11 +153,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("cooperative channel close artifact is invalid: {closed}");
     }
 
-    client.call(
-        "channel_close",
+    crate::driver::channel_close(
+        context,
+        client,
         scoped(
             "bootstrap-channel-close",
-            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-lnd", "channel_id": bootstrap_channel_id, "idempotency_key": "bootstrap-channel-close-slice5"}),
+            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-lnd", "channel_id": bootstrap_channel_id}),
         ),
     )?;
     let bootstrap_closed = cell::wait_operation(client, "bootstrap-channel-close", 120)?;
@@ -155,11 +169,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
     }
 
     submit_idempotent(
+        context,
         client,
-        "peer_disconnect",
+        crate::driver::peer_disconnect,
         scoped(
             "peer-disconnect",
-            json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "idempotency_key": "peer-disconnect-slice5"}),
+            json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd"}),
         ),
         "peer disconnect",
     )?;
@@ -168,11 +183,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("peer disconnect artifact is invalid: {disconnected}");
     }
 
-    client.call(
-        "peer_connect",
+    crate::driver::peer_connect(
+        context,
+        client,
         scoped(
             "peer-reconnect",
-            json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "idempotency_key": "peer-reconnect-slice5"}),
+            json!({"from_lightning": "mint-lnd", "to_lightning": "payer-lnd"}),
         ),
     )?;
     let reconnected = cell::wait_operation(client, "peer-reconnect", 120)?;
@@ -180,11 +196,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("peer reconnect artifact is invalid: {reconnected}");
     }
 
-    client.call(
-        "channel_open",
+    crate::driver::channel_open(
+        context,
+        client,
         scoped(
             "force-channel-open",
-            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_sat": 1_000_000, "push_sat": 0, "idempotency_key": "force-channel-open-slice5"}),
+            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_sat": 1_000_000, "push_sat": 0}),
         ),
     )?;
     let force_channel = cell::wait_operation(client, "force-channel-open", 120)?;
@@ -193,11 +210,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         "force-close target",
     )?;
 
-    client.call(
-        "channel_force_close",
+    crate::driver::channel_force_close(
+        context,
+        client,
         scoped(
             "channel-force-close",
-            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_id": force_channel_id, "idempotency_key": "channel-force-close-slice5"}),
+            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "payer-lnd", "channel_id": force_channel_id}),
         ),
     )?;
     let force_closed = cell::wait_operation(client, "channel-force-close", 120)?;
@@ -211,11 +229,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("force channel close artifact is invalid: {force_closed}");
     }
 
-    client.call(
-        "channel_close",
+    crate::driver::channel_close(
+        context,
+        client,
         scoped(
             "cln-channel-close",
-            json!({"chain": "chain", "from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "channel_id": cln_channel_id, "idempotency_key": "cln-channel-close-slice5"}),
+            json!({"chain": "chain", "from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "channel_id": cln_channel_id}),
         ),
     )?;
     let cln_closed = cell::wait_operation(client, "cln-channel-close", 120)?;
@@ -229,11 +248,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("CLN cooperative close artifact is invalid: {cln_closed}");
     }
 
-    client.call(
-        "peer_disconnect",
+    crate::driver::peer_disconnect(
+        context,
+        client,
         scoped(
             "cln-peer-disconnect",
-            json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "idempotency_key": "cln-peer-disconnect-slice5"}),
+            json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd"}),
         ),
     )?;
     let cln_disconnected = cell::wait_operation(client, "cln-peer-disconnect", 120)?;
@@ -241,11 +261,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("CLN to LND disconnect artifact is invalid: {cln_disconnected}");
     }
 
-    client.call(
-        "peer_connect",
+    crate::driver::peer_connect(
+        context,
+        client,
         scoped(
             "cln-peer-reconnect",
-            json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "idempotency_key": "cln-peer-reconnect-slice5"}),
+            json!({"from_lightning": "attacker-cln", "to_lightning": "mint-lnd"}),
         ),
     )?;
     let cln_reconnected = cell::wait_operation(client, "cln-peer-reconnect", 120)?;
@@ -253,11 +274,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         bail!("CLN to LND reconnect artifact is invalid: {cln_reconnected}");
     }
 
-    client.call(
-        "channel_open",
+    crate::driver::channel_open(
+        context,
+        client,
         scoped(
             "cln-force-channel-open",
-            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 300_000, "idempotency_key": "cln-force-channel-open-slice5"}),
+            json!({"chain": "chain", "from_lightning": "mint-lnd", "to_lightning": "attacker-cln", "channel_sat": 1_000_000, "push_sat": 300_000}),
         ),
     )?;
     let cln_force_channel = cell::wait_operation(client, "cln-force-channel-open", 120)?;
@@ -266,11 +288,12 @@ pub(super) fn run(client: &mut McpClient, bootstrap_channel_id: &str) -> Result<
         "CLN force-close target",
     )?;
 
-    client.call(
-        "channel_force_close",
+    crate::driver::channel_force_close(
+        context,
+        client,
         scoped(
             "cln-channel-force-close",
-            json!({"chain": "chain", "from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "channel_id": cln_force_channel_id, "idempotency_key": "cln-channel-force-close-slice5"}),
+            json!({"chain": "chain", "from_lightning": "attacker-cln", "to_lightning": "mint-lnd", "channel_id": cln_force_channel_id}),
         ),
     )?;
     let cln_force_closed = cell::wait_operation(client, "cln-channel-force-close", 120)?;

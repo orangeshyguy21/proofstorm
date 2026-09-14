@@ -87,3 +87,5 @@ pub use validation::{ValidationIssue, ValidationReport, validate_cell};
 pub mod native;
 
 pub mod private_io;
+
+pub mod mcp;

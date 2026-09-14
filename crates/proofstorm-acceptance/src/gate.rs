@@ -72,6 +72,50 @@ impl GateContext {
         })
     }
 
+    /// Configure and open the ordinary project attachment, without launching an agent model.
+    pub fn managed_session(&self, label: &str) -> Result<McpClient> {
+        use anyhow::Context;
+        let project = self.work().join(format!("mcp-{label}"));
+        std::fs::create_dir_all(&project)?;
+        let mut configure = self.command(&[
+            "--json",
+            "agent",
+            "configure",
+            "codex",
+            "--allow-development",
+        ])?;
+        configure
+            .current_dir(&project)
+            .env("CODEX_HOME", self.work().join("acceptance-codex"))
+            .env("CLAUDE_CONFIG_DIR", self.work().join("acceptance-claude"));
+        let configured = crate::process::json(configure, 240)?;
+        let actor = configured["actor"]
+            .as_str()
+            .context("managed actor missing")?;
+        let mut command = std::process::Command::new(&self.artifacts.mcp);
+        crate::client::clear_runtime_environment(&mut command);
+        command
+            .arg("--home")
+            .arg(&self.installation.home)
+            .arg("--attachment")
+            .arg(actor)
+            .current_dir(&project);
+        McpClient::from_command(command, label)
+    }
+
+    /// An explicitly scoped authorization fixture using the single registry's default grants.
+    pub fn default_session(&self, workspace: &str, principal: &str) -> Result<McpClient> {
+        let capabilities: Vec<String> = proofstorm_core::mcp::default_capabilities()
+            .into_iter()
+            .map(|c| serde_json::from_value(serde_json::json!(c)).expect("capability string"))
+            .collect();
+        self.session(
+            workspace,
+            principal,
+            &capabilities.iter().map(String::as_str).collect::<Vec<_>>(),
+        )
+    }
+
     /// Start a capability-scoped MCP session against this gate's database.
     pub fn session(
         &self,
@@ -88,7 +132,6 @@ impl GateContext {
             workspace,
             &[
                 ("PROOFSTORM_HOME", home.as_str()),
-                ("PROOFSTORM_TOOLSET", "all"),
                 ("PROOFSTORM_WORKSPACE", workspace),
                 ("PROOFSTORM_PRINCIPAL", principal),
                 ("PROOFSTORM_CAPABILITIES", joined.as_str()),
@@ -114,39 +157,3 @@ impl GateContext {
             .inspect_cli(&self.installation.home, workspace, principal, cell)
     }
 }
-
-/// The capability set an experiment-driving gate needs on top of the lifecycle.
-pub const EXPERIMENT_CAPABILITIES: &[&str] = &[
-    "catalog.read",
-    "cell.read",
-    "cell.create",
-    "cell.validate",
-    "cell.publish",
-    "cell.materialize",
-    "cell.status",
-    "cell.close",
-    "experiment.create",
-    "experiment.read",
-    "experiment.close",
-    "cell.operate",
-    "wallet.create",
-    "wallet.control",
-    "wallet.fund",
-    "chain.mine",
-    "peer.connect",
-    "channel.open",
-    "oracle.run",
-    "artifact.read",
-];
-
-/// The capability set a full lifecycle gate needs.
-pub const LIFECYCLE_CAPABILITIES: &[&str] = &[
-    "catalog.read",
-    "cell.read",
-    "cell.create",
-    "cell.validate",
-    "cell.publish",
-    "cell.materialize",
-    "cell.status",
-    "cell.close",
-];

@@ -232,6 +232,12 @@ impl Store {
                 )?;
             }
         }
+        // Preview content is cell-owned; retain only compact retry/admission tombstones.
+        tx.execute("DELETE FROM cell_previews WHERE workspace_id=?1 AND (id IN (SELECT plan_id FROM preview_admissions WHERE workspace_id=?1 AND instance_id=?2) OR json_extract(preview_json,'$.update.target.instance_id')=?2)",params![ws,id])?;
+        tx.execute(
+            "DELETE FROM automatic_runs WHERE workspace_id=?1 AND instance_key=?2",
+            params![ws, instance.instance_key],
+        )?;
         tx.execute("DELETE FROM private_access_grants WHERE workspace_id=?1 AND json_extract(grant_json,'$.instance_id')=?2",params![ws,id])?;
         tx.execute("DELETE FROM operation_revisions WHERE workspace_id=?1 AND operation_id IN (SELECT id FROM actions WHERE workspace_id=?1 AND instance_id=?2)",params![ws,id])?;
         for table in [

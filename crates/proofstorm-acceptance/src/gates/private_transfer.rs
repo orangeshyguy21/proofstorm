@@ -212,7 +212,7 @@ pub fn exercise(
     let replay = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "synthetic-replay-refused",
         json!({"component":"wallet-a","argv":["sh","-c","exit 99"],"timeout_seconds":10,"private_payload":{"kind":"consume","reference":synthetic,"input":{"kind":"stdin"}}}),
     );
@@ -251,17 +251,22 @@ pub fn exercise(
         "configured-wallet-a",
     )?;
     start_session(client, directory, "wallet-a", "start-wallet-a")?;
-    operation(
+    crate::native::bootstrap(
         client,
-        directory,
-        "liquidity_bootstrap",
+        "cocod-wallet-instance",
+        "cocod-wallet-experiment",
         "bootstrap",
-        json!({"chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd","funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000}),
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
     let invoice = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "funding-invoice",
         json!({"component":"wallet-a","argv":["cocod","receive","bolt11","5000","--mint-url","http://mint:3338"],"timeout_seconds":60,"output":{"mode":"bolt11"}}),
     )?;
@@ -269,7 +274,7 @@ pub fn exercise(
     let paid = operation(
         client,
         directory,
-        "component_exec_live",
+        "cell_exec",
         "funding-payment",
         json!({"component":"payer-lnd","argv":["lncli","--lnddir=/home/lnd/.lnd","--network=regtest","--rpcserver=127.0.0.1:10009","payinvoice","--force","--json",request],"timeout_seconds":60,"output":{"mode":"json_fields","fields":["status","value_sat"]}}),
     )?;
