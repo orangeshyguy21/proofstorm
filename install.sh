@@ -39,10 +39,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -n "$expected_current$expected_sha256$expected_bytes" ]; then
-  [ "${#expected_current}" = 64 ] && [ "${#expected_sha256}" = 64 ] || fail 'invalid update identity'
+  if [ "${#expected_current}" -ne 64 ] || [ "${#expected_sha256}" -ne 64 ]; then
+    fail 'invalid update identity'
+  fi
   case "$expected_current$expected_sha256" in *[!0-9a-f]*) fail 'invalid update digest' ;; esac
   case "$expected_bytes" in ''|*[!0-9]*) fail 'invalid update byte count' ;; esac
-  [ "$expected_bytes" -gt 0 ] && [ "$expected_bytes" -le 536870912 ] || fail 'update archive size exceeds limit'
+  if ! [ "$expected_bytes" -gt 0 ] || ! [ "$expected_bytes" -le 536870912 ]; then
+    fail 'update archive size exceeds limit'
+  fi
 fi
 case "$install_prefix" in /*) ;; *) fail '--prefix must be an absolute path' ;; esac
 case "$install_version" in ''|*[!A-Za-z0-9.+-]*) fail 'invalid version' ;; esac
