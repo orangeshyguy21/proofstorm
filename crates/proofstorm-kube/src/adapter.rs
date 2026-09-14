@@ -46,10 +46,7 @@ type ComponentRenderer = fn(&ComponentPlanContract) -> Result<RenderedComponent,
 static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> =
     LazyLock::new(|| {
         BTreeMap::from([
-            (
-                "attacker-workspace",
-                render_attacker_component as ComponentRenderer,
-            ),
+            ("workspace", render_attacker_component as ComponentRenderer),
             ("bitcoin-core", render_bitcoin_component),
             ("cdk", render_cdk_component),
             ("cdk-ldk", render_cdk_component),
@@ -2770,7 +2767,7 @@ fn nutshell_mint_environment(
 pub fn render_attacker_component(
     plan: &ComponentPlanContract,
 ) -> Result<RenderedComponent, AdapterError> {
-    require_plan_backend(plan, "attacker-workspace", ComponentKind::Attacker)?;
+    require_plan_backend(plan, "workspace", ComponentKind::Attacker)?;
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut rendered = RenderedComponent::default();
     rendered.deployments.push(resource(json!({
@@ -3421,7 +3418,7 @@ mod tests {
                 "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
                 "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
-                "attacker-workspace" => "attacker-workspace/0.1/v1",
+                "workspace" => "workspace/0.1/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),
             }
             .into(),
@@ -3599,7 +3596,7 @@ mod tests {
                 component(
                     "attacker",
                     ComponentKind::Attacker,
-                    "attacker-workspace",
+                    "workspace",
                     ControlClass::Attacker,
                 ),
             ],

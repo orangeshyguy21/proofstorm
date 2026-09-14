@@ -679,7 +679,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         cocod_wallet_entry(amd64, backends, adapter_version),
         catalog_entry(
             amd64,
-            "attacker-workspace",
+            "workspace",
             backends,
             ComponentKind::Attacker,
             "General-purpose shell workspace for running commands and testing cell services",
@@ -1439,7 +1439,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             ],
             &[],
         )],
-        "redis" | "postgresql" | "attacker-workspace" => {
+        "redis" | "postgresql" | "workspace" => {
             vec![runtime_endpoint("component", "service", OBSERVE, &[])]
         }
         _ => vec![runtime_endpoint(

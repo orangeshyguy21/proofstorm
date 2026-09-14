@@ -511,7 +511,7 @@ pub enum EffectiveComponentConfig {
     CdkCliWallet,
     #[serde(rename = "cocod-wallet")]
     CocodWallet,
-    #[serde(rename = "attacker-workspace")]
+    #[serde(rename = "workspace")]
     AttackerWorkspace,
 }
 
@@ -935,7 +935,7 @@ impl EffectiveComponentConfig {
             "nutshell-wallet" => Ok(Self::NutshellWallet),
             "cdk-cli-wallet" => Ok(Self::CdkCliWallet),
             "cocod-wallet" => Ok(Self::CocodWallet),
-            "attacker-workspace" => Ok(Self::AttackerWorkspace),
+            "workspace" => Ok(Self::AttackerWorkspace),
             implementation => Err(format!(
                 "backend_typed_config_missing: implementation {implementation:?} has no typed effective configuration"
             )),
@@ -1796,12 +1796,12 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             ]),
         ),
         contract(
-            "attacker-workspace",
+            "workspace",
             ComponentKind::Attacker,
-            "attacker-workspace/0.1/v1",
+            "workspace/0.1/v1",
             BTreeMap::new(),
             BTreeMap::new(),
-            "proofstorm/attacker-workspace-state/v1",
+            "proofstorm/workspace-state/v1",
             BTreeSet::from([
                 ComponentConditionType::WorkloadReady,
                 ComponentConditionType::ComponentReady,
@@ -2723,10 +2723,10 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Instance wallet seed material", Secret),
             ),
         ]),
-        "attacker-workspace" => BTreeMap::from([
+        "workspace" => BTreeMap::from([
             (
                 "idle_process".into(),
-                string("Persistent attacker workspace process", Policy),
+                string("Persistent workspace process", Policy),
             ),
             (
                 "service_account_access".into(),
@@ -2734,7 +2734,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "workspace_profile".into(),
-                string("Pinned adversarial tool workspace", Policy),
+                string("Pinned general-purpose shell workspace", Policy),
             ),
         ]),
         "postgresql" => BTreeMap::from([
@@ -3197,7 +3197,7 @@ fn execution_contract(
                 ("PROOFSTORM_WALLET".into(), "{component_id}".into()),
             ]),
         ),
-        "attacker-workspace" => (vec![], BTreeMap::from([("HOME".into(), "/tmp".into())])),
+        "workspace" => (vec![], BTreeMap::from([("HOME".into(), "/tmp".into())])),
         _ => (vec![], BTreeMap::new()),
     }
 }
@@ -3380,7 +3380,7 @@ mod tests {
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
                 "cdk-cli-wallet" => "cdk-cli-wallet/0.18/v1",
                 "cocod-wallet" => "cocod-wallet/0.0.17/v1",
-                "attacker-workspace" => "attacker-workspace/0.1/v1",
+                "workspace" => "workspace/0.1/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),
             }
             .into(),
@@ -4062,7 +4062,7 @@ mod tests {
 
     #[test]
     fn execution_context_and_target_descriptor_compose_independently() {
-        let mut executor = component("attacker", "attacker-workspace", ComponentKind::Attacker);
+        let mut executor = component("attacker", "workspace", ComponentKind::Attacker);
         executor.control = crate::ControlClass::Attacker;
         let target = component("chain", "bitcoin-core", ComponentKind::Bitcoin);
         let cell = crate::CellSpec {

@@ -255,7 +255,7 @@ pub fn bounds(nodes: &[CanvasNode], positions: &Positions) -> (f64, f64, f64, f6
 // Keep saved implementation IDs intact while presenting their current names.
 pub fn implementation_label(implementation: &str) -> &str {
     match implementation {
-        "attacker-workspace" => "Workspace",
+        "workspace" => "Workspace",
         _ => implementation,
     }
 }

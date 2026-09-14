@@ -64,26 +64,26 @@ command to launch a native app instead of its CLI.
 
 ## Components
 
-These are the versions and integrations in the built-in catalog—not a claim that
-every combination will work. A connected agent can read the
-catalog for full configuration and compatibility details.
+The built-in catalog includes the following components and integrations.
+Agents can read the installed catalog for exact versions, configuration, and
+compatibility details.
 
-| Component | Catalog ID | Version | Integration |
-| --- | --- | --- | --- |
-| Bitcoin Core | `bitcoin-core` | 31.1 | Regtest chain, RPC, persistent state |
-| LND | `lnd` | 0.21.3-beta; 0.20.4-beta | Lightning, BOLT11 |
-| Core Lightning | `cln` | 26.06.7 | Lightning, BOLT11 |
-| CDK mint | `cdk` | 0.18.0 | LND / CLN; SQLite / PostgreSQL |
-| CDK + LDK mint | `cdk-ldk` | 0.18.0 | Embedded Lightning; BOLT11 / BOLT12 |
-| CDK + BDK mint | `cdk-bdk` | 0.18.0 | On-chain payments; Bitcoin regtest |
-| Nutshell mint | `nutshell` | 0.20.3 | LND / CLN; optional NUT-21 / NUT-22 auth |
-| Nutshell wallet | `nutshell-wallet` | 0.20.3 | Persistent Cashu wallet |
-| CDK CLI wallet | `cdk-cli-wallet` | 0.18.0 | Cashu wallet CLI |
-| Coco daemon | `cocod-wallet` | 0.0.17-dev.44e5101c | Experimental Cashu wallet |
-| PostgreSQL | `postgresql` | 17.11 | Persistent database |
-| Redis | `redis` | 8.10.1 | Ephemeral cache |
-| Keycloak | `keycloak` | 25.0.6 | Test OIDC provider |
-| Workspace | `attacker-workspace` | 0.1.0-alpha.1 | General-purpose shell for commands and testing cell services |
+| Component | Catalog ID | Integration |
+| --- | --- | --- |
+| Bitcoin Core | `bitcoin-core` | Regtest chain, RPC, persistent state |
+| LND | `lnd` | Lightning, BOLT11 |
+| Core Lightning | `cln` | Lightning, BOLT11 |
+| CDK mint | `cdk` | LND / CLN; SQLite / PostgreSQL |
+| CDK + LDK mint | `cdk-ldk` | Embedded Lightning; BOLT11 / BOLT12 |
+| CDK + BDK mint | `cdk-bdk` | On-chain payments; Bitcoin regtest |
+| Nutshell mint | `nutshell` | LND / CLN; optional NUT-21 / NUT-22 auth |
+| Nutshell wallet | `nutshell-wallet` | Persistent Cashu wallet |
+| CDK CLI wallet | `cdk-cli-wallet` | Cashu wallet CLI |
+| Coco daemon | `cocod-wallet` | Experimental Cashu wallet |
+| PostgreSQL | `postgresql` | Persistent database |
+| Redis | `redis` | Ephemeral cache |
+| Keycloak | `keycloak` | Test OIDC provider |
+| Workspace | `workspace` | General-purpose shell for commands and testing cell services |
 
 ## Updates
 
