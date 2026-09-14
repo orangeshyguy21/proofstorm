@@ -54,6 +54,10 @@ pub const fn outcome_title(phase: OperationPhase) -> &'static str {
 
 /// Display names for MCP discovery and interfaces that refer to exact tool IDs.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one explicit title table covers the public MCP tool IDs"
+)]
 pub fn tool_title(name: &str) -> Option<&'static str> {
     Some(match name {
         "cell_up" => "Start cell",
@@ -61,6 +65,8 @@ pub fn tool_title(name: &str) -> Option<&'static str> {
         "cell_inspect" => "Inspect cell",
         "cell_exec" | "component_exec_live" => action_title(OperationKind::ComponentExecLive),
         "cell_sync" => "Collect results",
+        "activity_search" => "Search recorded activity",
+        "operation_read" => "Read recorded result",
         "cell_finish" => "Finish cell",
         "workspace_read" => "View workspace",
         "catalog_list" => "Browse components",

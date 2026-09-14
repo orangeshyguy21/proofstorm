@@ -2,6 +2,11 @@ mod cell_input;
 pub use cell_input::{CellFile, CellInput};
 mod cell_search;
 pub use cell_search::{CellSearchRequest, CellSearchResult, CellSearchSection};
+mod activity_search;
+mod cell_sync;
+pub use activity_search::ActivitySearchRequest;
+mod operation_read;
+pub use operation_read::OperationReadRequest;
 
 use proofstorm_app::runtime::missing_action_artifact;
 use proofstorm_app::runtime::runtime_action_resource;
@@ -73,6 +78,8 @@ pub struct DeveloperUpRequest {
 #[serde(deny_unknown_fields)]
 pub struct DeveloperInspectRequest {
     pub name: String,
+    /// Return activity after this sequence. Pass the response's `next_sequence`
+    /// here to continue reading a page.
     #[serde(default)]
     pub after_sequence: u64,
 }
@@ -2355,6 +2362,8 @@ impl ProofstormToolset {
                     | "cell_sync"
                     | "cell_component_status_list"
                     | "operation_status"
+                    | "activity_search"
+                    | "operation_read"
                     | "operation_wait_many"
                     | "action_cancel"
             ),
@@ -2447,6 +2456,8 @@ impl ProofstormToolset {
                     | "experiment_read"
                     | "session_read"
                     | "operation_status"
+                    | "activity_search"
+                    | "operation_read"
                     | "operation_wait"
                     | "operation_wait_many"
                     | "action_list"
@@ -2516,6 +2527,8 @@ fn experiment_tool(tool: &str) -> bool {
             | "authentication_protected_spend"
             | "authentication_replay"
             | "operation_status"
+            | "activity_search"
+            | "operation_read"
             | "operation_wait_many"
             | "action_cancel"
             | "action_list"
@@ -2665,6 +2678,8 @@ impl ProofstormMcp {
                         | "session_read"
                         | "session_list"
                         | "action_list"
+                        | "activity_search"
+                        | "operation_read"
                         | "artifact_export"
                         | "evidence_section_read"
                         | "cell_diff"
@@ -2967,7 +2982,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_sync",
-        description = "Synchronize runtime receipts into durable activity for a named cell, without executing a new action. Then returns status and the first activity page. Unknown outcomes remain explicit. Returns the cell_inspect status shape."
+        description = "Synchronize runtime receipts into durable activity for a named cell, without executing a new action. Returns status and a byte-bounded activity page in the cell_inspect shape. Pass next_sequence as after_sequence to continue until next_sequence is null. Unknown outcomes remain explicit."
     )]
     async fn proofstorm_cell_sync(
         &self,
@@ -2979,7 +2994,7 @@ impl ProofstormMcp {
             .inspect(&request.name, request.after_sequence)
             .await
             .map_err(app_error)
-            .and_then(|view| developer_result(compact_developer_view(view)))
+            .and_then(cell_sync::result)
     }
 
     #[tool(
@@ -6418,6 +6433,33 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "activity_search",
+        description = "Search recorded operations across all actors and runs in a cell. Filter by component, phase, kind, actor, run/session and acceptance time; match literal/regex JSON scalar values. Returns operation IDs/digests, summaries, matching JSON pointers and excerpts, plus requested fields. Use operation_read for omitted values or more text. Newest first; scans at most 200 records per call. Continue next_cursor even if items is empty; null means exhausted. Cursors reject changed history or filters. Read-only: no runtime polling; use cell_sync first for fresh receipts."
+    )]
+    fn proofstorm_activity_search(
+        &self,
+        Parameters(request): Parameters<ActivitySearchRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.authorize_all(&[
+            Capability::CellStatus,
+            Capability::ExperimentRead,
+            Capability::ArtifactRead,
+        ])?;
+        activity_search::search(&self.store, &self.workspace, &self.principal, &request)
+    }
+
+    #[tool(
+        name = "operation_read",
+        description = "Read a recorded operation's selected JSON pointer without runtime polling. Returns value and operation_digest. Copy expected_digest from activity_search to reject changed data. For strings and arrays, follow next_offset with the same digest and pointer; offsets count Unicode characters or array items. Null next_offset means complete. Objects must fit; select a deeper pointer if too large. Only already recorded data is available, including the original output visibility and truncation limits."
+    )]
+    fn proofstorm_operation_read(
+        &self,
+        Parameters(request): Parameters<OperationReadRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        operation_read::read(&self.store, &self.workspace, &self.principal, &request)
+    }
+
+    #[tool(
         name = "operation_status",
         description = "Read an operation and persist its bounded terminal artifact"
     )]
@@ -8276,9 +8318,9 @@ impl ServerHandler for ProofstormMcp {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(if self.toolset == ProofstormToolset::Developer {
-            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named cell with cell_up, inspect runtime and cached activity with cell_inspect, and run native argv commands with cell_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use cell_sync to collect durable receipts; inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate cell is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with cell_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
+            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named cell with cell_up, inspect runtime and cached activity with cell_inspect, and run native argv commands with cell_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use cell_sync to collect durable receipts, then activity_search to find recorded operations by filters or text and operation_read to fetch selected fields or output slices. Follow next_cursor even on empty search pages and next_offset for long values; keep returned digests to detect changes. Inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate cell is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with cell_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
         } else {
-            "Use catalog_list to discover implementation IDs, then cell_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a cell_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call cell_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the cell; deletion purges cell-owned activity. Read full evidence only through its manifest resource_uri; use evidence_section_read for bounded inspection."
+            "Use catalog_list to discover implementation IDs, then cell_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a cell_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call cell_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the cell; deletion purges cell-owned activity. Search recorded operations with activity_search and read selected JSON paths or text slices with operation_read; these reads never poll the runtime. Read full evidence only through its manifest resource_uri; use evidence_section_read for bounded inspection."
         }
         )
     }
@@ -8650,6 +8692,15 @@ fn runtime_tool_capabilities() -> Vec<(&'static str, &'static [Capability])> {
         ("reachability_oracle", &[Capability::OracleRun]),
         ("action_cancel", &[Capability::ActionCancel]),
         ("operation_status", &[Capability::ArtifactRead]),
+        (
+            "activity_search",
+            &[
+                Capability::CellStatus,
+                Capability::ExperimentRead,
+                Capability::ArtifactRead,
+            ],
+        ),
+        ("operation_read", &[Capability::ArtifactRead]),
         ("operation_wait", &[Capability::ArtifactRead]),
         ("operation_wait_many", &[Capability::ArtifactRead]),
         ("action_list", &[Capability::ExperimentRead]),
@@ -9071,7 +9122,7 @@ const fn component_kind_name(kind: ComponentKind) -> &'static str {
         ComponentKind::Database => "database",
         ComponentKind::IdentityProvider => "identity_provider",
         ComponentKind::Wallet => "wallet",
-        ComponentKind::Attacker => "attacker",
+        ComponentKind::Attacker => "workspace",
         ComponentKind::Proxy => "proxy",
         ComponentKind::Oracle => "oracle",
     }
@@ -13162,7 +13213,7 @@ mod tests {
             service.tool_names().len(),
             encoded.len()
         );
-        assert_eq!(service.tool_names().len(), 94);
+        assert_eq!(service.tool_names().len(), 96);
         assert_optional_tracking(&service);
 
         assert!(
@@ -13212,10 +13263,11 @@ mod tests {
             // Full configuration reads, update previews, and revision/generation receipts.
             // Human-readable tool titles add at most 2 KiB to these dense profiles.
             // Includes scoped topology search and workspace file inputs.
-            (ProofstormToolset::Experiment, 180 * 1024),
+            // Recorded activity search and selective reads add two compact tools.
+            (ProofstormToolset::Experiment, 184 * 1024),
             (ProofstormToolset::Native, 134 * 1024),
             (ProofstormToolset::Design, 100 * 1024),
-            (ProofstormToolset::Runtime, 220 * 1024),
+            (ProofstormToolset::Runtime, 224 * 1024),
             (ProofstormToolset::Evidence, 100 * 1024),
         ] {
             let focused = service.clone().with_toolset(toolset);

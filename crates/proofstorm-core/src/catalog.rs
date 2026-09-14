@@ -682,7 +682,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             "attacker-workspace",
             backends,
             ComponentKind::Attacker,
-            "Disposable adversarial client workspace",
+            "General-purpose shell workspace for running commands and testing cell services",
             adapter_version,
             "0.1.0-alpha.1",
             ReleaseChannel::Prerelease,

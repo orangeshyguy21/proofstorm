@@ -211,6 +211,94 @@ fn configured_stdio_discovery_and_direct_calls_are_capability_filtered() {
 }
 
 #[test]
+fn recorded_search_and_selected_reads_work_over_offline_stdio() {
+    use proofstorm_core::{Capability, OperationKind, OperationPhase};
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("recorded.sqlite3");
+    let store = proofstorm_store::Store::open(&database).unwrap();
+    proofstorm_app::developer::configure(&store, "test", "agent").unwrap();
+    let spec = serde_json::from_value(json!({
+        "api_version":"proofstorm/v1alpha1", "name":"search-demo", "links":[],
+        "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core",
+            "version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
+    }))
+    .unwrap();
+    store
+        .create_draft("test", "agent", "draft", &spec, "draft")
+        .unwrap();
+    let revision = store
+        .publish("test", "agent", "draft", 1, "publish")
+        .unwrap();
+    store
+        .materialize("test", "agent", "search-demo", &revision.digest, "up")
+        .unwrap();
+    store
+        .create_operation(
+            "test",
+            "agent",
+            "search-demo",
+            "",
+            "",
+            "recorded-command",
+            OperationKind::ComponentExecLive,
+            &json!({"component":"chain","argv":["example"]}),
+            "recorded-command",
+            Capability::ComponentExecLive,
+        )
+        .unwrap();
+    store
+        .record_operation_result(
+            "test",
+            "recorded-command",
+            OperationPhase::Succeeded,
+            json!({"stdout":"database busy", "exit_code":1}),
+        )
+        .unwrap();
+    let before = store
+        .activity_observation_digest("test", "agent", "search-demo")
+        .unwrap();
+    let mut client = McpClient::spawn(
+        binary(),
+        "recorded-search",
+        &[
+            ("PROOFSTORM_MODE", "offline".as_ref()),
+            ("PROOFSTORM_DB", database.as_os_str()),
+            ("PROOFSTORM_WORKSPACE", "test".as_ref()),
+            ("PROOFSTORM_PRINCIPAL", "agent".as_ref()),
+            ("PROOFSTORM_TOOLSET", "developer".as_ref()),
+        ],
+    )
+    .unwrap();
+    let found = client
+        .call(
+            "activity_search",
+            json!({"name":"search-demo", "query":"database",
+        "native_exit_code":1, "fields":["/artifact/content/exit_code"]}),
+        )
+        .unwrap();
+    assert_eq!(found["items"][0]["operation_id"], "recorded-command");
+    assert_eq!(found["items"][0]["fields"][0]["value"], 1);
+    let receipt = client
+        .call(
+            "operation_read",
+            json!({
+                "operation_id":found["items"][0]["operation_id"],
+                "expected_digest":found["items"][0]["operation_digest"],
+                "pointer":found["items"][0]["matches"][0]["pointer"], "offset":9,"limit":4
+            }),
+        )
+        .unwrap();
+    assert_eq!(receipt["value"], "busy");
+    assert!(receipt["next_offset"].is_null());
+    assert_eq!(
+        before,
+        store
+            .activity_observation_digest("test", "agent", "search-demo")
+            .unwrap()
+    );
+}
+
+#[test]
 fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
     let directory = tempfile::tempdir().expect("tempdir");
     let kubeconfig = disconnected_kubeconfig(directory.path());
@@ -389,7 +477,7 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 16);
+    assert_eq!(names.len(), 18);
     for name in [
         "session_list",
         "cell_up",
@@ -399,6 +487,8 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         "environment_read",
         "cell_exec",
         "cell_sync",
+        "activity_search",
+        "operation_read",
         "cell_finish",
     ] {
         assert!(names.contains(&name));

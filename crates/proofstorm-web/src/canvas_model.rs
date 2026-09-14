@@ -252,6 +252,14 @@ pub fn bounds(nodes: &[CanvasNode], positions: &Positions) -> (f64, f64, f64, f6
         .fold(f64::NEG_INFINITY, f64::max);
     (x, y, (right - x).max(500.0), (bottom - y).max(320.0))
 }
+// Keep saved implementation IDs intact while presenting their current names.
+pub fn implementation_label(implementation: &str) -> &str {
+    match implementation {
+        "attacker-workspace" => "Workspace",
+        _ => implementation,
+    }
+}
+
 pub fn appearance(kind: ComponentKind) -> (&'static str, &'static str, &'static str) {
     match kind {
         ComponentKind::Bitcoin => (
@@ -290,7 +298,11 @@ pub fn appearance(kind: ComponentKind) -> (&'static str, &'static str, &'static 
             "Oracle",
             "M2 12s4-8 10-8 10 8 10 8-4 8-10 8S2 12 2 12Z M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
         ),
-        ComponentKind::Attacker => ("attacker", "Attacker", "m12 2 10 19H2Z M12 8v6 M12 17v1"),
+        ComponentKind::Attacker => (
+            "workspace",
+            "Workspace",
+            "M3 4h18v16H3Z M6 8l4 4-4 4 M13 16h5",
+        ),
     }
 }
 

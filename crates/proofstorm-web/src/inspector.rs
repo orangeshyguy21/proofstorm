@@ -28,7 +28,7 @@ pub(crate) fn ComponentPanel(
     {
         return view!{<div class=format!("component-panel type-{}",crate::canvas_model::appearance(embedded.kind).0)><span class="eyebrow type-label">{crate::canvas_model::appearance(embedded.kind).1}</span><h3>{embedded.name}</h3><p>"Embedded in "{component.id.clone()}</p><div class="version-details"><span>"Version"</span><strong>{embedded.version.unwrap_or_else(||"Not reported".into())}</strong></div><p class="inspector-note">"Shares its parent’s process and resource usage."</p><h4>"Parent build"</h4><VersionDetails component=component.clone() /><h4>"Observation"</h4><p>"Separate runtime health and balances are not reported for this embedded resource."</p></div>}.into_any();
     }
-    view! { <div class=format!("component-panel type-{}",crate::canvas_model::appearance(component.kind).0)><span class="eyebrow type-label">{crate::canvas_model::appearance(component.kind).1}</span><h3>{component.id.clone()}</h3><p>{component.implementation.clone()}" · "{health(&component)}</p>
+    view! { <div class=format!("component-panel type-{}",crate::canvas_model::appearance(component.kind).0)><span class="eyebrow type-label">{crate::canvas_model::appearance(component.kind).1}</span><h3>{component.id.clone()}</h3><p>{crate::canvas_model::implementation_label(&component.implementation).to_owned()}" · "{health(&component)}</p>
         <VersionDetails component=component.clone() />
         <BalancePanel telemetry cell_id=cell.id.clone() component=component.id.clone() />
     </div> }.into_any()

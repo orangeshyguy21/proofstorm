@@ -1,6 +1,6 @@
 # Proofstorm 0.1.0-alpha.1 — Linux x86-64
 
-Early alpha for testing the GitHub installer and full runtime on a fresh Linux VM.
+Early alpha for testing the public installer and full runtime on a fresh Linux VM.
 This prerelease ships Linux x86-64 binaries for glibc-based distributions. A Mac
 archive is not included in this prerelease yet.
 
@@ -10,9 +10,9 @@ Run as your ordinary user, not root:
 
 ```sh
 curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://github.com/orangeshyguy21/proofstorm/releases/download/v0.1.0-alpha.1/install.sh \
+  https://proofstorm.com/install \
   --output /tmp/proofstorm-install.sh
-sh /tmp/proofstorm-install.sh
+sh /tmp/proofstorm-install.sh --version 0.1.0-alpha.1
 export PATH="$HOME/.local/bin:$PATH"
 proofstorm setup
 proofstorm doctor
@@ -43,7 +43,7 @@ That result is not a test of this newly rebuilt alpha or its GitHub download.
 
 - Archive: `proofstorm-0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz`
 - Archive SHA-256: `9d81714bd782214f08b0d1860b34be4a8d12713c471e679821c6df7b93571517`
-- Installer SHA-256: `9a6ed7944f350b161170c55ab3a845beb37d6cb1f22ebac42692a4970f5120a3`
+- Original release installer SHA-256: `9a6ed7944f350b161170c55ab3a845beb37d6cb1f22ebac42692a4970f5120a3`
 - Source base revision: `9bdba429f3f9f4b48ba7c762981548d5f948f496`
 - Exact dirty source snapshot SHA-256: `37f9e3a0545107fd550df13531c09f10e87412f5e0d15371a975cb4e99491482`
 

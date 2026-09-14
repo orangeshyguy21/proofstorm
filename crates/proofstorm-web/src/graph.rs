@@ -247,7 +247,7 @@ fn CanvasTile(
             <path class="type-icon" transform="translate(16 12) scale(.65)" d=move ||data.get().map(|n|canvas_model::appearance(n.kind).2) />
             <text class="node-kind" x="39" y="25">{move ||data.get().map(|n|canvas_model::appearance(n.kind).1)}</text>
             <text class="node-name" x="17" y="52">{move ||data.get().map(|n|short(&n.name,26))}</text>
-            <text class="node-impl" x="17" y="73">{move ||data.get().map(|n|if n.is_embedded(){"Embedded · shares parent process".into()}else{short(&n.implementation,30)})}</text>
+            <text class="node-impl" x="17" y="73">{move ||data.get().map(|n|if n.is_embedded(){"Embedded · shares parent process".into()}else{short(canvas_model::implementation_label(&n.implementation),30)})}</text>
             <Show when=move ||data.get().is_some_and(|n|!n.is_embedded())>
                 <NodeBalance telemetry cell data />
                 <text class="node-health" x="17" y="132">{status}</text><circle class=move ||format!("status-dot {}",status()) cx="241" cy="127" r="4" />

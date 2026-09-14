@@ -1,10 +1,12 @@
 <p align="center">
-  <img src="crates/proofstorm-web/assets/proofstorm-logo.svg" width="44" height="51" alt="">
-  &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="crates/proofstorm-web/assets/proofstorm-word-mark-on-dark.svg">
-    <img src="crates/proofstorm-web/assets/proofstorm-word-mark.svg" width="240" height="44" alt="Proofstorm">
-  </picture>
+  <a href="https://proofstorm.com/">
+    <img src="crates/proofstorm-web/assets/proofstorm-logo.svg" width="44" height="51" alt="">
+    &nbsp;
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="crates/proofstorm-web/assets/proofstorm-word-mark-on-dark.svg">
+      <img src="crates/proofstorm-web/assets/proofstorm-word-mark.svg" width="240" height="44" alt="Proofstorm">
+    </picture>
+  </a>
 </p>
 <p align="center">Local test cells for Bitcoin, Lightning &amp; Cashu.</p>
 <p align="center">
@@ -25,13 +27,13 @@ conflicts with an existing executable.
 
 ## Quick start
 
-These command examples require a build with the new CLI.
+Get the current public release from [proofstorm.com](https://proofstorm.com/).
 
 On **Linux x86-64**, install Docker Engine with Buildx and make sure
 `docker info` works as your normal user. Then:
 
 ```sh
-curl -fsSL https://github.com/orangeshyguy21/proofstorm/releases/download/v0.1.0-alpha.2/install.sh | sh
+curl -fsSL https://proofstorm.com/install | sh
 export PATH="$HOME/.local/bin:$PATH"
 storm setup
 storm doctor
@@ -62,14 +64,14 @@ command to launch a native app instead of its CLI.
 
 | Host | Public installer | Status |
 | --- | --- | --- |
-| Linux x86-64 / AMD64 | `0.1.0-alpha.2` | Fresh Ubuntu VM smoke test passed with Docker Engine + Buildx |
-| macOS Apple Silicon / ARM64 | In progress | Checkout workflow available with Docker Desktop; packaged clean-Mac test pending |
+| Linux x86-64 / AMD64 | Available | Docker Engine + Buildx required; recorded Linux smoke test below |
+| macOS Apple Silicon / ARM64 | Available | Docker Desktop required; packaged clean-Mac runtime test pending |
 | Linux ARM64 | Not yet | No published host bundle |
 | macOS Intel | Not supported | No host bundle |
 | Windows / WSL | Not supported yet | No validated installation flow |
 
-The Linux smoke test covered installation, setup, one Bitcoin cell through Codex
-and OpenCode, headless GUI startup, reinstall, and cleanup. It did **not** cover
+The recorded alpha.2 Linux smoke test covered installation, setup, one Bitcoin
+cell through Codex and OpenCode, headless GUI startup, reinstall, and cleanup. It did **not** cover
 every component, transactions, or visual GUI behavior. See the
 [acceptance summary](release/alpha-2-linux-smoke.md).
 
@@ -99,7 +101,7 @@ catalog for full configuration and compatibility details.
 | PostgreSQL | `postgresql` | 17.11 | Persistent database |
 | Redis | `redis` | 8.10.1 | Ephemeral cache |
 | Keycloak | `keycloak` | 25.0.6 | Test OIDC provider |
-| Attacker workspace | `attacker-workspace` | 0.1.0-alpha.1 | Disposable client shell |
+| Workspace | `attacker-workspace` | 0.1.0-alpha.1 | General-purpose shell for commands and testing cell services |
 
 ## CLI in a minute
 
@@ -132,6 +134,52 @@ storm gui status       # Shows GUI service status
 
 Commands show progress and readable results. Add `--json` for scripts, or
 `--help` to any command for options. Cells are not automatically funded.
+
+## Search recorded results with an agent
+
+Agents can use `activity_search` to find operations across every actor and run
+in a cell. Search text literally or with regex, filter by component, operation
+phase, native exit code, actor, run/session, or acceptance time, and request
+only the JSON fields needed. For example, these MCP arguments find Bob's
+recorded output mentioning a database and return the exit codes:
+
+```json
+{
+  "name": "alpha-payments",
+  "component": "bob",
+  "query": "database",
+  "case_insensitive": true,
+  "fields": ["/artifact/content/exit_code"],
+  "limit": 10
+}
+```
+
+Matches include operation IDs and digests, JSON pointers, and short excerpts
+with character offsets. Large selected values are explicitly marked as omitted.
+Use `operation_read` to retrieve a particular field or a slice of longer output:
+
+```json
+{
+  "operation_id": "<operation_id from the match>",
+  "expected_digest": "<operation_digest from the match>",
+  "pointer": "/artifact/content/stdout",
+  "offset": 0,
+  "limit": 1000
+}
+```
+
+Both tools read saved history without running commands or polling components.
+Use `cell_sync` first when fresh receipts are needed. Searches match recorded
+JSON scalar values and return the first excerpt per matching field. They scan
+at most 200 operations per call: follow `next_cursor` even after an empty page,
+until it is null. A cursor is invalidated when that cell's history changes;
+repeat the search without it. Reads use `next_offset` for Unicode character or
+array-element slices; keep the returned digest to detect changes between reads.
+Private or previously truncated output cannot be recovered through search.
+
+`cell_search` provides the same search-and-select workflow for desired component
+configuration and connections. Catalog filters and `catalog_config_schema_read`
+provide focused component and configuration-schema discovery.
 
 ## Development
 

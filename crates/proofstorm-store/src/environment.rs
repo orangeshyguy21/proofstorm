@@ -14,6 +14,54 @@ pub struct PendingObservationPage {
 }
 
 impl Store {
+    /// Fingerprint the recorded activity of one immutable cell incarnation.
+    /// Requests and terminal artifacts are immutable. Legal updates only add
+    /// actions or advance their phases, so phase counts detect receipt changes
+    /// without reading every artifact. Unrelated cells do not invalidate it.
+    pub fn activity_observation_digest(
+        &self,
+        workspace: &str,
+        principal: &str,
+        instance: &str,
+    ) -> Result<String, StoreError> {
+        for capability in [
+            Capability::CellStatus,
+            Capability::ExperimentRead,
+            Capability::ArtifactRead,
+        ] {
+            self.authorize(workspace, principal, capability)?;
+        }
+        let identity = self.instance_unchecked(workspace, instance)?;
+        let db = self.lock()?;
+        let counts = db.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(sequence),0),
+                    COUNT(CASE WHEN phase_json='\"pending\"' THEN 1 END),
+                    COUNT(CASE WHEN phase_json='\"running\"' THEN 1 END),
+                    COUNT(CASE WHEN phase_json='\"succeeded\"' THEN 1 END),
+                    COUNT(CASE WHEN phase_json='\"failed\"' THEN 1 END),
+                    COUNT(CASE WHEN phase_json='\"cancelled\"' THEN 1 END)
+             FROM actions WHERE workspace_id=?1 AND instance_id=?2",
+            params![workspace, instance],
+            |row| {
+                Ok([
+                    row.get::<_, i64>(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ])
+            },
+        )?;
+        Ok(proofstorm_core::digest_json(&(
+            workspace,
+            instance,
+            identity.instance_key,
+            counts,
+        )))
+    }
+
     /// Opaque invalidation inputs: catches writes through this connection and other processes.
     /// Database-wide changes may cause harmless extra refreshes; no row data is returned.
     pub fn observation_token(
