@@ -8,6 +8,8 @@ mod cell_sync;
 pub use cell_inspect::CellInspectRequest;
 mod cell_up;
 mod read_query;
+mod session_directory;
+pub use session_directory::SessionListRequest;
 mod status_search;
 pub use activity_search::ActivitySearchRequest;
 mod operation_read;
@@ -2103,21 +2105,6 @@ pub struct FinishSessionRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct SessionListRequest {
-    #[serde(default)]
-    pub instance_id: String,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub cursor: String,
-    #[serde(default = "session_page_limit")]
-    pub limit: u32,
-}
-fn session_page_limit() -> u32 {
-    20
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct PrivateAccessIdRequest {
     pub grant_id: String,
 }
@@ -2980,17 +2967,17 @@ impl ProofstormMcp {
 
     #[tool(
         name = "environment_read",
-        description = "Read the workspace environment: cells currently present in the selected cluster, declared topology, endpoint metadata, desired resource demand, session overlaps and cached activity. Deleted and unmaterialized cells are excluded. No commands, sessions or receipt synchronization are triggered. Includes coverage and per-source freshness; protocol traffic and attached clients are not collected. Use cursor/limit to page cells, or instance_id with session_cursor/activity_cursor/component_cursor/link_cursor to page one cell's sections. Same JSON contract as proofstorm ls and GET /v1/environment."
+        description = "Read the current workspace environment. Use scan=true for compact cell headers; filter name, owner, observed phase, component_kind or implementation, or search header JSON with query/regex. Select sections (components, links, resources, sessions, activity) or RFC 6901 fields; only needed sections are loaded. Keep selectors unchanged with cursor; detail sections and their cursors require instance_id. Runtime can be stale or unavailable; consult runtime.state. Omitted sections were not requested. No commands, sessions or synchronization occur. GET /v1/environment shares these selectors; no selectors preserves the full GUI/CLI view."
     )]
     async fn proofstorm_environment_read(
         &self,
-        Parameters(request): Parameters<proofstorm_app::environment::EnvironmentQuery>,
+        Parameters(request): Parameters<proofstorm_app::environment::EnvironmentReadQuery>,
     ) -> Result<CallToolResult, ErrorData> {
         self.cells()?
-            .environment(&request)
+            .environment_read(&request, MAX_AGENT_RESPONSE_BYTES / 4)
             .await
             .map_err(app_error)
-            .and_then(environment_result)
+            .and_then(developer_result)
     }
 
     #[tool(
@@ -4239,35 +4226,13 @@ impl ProofstormMcp {
     }
     #[tool(
         name = "session_list",
-        description = "List sessions in a cell, or temporal overlaps with session_id. Bounded pagination; no expiry or liveness inference. Overlap is advisory and never blocks work."
+        description = "Search session records by cell, exact id, actor, run, phase or time. overlaps_with selects overlapping intervals; legacy session_id is an alias. Use scan, literal/regex query, fields and cursor for bounded targeted reads. Follow next_cursor even on an empty search page. Active means unfinished tracking, not proof of agent liveness. Reads never refresh activity or block work."
     )]
     fn proofstorm_session_list(
         &self,
         Parameters(request): Parameters<SessionListRequest>,
-    ) -> Result<Json<proofstorm_store::SessionPage>, ErrorData> {
-        if let Some(id) = request.session_id {
-            self.store
-                .overlapping_sessions(
-                    &self.workspace,
-                    &self.principal,
-                    &id,
-                    &request.cursor,
-                    request.limit,
-                )
-                .map(Json)
-                .map_err(store_error)
-        } else {
-            self.store
-                .sessions(
-                    &self.workspace,
-                    &self.principal,
-                    &request.instance_id,
-                    &request.cursor,
-                    request.limit,
-                )
-                .map(Json)
-                .map_err(store_error)
-        }
+    ) -> Result<CallToolResult, ErrorData> {
+        session_directory::read(&self.store, &self.workspace, &self.principal, &request)
     }
     #[tool(
         name = "private_access_issue",
@@ -8297,7 +8262,7 @@ impl ServerHandler for ProofstormMcp {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(if self.toolset == ProofstormToolset::Developer {
-            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named cell with cell_up, read a compact summary with cell_inspect, and run native argv commands with cell_exec. For edits, copy desired_generation and instance_key into cell_up expected_generation and expected_instance_key; retain the full request for exact retries. cell_up returns acceptance, not readiness. Search configuration with cell_search and readiness with cell_component_status_list; scan for IDs, filter first and request only needed fields. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use cell_sync to collect durable receipts, then activity_search to find recorded operations by filters or text and operation_read to fetch selected fields or output slices. Follow next_cursor even on empty search pages and next_offset for long values; keep returned digests to detect changes. Inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate cell is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with cell_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
+            "Discover exact component configuration through catalog_list and catalog_entry_read. Scan the workspace with environment_read scan=true, then filter and select only needed sections or fields. Start a named cell with cell_up, read a compact summary with cell_inspect, and run native argv commands with cell_exec. For edits, copy desired_generation and instance_key into cell_up expected_generation and expected_instance_key; retain the full request for exact retries. cell_up returns acceptance, not readiness. Search configuration with cell_search and readiness with cell_component_status_list; scan for IDs, filter first and request only needed fields. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list filters, scan and fields to inspect actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use cell_sync to collect durable receipts, then activity_search to find recorded operations by filters or text and operation_read to fetch selected fields or output slices. Follow next_cursor even on empty search pages and next_offset for long values; keep returned digests to detect changes. Inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate cell is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with cell_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
         } else {
             "Use catalog_list to discover implementation IDs, then cell_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a cell_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call cell_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the cell; deletion purges cell-owned activity. Search recorded operations with activity_search and read selected JSON paths or text slices with operation_read; these reads never poll the runtime. Read full evidence only through its manifest resource_uri; use evidence_section_read for bounded inspection."
         }
@@ -9836,6 +9801,7 @@ pub struct DeveloperCellView {
     pub observed_at_unix: i64,
 }
 
+#[cfg(test)]
 fn environment_result(
     mut view: proofstorm_app::environment::EnvironmentView,
 ) -> Result<CallToolResult, ErrorData> {
@@ -12188,7 +12154,7 @@ mod tests {
         );
         let result = service
             .proofstorm_environment_read(Parameters(
-                proofstorm_app::environment::EnvironmentQuery::default(),
+                proofstorm_app::environment::EnvironmentReadQuery::default(),
             ))
             .await
             .unwrap();
@@ -12204,7 +12170,7 @@ mod tests {
         assert!(
             service
                 .proofstorm_environment_read(Parameters(
-                    proofstorm_app::environment::EnvironmentQuery::default()
+                    proofstorm_app::environment::EnvironmentReadQuery::default()
                 ))
                 .await
                 .is_err()
@@ -13569,7 +13535,7 @@ mod tests {
             let content = serde_json::json!({
                 "exit_code": if index == 4 { 7 } else { 0 },
                 "cleanup_verified": true, "output_truncated": true,
-                "streams_complete": true, "stdout": "x".repeat(14_000),
+                "streams_complete": true, "stdout": format!("{{\"status\":\"FAILED\"}}{}", "x".repeat(14_000)),
                 "private_output_ref": "private-reference",
             });
             CellOperation {
@@ -13598,6 +13564,19 @@ mod tests {
                 }),
             }
         };
+        // A successful history query may return a failed payment. Raw output
+        // need not have a projection result; neither fact changes command exit.
+        let query = compact_operation_wait(operation(1), false);
+        assert_eq!(query.phase, OperationPhase::Succeeded);
+        let native = query.native_result.unwrap();
+        assert_eq!(native["exit_code"], 0);
+        assert!(native.get("projection_succeeded").is_none());
+        let mut missing = operation(7);
+        missing.phase = OperationPhase::Failed;
+        missing.artifact = None;
+        let unknown = compact_operation_wait(missing, false);
+        assert_eq!(unknown.phase, OperationPhase::Failed);
+        assert!(unknown.terminal && unknown.native_result.is_none());
         let ids = vec!["diag-1".into(), "missing".into(), "diag-4".into()];
         let (good, errors) = partition_operation_results(
             &ids,

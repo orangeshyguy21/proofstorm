@@ -19,6 +19,8 @@ smaller read; never return an empty page with a non-advancing cursor.
 
 | Need | Tool and selection |
 | --- | --- |
+| Find cells in the environment | `environment_read`: compact scan, name/owner/phase/component filters, header search, section/field selection, cursor |
+| Find actors and tracking intervals | `session_list`: exact ID or overlaps, actor/run/phase/time filters, text search, scans, fields, cursor |
 | Admit creation or an edit | `cell_up`: acceptance, identity and generation receipt |
 | Find current version and readiness counts | `cell_inspect`: compact summary by default |
 | Read a status subsection | `cell_inspect.fields`: RFC 6901 pointers into the detailed view |
@@ -29,13 +31,69 @@ smaller read; never return an empty page with a non-advancing cursor.
 | Retrieve receipt details | `operation_read`: digest-bound JSON pointer or Unicode text slice |
 
 `cell_sync` refreshes recorded activity; `activity_search` searches the stored
-results without executing or synchronizing commands. `environment_read` remains
-a workspace overview with cell/section pagination, and `session_list` remains a
-paged session directory. They are not general text-search interfaces. New large
-collection interfaces should follow this contract instead of adding another
-unfiltered dump; these remaining directories are candidates for the next audit.
+results without executing or synchronizing commands. `environment_read` scans
+only cells present in the selected cluster and tracked in this workspace. Its
+selectors are shared with HTTP; requests without selectors preserve the existing
+full GUI and CLI view.
+
+Environment scans use the cluster listing and stored identity metadata. They
+skip session/history decoding, resource rendering, endpoint expansion, and
+per-cell runtime/prober requests. Typed component filters consult the desired
+configuration. Header search runs before field selection; it does not search
+configuration or receipts recursively. Runtime freshness remains explicit.
+Messages are omitted from compact headers; select `/runtime/message` when needed.
+
+Detailed environment sections require `instance_id`. Scan for a cell first,
+then request `components`, `links`, `resources`, `sessions` or `activity`, or
+fields inside those sections. Only dependencies of the selected fields load;
+for example, reading a component ID does not render endpoints. Each returned
+section cursor belongs to that cell and those selectors. Field reads preserve
+section continuations alongside their projected values. An unrequested section
+is absent; an unreadable requested section is null with an explicit error.
+
+Session directory filters run in storage before bounded text/regex matching.
+A sparse search can return an empty page with an advancing cursor after scanning
+200 candidates; continue until the cursor is null. `id` means exact lookup;
+`overlaps_with` means interval overlap, with legacy `session_id` accepted as its
+alias. The overlap cutoff is fixed throughout pagination. `active` means an
+unfinished tracking interval, not proof of a running agent. Reads never refresh
+last-activity timestamps.
+
+Directory cursors bind selectors, their boundary, scope and source identity.
+Session updates invalidate session cursors. Environment cursors bind matching
+cell membership and desired generations; readiness observations may change
+without invalidation when matching membership stays the same. Restart without
+the cursor after an invalidation. Old plain session cursors must also restart.
 
 ## Examples
+
+Find Bitcoin cells owned by an actor with `environment_read`:
+
+```json
+{"scan":true,"owner":"developer","implementation":"bitcoin-core","limit":20}
+```
+
+After selecting a returned cell ID, retrieve a component field:
+
+```json
+{"instance_id":"<returned-cell-id>","fields":["/components/items/0/id"]}
+```
+
+Find unfinished sessions with `session_list`:
+
+```json
+{"instance_id":"<returned-cell-id>","principal_id":"developer","phase":"active","scan":true}
+```
+
+Retrieve a session's run and last activity:
+
+```json
+{"id":"<returned-session-id>","fields":["/experiment_id","/last_activity_at_unix"]}
+```
+
+For HTTP, `sections` and `fields` accept comma-separated values or an encoded
+JSON array string. MCP uses arrays. Pointers containing commas should use the
+JSON array form in HTTP.
 
 Scan components that are not ready:
 

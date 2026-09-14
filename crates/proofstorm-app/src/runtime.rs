@@ -27,6 +27,17 @@ impl Runtime {
         &self,
         workspace: &str,
     ) -> Result<std::collections::BTreeSet<String>, Error> {
+        Ok(self
+            .current_instances(workspace)
+            .await?
+            .into_keys()
+            .collect())
+    }
+
+    pub(crate) async fn current_instances(
+        &self,
+        workspace: &str,
+    ) -> Result<std::collections::BTreeMap<String, ProofstormCell>, Error> {
         let api = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
         let resources = tokio::time::timeout(
             std::time::Duration::from_secs(3),
@@ -43,7 +54,7 @@ impl Runtime {
             .items
             .into_iter()
             .filter(|cell| cell.spec.workspace_id == workspace)
-            .map(|cell| cell.spec.instance_id)
+            .map(|cell| (cell.spec.instance_id.clone(), cell))
             .collect())
     }
 

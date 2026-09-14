@@ -200,7 +200,7 @@ fn human(command: &str, value: &Value) -> String {
                     text.push_str("No recorded operations.\n");
                 }
                 for item in items {
-                    let _ = writeln!(text, "{}  {}", field(item, "id"), field(item, "phase"));
+                    let _ = writeln!(text, "{}  {}", field(item, "id"), operation_summary(item));
                 }
             }
             describe(&mut text, "next cursor", &value["next_cursor"], 0);
@@ -210,7 +210,7 @@ fn human(command: &str, value: &Value) -> String {
             let mut text = format!(
                 "Operation {}: {}\n",
                 field(value, "id"),
-                field(value, "phase")
+                operation_summary(value)
             );
             describe(&mut text, "result", &value["artifact"]["content"], 0);
             if value["artifact"]["content"].get("private_output").is_some() {
@@ -225,6 +225,61 @@ fn human(command: &str, value: &Value) -> String {
             text
         }
     }
+}
+
+// Only human output interprets the native receipt. The operation phase and
+// machine-readable receipt retain their existing, independent meanings.
+fn operation_summary(value: &Value) -> String {
+    let phase = field(value, "phase");
+    if value["kind"] != "component_exec_live" {
+        return phase.into();
+    }
+    if matches!(phase, "pending" | "running") {
+        return format!("execution {phase}");
+    }
+    let receipt = &value["artifact"]["content"];
+    // ops ls receives the compact Activity projection instead of the artifact.
+    let exit = receipt["exit_code"]
+        .as_i64()
+        .or_else(|| value["native_exit_code"].as_i64());
+    let signal = receipt["exit_signal"].as_i64();
+    let timed_out = receipt["timed_out"]
+        .as_bool()
+        .or_else(|| value["native_timed_out"].as_bool());
+    let cleanup = receipt["cleanup_verified"]
+        .as_bool()
+        .or_else(|| value["cleanup_verified"].as_bool());
+    let command = if receipt["cancelled"] == true {
+        "command cancelled".into()
+    } else if timed_out == Some(true) {
+        "command timed out".into()
+    } else if let Some(signal) = signal {
+        format!("command terminated (signal {signal})")
+    } else if let Some(exit) = exit {
+        if exit != 0 {
+            format!("command failed (exit {exit})")
+        } else if cleanup == Some(true) && phase != "cancelled" {
+            "command succeeded (exit 0)".into()
+        } else {
+            "command exited 0".into()
+        }
+    } else {
+        "command outcome unknown".into()
+    };
+    let mut summary = format!(
+        "execution {}; {command}",
+        if phase == "succeeded" {
+            "completed"
+        } else {
+            phase
+        }
+    );
+    if cleanup != Some(true)
+        && (exit.is_some() || signal.is_some() || timed_out == Some(true) || cleanup == Some(false))
+    {
+        summary.push_str("; cleanup unverified");
+    }
+    summary
 }
 
 fn installation_summary(value: &Value) -> String {
@@ -355,6 +410,87 @@ fn describe(text: &mut String, label: &str, value: &Value, indent: usize) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_operation_headlines_use_receipts_without_interpreting_output() {
+        for (receipt, expected) in [
+            (
+                json!({"exit_code":1,"cleanup_verified":true,"stderr":"[lncli] FAILED"}),
+                "execution completed; command failed (exit 1)",
+            ),
+            (
+                json!({"exit_code":0,"cleanup_verified":true,"stdout":"{\"status\":\"FAILED\"}"}),
+                "execution completed; command succeeded (exit 0)",
+            ),
+            (Value::Null, "execution completed; command outcome unknown"),
+            (
+                json!({"exit_code":null,"cleanup_verified":true}),
+                "execution completed; command outcome unknown",
+            ),
+            (
+                json!({"exit_code":0,"cleanup_verified":false}),
+                "execution completed; command exited 0; cleanup unverified",
+            ),
+            (
+                json!({"exit_code":0}),
+                "execution completed; command exited 0; cleanup unverified",
+            ),
+            (
+                json!({"exit_code":0,"timed_out":true,"cleanup_verified":true}),
+                "execution completed; command timed out",
+            ),
+            (
+                json!({"exit_code":null,"exit_signal":15,"cleanup_verified":true}),
+                "execution completed; command terminated (signal 15)",
+            ),
+            (
+                json!({"exit_code":0,"cancelled":true,"cleanup_verified":true}),
+                "execution completed; command cancelled",
+            ),
+        ] {
+            // Raw output mode does not produce projection_succeeded.
+            assert!(receipt.get("projection_succeeded").is_none());
+            let operation = json!({"id":"native-test","kind":"component_exec_live",
+                "phase":"succeeded","artifact":{"content":receipt}});
+            for command in ["exec", "result"] {
+                let text = human(command, &operation);
+                assert_eq!(
+                    text.lines().next().unwrap(),
+                    format!("Operation native-test: {expected}"),
+                    "{command}: {receipt}"
+                );
+            }
+        }
+        for phase in ["pending", "running", "failed", "cancelled"] {
+            let operation = json!({"id":"native-test","kind":"component_exec_live","phase":phase});
+            let suffix = if matches!(phase, "pending" | "running") {
+                ""
+            } else {
+                "; command outcome unknown"
+            };
+            assert_eq!(
+                human("result", &operation),
+                format!("Operation native-test: execution {phase}{suffix}\n")
+            );
+        }
+        assert_eq!(
+            human(
+                "result",
+                &json!({"id":"restart","kind":"component_restart","phase":"succeeded"})
+            ),
+            "Operation restart: succeeded\n"
+        );
+        // Activity omits the receipt's cancellation flag. A cancelled operation
+        // must not become a successful command just because an exit is recorded.
+        assert_eq!(
+            human(
+                "ops-list",
+                &json!({"items":[{"id":"cancelled","kind":"component_exec_live",
+                "phase":"cancelled","native_exit_code":0,"cleanup_verified":true}]})
+            ),
+            "cancelled  execution cancelled; command exited 0\n"
+        );
+    }
 
     #[test]
     fn terminal_progress_is_prompt_animated_and_cleared_without_a_timer() {

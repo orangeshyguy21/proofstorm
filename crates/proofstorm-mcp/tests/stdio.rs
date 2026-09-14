@@ -290,6 +290,20 @@ fn recorded_search_and_selected_reads_work_over_offline_stdio() {
         .unwrap();
     assert_eq!(receipt["value"], "busy");
     assert!(receipt["next_offset"].is_null());
+    let sessions = client
+        .call(
+            "session_list",
+            json!({"instance_id":"search-demo","principal_id":"agent","scan":true}),
+        )
+        .unwrap();
+    assert_eq!(sessions["sessions"].as_array().unwrap().len(), 1);
+    let session = client
+        .call(
+            "session_list",
+            json!({"id":sessions["sessions"][0]["id"],"fields":["/id","/principal_id"]}),
+        )
+        .unwrap();
+    assert_eq!(session["sessions"][0]["/principal_id"], "agent");
     assert_eq!(
         before,
         store
@@ -478,12 +492,77 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(names.len(), 18);
+    assert_selectors_advertised(&listed);
+    for name in [
+        "session_list",
+        "cell_up",
+        "cell_inspect",
+        "cell_read",
+        "cell_search",
+        "environment_read",
+        "cell_exec",
+        "cell_sync",
+        "activity_search",
+        "operation_read",
+        "cell_finish",
+    ] {
+        assert!(names.contains(&name));
+    }
+    for name in [
+        "experiment_create",
+        "session_start",
+        "cell_recipe_bootstrap",
+        "wallet_pay",
+    ] {
+        assert!(!names.contains(&name));
+    }
+    assert!(serde_json::to_vec(&listed).unwrap().len() < 64 * 1024);
+    assert!(
+        client.initialize_result()["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("cell_up")
+    );
+}
+
+fn assert_selectors_advertised(listed: &serde_json::Value) {
     for (name, fields) in [
         (
             "cell_up",
             vec!["expected_generation", "expected_instance_key"],
         ),
         ("cell_inspect", vec!["fields"]),
+        (
+            "environment_read",
+            vec![
+                "scan",
+                "name",
+                "owner",
+                "phase",
+                "component_kind",
+                "implementation",
+                "query",
+                "sections",
+                "fields",
+                "cursor",
+            ],
+        ),
+        (
+            "session_list",
+            vec![
+                "id",
+                "overlaps_with",
+                "principal_id",
+                "run_id",
+                "phase",
+                "started_after_unix",
+                "last_activity_before_unix",
+                "query",
+                "scan",
+                "fields",
+                "cursor",
+            ],
+        ),
         (
             "cell_search",
             vec!["id", "scan", "query", "fields", "cursor"],
@@ -520,36 +599,6 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
             );
         }
     }
-    for name in [
-        "session_list",
-        "cell_up",
-        "cell_inspect",
-        "cell_read",
-        "cell_search",
-        "environment_read",
-        "cell_exec",
-        "cell_sync",
-        "activity_search",
-        "operation_read",
-        "cell_finish",
-    ] {
-        assert!(names.contains(&name));
-    }
-    for name in [
-        "experiment_create",
-        "session_start",
-        "cell_recipe_bootstrap",
-        "wallet_pay",
-    ] {
-        assert!(!names.contains(&name));
-    }
-    assert!(serde_json::to_vec(&listed).unwrap().len() < 64 * 1024);
-    assert!(
-        client.initialize_result()["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("cell_up")
-    );
 }
 
 fn disconnected_kubeconfig(directory: &Path) -> std::path::PathBuf {

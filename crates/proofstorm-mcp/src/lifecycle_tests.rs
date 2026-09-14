@@ -26,6 +26,10 @@ fn cluster_client() -> Client {
                         200,
                         serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":[]}),
                     ),
+                    http::Method::GET if path.ends_with("/proofstormcells") => (
+                        200,
+                        serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":objects.values().filter(|v|v["kind"]=="ProofstormCell").collect::<Vec<_>>()}),
+                    ),
                     http::Method::GET => objects
                         .get(&path)
                         .cloned()
@@ -103,6 +107,42 @@ fn populate_history(store: &Store, instance: &str) {
             )
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn environment_directory_handler_has_bounded_matching_text_and_structured_pages() {
+    let store = tests::seeded_store();
+    for cap in [Capability::ExperimentRead, Capability::CellOperate] {
+        store.grant("alpha", "designer", cap).unwrap();
+    }
+    let service = ProofstormMcp::new(store, "alpha", "designer")
+        .unwrap()
+        .with_kubernetes(cluster_client(), "system");
+    let request:DeveloperUpRequest=serde_json::from_value(serde_json::json!({"name":"directory-cell","cell":{"api_version":"proofstorm/v1alpha1","name":"directory","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]}})).unwrap();
+    service
+        .proofstorm_cell_up(Parameters(request))
+        .await
+        .unwrap();
+    let response = service
+        .proofstorm_environment_read(Parameters(
+            serde_json::from_value(
+                serde_json::json!({"scan":true,"owner":"designer","implementation":"bitcoin-core"}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(serialized_size(&response).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
+    let wire = serde_json::to_value(&response).unwrap();
+    let structured = response.structured_content.unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(wire["content"][0]["text"].as_str().unwrap())
+            .unwrap(),
+        structured
+    );
+    assert_eq!(structured["matched_count"], 1);
+    assert_eq!(structured["cells"]["items"][0]["name"], "directory-cell");
+    assert!(structured["cells"]["items"][0].get("sessions").is_none());
 }
 
 #[tokio::test]

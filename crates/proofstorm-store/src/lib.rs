@@ -8,9 +8,11 @@ pub use environment::{EnvironmentEntry, PendingObservationPage};
 mod delegation;
 mod onboarding;
 mod runs;
+mod session_directory;
 #[cfg(test)]
 mod session_tests;
 mod sessions;
+pub use session_directory::{SessionFilters, SessionWindow};
 pub use sessions::SessionPage;
 mod cells;
 mod lifecycle;
