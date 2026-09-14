@@ -133,6 +133,7 @@ fn human(command: &str, value: &Value) -> String {
     use std::fmt::Write;
     let bin = proofstorm_app::command_name();
     match command {
+        "runtime-stop" | "runtime-start" => runtime_summary(command, value, bin),
         "update" => update_summary(value),
         "setup" if value["ready"] == true => format!("Runtime ready.\nOpen the GUI: {bin} gui\n"),
         "setup" if value["prepared"] == true => {
@@ -225,6 +226,19 @@ fn human(command: &str, value: &Value) -> String {
             describe(&mut text, "", value, 0);
             text
         }
+    }
+}
+
+fn runtime_summary(command: &str, value: &Value, bin: &str) -> String {
+    if command == "runtime-stop" {
+        format!("Proofstorm stopped. Persistent cell data is preserved.\nResume: {bin} start\n")
+    } else if value["ready"] == true {
+        format!("Proofstorm runtime ready.\nOpen the GUI: {bin} gui\n")
+    } else {
+        format!(
+            "Proofstorm runtime running; some services are not ready: {}\nInspect cells with {bin} ls and {bin} status CELL.\n",
+            value["unready_workloads"]
+        )
     }
 }
 

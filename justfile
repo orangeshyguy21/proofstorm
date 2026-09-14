@@ -42,8 +42,16 @@ doctor *args:
 gui *args:
     .proofstorm-dev/bin/proofstorm gui "$@"
 
-# Stop the managed GUI, leaving cells running.
+# Stop the checkout runtime and GUI, preserving cell storage.
 stop:
+    .proofstorm-dev/bin/proofstorm stop
+
+# Resume the checkout runtime without rebuilding or changing its cells.
+start:
+    .proofstorm-dev/bin/proofstorm start
+
+# Stop only the managed GUI, leaving cells running.
+gui-stop:
     .proofstorm-dev/bin/proofstorm gui stop
 
 # Run the same quick checks, lints, and tests as CI; no runtime needed.

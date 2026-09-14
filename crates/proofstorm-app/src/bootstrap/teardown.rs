@@ -161,6 +161,27 @@ fn read_receipt(installation: &Installation) -> Result<Resources> {
     Ok(receipt)
 }
 
+/// Suspend/resume requires every original resource, including storage, to remain.
+/// Unlike retirement, absence is an error and can never authorize recreation.
+pub(super) fn preserved_runtime(installation: &Installation) -> Result<BTreeMap<String, String>> {
+    ensure!(
+        !installation.home.join(RETIRED).exists(),
+        "installation runtime is retired"
+    );
+    let expected = read_receipt(installation)?;
+    let current = snapshot(installation, &|args| docker(&installation.home, args, 30))?;
+    ensure!(
+        expected == current,
+        "runtime resources changed or are missing; refusing to suspend or resume replaced resources"
+    );
+    ensure!(
+        !current.containers.is_empty(),
+        "runtime has no recorded containers; run setup first"
+    );
+    super::cluster::verify_kubeconfig(installation)?;
+    Ok(current.containers)
+}
+
 /// Explicit dev reset can bind the older saved container/network IDs to their
 /// current exclusively used storage. Ordinary retirement never adopts receipts.
 /// This is not data migration: every recorded runtime resource will be removed.

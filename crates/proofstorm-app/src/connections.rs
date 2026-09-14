@@ -159,6 +159,7 @@ impl Connection {
                     }
                 },
                 _=health.tick()=> {
+                    self.cells.runtime_available()?;
                     self.cells.store.authorize(&self.cells.workspace,&self.cells.principal,Capability::CellConnect)?;
                     let cell=self.cells.resolve(&self.descriptor.cell)?;
                     if cell.phase!=CellHandlePhase::Open || self.cells.resolve_instance(&self.descriptor.cell)?.instance_key!=self.instance.instance_key {return Ok(());}

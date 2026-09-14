@@ -4,6 +4,12 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum Action {
+    RuntimeStop {
+        timeout: u32,
+    },
+    RuntimeStart {
+        timeout: u32,
+    },
     Update {
         check: bool,
     },

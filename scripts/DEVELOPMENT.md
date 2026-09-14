@@ -65,6 +65,18 @@ global PATH mutation, or legacy cell migration is involved.
 
 ## Rebuilding
 
+Use `storm stop` / `storm start` in the dev shell to suspend and resume the checkout
+runtime with its persistent cell data intact. From the checkout outside the dev
+shell, use `just stop` / `just start`; neither rebuilds. `just gui-stop` stops only
+the GUI. Resume leaves the GUI closed; reopen it with `storm gui` or `just gui`.
+
+The CLI owns installation lifecycle; there are no MCP start/stop tools. Existing
+MCP clients refuse live work while suspended and resume after startup. Stop waits
+for admitted work and normal pod termination; it never force-deletes pods or
+volumes. A timeout preserves progress for a retry, or `start` can restore a
+partially stopped runtime. A restored runtime with unhealthy workloads reports
+them and permits diagnosis instead of leaving all tools blocked.
+
 To start over during pre-alpha development, close coding-agent sessions and run:
 
 ```sh

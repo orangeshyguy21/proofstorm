@@ -73,6 +73,7 @@ drift is a failure, not something the runner repairs.
 | Gate or lane | Evidence / boundary |
 | --- | --- |
 | `smoke` | Scoped MCP Bitcoin creation/read/deletion, denied mutation, same-database CLI read-back |
+| `runtime-lifecycle` | Three CLI stop/start cycles, funded Bitcoin wallet/chain and volume identity preservation, active-work admission, persistent MCP suspension/reconnection, GUI shutdown, individually stopped component, interrupted startup retry |
 | `onboarding` (first gate) | Prepare-only twice, setup retry/controller reuse, exact on-demand image selection through CLI/MCP, ready cells, GUI stop preserving workloads |
 | `gui` | Embedded HTTP, authentication/origin checks, reuse, stale-record recovery and session rotation; no browser or native app launch |
 | `agent-config` | Private project/home fixtures for all three adapters, actual MCP probe, dry-run, backups, repeat, conflict/revocation and ambient-override protection |

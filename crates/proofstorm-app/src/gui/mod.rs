@@ -69,6 +69,7 @@ async fn open_inner(
     let verified = crate::artifacts::Verified::load(home, allow_development)?;
     let installation = &verified.installation;
     let _installation = Installation::lock(&installation.home)?;
+    crate::bootstrap::lifecycle::ensure_available(&installation.home)?;
     let project = project
         .map(|project| {
             progress("Checking project folder");

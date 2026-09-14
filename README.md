@@ -54,6 +54,13 @@ Prefer a browser? Run `storm gui`. It opens your default browser and offers
 launch buttons for detected native apps on macOS. Add `--desktop` to an `agent open`
 command to launch a native app instead of its CLI.
 
+To free resources while keeping your cells for later:
+
+```sh
+storm stop
+storm start
+```
+
 ## Supported environments
 
 | Host | Public installer | Status |

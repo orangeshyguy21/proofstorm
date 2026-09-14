@@ -1,5 +1,6 @@
 //! Installed runtime orchestration. Never selects the contributor context.
 mod cluster;
+pub mod lifecycle;
 mod local_controller;
 mod process;
 pub mod teardown;
@@ -202,6 +203,7 @@ fn preflight(home: &Path) -> Result<Value> {
 
 /// Read-only checks, including before an installation exists. No grants or state writes.
 pub fn check_installed_runtime(installation: &Installation) -> Result<()> {
+    lifecycle::ensure_available(&installation.home)?;
     let controller = selected_controller(&installation.home)?;
     cluster::owned(installation)?;
     healthy(installation, &controller)
@@ -248,6 +250,7 @@ pub(crate) fn check_verified_runtime(
     progress: &dyn Fn(&str),
 ) -> Result<()> {
     let installation = &verified.installation;
+    lifecycle::ensure_available(&installation.home)?;
     progress("Checking controller compatibility");
     let controller = match &verified.controller_sha256 {
         Some(sha) => local_controller::current(installation, sha)?,
@@ -282,6 +285,9 @@ pub fn doctor(home: &Path) -> Value {
         "runtime",
         (|| {
             let installation = Installation::load(home)?;
+            if let Some(stopped) = lifecycle::doctor(&installation)? {
+                return Ok(stopped);
+            }
             cluster::owned(&installation)?;
             healthy(&installation, &selected_controller(home)?)?;
             Ok(json!({"cluster":installation.cluster_name(),"controller_ready":true}))
@@ -341,6 +347,7 @@ pub fn setup_with_progress(
     let home = &installation.home;
     progress("Waiting for installation lock");
     let _guard = Installation::lock(home)?;
+    lifecycle::ensure_available(home)?;
     ensure!(
         !home.join(teardown::RETIRED).exists(),
         "this installation is retired; select a new home instead of reusing deleted state"
