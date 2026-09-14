@@ -22,6 +22,17 @@ struct Cluster {
     conflict_lease: bool,
     update_conflicts: usize,
     after_update_conflict: Option<Box<dyn FnOnce() + Send>>,
+    deletion_race: Option<DeletionRace>,
+    delete_failure: Option<u16>,
+    after_cell_delete: Option<ClusterHook>,
+}
+
+type ClusterHook = Box<dyn FnOnce(&mut Cluster) + Send>;
+
+#[derive(Clone, Copy)]
+enum DeletionRace {
+    DeferFirstDelete,
+    FinishBeforeRepeatedDelete,
 }
 
 fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
@@ -74,12 +85,32 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                     cluster.objects.remove(&path);
                     (200,json!({"apiVersion":"v1","kind":"Status","status":"Success","code":200}))
                 },
+                "DELETE" if cluster.delete_failure.is_some() => {
+                    let code = cluster.delete_failure.unwrap();
+                    let reason = if code == 403 { "Forbidden" } else { "Unavailable" };
+                    (code,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":reason,"message":"injected DELETE failure","code":code}))
+                },
+                "DELETE" if matches!(cluster.deletion_race, Some(DeletionRace::DeferFirstDelete)) => {
+                    cluster.deletion_race = Some(DeletionRace::FinishBeforeRepeatedDelete);
+                    let cell = cluster.objects.get_mut(&path).unwrap();
+                    cell["metadata"]["deletionTimestamp"] = json!("2026-09-14T00:00:00Z");
+                    cell["status"]["phase"] = json!("Closing");
+                    (200, cell.clone())
+                },
                 "DELETE"=> {
                     let cell=cluster.objects.remove(&path).unwrap();
                     let key=cell["spec"]["instanceKey"].as_str().unwrap();
                     let name=format!("proofstorm-teardown-{key}");
                     cluster.objects.insert(format!("/api/v1/namespaces/system/configmaps/{name}"),json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":name,"uid":format!("uid-{name}")},"data":{"instanceNamespace":format!("proofstorm-{key}"),"inventoryDigest":"digest","verifiedAbsent":"true"}}));
-                    (200,json!({"apiVersion":"v1","kind":"Status","status":"Success","code":200}))
+                    if let Some(hook) = cluster.after_cell_delete.take() { hook(&mut cluster); }
+                    if matches!(cluster.deletion_race.take(), Some(DeletionRace::FinishBeforeRepeatedDelete)) {
+                        // Finalizer completion occurs after the preceding GET but before
+                        // the repeated DELETE reaches the API server.
+                        assert!(cell["metadata"]["deletionTimestamp"].is_string());
+                        (404,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"cell already removed by its finalizer","code":404}))
+                    } else {
+                        (200,json!({"apiVersion":"v1","kind":"Status","status":"Success","code":200}))
+                    }
                 },
                 "GET" if cluster.fail_reads => (503,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Unavailable","message":"PRIVATE-RUNTIME-DETAIL","code":503})),
                 "GET" if path=="/api/v1/namespaces/kube-system" => (200,cluster.objects.get(&path).cloned().unwrap_or(json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":"kube-system","uid":"test-cluster"}}))),
@@ -456,13 +487,14 @@ async fn missing_runtime_with_a_remaining_namespace_does_not_claim_cleanup() {
         format!("/api/v1/namespaces/{namespace}"),
         json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":namespace}}),
     );
-    assert!(
+    assert_eq!(
         cells
             .down("interrupted", 2)
             .await
             .unwrap_err()
-            .message
-            .contains("still exists")
+            .details
+            .unwrap()["code"],
+        "cell_close_pending"
     );
     assert_eq!(
         cells.inspect("interrupted", 0).await.unwrap().cell.phase,

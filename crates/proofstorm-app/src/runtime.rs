@@ -347,7 +347,7 @@ impl Runtime {
         let mut status = match self.status(instance.clone()).await {
             Ok(status) => status,
             Err(error) if error.kind == crate::ErrorKind::Missing => {
-                return self.verify_absent(instance).await;
+                return self.removal_status(instance).await;
             }
             Err(error) => return Err(error),
         };
@@ -365,7 +365,7 @@ impl Runtime {
             let uid = resource
                 .uid()
                 .ok_or_else(|| Error::problem("runtime_identity_missing", "Cell UID missing"))?;
-            cells
+            match cells
                 .delete(
                     &instance.resource_name,
                     &DeleteParams {
@@ -377,7 +377,16 @@ impl Runtime {
                     },
                 )
                 .await
-                .map_err(kube_error)?;
+            {
+                // Finalization may win the race between GET and DELETE. A 404
+                // requires verification; it is not itself a cleanup receipt.
+                Err(kube::Error::Api(error)) if error.code == 404 => {
+                    return self.removal_status(instance).await;
+                }
+                result => {
+                    result.map_err(kube_error)?;
+                }
+            }
         }
         status.phase = InstancePhase::Closing;
         status.message = Some("deleting instance namespace and verifying absence".into());
@@ -387,37 +396,56 @@ impl Runtime {
     /// Verify both runtime identity and namespace absence when startup never
     /// reached the controller, so there is no controller teardown receipt.
     pub async fn verify_absent(&self, instance: CellInstance) -> Result<CellInstanceStatus, Error> {
-        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
-        let namespace = proofstorm_kube::instance_namespace(&instance.instance_key);
-        if cells.get_opt(&instance.resource_name).await?.is_some()
-            || Api::<Namespace>::all(self.client.clone())
-                .get_opt(&namespace)
-                .await?
-                .is_some()
-        {
+        let status = self.removal_status(instance).await?;
+        if status.phase != InstancePhase::Closed {
             return Err(Error::problem(
                 "cleanup_unverified",
                 "runtime resource or instance namespace still exists",
             ));
         }
+        Ok(status)
+    }
+
+    /// Observe teardown by exact incarnation, including after its local record
+    /// or controller receipt has been collected. Failed reads remain errors.
+    pub(crate) async fn removal_status(
+        &self,
+        instance: CellInstance,
+    ) -> Result<CellInstanceStatus, Error> {
+        let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        let namespace = proofstorm_kube::instance_namespace(&instance.instance_key);
+        let pending = cells.get_opt(&instance.resource_name).await?.is_some()
+            || Api::<Namespace>::all(self.client.clone())
+                .get_opt(&namespace)
+                .await?
+                .is_some();
         Ok(CellInstanceStatus {
             observed_generation: 0,
             observed_revision_digest: String::new(),
             last_converged_revision: None,
             retained_storage: BTreeMap::new(),
             instance: instance.clone(),
-            phase: InstancePhase::Closed,
+            phase: if pending {
+                InstancePhase::Closing
+            } else {
+                InstancePhase::Closed
+            },
             instance_namespace: namespace.clone(),
             components: vec![],
             inventory: vec![],
-            teardown_receipt: Some(CoreTeardownReceipt {
+            teardown_receipt: (!pending).then(|| CoreTeardownReceipt {
                 instance_id: instance.id,
                 instance_namespace: namespace,
                 inventory_digest: proofstorm_core::digest_json(&Vec::<serde_json::Value>::new()),
                 verified_absent: true,
             }),
             message: Some(
-                "absence verified directly; no controller teardown receipt was available".into(),
+                if pending {
+                    "runtime resource or instance namespace still exists; waiting for cleanup"
+                } else {
+                    "absence verified directly; no controller teardown receipt was available"
+                }
+                .into(),
             ),
         })
     }

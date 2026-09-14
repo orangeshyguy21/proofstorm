@@ -6873,7 +6873,7 @@ mod tests {
         assert_eq!(receipt.inventory_count, 1);
         assert!(receipt.inventory_digest.starts_with("sha256:"));
         assert!(receipt.runtime_guidance.as_deref().is_some_and(|guidance| {
-            guidance.contains("experiment_id and session_id can be omitted")
+            guidance.contains("run_id is optional and session attribution is automatic")
         }));
         let encoded = serde_json::to_string(&receipt).expect("status receipt");
         assert!(!encoded.contains("\"components\":["));

@@ -165,13 +165,21 @@ impl Cells {
         let mut first = true;
         loop {
             // Announce transitions once, not the same stages on every polling cycle.
-            let status = self
+            let status = match self
                 .close_with_progress(
                     &instance.id,
                     &instance.instance_key,
                     if first { progress } else { &|_| {} },
                 )
-                .await?;
+                .await
+            {
+                // A background reconciler can purge the record between polls.
+                // Keep verifying the captured incarnation, never a reused name.
+                Err(error) if error.kind == ErrorKind::Missing => {
+                    self.runtime.removal_status(instance.clone()).await?
+                }
+                result => result?,
+            };
             if status.phase == InstancePhase::Closed {
                 progress("Cell cleanup verified");
                 view.cell.phase = CellHandlePhase::Closed;
