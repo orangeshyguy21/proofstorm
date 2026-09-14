@@ -44,6 +44,7 @@ impl Cells {
         let instance_key = instance
             .as_ref()
             .map(|instance| instance.instance_key.clone());
+        let desired_generation = instance.as_ref().map(|instance| instance.generation);
         let runtime = match instance {
             Some(instance) => match self.runtime.status(instance.clone()).await {
                 Ok(status) => Some(status),
@@ -81,6 +82,7 @@ impl Cells {
         Ok(CellView {
             cell,
             instance_key,
+            desired_generation,
             reconciliation_error: None,
             runtime,
             run,

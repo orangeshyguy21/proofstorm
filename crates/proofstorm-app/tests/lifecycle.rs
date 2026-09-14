@@ -1000,3 +1000,5 @@ async fn inspecting_unmaterialized_intent_does_not_require_or_create_a_run() {
 
 #[path = "shared_lifecycle/mod.rs"]
 mod shared_lifecycle;
+#[path = "shared_lifecycle/up_admission.rs"]
+mod up_admission;

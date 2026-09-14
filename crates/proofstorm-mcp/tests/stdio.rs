@@ -478,6 +478,48 @@ fn developer_profile_exposes_named_lifecycle_without_manual_coordination() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(names.len(), 18);
+    for (name, fields) in [
+        (
+            "cell_up",
+            vec!["expected_generation", "expected_instance_key"],
+        ),
+        ("cell_inspect", vec!["fields"]),
+        (
+            "cell_search",
+            vec!["id", "scan", "query", "fields", "cursor"],
+        ),
+        (
+            "cell_component_status_list",
+            vec![
+                "component",
+                "ready",
+                "scan",
+                "query",
+                "regex",
+                "fields",
+                "cursor",
+            ],
+        ),
+    ] {
+        let tool = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap();
+        for field in fields {
+            assert!(
+                tool["inputSchema"]["properties"].get(field).is_some(),
+                "{name} must advertise {field}"
+            );
+            assert!(
+                tool["inputSchema"]["required"]
+                    .as_array()
+                    .is_none_or(|required| !required.contains(&json!(field))),
+                "existing callers may omit {field}"
+            );
+        }
+    }
     for name in [
         "session_list",
         "cell_up",

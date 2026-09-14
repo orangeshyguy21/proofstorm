@@ -11,18 +11,49 @@ impl Cells {
         delete_data: bool,
         delete_retained: &[String],
     ) -> Result<proofstorm_core::CellUpdatePlan, Error> {
+        self.plan_edit_at(name, spec, delete_data, delete_retained, None)
+    }
+
+    pub(super) fn plan_edit_at(
+        &self,
+        name: &str,
+        spec: &CellSpec,
+        delete_data: bool,
+        delete_retained: &[String],
+        expected_generation: Option<u64>,
+    ) -> Result<proofstorm_core::CellUpdatePlan, Error> {
         let handle = self.resolve(name)?;
         let instance = self.instance(&handle)?;
+        let generation = expected_generation.unwrap_or(instance.generation);
         let draft_id = format!(
             "edit-{}",
             &proofstorm_core::digest_json(&(
                 instance.id.clone(),
-                instance.generation,
+                generation,
                 spec,
                 delete_data,
                 delete_retained
             ))[7..39]
         );
+        // A fenced retry must find the same immutable plan after its generation
+        // has advanced. accept_update checks its durable receipt before the CAS,
+        // and never restores an older desired revision when replaying it.
+        if let Some(plan) = self
+            .store
+            .update_plan(&self.workspace, &self.principal, &draft_id)?
+        {
+            return Ok(plan);
+        }
+        if generation != instance.generation {
+            return Err(Error::failure(
+                "Desired configuration changed; inspect the cell and replan",
+                Some(
+                    serde_json::json!({"code":"cell_update_conflict", "accepted":false,
+                    "expected_generation":generation, "desired_generation":instance.generation,
+                    "instance_key":instance.instance_key, "next_tool":"cell_inspect"}),
+                ),
+            ));
+        }
         self.store.create_draft(
             &self.workspace,
             &self.principal,
@@ -43,7 +74,7 @@ impl Cells {
             proofstorm_core::CellUpdateTarget {
                 delete_retained: delete_retained.to_vec(),
                 instance_id: instance.id,
-                expected_generation: instance.generation,
+                expected_generation: generation,
                 delete_data,
             },
             &revision,

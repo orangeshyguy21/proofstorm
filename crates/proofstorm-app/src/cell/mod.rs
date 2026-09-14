@@ -28,12 +28,16 @@ mod wait;
 pub use wait::{WaitRequest, WaitResult, wait_terminal};
 
 pub use apply::{AppliedCell, ReconciliationError, ReviewedApply, review_apply};
+pub use create::UpResult;
 pub use proofstorm_view::Activity;
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct CellView {
     pub cell: CellHandle,
     pub instance_key: Option<String>,
+    /// Durable desired configuration generation, even when runtime status is unavailable.
+    /// Null means this named incarnation has no materialized instance record.
+    pub desired_generation: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reconciliation_error: Option<ReconciliationError>,
     pub runtime: Option<CellInstanceStatus>,

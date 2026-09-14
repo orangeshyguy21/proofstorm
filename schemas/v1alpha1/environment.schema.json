@@ -135,7 +135,8 @@
         "config_digest": {
           "type": "string"
         },
-        "generation": {
+        "incarnation_generation": {
+          "description": "Name-handle counter, independent of desired configuration generation.\nVerified teardown can reset it; use `instance_key` to identify an incarnation.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -155,7 +156,7 @@
       },
       "required": [
         "name",
-        "generation",
+        "incarnation_generation",
         "owner",
         "config_digest",
         "phase",

@@ -3,7 +3,12 @@ pub use cell_input::{CellFile, CellInput};
 mod cell_search;
 pub use cell_search::{CellSearchRequest, CellSearchResult, CellSearchSection};
 mod activity_search;
+mod cell_inspect;
 mod cell_sync;
+pub use cell_inspect::CellInspectRequest;
+mod cell_up;
+mod read_query;
+mod status_search;
 pub use activity_search::ActivitySearchRequest;
 mod operation_read;
 pub use operation_read::OperationReadRequest;
@@ -12,6 +17,8 @@ use proofstorm_app::runtime::missing_action_artifact;
 use proofstorm_app::runtime::runtime_action_resource;
 #[cfg(test)]
 use proofstorm_app::runtime::terminal_action_observation;
+#[cfg(test)]
+use proofstorm_core::ComponentStatus;
 #[cfg(test)]
 use proofstorm_kube::ActionPhase;
 use std::{
@@ -29,10 +36,10 @@ use proofstorm_core::{
     CandidateSource, Capability, CatalogDependencySupport, CatalogEntry, CatalogFeature,
     CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, CellInstance,
     CellInstanceStatus, CellOperation, CellPolicy, CellSpec, ComponentKind, ComponentSpec,
-    ComponentStatus, ControlClass, DatabaseRole, DependencyBinding, DraftMutation,
-    EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent,
-    EvidenceInstance, Experiment, ExperimentPhase, InstancePhase, InventoryEntry, LinkKind,
-    LinkSpec, MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
+    ControlClass, DatabaseRole, DependencyBinding, DraftMutation, EVIDENCE_API_VERSION,
+    EvidenceAction, EvidenceArtifact, EvidenceBundle, EvidenceBundleContent, EvidenceInstance,
+    Experiment, ExperimentPhase, InstancePhase, InventoryEntry, LinkKind, LinkSpec,
+    MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
     NetworkFaultBackend, NetworkFaultDirection, NetworkFaultFeature, OperationArtifact,
     OperationKind, OperationPhase, PaymentMethod, PublishedRevision, ReleaseChannel,
     SupportLifecycle, TeardownReceipt as CoreTeardownReceipt, ValidationIssue,
@@ -72,6 +79,14 @@ use serde::{Deserialize, Serialize};
 pub struct DeveloperUpRequest {
     pub name: String,
     pub cell: CellInput,
+    /// For a live edit, copy `desired_generation` from `cell_inspect`. A stale
+    /// value rejects the edit. Keep it unchanged for an exact retry; omit for creation.
+    #[serde(default)]
+    #[schemars(range(min = 1))]
+    pub expected_generation: Option<u64>,
+    /// Copy `instance_key` from `cell_inspect` to also fence a same-name replacement.
+    #[serde(default)]
+    pub expected_instance_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1051,6 +1066,25 @@ pub struct CellStatusSummary {
 #[serde(deny_unknown_fields)]
 pub struct CellComponentStatusListRequest {
     pub instance_id: String,
+    /// Exact component ID; omit to search all components.
+    #[serde(default)]
+    pub component: Option<String>,
+    #[serde(default)]
+    pub ready: Option<bool>,
+    /// Literal text in each component's JSON; empty matches all.
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub regex: bool,
+    #[serde(default)]
+    pub case_insensitive: bool,
+    /// Return only id, kind and ready. Mutually exclusive with fields.
+    #[serde(default)]
+    pub scan: bool,
+    /// RFC 6901 pointers relative to a component, e.g. /conditions/0/reason.
+    /// Empty returns full statuses. Missing fields are null.
+    #[serde(default)]
+    pub fields: Vec<String>,
     #[serde(default = "default_status_list_limit")]
     #[schemars(range(min = 1, max = 50))]
     pub limit: u32,
@@ -1065,9 +1099,10 @@ pub struct CellComponentStatusListResponse {
     pub instance_id: String,
     pub revision_digest: String,
     /// Identifies this live observation. Readiness can change between pages;
-    /// the cursor is bound to the cell revision and component membership.
+    /// the cursor is bound to filters, the cell revision and matching component IDs.
     pub observation_digest: String,
-    pub components: Vec<ComponentStatus>,
+    pub components: Vec<serde_json::Value>,
+    pub matched_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
@@ -1076,6 +1111,21 @@ pub struct CellComponentStatusListResponse {
 #[serde(deny_unknown_fields)]
 pub struct CellInventoryListRequest {
     pub instance_id: String,
+    /// Exact Kubernetes kind and namespace filters.
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    /// Literal text in each entry's JSON; empty matches all.
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub regex: bool,
+    #[serde(default)]
+    pub case_insensitive: bool,
+    /// RFC 6901 pointers relative to an entry, e.g. /name or /kind.
+    #[serde(default)]
+    pub fields: Vec<String>,
     #[serde(default = "default_status_list_limit")]
     #[schemars(range(min = 1, max = 50))]
     pub limit: u32,
@@ -1089,7 +1139,8 @@ pub struct CellInventoryListRequest {
 pub struct CellInventoryListResponse {
     pub instance_id: String,
     pub inventory_digest: String,
-    pub inventory: Vec<InventoryEntry>,
+    pub inventory: Vec<serde_json::Value>,
+    pub matched_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
@@ -2906,7 +2957,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_up",
-        description = "Start a named cell from its specification. Backend links require flat kind-specific fields: chain_backend network; payment_backend method and unit; database_backend role; authentication_backend protocol. Peer and network_path links have no binding fields. Canonical specifications read from cell_read are also accepted. Publication and materialization are resumable stages. A default run and activity session are managed automatically; repeat the same name/configuration to resume. Changing an existing cell applies a live edit and preserves unchanged components. Returns the same status shape as cell_inspect."
+        description = "Start or live-edit a named cell, preserving unchanged components. Returns a small acceptance receipt; acceptance does not mean ready. Read cell_inspect for desired_generation and instance_key, and pass them as expected_generation/expected_instance_key to fence an edit. Keep the entire request unchanged for an exact retry. Omit preconditions for creation. Publication and materialization are resumable. Backend links require flat kind-specific fields: chain_backend network; payment_backend method/unit; database_backend role; authentication_backend protocol. Canonical cell_read specifications also work. Use cell_component_status_list for readiness, cell_search for configuration and activity_search for history."
     )]
     async fn proofstorm_cell_up(
         &self,
@@ -2916,10 +2967,15 @@ impl ProofstormMcp {
         let cell = CellSpec::try_from(request.cell)
             .map_err(|message| coded_invalid_request("invalid_cell_input", message))?;
         self.cells()?
-            .up(&request.name, &cell)
+            .up_accepted(
+                &request.name,
+                &cell,
+                request.expected_generation,
+                request.expected_instance_key.as_deref(),
+            )
             .await
             .map_err(app_error)
-            .and_then(|view| developer_result(compact_developer_view(view)))
+            .and_then(cell_up::result)
     }
 
     #[tool(
@@ -2939,17 +2995,18 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_inspect",
-        description = "Read named cell runtime status, run, owner and cached activity. This read does not execute commands or synchronize receipts. Use cell_sync for fresh action results."
+        description = "Read a compact named-cell summary. desired_generation fences live edits; cell.incarnation_generation is a name-handle counter that can reset after teardown; instance_key identifies the incarnation. Select detailed view fields with RFC 6901 pointers, e.g. /runtime/blockers. For larger datasets use cell_search, cell_component_status_list, activity_search or session_list; operation_read retrieves receipt fields and text slices. No commands or receipt synchronization; use cell_sync for fresh action results."
     )]
     async fn proofstorm_cell_inspect(
         &self,
-        Parameters(request): Parameters<DeveloperInspectRequest>,
-    ) -> Result<Json<DeveloperCellView>, ErrorData> {
+        Parameters(request): Parameters<CellInspectRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        read_query::validate_fields(&request.fields)?;
         self.cells()?
             .inspect(&request.name, request.after_sequence)
             .await
-            .map(|view| Json(compact_developer_view(view)))
             .map_err(app_error)
+            .and_then(|view| cell_inspect::result(view, &request.fields))
     }
 
     #[tool(
@@ -2982,7 +3039,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_sync",
-        description = "Synchronize runtime receipts into durable activity for a named cell, without executing a new action. Returns status and a byte-bounded activity page in the cell_inspect shape. Pass next_sequence as after_sequence to continue until next_sequence is null. Unknown outcomes remain explicit."
+        description = "Synchronize runtime receipts into durable activity for a named cell, without executing a new action. Returns runtime status and a byte-bounded activity page. Use activity_search for targeted recorded results and `operation_read` for receipt fields or text slices. Pass next_sequence as after_sequence to continue until next_sequence is null. Unknown outcomes remain explicit."
     )]
     async fn proofstorm_cell_sync(
         &self,
@@ -3621,7 +3678,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_search",
-        description = "Search a stored draft or live desired topology without loading the entire document. Supports literal/regex matching across component/link JSON, JSON-pointer field projection, exact match counts and snapshot-bound pagination. Use this for large cells, finding configuration values, or locating links by endpoint. No runtime commands or changes are made."
+        description = "Search a stored draft or live desired topology without loading the entire document. Supports exact ID filters, literal/regex matching across component/link JSON, scan mode for IDs/paths/sizes, JSON-pointer fields, exact match counts and snapshot-bound pagination. Use this for large cells, finding configuration values, or locating links by endpoint. No runtime commands or changes are made."
     )]
     fn proofstorm_cell_search(
         &self,
@@ -3939,104 +3996,26 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_component_status_list",
-        description = "Page through live component readiness and startup failures. Readiness may change between pages; cursors survive those changes but reject a changed revision or component membership. Image-pull failures are blocked startup, not build progress"
+        description = "Search live component readiness and startup failures. Filter component/ready, use literal or regex query, scan for IDs/kinds/readiness, or select fields with JSON pointers. Full MCP responses are byte-bounded. Cursors bind filters, revision and matching IDs; readiness may change without changing membership. Image-pull failures are blocked startup, not build progress"
     )]
     async fn proofstorm_cell_component_status_list(
         &self,
         Parameters(request): Parameters<CellComponentStatusListRequest>,
     ) -> Result<Json<CellComponentStatusListResponse>, ErrorData> {
-        validate_status_list_limit(request.limit)?;
-        let status = self.full_cell_status(&request.instance_id).await?;
-        let snapshot_digest = component_status_identity(&status);
-        let mut components = status.components;
-        components.sort_by(|left, right| left.id.cmp(&right.id));
-        let observation_digest = digest_json(&components);
-        let start = status_page_start(request.cursor.as_deref(), &components, |component| {
-            status_cursor(
-                "component",
-                &request.instance_id,
-                &snapshot_digest,
-                &component.id,
-            )
-        })?;
-        let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
-        let mut end = (start + limit).min(components.len());
-        loop {
-            let response = CellComponentStatusListResponse {
-                instance_id: request.instance_id.clone(),
-                revision_digest: status.instance.revision_digest.clone(),
-                observation_digest: observation_digest.clone(),
-                components: components[start..end].to_vec(),
-                next_cursor: (end < components.len() && end > start).then(|| {
-                    status_cursor(
-                        "component",
-                        &request.instance_id,
-                        &snapshot_digest,
-                        &components[end - 1].id,
-                    )
-                }),
-            };
-            if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
-                return Ok(Json(response));
-            }
-            if end <= start + 1 {
-                return Err(coded_invalid_request(
-                    "status_response_too_large",
-                    "one component status exceeds the agent response budget",
-                ));
-            }
-            end -= 1;
-        }
+        status_search::components(self.full_cell_status(&request.instance_id).await?, &request)
+            .map(Json)
     }
 
     #[tool(
         name = "cell_inventory_list",
-        description = "List sanitized Kubernetes inventory for a cell instance in bounded cursor pages"
+        description = "Search sanitized Kubernetes inventory in byte-bounded pages. Filter kind/namespace, search literal or regex query, and select fields with JSON pointers. Keep filters unchanged when continuing a cursor"
     )]
     async fn proofstorm_cell_inventory_list(
         &self,
         Parameters(request): Parameters<CellInventoryListRequest>,
     ) -> Result<Json<CellInventoryListResponse>, ErrorData> {
-        validate_status_list_limit(request.limit)?;
-        let status = self.full_cell_status(&request.instance_id).await?;
-        let mut inventory = status.inventory;
-        inventory.sort_by_key(inventory_key);
-        let inventory_digest = digest_json(&inventory);
-        let start = status_page_start(request.cursor.as_deref(), &inventory, |entry| {
-            status_cursor(
-                "inventory",
-                &request.instance_id,
-                &inventory_digest,
-                &inventory_key(entry),
-            )
-        })?;
-        let limit = usize::try_from(request.limit).unwrap_or(usize::MAX);
-        let mut end = (start + limit).min(inventory.len());
-        loop {
-            let response = CellInventoryListResponse {
-                instance_id: request.instance_id.clone(),
-                inventory_digest: inventory_digest.clone(),
-                inventory: inventory[start..end].to_vec(),
-                next_cursor: (end < inventory.len() && end > start).then(|| {
-                    status_cursor(
-                        "inventory",
-                        &request.instance_id,
-                        &inventory_digest,
-                        &inventory_key(&inventory[end - 1]),
-                    )
-                }),
-            };
-            if serialized_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
-                return Ok(Json(response));
-            }
-            if end <= start + 1 {
-                return Err(coded_invalid_request(
-                    "status_response_too_large",
-                    "one inventory entry exceeds the agent response budget",
-                ));
-            }
-            end -= 1;
-        }
+        status_search::inventory(self.full_cell_status(&request.instance_id).await?, &request)
+            .map(Json)
     }
 
     #[tool(
@@ -8318,7 +8297,7 @@ impl ServerHandler for ProofstormMcp {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(if self.toolset == ProofstormToolset::Developer {
-            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named cell with cell_up, inspect runtime and cached activity with cell_inspect, and run native argv commands with cell_exec. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use cell_sync to collect durable receipts, then activity_search to find recorded operations by filters or text and operation_read to fetch selected fields or output slices. Follow next_cursor even on empty search pages and next_offset for long values; keep returned digests to detect changes. Inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate cell is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with cell_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
+            "Discover exact component configuration through catalog_list and catalog_entry_read. Read the whole workspace with environment_read. Start a named cell with cell_up, read a compact summary with cell_inspect, and run native argv commands with cell_exec. For edits, copy desired_generation and instance_key into cell_up expected_generation and expected_instance_key; retain the full request for exact retries. cell_up returns acceptance, not readiness. Search configuration with cell_search and readiness with cell_component_status_list; scan for IDs, filter first and request only needed fields. Use one request_id per action and reuse it for exact retries. Activity sessions are automatic and nonblocking. Use session_list to inspect concurrent actors and temporal overlaps; unfinished sessions report last activity without implying liveness. Use cell_sync to collect durable receipts, then activity_search to find recorded operations by filters or text and operation_read to fetch selected fields or output slices. Follow next_cursor even on empty search pages and next_offset for long values; keep returned digests to detect changes. Inspect and wait on individual operations as needed. Readiness is per operation: recovery commands can run while the aggregate cell is pending. Verify command exit and effects separately; command success does not prove payment settlement. Finish with cell_finish, repeating after a timeout until absence is verified. Advanced coordination requires an explicitly selected toolset."
         } else {
             "Use catalog_list to discover implementation IDs, then cell_plan to describe roles and connections for any supported topology. For unreleased code, call candidate_build with its public GitHub PR URL, use repeated bounded candidate_wait calls, then copy the returned catalog_entry fields verbatim into a cell_plan component and disclose its build_profile_notes with commit/image provenance. Proofstorm resolves kinds, controls, config contracts, and unambiguous dependency bindings. Verify the normalized plan and call cell_apply with its digest; do not substitute an unrelated recipe for a requested topology. Experiment and session setup are optional for native commands, logs, faults, and diagnosis: omit experiment_id and session_id to use automatic actor attribution. Explicit experiments are available for evidence grouping. Prefer native CLIs through component_exec_live to operate deployed software; discover invocation hints in catalog entries and commands through CLI help. Use typed actions when they provide provisioning, coordination, faults, lifecycle guarantees, or useful portable observations. Use component_forensics only for offline inspection. Inspect terminal artifacts and verify effects. Account for all commands and faults when attributing effects; distinguish observations from inferences. Export any evidence you need before closing and awaiting the cell; deletion purges cell-owned activity. Search recorded operations with activity_search and read selected JSON paths or text slices with operation_read; these reads never poll the runtime. Read full evidence only through its manifest resource_uri; use evidence_section_read for bounded inspection."
         }
@@ -9844,6 +9823,8 @@ fn inventory_key(entry: &InventoryEntry) -> String {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DeveloperCellView {
     pub instance_key: Option<String>,
+    /// Desired configuration version, distinct from `cell.incarnation_generation`.
+    pub desired_generation: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reconciliation_error: Option<CellReconciliationError>,
     pub cell: proofstorm_store::CellHandle,
@@ -9865,8 +9846,7 @@ fn environment_result(
     developer_result(view)
 }
 
-// Discovery publishes each response contract once (inspect/operation_status),
-// instead of duplicating it on every mutating lifecycle route.
+// Mutations return small receipts instead of duplicating full status and history.
 fn developer_result(value: impl Serialize) -> Result<CallToolResult, ErrorData> {
     let value = serde_json::to_value(value)
         .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
@@ -9876,6 +9856,7 @@ fn developer_result(value: impl Serialize) -> Result<CallToolResult, ErrorData> 
 fn compact_developer_view(view: proofstorm_app::cell::CellView) -> DeveloperCellView {
     DeveloperCellView {
         instance_key: view.instance_key,
+        desired_generation: view.desired_generation,
         reconciliation_error: view.reconciliation_error,
         cell: view.cell,
         runtime: view.runtime.map(|status| {
@@ -13934,13 +13915,20 @@ mod tests {
                 instance_id: "blocked".into(),
                 limit: 20,
                 cursor: None,
+                component: None,
+                ready: None,
+                query: String::new(),
+                regex: false,
+                case_insensitive: false,
+                scan: false,
+                fields: vec![],
             }))
             .await
             .unwrap()
             .0;
         assert_eq!(
-            detail.components[0].conditions[0].reason,
-            Reason::ImagePullBackoff
+            detail.components[0]["conditions"][0]["reason"],
+            serde_json::json!(Reason::ImagePullBackoff)
         );
     }
 

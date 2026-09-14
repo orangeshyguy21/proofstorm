@@ -63,6 +63,7 @@ mod tests {
                 instance_id: "cell-payments".into(),
             },
             instance_key: Some("payments".into()),
+            desired_generation: Some(2),
             reconciliation_error: None,
             runtime: None,
             run: None,

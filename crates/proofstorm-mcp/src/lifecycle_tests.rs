@@ -75,6 +75,116 @@ fn cluster_client() -> Client {
     )
 }
 
+fn populate_history(store: &Store, instance: &str) {
+    let run = store.default_run_id("alpha", "designer", instance).unwrap();
+    for index in 0..20 {
+        let session = format!("session-{index:02}-{}", "s".repeat(52));
+        let operation = format!("payment-{index:02}-{}", "p".repeat(52));
+        store
+            .create_operation(
+                "alpha",
+                "designer",
+                instance,
+                &run,
+                &session,
+                &operation,
+                OperationKind::ComponentExecLive,
+                &serde_json::json!({"component":"chain","argv":["bitcoin-cli","getblockcount"]}),
+                &operation,
+                Capability::ComponentExecLive,
+            )
+            .unwrap();
+        store
+            .record_operation_result(
+                "alpha",
+                &operation,
+                OperationPhase::Succeeded,
+                serde_json::json!({"exit_code":0,"cleanup_verified":true}),
+            )
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn named_up_receipt_stays_small_after_history_grows_and_fences_edits() {
+    let store = tests::seeded_store();
+    for cap in [
+        Capability::ExperimentRead,
+        Capability::CellOperate,
+        Capability::ComponentExecLive,
+    ] {
+        store.grant("alpha", "designer", cap).unwrap();
+    }
+    let mcp = ProofstormMcp::new(store.clone(), "alpha", "designer")
+        .unwrap()
+        .with_kubernetes(cluster_client(), "system");
+    let spec = serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"retries","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]});
+    let mut request: DeveloperUpRequest =
+        serde_json::from_value(serde_json::json!({"name":"alpha-retries","cell":spec})).unwrap();
+    let first = mcp
+        .proofstorm_cell_up(Parameters(request.clone()))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    let instance = first["cell"]["instance_id"].as_str().unwrap();
+    populate_history(&store, instance);
+    let view = mcp
+        .cells()
+        .unwrap()
+        .inspect("alpha-retries", 0)
+        .await
+        .unwrap();
+    assert!(
+        read_query::wire_size(&compact_developer_view(view)).unwrap() > MAX_AGENT_RESPONSE_BYTES,
+        "must reproduce the reported post-mutation response failure"
+    );
+    let mut changed = spec.clone();
+    changed["components"][0]["config"]["txindex"] = serde_json::json!(false);
+    request.cell = serde_json::from_value(changed).unwrap();
+    request.expected_generation = Some(1);
+    request.expected_instance_key = first["instance_key"].as_str().map(str::to_owned);
+    for _ in 0..2 {
+        let response = mcp
+            .proofstorm_cell_up(Parameters(request.clone()))
+            .await
+            .unwrap();
+        assert!(serialized_size(&response).unwrap() < 4096);
+        let value = response.structured_content.as_ref().unwrap();
+        let wire = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            &serde_json::from_str::<serde_json::Value>(
+                wire["content"][0]["text"].as_str().unwrap()
+            )
+            .unwrap(),
+            value
+        );
+        assert_eq!(value["accepted"], true);
+        assert_eq!(value["desired_generation"], 2);
+        assert_eq!(value["cell"]["incarnation_generation"], 1);
+        assert!(value.get("activity").is_none());
+    }
+    request.cell = serde_json::from_value(spec).unwrap();
+    let error = mcp
+        .proofstorm_cell_up(Parameters(request))
+        .await
+        .unwrap_err();
+    assert_eq!(error.data.unwrap()["code"], "cell_update_conflict");
+    let inspection = mcp
+        .proofstorm_cell_inspect(Parameters(
+            serde_json::from_value(
+                serde_json::json!({"name":"alpha-retries","fields":["/runtime/generation"]}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(serialized_size(&inspection).unwrap() < 4096);
+    let inspected = inspection.structured_content.unwrap();
+    assert_eq!(inspected["desired_generation"], 2);
+    assert_eq!(inspected["selected"]["/runtime/generation"], 2);
+}
+
 #[tokio::test]
 #[allow(
     clippy::too_many_lines,

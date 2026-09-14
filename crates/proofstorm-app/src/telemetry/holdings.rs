@@ -204,11 +204,11 @@ mod tests {
         assert_eq!(observation.mints.len(), 2);
     }
     #[test]
-    fn nutshell_groups_keysets_once_across_named_wallets() {
+    fn nutshell_groups_keysets_once_in_the_default_wallet() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join(".cashu/alice");
+        let root = dir.path().join(".cashu/wallet");
         std::fs::create_dir_all(&root).unwrap();
-        let db = Connection::open(root.join("alice.sqlite3")).unwrap();
+        let db = Connection::open(root.join("wallet.sqlite3")).unwrap();
         db.execute_batch("CREATE TABLE keysets(id TEXT,mint_url TEXT,unit TEXT); CREATE TABLE proofs(id TEXT,amount INTEGER,reserved INTEGER);
             INSERT INTO keysets VALUES ('a','http://mint:3338','sat'),('a','http://mint:3338','sat'),('b','http://other:3338','sat');
             INSERT INTO proofs VALUES ('a',12,0),('a',3,1),('b',20,0);").unwrap();

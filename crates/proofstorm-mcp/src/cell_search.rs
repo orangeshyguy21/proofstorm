@@ -39,6 +39,12 @@ pub struct CellSearchRequest {
     /// are returned as null. Select fields if a matching object is too large.
     #[serde(default)]
     pub fields: Vec<String>,
+    /// Return IDs, paths and sizes without values; use fields to retrieve a subtree.
+    #[serde(default)]
+    pub scan: bool,
+    /// Exact component or link ID, applied before text search.
+    #[serde(default)]
+    pub id: Option<String>,
     /// Page size; the server may return fewer items to fit the response.
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -54,8 +60,8 @@ fn default_limit() -> usize {
 pub struct CellSearchMatch {
     pub id: String,
     pub path: String,
-    /// Selected data, or null when it would dominate the response. In that
-    /// case request the required fields; the stored value is unchanged.
+    /// Selected data; null in scan mode or when `value_omitted` is true.
+    /// For an omitted value, request smaller fields; the stored value is unchanged.
     pub value: Option<Value>,
     pub value_bytes: usize,
     pub value_omitted: bool,
@@ -77,25 +83,15 @@ pub fn search(
     document: CellReadResponse,
     request: &CellSearchRequest,
 ) -> Result<CellSearchResult, ErrorData> {
-    if request
-        .fields
-        .iter()
-        .any(|field| !field.is_empty() && !field.starts_with('/'))
-    {
+    crate::read_query::validate_fields(&request.fields)?;
+    if request.scan && !request.fields.is_empty() {
         return Err(coded_invalid_request(
-            "cell_search_field_invalid",
-            "fields must be JSON pointers, such as /id or /config/txindex",
+            "search_fields_invalid",
+            "choose scan or fields, not both",
         ));
     }
-    let pattern = if request.regex {
-        request.query.clone()
-    } else {
-        regex::escape(&request.query)
-    };
-    let pattern = regex::RegexBuilder::new(&pattern)
-        .case_insensitive(request.case_insensitive)
-        .build()
-        .map_err(|error| coded_invalid_request("cell_search_regex_invalid", error.to_string()))?;
+    let pattern =
+        crate::read_query::pattern(&request.query, request.regex, request.case_insensitive)?;
     let cell_digest = digest_json(&document.cell);
     let fingerprint = digest_json(&(
         &document.id,
@@ -106,17 +102,10 @@ pub fn search(
         request.case_insensitive,
         request.section,
         &request.fields,
+        request.scan,
+        &request.id,
     ));
-    let offset = match &request.cursor {
-        None => 0,
-        Some(cursor) => {
-            let (digest, offset) = cursor.rsplit_once(':').ok_or_else(invalid_cursor)?;
-            if digest != fingerprint {
-                return Err(invalid_cursor());
-            }
-            offset.parse::<usize>().map_err(|_| invalid_cursor())?
-        }
-    };
+    let offset = search_start(request.cursor.as_deref(), &fingerprint)?;
     let mut result = CellSearchResult {
         id: document.id,
         version: document.version,
@@ -152,7 +141,12 @@ pub fn search(
             .iter()
             .enumerate()
         {
-            if !pattern.is_match(&entry.to_string()) {
+            if request
+                .id
+                .as_ref()
+                .is_some_and(|id| entry["id"].as_str() != Some(id))
+                || !pattern.is_match(&entry.to_string())
+            {
                 continue;
             }
             let position = result.matched_count;
@@ -160,11 +154,15 @@ pub fn search(
             if position < offset || page_full || result.items.len() >= request.limit.clamp(1, 200) {
                 continue;
             }
-            result
-                .items
-                .push(project_match(entry, section, index, &request.fields)?);
+            result.items.push(project_match(
+                entry,
+                section,
+                index,
+                &request.fields,
+                request.scan,
+            )?);
             // Reserve room for the count and continuation even on the last item.
-            if serialized_size(&result)? + 256 > MAX_AGENT_RESPONSE_BYTES {
+            if crate::read_query::wire_size(&result)? + 512 > MAX_AGENT_RESPONSE_BYTES {
                 result.items.pop();
                 page_full = true;
             }
@@ -177,7 +175,25 @@ pub fn search(
     if next < result.matched_count {
         result.next_cursor = Some(format!("{fingerprint}:{next}"));
     }
+    if result.items.is_empty() && result.next_cursor.is_some() {
+        return Err(coded_invalid_request(
+            "cell_search_response_too_large",
+            "no matching item fits; use scan=true or select smaller fields",
+        ));
+    }
+    crate::developer_result(&result)?;
     Ok(result)
+}
+
+fn search_start(cursor: Option<&str>, fingerprint: &str) -> Result<usize, ErrorData> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+    let (digest, offset) = cursor.rsplit_once(':').ok_or_else(invalid_cursor)?;
+    if digest != fingerprint {
+        return Err(invalid_cursor());
+    }
+    offset.parse().map_err(|_| invalid_cursor())
 }
 
 fn project_match(
@@ -185,28 +201,16 @@ fn project_match(
     section: &str,
     index: usize,
     fields: &[String],
+    scan: bool,
 ) -> Result<CellSearchMatch, ErrorData> {
-    let value = if fields.is_empty() {
-        entry.clone()
-    } else {
-        Value::Object(
-            fields
-                .iter()
-                .map(|field| {
-                    (
-                        field.clone(),
-                        entry.pointer(field).cloned().unwrap_or(Value::Null),
-                    )
-                })
-                .collect(),
-        )
-    };
+    let value = crate::read_query::project(entry, fields);
     let value_bytes = serialized_size(&value)?;
-    let value_omitted = value_bytes > MAX_AGENT_RESPONSE_BYTES / 2;
+    let value_omitted =
+        !scan && crate::read_query::wire_size(&value)? > MAX_AGENT_RESPONSE_BYTES / 2;
     Ok(CellSearchMatch {
         id: entry["id"].as_str().unwrap_or_default().to_owned(),
         path: format!("/{section}/{index}"),
-        value: (!value_omitted).then_some(value),
+        value: (!scan && !value_omitted).then_some(value),
         value_bytes,
         value_omitted,
     })
@@ -276,5 +280,50 @@ mod tests {
         .unwrap();
         assert!(!projected.items[0].value_omitted);
         assert_eq!(projected.items[0].value.as_ref().unwrap()["/id"], "node-01");
+    }
+
+    #[test]
+    fn wire_bounded_pages_and_scans_always_advance() {
+        let mut doc = document();
+        for component in &mut doc.cell.components {
+            component
+                .config
+                .insert("detail".into(), "\"\\\n".repeat(500).into());
+        }
+        let mut request: CellSearchRequest =
+            serde_json::from_value(serde_json::json!({"limit":20})).unwrap();
+        let mut ids = Vec::new();
+        loop {
+            let page = search(doc.clone(), &request).unwrap();
+            assert!(crate::read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
+            assert!(!page.items.is_empty());
+            ids.extend(page.items.iter().map(|item| item.id.clone()));
+            request.cursor = page.next_cursor;
+            if request.cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(ids.len(), 25);
+        assert_eq!(
+            ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            25
+        );
+        request.scan = true;
+        request.id = Some("node-03".into());
+        let scan = search(doc.clone(), &request).unwrap();
+        assert_eq!(scan.matched_count, 1);
+        assert!(scan.items[0].value.is_none());
+        assert_eq!(scan.items[0].path, "/components/3");
+        request.scan = false;
+        request.fields = vec!["/config/txindex".into()];
+        assert_eq!(
+            search(doc, &request).unwrap().items[0]
+                .value
+                .as_ref()
+                .unwrap()["/config/txindex"],
+            false
+        );
+        request.fields = vec!["/broken~escape".into()];
+        assert!(search(document(), &request).is_err());
     }
 }
