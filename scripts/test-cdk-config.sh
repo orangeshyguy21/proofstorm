@@ -43,14 +43,21 @@ if grep -q 'All generated CDK' "$scratch/output"; then
   echo 'CDK check reported success after a container failure' >&2; exit 1
 fi
 
-for mutation in image namespace; do
+for mutation in image shared namespace; do
   : > "$CONFIG_TRACE"
   if [[ "$mutation" == image ]]; then
     file="$fixture/crates/proofstorm-kube/tests/golden/cdk.json"
     jq '(.resources.deployments[].spec.template.spec.initContainers[] | select(.name == "initialize-config") | .image) = "untrusted:latest"' \
       "$file" > "$scratch/bad.json"
     cp "$scratch/bad.json" "$file"
+  elif [[ "$mutation" == shared ]]; then
+    cp "$root/crates/proofstorm-kube/tests/golden/cdk.json" "$fixture/crates/proofstorm-kube/tests/golden/"
+    file="$fixture/crates/proofstorm-kube/tests/golden/cdk-ldk.json"
+    jq '(.resources.deployments[].spec.template.spec.initContainers[] | select(.name == "initialize-config") | .image) = "proofstorm-registry.localhost:5000/cdk-mint@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+      "$file" > "$scratch/bad.json"
+    cp "$scratch/bad.json" "$file"
   else
+    cp "$root/crates/proofstorm-kube/tests/golden/cdk-ldk.json" "$fixture/crates/proofstorm-kube/tests/golden/"
     cp "$root/crates/proofstorm-kube/tests/golden/cdk.json" "$fixture/crates/proofstorm-kube/tests/golden/"
     jq '.namespace = "unapproved.invalid/other"' "$fixture/release/ghcr.json" > "$scratch/bad.json"
     cp "$scratch/bad.json" "$fixture/release/ghcr.json"

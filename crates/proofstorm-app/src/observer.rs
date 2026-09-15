@@ -24,6 +24,7 @@ impl Observer {
         let task = tokio::spawn(async move {
             let mut cursor = String::new();
             let mut lifecycle_cursor = String::new();
+            let mut candidate_cursor = String::new();
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -43,6 +44,17 @@ impl Observer {
                 )
                 .await;
                 let collected = collect(&cells, &cursor).await;
+                let candidate_failed =
+                    match crate::candidate::sweep(&cells, &candidate_cursor).await {
+                        Ok((next, failed)) => {
+                            candidate_cursor = next;
+                            failed
+                        }
+                        Err(error) => {
+                            eprintln!("candidate observation failed: {error}");
+                            true
+                        }
+                    };
                 let result = match cleanup {
                     Ok(next) => {
                         lifecycle_cursor = next;
@@ -69,7 +81,7 @@ impl Observer {
                     if incompatible {
                         status.state = "degraded".into();
                         status.error = Some("Some pending operations use incompatible stored records and cannot be collected. Collection continues for readable operations; runtime failures are retried automatically.".into());
-                    } else if failed {
+                    } else if failed || candidate_failed {
                         status.state = "degraded".into();
                         status.error = Some(
                             "Some runtime receipts could not be collected; retrying automatically."

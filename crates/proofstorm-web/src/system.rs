@@ -202,7 +202,32 @@ pub fn BalancePanel(
     cell_id: String,
     component: String,
 ) -> impl IntoView {
-    view! {{move ||balance(telemetry,&cell_id,&component).map(|b|{let unix=if b.error.is_some()&&b.amounts.is_empty()&&b.block_height.is_none(){0}else{b.observed_at_unix};let failed=b.error.is_some();view!{
-        <div class="balance-panel"><h4>"Latest observation"</h4>{b.error.clone().map(|message|view!{<p>{message}</p>})}{b.block_height.map(|height|view!{<div class="balance-row"><span>"Block height"</span><strong>{sat(height)}</strong></div>})}{b.amounts.into_iter().map(|a|view!{<div class="balance-row"><span>{a.label}</span><strong>{sat(a.sat)}<small>"sat"</small></strong></div>}).collect_view()}<small><FreshnessStatus unix failed /></small></div>
-    }})}}
+    let data = Memo::new(move |_| balance(telemetry, &cell_id, &component));
+    let summary = Signal::derive(move || {
+        data.get().map_or_else(
+            || "Not reported".into(),
+            |b| {
+                let reading = if let Some(height) = b.block_height {
+                    format!("Block {}", sat(height))
+                } else {
+                    b.amounts.first().map_or_else(
+                        || "No balances reported".into(),
+                        |a| format!("{} sat · {}", sat(a.sat), a.label),
+                    )
+                };
+                crate::inspector::observation_summary(
+                    reading,
+                    b.observed_at_unix,
+                    b.error.is_some(),
+                )
+            },
+        )
+    });
+    view! {<Show when=move || data.get().is_some()>
+        <crate::inspector::InspectorSection title="Latest observation" summary>
+            {move || data.get().map(|b| { let unix=if b.error.is_some()&&b.amounts.is_empty()&&b.block_height.is_none(){0}else{b.observed_at_unix};let failed=b.error.is_some();view!{
+                <div class="balance-panel">{b.error.clone().map(|message|view!{<p>{message}</p>})}{b.block_height.map(|height|view!{<div class="balance-row"><span>"Block height"</span><strong>{sat(height)}</strong></div>})}{b.amounts.into_iter().map(|a|view!{<div class="balance-row"><span>{a.label}</span><strong>{sat(a.sat)}<small>"sat"</small></strong></div>}).collect_view()}<small><FreshnessStatus unix failed /></small></div>
+            }})}
+        </crate::inspector::InspectorSection>
+    </Show>}
 }

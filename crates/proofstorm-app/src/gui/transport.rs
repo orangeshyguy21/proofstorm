@@ -147,7 +147,7 @@ pub(crate) async fn route(
         return Some(fail(
             StatusCode::UNAUTHORIZED,
             &format!(
-                "Run {} gui to open an authenticated browser session.",
+                "Run {} gui link, then open the printed link in this browser.",
                 crate::command_name()
             ),
         ));

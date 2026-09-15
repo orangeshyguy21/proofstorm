@@ -2,6 +2,11 @@
 
 mod backend;
 mod candidate;
+mod candidate_profiles;
+pub use candidate_profiles::{
+    CANDIDATE_BUILD_MAX_CPU_MILLICORES, CANDIDATE_BUILD_MAX_DEADLINE_SECONDS,
+    CandidateBuildProfile, candidate_build_profile,
+};
 mod catalog;
 mod coverage;
 mod evidence;
@@ -34,15 +39,16 @@ pub use backend::{
     WorkloadControllerKind, WorkloadObservationContract, default_backend_registry,
 };
 pub use candidate::{
-    CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateSource,
-    candidate_catalog_entry, effective_catalog,
+    CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateDiagnostics,
+    CandidateInput, CandidateLog, CandidateProvenance, CandidateSource, candidate_catalog_entry,
+    effective_catalog,
 };
 pub use catalog::{
-    AuthenticationMode, BuildProvenance, CatalogDependencySupport, CatalogEntry, CatalogFeature,
-    CatalogImplementationSupport, CatalogPaymentBindingSupport, CatalogPlatform, CatalogResponse,
-    CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
-    StorageBackend, SupportLifecycle, catalog_for_platform, default_catalog,
-    validate_catalog_component, validate_component_config,
+    AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CatalogDependencySupport, CatalogEntry,
+    CatalogFeature, CatalogImplementationSupport, CatalogOrigin, CatalogPaymentBindingSupport,
+    CatalogPlatform, CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix,
+    CatalogVersionSupport, ReleaseChannel, StorageBackend, SupportLifecycle, catalog_for_platform,
+    default_catalog, validate_catalog_component, validate_component_config,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

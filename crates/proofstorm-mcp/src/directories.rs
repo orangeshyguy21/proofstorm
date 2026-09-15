@@ -8,36 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct DirectoryQuery {
-    pub id: Option<String>,
-    pub owner: Option<String>,
-    pub phase: Option<String>,
-    pub query: String,
-    pub regex: bool,
-    pub case_insensitive: bool,
-    pub scan: bool,
-    pub fields: Vec<String>,
-    pub cursor: Option<String>,
-    pub limit: usize,
-}
-impl Default for DirectoryQuery {
-    fn default() -> Self {
-        Self {
-            id: None,
-            owner: None,
-            phase: None,
-            query: String::new(),
-            regex: false,
-            case_insensitive: false,
-            scan: false,
-            fields: vec![],
-            cursor: None,
-            limit: 20,
-        }
-    }
-}
+pub use proofstorm_view::DirectoryQuery;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -102,25 +73,16 @@ impl ProofstormMcp {
         &self,
         query: &DirectoryQuery,
     ) -> Result<CallToolResult, ErrorData> {
-        self.authorize(Capability::CandidateRead)?;
-        let records = self
-            .store
-            .candidate_builds(&self.workspace, &self.principal)
-            .map_err(store_error)?
-            .into_iter()
-            .map(|candidate| {
-                let mut value = json!(crate::compact_candidate_build(&candidate, false));
-                value["id"] = json!(candidate.id);
-                value["owner_principal_id"] = json!(candidate.principal_id);
-                value
-            })
-            .collect();
-        developer_result(page(
-            records,
-            query,
-            "items",
-            &(&self.workspace, &self.principal),
-        )?)
+        developer_result(
+            proofstorm_app::candidate::directory(
+                &self.store,
+                &self.workspace,
+                &self.principal,
+                query,
+                crate::MAX_AGENT_RESPONSE_BYTES,
+            )
+            .map_err(crate::app_error)?,
+        )
     }
 }
 

@@ -87,6 +87,8 @@ pub struct ProcessUsage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ComponentBalance {
     #[serde(default)]
+    pub bitcoin: Option<BitcoinObservation>,
+    #[serde(default)]
     pub rollout_digest: Option<String>,
     #[serde(default)]
     pub lightning: Option<LightningObservation>,
@@ -116,6 +118,12 @@ pub struct LightningObservation {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ObservedChannel {
+    /// BOLT channel ID, shared across implementations.
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    /// LDK reports send/receive capacities rounded down to whole sats.
+    #[serde(default)]
+    pub capacity_only: bool,
     pub funding_outpoint: String,
     pub peer_pubkey: String,
     pub active: bool,
@@ -143,5 +151,19 @@ impl MintHolding {
             .iter()
             .filter(|a| matches!(a.label.as_str(), "Spendable" | "Reserved"))
             .fold(0_u64, |sum, a| sum.saturating_add(a.sat))
+    }
+}
+
+/// Connected same-cell Bitcoin peers. Network addresses remain private.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BitcoinObservation {
+    pub observed_at_unix: i64,
+    pub error: Option<String>,
+    pub peers: Vec<String>,
+}
+impl ObservedChannel {
+    #[must_use]
+    pub fn id(&self) -> &str {
+        self.channel_id.as_deref().unwrap_or(&self.funding_outpoint)
     }
 }

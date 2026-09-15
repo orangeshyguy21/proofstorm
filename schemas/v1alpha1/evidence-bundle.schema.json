@@ -60,6 +60,159 @@
       ],
       "type": "object"
     },
+    "CandidateBuildProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "type": "string"
+        },
+        "catalog_implementations": {
+          "description": "Runtime presets served by this artifact. Empty in historical profiles,\nwhich remain restricted to the implementation requested at admission.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "cpu_limit_millicores": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deadline_seconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dockerfile": {
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "$ref": "#/$defs/CatalogFeature"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": "string"
+        },
+        "memory_limit_mib": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "platforms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "prepare": {
+          "description": "Trusted, versioned preparation recipe copied into the immutable build record.",
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "repository",
+        "baseline",
+        "dockerfile",
+        "platforms",
+        "features",
+        "notes",
+        "prepare",
+        "cpu_limit_millicores",
+        "memory_limit_mib",
+        "deadline_seconds"
+      ],
+      "type": "object"
+    },
+    "CandidateProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_digest": {
+          "type": "string"
+        },
+        "builder_image": {
+          "type": "string"
+        },
+        "input_digest": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/CandidateBuildProfile"
+        },
+        "profile_digest": {
+          "type": "string"
+        },
+        "requested_source": {
+          "additionalProperties": false,
+          "properties": {
+            "sha": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "pull_request",
+                "commit",
+                "tag"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_image": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "input_digest",
+        "requested_source",
+        "platform",
+        "source_image",
+        "builder_image",
+        "baseline_digest",
+        "profile",
+        "profile_digest"
+      ],
+      "type": "object"
+    },
     "CandidateSource": {
       "additionalProperties": false,
       "properties": {
@@ -68,6 +221,16 @@
         },
         "commit_sha": {
           "type": "string"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pull_request_url": {
           "type": "string"

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::{GateContext, cell, json as expect};
 
 const INSTANCE: &str = "cdk-cln-instance";
-const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
+const IMAGE: &str = proofstorm_core::CDK_MINT_IMAGE;
 
 fn cell_document() -> Value {
     json!({

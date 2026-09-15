@@ -2,8 +2,57 @@ use super::*;
 use std::fs;
 
 fn entry() -> Value {
-    json!({"command":"/a path/it's installed/proofstorm-mcp","args":["--home","/home with spaces","--attachment","codex-example"],
-        "cwd":"/project with spaces","required":true,"enabled":true,"startup_timeout_sec":60,"tool_timeout_sec":1800})
+    server_entry(
+        Path::new("/a path/it's installed/proofstorm-mcp"),
+        Path::new("/home with spaces"),
+        Path::new("/project with spaces"),
+        "codex-example",
+    )
+}
+
+#[test]
+fn generated_connections_never_require_proofstorm_for_agent_startup() {
+    for harness in [Harness::Codex, Harness::Opencode, Harness::Claude] {
+        let entry = agents::entry(harness, &entry()).unwrap();
+        if harness == Harness::Codex {
+            assert_eq!(entry["required"], false);
+        } else {
+            assert!(entry.get("required").is_none());
+        }
+    }
+}
+
+#[test]
+fn owned_required_codex_connection_is_upgraded_to_optional() {
+    let path = Path::new("/fixture/.codex/config.toml");
+    let mut old = entry();
+    old["required"] = json!(true);
+    let original = config::merge(path, None, &old, &[]).unwrap();
+    let output = replacement::merge(
+        Harness::Codex,
+        path,
+        Some(&original),
+        &entry(),
+        &[old],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        output,
+        original.replace("required = true", "required = false")
+    );
+    assert_eq!(
+        replacement::merge(
+            Harness::Codex,
+            path,
+            Some(&output),
+            &entry(),
+            &[entry()],
+            None
+        )
+        .unwrap(),
+        output
+    );
 }
 
 #[test]

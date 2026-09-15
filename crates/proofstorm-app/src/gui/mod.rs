@@ -82,26 +82,15 @@ async fn open_inner(
         .transpose()?;
     progress("Checking existing GUI");
     let _control = state::lease(&installation.home, "gui-control-lock.sqlite3")?;
-    let previous = state::record(&installation.home, &installation.id)?;
-    let (record, reused) = if let Some(record) = previous.as_ref().filter(|r| r.port != 0) {
-        if health(record).await.unwrap_or(false) {
-            ensure!(
-                record.executable == verified.executable
-                    && record
-                        .build_sha256
-                        .as_ref()
-                        .is_none_or(|sha| sha == &verified.executable_sha256),
-                "GUI uses an older build; run {} gui stop, then {} gui",
-                crate::command_name(),
-                crate::command_name()
-            );
-            progress("Reusing running GUI");
-            (record.clone(), true)
-        } else {
-            (start(&verified, progress).await?, false)
-        }
+    let (record, reused) = ensure_service(&verified, progress).await?;
+    // Only the explicit link command returns browser credentials to stdout.
+    let link = if no_open {
+        project
+            .as_deref()
+            .map(|p| sign_in_url(&record, p))
+            .transpose()?
     } else {
-        (start(&verified, progress).await?, false)
+        None
     };
     progress(if no_open {
         "GUI is ready"
@@ -123,18 +112,10 @@ async fn open_inner(
         "existing_tab_focused"
     } else {
         progress("Opening default browser");
-        let fragment = serde_urlencoded::to_string([
-            ("session", record.token.as_str()),
-            (
-                "project",
-                project
-                    .as_deref()
-                    .context("project folder missing")?
-                    .to_str()
-                    .context("non-UTF-8 project")?,
-            ),
-        ])?;
-        let url = format!("{}/#{fragment}", record.url());
+        let url = sign_in_url(
+            &record,
+            project.as_deref().context("project folder missing")?,
+        )?;
         // Delegate to the desktop's default URL handler, never a specific browser.
         let opener = if cfg!(target_os = "macos") {
             "/usr/bin/open"
@@ -149,21 +130,50 @@ async fn open_inner(
             .status()
             .with_context(|| {
                 format!(
-                    "browser unavailable; GUI is running. Use {} gui start on a headless host",
+                    "browser unavailable; GUI is running. Use {} gui link to open it in another browser",
                     crate::command_name()
                 )
             })?;
         ensure!(
             status.success(),
-            "browser could not be opened; GUI is running. Use {} gui start on a headless host",
+            "browser could not be opened; GUI is running. Use {} gui link to open it in another browser",
             crate::command_name()
         );
         "opened_default_browser"
     };
     Ok(
-        json!({"url":record.url(),"reused_server":reused,"browser":browser,"project":project,
+        json!({"url":link.as_deref().unwrap_or(&record.url()),"sign_in_link":link.is_some(),"reused_server":reused,"browser":browser,"project":project,
         "attached":false,"tab_focus":"best_effort","note":format!("Stop the GUI: {} gui stop. Cells keep running.", crate::command_name())}),
     )
+}
+
+fn sign_in_url(record: &Record, project: &Path) -> Result<String> {
+    let fragment = serde_urlencoded::to_string([
+        ("session", record.token.as_str()),
+        ("project", project.to_str().context("non-UTF-8 project")?),
+    ])?;
+    Ok(format!("{}/#{fragment}", record.url()))
+}
+
+// Caller holds installation and GUI control locks throughout replacement.
+async fn ensure_service(
+    verified: &crate::artifacts::Verified,
+    progress: &dyn Fn(&str),
+) -> Result<(Record, bool)> {
+    let home = &verified.installation.home;
+    if let Some(record) = state::record(home, &verified.installation.id)?.filter(|r| r.port != 0) {
+        if health(&record).await.unwrap_or(false) {
+            if record.executable == verified.executable
+                && record.build_sha256.as_deref() == Some(&verified.executable_sha256)
+            {
+                progress("Reusing running GUI");
+                return Ok((record, true));
+            }
+            progress("Restarting GUI with the current build");
+            stop_record(home, &record).await?;
+        }
+    }
+    Ok((start(verified, progress).await?, false))
 }
 
 async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -> Result<Record> {
@@ -280,10 +290,14 @@ pub async fn stop(home: &Path) -> Result<Value> {
     let Some(record) = state::record(&installation.home, &installation.id)? else {
         return Ok(json!({"stopped":false,"cells_stopped":false,"reason":"not_running"}));
     };
-    if !health(&record).await.unwrap_or(false) {
-        let _lifetime = state::lease(&installation.home, "gui-runtime-lock.sqlite3")
+    stop_record(&installation.home, &record).await
+}
+
+async fn stop_record(home: &Path, record: &Record) -> Result<Value> {
+    if !health(record).await.unwrap_or(false) {
+        let _lifetime = state::lease(home, "gui-runtime-lock.sqlite3")
             .context("GUI ownership could not be verified; no process was stopped")?;
-        state::remove_owned(&installation.home, &record)?;
+        state::remove_owned(home, record)?;
         return Ok(json!({"stopped":false,"cells_stopped":false,"stale_record_removed":true}));
     }
     let response = client()?
@@ -301,8 +315,8 @@ pub async fn stop(home: &Path) -> Result<Value> {
     // Confirm that its lifetime lease was released even if the connection closed.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(_lifetime) = state::lease(&installation.home, "gui-runtime-lock.sqlite3") {
-            state::remove_owned(&installation.home, &record)?;
+        if let Ok(_lifetime) = state::lease(home, "gui-runtime-lock.sqlite3") {
+            state::remove_owned(home, record)?;
             return Ok(json!({"stopped":true,"cells_stopped":false}));
         }
         ensure!(

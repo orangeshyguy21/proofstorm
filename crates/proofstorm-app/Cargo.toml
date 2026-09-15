@@ -14,7 +14,7 @@ path = "src/main.rs"
 proofstorm-view = { path = "../proofstorm-view" }
 anyhow.workspace = true
 futures.workspace = true
-hyper = { version = "1", features = ["server", "http1"] }
+hyper = { version = "1", features = ["server", "client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 serde_urlencoded = "0.7"

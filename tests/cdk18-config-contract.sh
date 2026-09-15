@@ -10,11 +10,17 @@ public_image() {
     | select(.name == "initialize-config") | .image] | unique | if length == 1 then .[0] else error("ambiguous initializer image") end' \
     "${ROOT_DIR}/crates/proofstorm-kube/tests/golden/$1.json") || return 1
   namespace=$(jq -er '.namespace' "${ROOT_DIR}/release/ghcr.json") || return 1
-  [[ "$logical" =~ ^proofstorm-registry\.localhost:5000/(cdk-mint-management|cdk-ldk-mint-management)@sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ "$logical" =~ ^proofstorm-registry\.localhost:5000/(cdk-mint|cdk-mint-management|cdk-ldk-mint-management)@sha256:[0-9a-f]{64}$ ]] || return 1
   [[ "$namespace" =~ ^ghcr\.io/[a-z0-9_-]+/proofstorm$ ]] || return 1
   printf '%s/%s\n' "$namespace" "${logical#proofstorm-registry.localhost:5000/}"
 }
 STANDARD_IMAGE=$(public_image cdk)
+for golden in cdk cdk-cln-cell cdk-bdk cdk-postgres-cell cdk-ldk; do
+  if [[ "$(public_image "$golden")" != "$STANDARD_IMAGE" ]]; then
+    echo "CDK preset $golden does not use the shared mint image" >&2
+    exit 1
+  fi
+done
 SECRET_FIXTURES="${ROOT_DIR}/tests/fixtures/cdk-mint-secrets"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT

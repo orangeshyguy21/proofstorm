@@ -1,0 +1,68 @@
+{
+  "format_version": 1,
+  "purpose": "mint image repository rename",
+  "verified_date": "2026-09-15",
+  "release_ready": false,
+  "copies": [
+    {
+      "format_version": 1,
+      "repository": "cdk-mint",
+      "platform": "linux/arm64",
+      "publication_id": "103e98cdea57bd3b0c08d589551fe767",
+      "tag": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint:upload-103e98cdea57bd3b0c08d589551fe767",
+      "input": {
+        "kind": "Copy",
+        "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a"
+      },
+      "local_image_id": null,
+      "local_verified": false,
+      "publication": "verified",
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+      "release_ready": false
+    },
+    {
+      "format_version": 1,
+      "repository": "nutshell-mint",
+      "platform": "linux/arm64",
+      "publication_id": "26463a19437ec4d156a9d3978dd7faa8",
+      "tag": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint:upload-26463a19437ec4d156a9d3978dd7faa8",
+      "input": {
+        "kind": "Copy",
+        "image": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f"
+      },
+      "local_image_id": null,
+      "local_verified": false,
+      "publication": "verified",
+      "image": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
+      "release_ready": false
+    },
+    {
+      "format_version": 1,
+      "repository": "nutshell-mint",
+      "platform": "linux/amd64",
+      "publication_id": "6ad329a85659aabc7252d9363c613328",
+      "tag": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint:upload-6ad329a85659aabc7252d9363c613328",
+      "input": {
+        "kind": "Copy",
+        "image": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint-management@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754"
+      },
+      "local_image_id": null,
+      "local_verified": false,
+      "publication": "verified",
+      "image": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754",
+      "release_ready": false
+    }
+  ],
+  "additional_platform_verification": {
+    "anonymous_verified": true,
+    "error": null,
+    "format_version": 1,
+    "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "release_ready": false,
+    "required_platform": "linux/amd64"
+  }
+}

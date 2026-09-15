@@ -1,3 +1,5 @@
+#[cfg(test)]
+use proofstorm_core::default_catalog;
 mod directories;
 #[cfg(test)]
 mod surface_tests;
@@ -31,33 +33,29 @@ use proofstorm_app::runtime::terminal_action_observation;
 use proofstorm_core::ComponentStatus;
 #[cfg(test)]
 use proofstorm_kube::ActionPhase;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
-use k8s_openapi::api::core::v1::Pod;
 use kube::{
-    Api, Client, ResourceExt,
+    Api, Client,
     api::{Patch, PatchParams},
 };
 use proofstorm_core::{
-    AuthenticationProtocol, BitcoinNetwork, CandidateBuild, CandidateBuildPhase, CandidateSource,
-    Capability, CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogResponse,
+    AuthenticationProtocol, BitcoinNetwork, CandidateBuild, CandidateSource, Capability,
+    CatalogDependencySupport, CatalogEntry, CatalogFeature, CatalogResponse,
     CatalogRuntimeEndpoint, CatalogSupportMatrix, CellInstance, CellInstanceStatus, CellOperation,
     CellPolicy, CellSpec, ComponentKind, ComponentSpec, ControlClass, DatabaseRole,
     DependencyBinding, EVIDENCE_API_VERSION, EvidenceAction, EvidenceArtifact, EvidenceBundle,
     EvidenceBundleContent, EvidenceInstance, Experiment, ExperimentPhase, InstancePhase,
     InventoryEntry, LinkKind, LinkSpec, NetworkFaultBackend, OperationArtifact, OperationKind,
     OperationPhase, PaymentMethod, PublishedRevision, ReleaseChannel, SupportLifecycle,
-    TeardownReceipt as CoreTeardownReceipt, ValidationIssue, default_catalog, digest_json,
+    TeardownReceipt as CoreTeardownReceipt, ValidationIssue, digest_json,
     network_policy_fault_backend, validate_cell,
 };
 use proofstorm_kube::{
-    CANDIDATE_BUILD_LABEL, CANDIDATE_CANCEL_ANNOTATION, CellAction, ComponentExecLiveAction,
-    ComponentForensicsAction, ComponentLogsAction, NetworkHealAction, NetworkPartitionAction,
-    ProofstormCandidateBuild, ProofstormCandidateBuildSpec, ProofstormCellAction,
-    ReachabilityOracleAction, WalletBalanceAction, component_ports,
+    CANDIDATE_CANCEL_ANNOTATION, CellAction, ComponentExecLiveAction, ComponentForensicsAction,
+    ComponentLogsAction, NetworkHealAction, NetworkPartitionAction, ProofstormCandidateBuild,
+    ProofstormCandidateBuildSpec, ProofstormCellAction, ReachabilityOracleAction,
+    WalletBalanceAction, component_ports,
 };
 use proofstorm_store::{Draft, Store, StoreError, Workspace};
 use rmcp::{
@@ -165,52 +163,7 @@ impl From<Draft> for CellReadResponse {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CatalogDependencyFilter {
-    pub link_kind: LinkKind,
-    pub implementation: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CatalogListRequest {
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub implementations: BTreeSet<String>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub kinds: BTreeSet<ComponentKind>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub features_all: BTreeSet<CatalogFeature>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub release_channels: BTreeSet<ReleaseChannel>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub support_lifecycles: BTreeSet<SupportLifecycle>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependency: Option<CatalogDependencyFilter>,
-    #[serde(default = "default_catalog_list_limit")]
-    #[schemars(range(min = 1, max = 50))]
-    pub limit: u32,
-    /// Opaque continuation token returned by a prior call with identical filters.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-}
-
-impl Default for CatalogListRequest {
-    fn default() -> Self {
-        Self {
-            implementations: BTreeSet::new(),
-            kinds: BTreeSet::new(),
-            features_all: BTreeSet::new(),
-            release_channels: BTreeSet::new(),
-            support_lifecycles: BTreeSet::new(),
-            dependency: None,
-            limit: default_catalog_list_limit(),
-            cursor: None,
-        }
-    }
-}
+pub use proofstorm_view::{CatalogDependencyFilter, CatalogListRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -230,7 +183,6 @@ pub struct CatalogConfigSchemaRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogEntrySummary {
     pub id: String,
     pub kind: ComponentKind,
@@ -250,7 +202,6 @@ pub struct CatalogEntrySummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogListResponse {
     pub api_version: String,
     pub catalog_digest: String,
@@ -262,6 +213,8 @@ pub struct CatalogListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogEntryDetail {
+    pub origin: proofstorm_core::CatalogOrigin,
+    pub build_profile: Option<proofstorm_core::CandidateBuildProfile>,
     pub id: String,
     pub kind: ComponentKind,
     pub description: String,
@@ -307,15 +260,7 @@ pub struct CatalogConfigSchemaResponse {
     pub referenced_schemas: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateBuildRequest {
-    pub candidate_id: String,
-    pub pull_request_url: String,
-    pub implementation: String,
-    #[serde(rename = "request_id")]
-    pub idempotency_key: String,
-}
+pub use proofstorm_app::candidate::CandidateBuildRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -332,35 +277,7 @@ pub struct CandidateCancelRequest {
     pub candidate_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateBuildReceipt {
-    pub candidate_id: String,
-    pub base_version: String,
-    /// Use the exact implementation/version in a cell component; `catalog_entry_read` supplies its configuration contract.
-    pub catalog_entry: CandidateCatalogSelector,
-    pub commit_sha: String,
-    pub phase: CandidateBuildPhase,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    pub logs_resource_uri: String,
-    /// Configured build transformations to disclose alongside source identity.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub build_profile_notes: Vec<String>,
-    pub timed_out: bool,
-    pub next_tool: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateCatalogSelector {
-    pub implementation: String,
-    pub version: String,
-}
+pub use proofstorm_view::{CandidateBuildReceipt, CandidateCatalogSelector};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1407,10 +1324,6 @@ const fn default_evidence_section_limit() -> u32 {
     20
 }
 
-const fn default_catalog_list_limit() -> u32 {
-    20
-}
-
 const fn default_status_list_limit() -> u32 {
     20
 }
@@ -1419,7 +1332,6 @@ const fn default_wait_timeout_seconds() -> u32 {
     30
 }
 
-const MAX_CATALOG_LIST_LIMIT: u32 = 50;
 const MAX_AGENT_RESPONSE_BYTES: usize = 32 * 1024;
 
 #[derive(Clone)]
@@ -1950,18 +1862,22 @@ impl ProofstormMcp {
 
     #[tool(
         name = "catalog_list",
-        description = "List compact installed component identities, exact versions, config versions, and valid controls. Read exact entry details only for components you select; read a config schema only for constraints on a non-default field"
+        description = "Search visible component images by literal text or bounded regex, kind and origin. query: cdk matches the CDK family; implementations selects exact IDs. Filters combine before pagination; scan and JSON-pointer fields keep reads compact. Read exact entry details only for components you select; read a config schema only for constraints on a non-default field"
     )]
     fn proofstorm_catalog_list(
         &self,
         Parameters(request): Parameters<CatalogListRequest>,
-    ) -> Result<Json<CatalogListResponse>, ErrorData> {
+    ) -> Result<Json<proofstorm_view::CatalogPage>, ErrorData> {
         self.authorize(Capability::CatalogRead)?;
-        let catalog = self
-            .store
-            .effective_catalog(&self.workspace, &self.principal)
-            .map_err(store_error)?;
-        catalog_page_with_catalog(&request, &catalog).map(Json)
+        let response = proofstorm_app::catalog::read(
+            &self.store,
+            &self.workspace,
+            &self.principal,
+            &request,
+            MAX_AGENT_RESPONSE_BYTES,
+        )
+        .map_err(app_error)?;
+        bounded_json_response(response).map(Json)
     }
 
     #[tool(
@@ -2005,139 +1921,24 @@ impl ProofstormMcp {
 
     #[tool(
         name = "candidate_build",
-        description = "Build a durable candidate image from a public GitHub PR; then wait. On success, copy the returned catalog_entry fields verbatim into a cell_plan component"
+        description = "Build a durable candidate mint or wallet from a public GitHub PR, full commit SHA or release tag; then wait. Uses container toolchains and inherits an unverified baseline contract. One CDK mint build serves cdk, cdk-ldk and cdk-bdk. On success, copy a returned catalog_entries selector into a cell_plan component; catalog_entry is the requested preset"
     )]
     async fn proofstorm_candidate_build(
         &self,
         Parameters(request): Parameters<CandidateBuildRequest>,
     ) -> Result<Json<CandidateBuildReceipt>, ErrorData> {
-        self.authorize_all(&[
-            Capability::CandidateBuild,
-            Capability::CandidateRead,
-            Capability::CatalogRead,
-        ])?;
-        let (owner, repository_name, pull_number) =
-            parse_github_pull_request_url(&request.pull_request_url)?;
-        let adapter = candidate_build_adapter(&request.implementation).ok_or_else(|| {
-            coded_invalid_request(
-                "candidate_implementation_unsupported",
-                format!(
-                    "implementation {:?} has no candidate build adapter",
-                    request.implementation
-                ),
-            )
-        })?;
-        let requested_repository = format!("{owner}/{repository_name}");
-        if !requested_repository.eq_ignore_ascii_case(adapter.repository) {
-            return Err(coded_invalid_request(
-                "candidate_repository_mismatch",
-                format!(
-                    "implementation {:?} accepts pull requests from {}, not {requested_repository}",
-                    request.implementation, adapter.repository
-                ),
-            ));
-        }
-        match self
-            .store
-            .candidate_build(&self.workspace, &self.principal, &request.candidate_id)
-        {
-            Ok(candidate)
-                if candidate.implementation == request.implementation
-                    && candidate.pull_request_url == request.pull_request_url =>
-            {
-                if !candidate.phase.terminal() {
-                    self.runtime()?.apply_candidate_build(&candidate).await?;
-                }
-                return Ok(Json(compact_candidate_build(&candidate, false)));
-            }
-            Ok(_) => {
-                return Err(coded_invalid_request(
-                    "candidate_identity_conflict",
-                    "candidate_id already identifies a different build request",
-                ));
-            }
-            Err(StoreError::NotFound { .. }) => {}
-            Err(error) => return Err(store_error(error)),
-        }
-        let catalog = default_catalog();
-        let base_version = catalog
-            .implementations
-            .iter()
-            .find(|support| support.implementation == request.implementation)
-            .and_then(|support| support.preferred_version.clone())
-            .ok_or_else(|| {
-                coded_invalid_request(
-                    "candidate_implementation_not_found",
-                    format!(
-                        "catalog implementation {:?} is not installed",
-                        request.implementation
-                    ),
-                )
-            })?;
-        let resolved = resolve_github_pull_request(&owner, &repository_name, pull_number).await?;
-        // Candidate IDs already have workspace-scoped immutable identity. Reusing
-        // them in the catalog selector is easier for agents than synthesizing a
-        // second, hash-like handle that must be copied exactly.
-        let version = format!("candidate-{}", request.candidate_id);
-        let identity = (
+        let runtime = self.runtime()?;
+        let candidate = proofstorm_app::candidate::admit(
+            &self.store,
             &self.workspace,
-            &request.candidate_id,
-            &request.implementation,
-            &base_version,
-            &request.pull_request_url,
-            &resolved.repository,
-            &resolved.commit_sha,
-        );
-        let request_digest = digest_json(&identity);
-        let resource_name = format!("candidate-{}", &request_digest[7..26]);
-        let mut build_features = if matches!(
-            request.implementation.as_str(),
-            "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
-        ) {
-            [proofstorm_core::CatalogFeature::MintManagementRpc]
-                .into_iter()
-                .collect()
-        } else {
-            BTreeSet::new()
-        };
-        if matches!(
-            request.implementation.as_str(),
-            "nutshell" | "nutshell-wallet"
-        ) {
-            build_features.insert(proofstorm_core::CatalogFeature::NativeCliEntrypoints);
+            &self.principal,
+            &request,
+        )
+        .await
+        .map_err(app_error)?;
+        if !candidate.phase.terminal() {
+            runtime.apply_candidate_build(&candidate).await?;
         }
-        let candidate = CandidateBuild {
-            api_version: proofstorm_core::CANDIDATE_BUILD_API_VERSION.into(),
-            id: request.candidate_id,
-            workspace_id: self.workspace.clone(),
-            principal_id: self.principal.clone(),
-            implementation: request.implementation,
-            base_version,
-            pull_request_url: request.pull_request_url,
-            resource_name,
-            request_digest,
-            build_features,
-            phase: CandidateBuildPhase::Pending,
-            accepted_at_unix: unix_now(),
-            started_at_unix: None,
-            completed_at_unix: None,
-            repository: Some(resolved.repository),
-            commit_sha: Some(resolved.commit_sha),
-            version: Some(version),
-            image: None,
-            error_code: None,
-            error_message: None,
-        };
-        let candidate = self
-            .store
-            .create_candidate_build(
-                &self.workspace,
-                &self.principal,
-                &candidate,
-                &request.idempotency_key,
-            )
-            .map_err(store_error)?;
-        self.runtime()?.apply_candidate_build(&candidate).await?;
         Ok(Json(compact_candidate_build(&candidate, false)))
     }
 
@@ -3458,6 +3259,11 @@ impl ProofstormMcp {
 impl CatalogEntryDetail {
     fn from_entry(entry: &CatalogEntry, preferred: bool) -> Self {
         Self {
+            origin: entry.origin(),
+            build_profile: entry.source.as_ref().map_or_else(
+                || proofstorm_core::candidate_build_profile(&entry.id),
+                |s| s.provenance.as_ref().map(|p| p.profile.clone()),
+            ),
             id: entry.id.clone(),
             kind: entry.kind,
             description: entry.description.clone(),
@@ -3796,91 +3602,6 @@ fn evidence_pointer(
     })
 }
 
-fn catalog_page_with_catalog(
-    request: &CatalogListRequest,
-    catalog: &CatalogResponse,
-) -> Result<CatalogListResponse, ErrorData> {
-    // Pagination is a resource safeguard, not user intent. Saturate harmless
-    // model guesses instead of spending an agent turn on a recoverable error.
-    let limit = request.limit.clamp(1, MAX_CATALOG_LIST_LIMIT);
-    let catalog_digest = digest_json(&catalog);
-    let filter_digest = catalog_filter_digest(request);
-    let mut entries = catalog
-        .entries
-        .iter()
-        .filter(|entry| catalog_entry_matches(entry, request))
-        .collect::<Vec<_>>();
-    entries.sort_by(|left, right| {
-        left.id
-            .cmp(&right.id)
-            .then_with(|| left.version.cmp(&right.version))
-    });
-    let start = match request.cursor.as_deref() {
-        None => 0,
-        Some(cursor) => entries
-            .iter()
-            .position(|entry| catalog_cursor(&catalog_digest, &filter_digest, entry) == cursor)
-            .map(|position| position + 1)
-            .ok_or_else(|| {
-                coded_invalid_request(
-                    "catalog_cursor_invalid",
-                    "catalog cursor is invalid, stale, or belongs to different filters",
-                )
-            })?,
-    };
-    let preferred = catalog
-        .implementations
-        .iter()
-        .filter_map(|support| {
-            support
-                .preferred_version
-                .as_ref()
-                .map(|version| (&support.implementation, version))
-        })
-        .collect::<BTreeSet<_>>();
-    let summaries = entries
-        .iter()
-        .skip(start)
-        .take(usize::try_from(limit).unwrap_or(usize::MAX))
-        .map(|entry| CatalogEntrySummary {
-            id: entry.id.clone(),
-            kind: entry.kind,
-            version: entry.version.clone(),
-            preferred: preferred.contains(&(&entry.id, &entry.version)),
-            adapter_version: entry.adapter_version.clone(),
-            protocol_action_adapter_version: entry.protocol_action_adapter_version.clone(),
-            config_version: entry.config_version.clone(),
-            config_schema_digest: entry.config_schema_digest.clone(),
-            allowed_control: entry.allowed_control.clone(),
-            recommended_control: recommended_control(entry),
-            release_channel: entry.release_channel,
-            support_lifecycle: entry.support_lifecycle,
-        })
-        .collect::<Vec<_>>();
-    let mut end = summaries.len();
-    loop {
-        let has_more = start + end < entries.len();
-        let next_cursor = has_more && end > 0;
-        let response = CatalogListResponse {
-            api_version: catalog.api_version.clone(),
-            catalog_digest: catalog_digest.clone(),
-            items: summaries[..end].to_vec(),
-            next_cursor: next_cursor
-                .then(|| catalog_cursor(&catalog_digest, &filter_digest, entries[start + end - 1])),
-        };
-        if read_query::wire_size(&response)? <= MAX_AGENT_RESPONSE_BYTES {
-            return Ok(response);
-        }
-        if end == 0 {
-            return Err(coded_invalid_request(
-                "catalog_response_too_large",
-                "catalog page envelope exceeds the agent response budget",
-            ));
-        }
-        end -= 1;
-    }
-}
-
 fn recommended_control(entry: &CatalogEntry) -> ControlClass {
     [
         ControlClass::Target,
@@ -3935,50 +3656,6 @@ fn config_defaults(entry: &CatalogEntry) -> BTreeMap<String, serde_json::Value> 
                 .map(|default| (name.clone(), default))
         })
         .collect()
-}
-
-fn catalog_filter_digest(request: &CatalogListRequest) -> String {
-    digest_json(&(
-        "proofstorm/catalog-filter/v1",
-        &request.implementations,
-        &request.kinds,
-        &request.features_all,
-        &request.release_channels,
-        &request.support_lifecycles,
-        &request.dependency,
-    ))
-}
-
-fn catalog_entry_matches(entry: &CatalogEntry, request: &CatalogListRequest) -> bool {
-    (request.implementations.is_empty() || request.implementations.contains(&entry.id))
-        && (request.kinds.is_empty() || request.kinds.contains(&entry.kind))
-        && request.features_all.is_subset(&entry.features)
-        && (request.release_channels.is_empty()
-            || request.release_channels.contains(&entry.release_channel))
-        && (request.support_lifecycles.is_empty()
-            || request
-                .support_lifecycles
-                .contains(&entry.support_lifecycle))
-        && request.dependency.as_ref().is_none_or(|filter| {
-            entry.compatible_dependencies.iter().any(|dependency| {
-                dependency.link_kind == filter.link_kind
-                    && dependency.implementation == filter.implementation
-                    && filter
-                        .version
-                        .as_ref()
-                        .is_none_or(|version| dependency.versions.contains(version))
-            })
-        })
-}
-
-fn catalog_cursor(catalog_digest: &str, filter_digest: &str, entry: &CatalogEntry) -> String {
-    digest_json(&(
-        "proofstorm/catalog-cursor/v1",
-        catalog_digest,
-        filter_digest,
-        &entry.id,
-        &entry.version,
-    ))
 }
 
 fn exact_catalog_entry<'a>(
@@ -4184,15 +3861,18 @@ impl ServerHandler for ProofstormMcp {
                 "Complete deterministic evidence bundle identified by a manifest returned from evidence_export",
             )
             .with_mime_type("application/vnd.proofstorm.evidence.v1alpha1+json"),
+            ResourceTemplate::new("proofstorm://candidate-build/{candidate_id}/record{?path,offset,digest}", "proofstorm-candidate-build-record")
+                .with_description("Read frozen source, recipe and build evidence by JSON pointer; follow next_uri for complete text")
+                .with_mime_type("application/json"),
             ResourceTemplate::new(
-                "proofstorm://candidate-build/{candidate_id}/logs",
+                "proofstorm://candidate-build/{candidate_id}/logs{?offset,digest}",
                 "proofstorm-candidate-build-logs",
             )
             .with_title("Proofstorm candidate build logs")
             .with_description(
-                "Bounded recent BuildKit output for diagnosing a candidate image build",
+                "Retained source and BuildKit diagnostics, paged as text with next_uri; available after evidence capture",
             )
-            .with_mime_type("text/plain"),
+            .with_mime_type("application/json"),
         ]))
     }
 
@@ -4201,19 +3881,67 @@ impl ServerHandler for ProofstormMcp {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        if let Some(candidate_id) = request
-            .uri
-            .strip_prefix("proofstorm://candidate-build/")
-            .and_then(|path| path.strip_suffix("/logs"))
-        {
-            self.authorize(Capability::CandidateRead)?;
-            let candidate = self
-                .store
-                .candidate_build(&self.workspace, &self.principal, candidate_id)
-                .map_err(store_error)?;
-            let logs = self.runtime()?.candidate_logs(&candidate).await?;
+        if request.uri.starts_with("proofstorm://candidate-build/") {
+            let url = reqwest::Url::parse(&request.uri)
+                .map_err(|e| coded_invalid_request("candidate_resource_invalid", e.to_string()))?;
+            let path = url
+                .path()
+                .trim_start_matches('/')
+                .split('/')
+                .collect::<Vec<_>>();
+            if path.len() != 2 || !matches!(path[1], "logs" | "record") {
+                return Err(coded_invalid_request(
+                    "candidate_resource_invalid",
+                    "Expected candidate ID followed by logs or record",
+                ));
+            }
+            let mut query = proofstorm_app::candidate::CandidateReadQuery {
+                id: path[0].into(),
+                path: if path[1] == "logs" {
+                    "/diagnostics".into()
+                } else {
+                    String::new()
+                },
+                ..Default::default()
+            };
+            for (key, value) in url.query_pairs() {
+                match key.as_ref() {
+                    "path" => query.path = value.into_owned(),
+                    "offset" => {
+                        query.offset = value.parse().map_err(|_| {
+                            coded_invalid_request("candidate_resource_invalid", "Invalid offset")
+                        })?;
+                    }
+                    "digest" => query.expected_digest = Some(value.into_owned()),
+                    _ => {
+                        return Err(coded_invalid_request(
+                            "candidate_resource_invalid",
+                            "Unknown resource selector",
+                        ));
+                    }
+                }
+            }
+            let mut page = proofstorm_app::candidate::read(
+                &self.store,
+                &self.workspace,
+                &self.principal,
+                &query,
+            )
+            .map_err(app_error)?;
+            if let Some(next) = page["next_offset"].as_u64() {
+                let mut continuation = url;
+                continuation.set_query(None);
+                continuation
+                    .query_pairs_mut()
+                    .append_pair("path", &query.path)
+                    .append_pair("offset", &next.to_string())
+                    .append_pair("digest", page["digest"].as_str().unwrap_or_default());
+                page["next_uri"] = serde_json::json!(continuation.as_str());
+            }
+            let text = serde_json::to_string(&page)
+                .map_err(|e| coded_invalid_request("candidate_resource_invalid", e.to_string()))?;
             return Ok(ReadResourceResult::new(vec![
-                ResourceContents::text(logs, request.uri).with_mime_type("text/plain"),
+                ResourceContents::text(text, request.uri).with_mime_type("application/json"),
             ])
             .into());
         }
@@ -4914,15 +4642,14 @@ impl ProofstormMcp {
         &self,
         candidate: CandidateBuild,
     ) -> Result<CandidateBuild, ErrorData> {
-        let Some(observed) = self.runtime()?.candidate_status(&candidate).await? else {
-            return Ok(candidate);
-        };
-        if observed == candidate {
-            return Ok(candidate);
-        }
-        self.store
-            .update_candidate_build(&self.workspace, &observed)
-            .map_err(store_error)
+        proofstorm_app::candidate::observe(
+            &self.runtime()?.shared(),
+            &self.store,
+            &self.workspace,
+            candidate,
+        )
+        .await
+        .map_err(app_error)
     }
 }
 
@@ -4960,214 +4687,46 @@ fn candidate_build_resource(
             version,
             request_digest: candidate.request_digest.clone(),
             accepted_at_unix: candidate.accepted_at_unix,
+            provenance: candidate.provenance.clone(),
             image_repository: format!(
-                "{registry}/proofstorm-candidates/{}",
+                "{registry}/{}/{}",
+                if candidate.provenance.is_some() {
+                    "candidates"
+                } else {
+                    "proofstorm-candidates"
+                },
                 candidate.implementation
             ),
-            dockerfile: candidate_build_adapter(&candidate.implementation)
+            dockerfile: candidate
+                .provenance
+                .as_ref()
+                .map_or_else(
+                    || match candidate.implementation.as_str() {
+                        "cdk" | "cdk-bdk" | "nutshell" | "nutshell-wallet" => {
+                            Some("Dockerfile".into())
+                        }
+                        "cdk-ldk" => Some("Dockerfile.ldk-node".into()),
+                        _ => None,
+                    },
+                    |p| Some(p.profile.dockerfile.clone()),
+                )
                 .ok_or_else(|| {
                     coded_invalid_request(
                         "candidate_implementation_unsupported",
                         "candidate implementation has no build adapter",
                     )
-                })?
-                .dockerfile
-                .into(),
+                })?,
         },
     );
     resource.metadata.namespace = Some(namespace.into());
     Ok(resource)
 }
 
-fn compact_candidate_build(candidate: &CandidateBuild, timed_out: bool) -> CandidateBuildReceipt {
-    let next_tool = match candidate.phase {
-        CandidateBuildPhase::Succeeded => "cell_plan",
-        CandidateBuildPhase::Failed | CandidateBuildPhase::Cancelled => "none",
-        CandidateBuildPhase::Pending
-        | CandidateBuildPhase::Resolving
-        | CandidateBuildPhase::Building
-        | CandidateBuildPhase::Pushing => "candidate_wait",
-    };
-    let version = candidate.version.clone().unwrap_or_default();
-    CandidateBuildReceipt {
-        candidate_id: candidate.id.clone(),
-        base_version: candidate.base_version.clone(),
-        catalog_entry: CandidateCatalogSelector {
-            implementation: candidate.implementation.clone(),
-            version,
-        },
-        commit_sha: candidate.commit_sha.clone().unwrap_or_default(),
-        phase: candidate.phase,
-        image: candidate.image.clone(),
-        error_code: candidate.error_code.clone(),
-        message: candidate.error_message.clone(),
-        logs_resource_uri: format!("proofstorm://candidate-build/{}/logs", candidate.id),
-        build_profile_notes: if matches!(
-            candidate.implementation.as_str(),
-            "nutshell" | "nutshell-wallet"
-        ) {
-            vec!["The configured Nutshell build profile modifies the Dockerfile: before poetry install, it removes breez-sdk-spark from the Poetry lock and installs breez-sdk-spark==0.17.0 with pip. The source commit is frozen, but this is a dependency-adjusted build, not the untouched upstream build recipe".into()]
-        } else {
-            vec![]
-        },
-        timed_out,
-        next_tool: next_tool.into(),
-    }
-}
+use proofstorm_app::candidate::receipt as compact_candidate_build;
 
-struct ResolvedPullRequest {
-    repository: String,
-    commit_sha: String,
-}
-
-#[derive(Deserialize)]
-struct GitHubPullRequestResponse {
-    head: GitHubPullRequestHead,
-}
-
-#[derive(Deserialize)]
-struct GitHubPullRequestHead {
-    sha: String,
-    repo: GitHubRepositoryResponse,
-}
-
-#[derive(Deserialize)]
-struct GitHubRepositoryResponse {
-    clone_url: String,
-}
-
-async fn resolve_github_pull_request(
-    owner: &str,
-    repository: &str,
-    pull_number: u64,
-) -> Result<ResolvedPullRequest, ErrorData> {
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("proofstorm/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| {
-            ErrorData::internal_error(
-                format!("failed to initialize GitHub client: {error}"),
-                Some(serde_json::json!({"code": "github_client_failed"})),
-            )
-        })?;
-    let mut request = client.get(format!(
-        "https://api.github.com/repos/{owner}/{repository}/pulls/{pull_number}"
-    ));
-    if let Ok(token) = std::env::var("GITHUB_TOKEN")
-        && !token.is_empty()
-    {
-        request = request.bearer_auth(token);
-    }
-    let response = request.send().await.map_err(|error| {
-        coded_invalid_request(
-            "candidate_pr_resolution_failed",
-            format!("GitHub pull request resolution failed: {error}"),
-        )
-    })?;
-    if !response.status().is_success() {
-        return Err(coded_invalid_request(
-            "candidate_pr_resolution_failed",
-            format!(
-                "GitHub returned {} while resolving the public pull request",
-                response.status()
-            ),
-        ));
-    }
-    let response = response
-        .json::<GitHubPullRequestResponse>()
-        .await
-        .map_err(|error| {
-            coded_invalid_request(
-                "candidate_pr_response_invalid",
-                format!("GitHub returned an invalid pull request response: {error}"),
-            )
-        })?;
-    if response.head.sha.len() != 40
-        || !response
-            .head
-            .sha
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(coded_invalid_request(
-            "candidate_pr_response_invalid",
-            "GitHub pull request head did not contain a full commit SHA",
-        ));
-    }
-    Ok(ResolvedPullRequest {
-        repository: response.head.repo.clone_url,
-        commit_sha: response.head.sha.to_ascii_lowercase(),
-    })
-}
-
-fn parse_github_pull_request_url(url: &str) -> Result<(String, String, u64), ErrorData> {
-    let path = url
-        .strip_prefix("https://github.com/")
-        .and_then(|path| path.strip_suffix('/').or(Some(path)))
-        .ok_or_else(|| {
-            coded_invalid_request(
-                "candidate_pr_url_invalid",
-                "pull_request_url must be an https://github.com pull request URL",
-            )
-        })?;
-    let segments = path.split('/').collect::<Vec<_>>();
-    if segments.len() != 4 || segments[2] != "pull" {
-        return Err(coded_invalid_request(
-            "candidate_pr_url_invalid",
-            "pull_request_url must have the form https://github.com/owner/repository/pull/number",
-        ));
-    }
-    let pull_number = segments[3].parse::<u64>().map_err(|_| {
-        coded_invalid_request(
-            "candidate_pr_url_invalid",
-            "pull_request_url must end with a numeric pull request number",
-        )
-    })?;
-    if pull_number == 0
-        || [segments[0], segments[1]].iter().any(|segment| {
-            segment.is_empty()
-                || !segment
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        })
-    {
-        return Err(coded_invalid_request(
-            "candidate_pr_url_invalid",
-            "pull_request_url has an invalid owner, repository, or pull request number",
-        ));
-    }
-    Ok((segments[0].into(), segments[1].into(), pull_number))
-}
-
-struct CandidateBuildAdapter {
-    repository: &'static str,
-    dockerfile: &'static str,
-}
-
-fn candidate_build_adapter(implementation: &str) -> Option<CandidateBuildAdapter> {
-    match implementation {
-        "nutshell" | "nutshell-wallet" => Some(CandidateBuildAdapter {
-            repository: "cashubtc/nutshell",
-            dockerfile: "Dockerfile",
-        }),
-        "cdk" | "cdk-bdk" => Some(CandidateBuildAdapter {
-            repository: "cashubtc/cdk",
-            dockerfile: "Dockerfile",
-        }),
-        "cdk-ldk" => Some(CandidateBuildAdapter {
-            repository: "cashubtc/cdk",
-            dockerfile: "Dockerfile.ldk-node",
-        }),
-        _ => None,
-    }
-}
-
-fn unix_now() -> i64 {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    i64::try_from(seconds).unwrap_or(i64::MAX)
+#[cfg(test)]
+fn candidate_build_adapter(implementation: &str) -> Option<proofstorm_core::CandidateBuildProfile> {
+    proofstorm_core::candidate_build_profile(implementation)
 }
 
 impl KubernetesRuntime {
@@ -5217,46 +4776,6 @@ impl KubernetesRuntime {
         Ok(())
     }
 
-    async fn candidate_status(
-        &self,
-        candidate: &CandidateBuild,
-    ) -> Result<Option<CandidateBuild>, ErrorData> {
-        let builds = Api::<ProofstormCandidateBuild>::namespaced(
-            self.client.clone(),
-            &self.control_namespace,
-        );
-        let Some(resource) = builds
-            .get_opt(&candidate.resource_name)
-            .await
-            .map_err(kube_error)?
-        else {
-            return Ok(None);
-        };
-        if resource.spec.workspace_id != candidate.workspace_id
-            || resource.spec.candidate_id != candidate.id
-            || resource.spec.principal_id != candidate.principal_id
-            || resource.spec.implementation != candidate.implementation
-            || resource.spec.request_digest != candidate.request_digest
-            || resource.spec.commit_sha != candidate.commit_sha.as_deref().unwrap_or_default()
-        {
-            return Err(coded_invalid_request(
-                "candidate_identity_conflict",
-                "candidate build runtime identity does not match its durable journal",
-            ));
-        }
-        let Some(status) = resource.status else {
-            return Ok(None);
-        };
-        let mut observed = candidate.clone();
-        observed.phase = status.phase;
-        observed.started_at_unix = status.started_at_unix;
-        observed.completed_at_unix = status.completed_at_unix;
-        observed.image = status.image;
-        observed.error_code = status.error_code;
-        observed.error_message = status.message;
-        Ok(Some(observed))
-    }
-
     async fn request_candidate_cancellation(
         &self,
         candidate: &CandidateBuild,
@@ -5277,30 +4796,6 @@ impl KubernetesRuntime {
             .await
             .map_err(kube_error)?;
         Ok(())
-    }
-
-    async fn candidate_logs(&self, candidate: &CandidateBuild) -> Result<String, ErrorData> {
-        let pods = Api::<Pod>::namespaced(self.client.clone(), &self.control_namespace);
-        let list = pods
-            .list(&kube::api::ListParams::default().labels(&format!(
-                "{CANDIDATE_BUILD_LABEL}={}",
-                candidate.resource_name
-            )))
-            .await
-            .map_err(kube_error)?;
-        let Some(pod) = list.items.first() else {
-            return Ok("candidate build Pod has not started".into());
-        };
-        pods.logs(
-            &pod.name_any(),
-            &kube::api::LogParams {
-                container: Some("buildkit".into()),
-                tail_lines: Some(200),
-                ..kube::api::LogParams::default()
-            },
-        )
-        .await
-        .map_err(kube_error)
     }
 
     async fn apply_action(
@@ -6029,13 +5524,32 @@ mod tests {
     #[test]
     fn catalog_summary_then_exact_detail_and_schema_is_progressive() {
         let service = ProofstormMcp::new(seeded_store(), "alpha", "designer").expect("service");
-        let page = service
+        let mut page = service
             .proofstorm_catalog_list(Parameters(CatalogListRequest::default()))
             .expect("catalog discovery")
             .0;
+        let mut items = page.items.clone();
+        while let Some(cursor) = page.next_cursor.clone() {
+            page = service
+                .proofstorm_catalog_list(Parameters(CatalogListRequest {
+                    cursor: Some(cursor),
+                    ..Default::default()
+                }))
+                .unwrap()
+                .0;
+            assert!(serde_json::to_vec(&page).unwrap().len() <= 8 * 1024);
+            assert!(
+                read_query::wire_size(&serde_json::to_value(&page).unwrap()).unwrap()
+                    <= MAX_AGENT_RESPONSE_BYTES
+            );
+            items.extend(page.items.clone());
+        }
+        page.items = items;
+        let page: CatalogListResponse =
+            serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
         assert_eq!(page.items.len(), 15);
         assert!(page.next_cursor.is_none());
-        assert!(serialized_size(&page).expect("page size") < 8 * 1024);
+        assert!(read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
         assert!(page.items.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
@@ -6104,6 +5618,8 @@ mod tests {
             }))
             .expect("first page")
             .0;
+        let first: CatalogListResponse =
+            serde_json::from_value(serde_json::to_value(first).unwrap()).unwrap();
         assert_eq!(first.items.len(), 5);
         assert!(serialized_size(&first).expect("first size") <= MAX_AGENT_RESPONSE_BYTES);
         let cursor = first.next_cursor.clone().expect("continuation cursor");
@@ -6115,6 +5631,8 @@ mod tests {
             }))
             .expect("second page")
             .0;
+        let second: CatalogListResponse =
+            serde_json::from_value(serde_json::to_value(second).unwrap()).unwrap();
         assert_eq!(second.items.len(), 5);
         assert!(
             first
@@ -6134,6 +5652,8 @@ mod tests {
             }))
             .expect("filtered catalog")
             .0;
+        let filtered: CatalogListResponse =
+            serde_json::from_value(serde_json::to_value(filtered).unwrap()).unwrap();
         assert_eq!(filtered.items.len(), 1);
         assert_eq!(filtered.items[0].id, "nutshell");
         assert_eq!(filtered.items[0].allowed_control, [ControlClass::Target]);
@@ -6147,7 +5667,10 @@ mod tests {
             }))
             .expect("harmless oversized page limit is saturated")
             .0;
-        assert_eq!(oversized_limit.items.len(), 15);
+        let oversized_limit: CatalogListResponse =
+            serde_json::from_value(serde_json::to_value(oversized_limit).unwrap()).unwrap();
+        assert!(!oversized_limit.items.is_empty() && oversized_limit.items.len() < 15);
+        assert!(oversized_limit.next_cursor.is_some());
 
         let stale = service.proofstorm_catalog_list(Parameters(CatalogListRequest {
             implementations: ["nutshell".into()].into(),
@@ -6552,7 +6075,7 @@ mod tests {
 
     #[test]
     fn candidate_build_pushes_to_the_selected_installation_registry() {
-        let candidate: CandidateBuild = serde_json::from_value(serde_json::json!({
+        let mut candidate: CandidateBuild = serde_json::from_value(serde_json::json!({
             "api_version": "proofstorm/candidate-build/v1alpha1",
             "id": "candidate-test", "workspace_id": "workspace", "principal_id": "developer",
             "implementation": "nutshell", "base_version": "0.19.0",
@@ -6583,26 +6106,47 @@ mod tests {
             "k3d-pst-second-registry:5000/proofstorm-candidates/nutshell"
         );
         assert_ne!(first.spec.image_repository, second.spec.image_repository);
+        let mut profile = candidate_build_adapter("nutshell").unwrap();
+        profile.dockerfile = "Saved.Dockerfile".into();
+        candidate.provenance = Some(proofstorm_core::CandidateProvenance {
+            schema_version: 1,
+            input_digest: "input".into(),
+            requested_source: proofstorm_core::CandidateInput::Tag {
+                tag: "v0.20.3".into(),
+            },
+            platform: "linux/arm64".into(),
+            source_image: proofstorm_kube::images::GIT_IMAGE.into(),
+            builder_image: proofstorm_kube::images::BUILDKIT_IMAGE.into(),
+            baseline_digest: "baseline".into(),
+            profile_digest: profile.digest(),
+            profile,
+        });
+        let new_build = candidate_build_resource(
+            &candidate,
+            "proofstorm-system",
+            "k3d-pst-first-registry:5000",
+        )
+        .unwrap();
+        assert_eq!(
+            new_build.spec.image_repository,
+            "k3d-pst-first-registry:5000/candidates/nutshell"
+        );
+        assert_eq!(new_build.spec.dockerfile, "Saved.Dockerfile");
+        assert_eq!(new_build.spec.provenance, candidate.provenance);
     }
 
     #[test]
-    fn candidate_build_surface_is_generic_bounded_and_pr_only() {
-        assert_eq!(
-            parse_github_pull_request_url("https://github.com/cashubtc/nutshell/pull/1095/")
-                .expect("valid PR URL"),
-            ("cashubtc".into(), "nutshell".into(), 1095)
-        );
-        for invalid in [
-            "http://github.com/cashubtc/nutshell/pull/1095",
-            "https://github.com/cashubtc/nutshell/issues/1095",
-            "https://github.com/cashubtc/nutshell/pull/main",
+    fn candidate_build_surface_covers_all_cashu_profiles_and_bounded_waits() {
+        for implementation in [
+            "cdk",
+            "cdk-bdk",
+            "cdk-ldk",
+            "nutshell",
+            "nutshell-wallet",
+            "cdk-cli-wallet",
+            "cocod-wallet",
         ] {
-            let error =
-                parse_github_pull_request_url(invalid).expect_err("PR URL must fail closed");
-            assert_eq!(
-                error.data.expect("coded error")["code"],
-                "candidate_pr_url_invalid"
-            );
+            assert!(candidate_build_adapter(implementation).is_some());
         }
         let nutshell = candidate_build_adapter("nutshell").expect("Nutshell build adapter");
         assert_eq!(nutshell.repository, "cashubtc/nutshell");

@@ -28,6 +28,7 @@ fn successful_candidate_becomes_a_workspace_catalog_version() {
             .expect("candidate grant");
     }
     let candidate = CandidateBuild {
+        diagnostics: None,
         api_version: CANDIDATE_BUILD_API_VERSION.into(),
         id: "nutshell-pr-1095".into(),
         workspace_id: "alpha".into(),
@@ -37,6 +38,7 @@ fn successful_candidate_becomes_a_workspace_catalog_version() {
         pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
         resource_name: "candidate-aabbccdd".into(),
         request_digest: "sha256:request".into(),
+        provenance: None,
         build_features: [
             proofstorm_core::CatalogFeature::MintManagementRpc,
             proofstorm_core::CatalogFeature::NativeCliEntrypoints,

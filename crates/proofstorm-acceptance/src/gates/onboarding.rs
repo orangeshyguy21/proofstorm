@@ -131,7 +131,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             .difference(&selected)
             .map(String::as_str)
             .collect::<BTreeSet<_>>()
-            == BTreeSet::from(["cdk-mint-management"]),
+            == BTreeSet::from(["cdk-mint"]),
         "MCP fetched unexpected images"
     );
     let status = context.cli(&["status", "onboarding-mcp"])?;

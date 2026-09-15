@@ -5,6 +5,9 @@ use anyhow::{Result, bail};
 use crate::GateContext;
 
 pub mod agents;
+mod candidate_isolation;
+pub mod candidates;
+mod candidates_nutshell;
 pub mod cashu_double_spend;
 pub mod cdk_bdk_stress;
 pub mod cdk_cln;
@@ -42,6 +45,15 @@ pub const NAMES: &[&str] = &[
     "smoke",
     "runtime-lifecycle",
     "mcp-surface",
+    "candidate-build-isolation",
+    "candidate-coco",
+    "candidate-cdk-cli",
+    "candidate-nutshell-wallet",
+    "candidate-nutshell",
+    "candidate-cdk-modes",
+    "candidate-cdk",
+    "candidate-cdk-ldk",
+    "candidate-cdk-bdk",
     "onboarding",
     "gui",
     "cli-progress",
@@ -87,6 +99,15 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "smoke" => smoke::run(context),
         "runtime-lifecycle" => runtime_lifecycle::run(context),
         "mcp-surface" => surface::run(context),
+        "candidate-build-isolation" => candidate_isolation::run(context),
+        "candidate-coco" => candidates::run(context, "cocod-wallet"),
+        "candidate-cdk-cli" => candidates::run(context, "cdk-cli-wallet"),
+        "candidate-nutshell-wallet" => candidates::run(context, "nutshell-wallet"),
+        "candidate-nutshell" => candidates::run(context, "nutshell"),
+        "candidate-cdk-modes" => candidates::run_cdk_modes(context),
+        "candidate-cdk" => candidates::run(context, "cdk"),
+        "candidate-cdk-ldk" => candidates::run(context, "cdk-ldk"),
+        "candidate-cdk-bdk" => candidates::run(context, "cdk-bdk"),
         "onboarding" => onboarding::run(context),
         "gui" => gui::run(context),
         "cli-progress" => progress::run(context),

@@ -1,3 +1,7 @@
+// The historical registry name is retained for the existing immutable artifact.
+// All CDK mint presets use this daemon with LDK, BDK and PostgreSQL support.
+pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
@@ -30,6 +34,27 @@ pub enum SupportLifecycle {
     Supported,
     Deprecated,
     Experimental,
+}
+
+/// Catalog origin is independent of release stability or compatibility.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogOrigin {
+    BuiltIn,
+    Candidate,
+}
+
+impl CatalogEntry {
+    #[must_use]
+    pub const fn origin(&self) -> CatalogOrigin {
+        if self.source.is_some() {
+            CatalogOrigin::Candidate
+        } else {
+            CatalogOrigin::BuiltIn
+        }
+    }
 }
 
 #[derive(
@@ -407,7 +432,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+            CDK_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::PersistentState,
@@ -452,7 +477,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+            CDK_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -492,7 +517,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+            CDK_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -713,10 +738,9 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         }
         let encoded = match entry.id.as_str() {
             "bitcoin-core" => include_str!("../../../docker/bitcoin/bitcoin-31.1-provenance.json"),
-            "cdk" | "cdk-bdk" => {
-                include_str!("../../../docker/mint/cdk-management-provenance.json")
+            "cdk" | "cdk-bdk" | "cdk-ldk" => {
+                include_str!("../../../docker/mint/cdk-ldk-management-provenance.json")
             }
-            "cdk-ldk" => include_str!("../../../docker/mint/cdk-ldk-management-provenance.json"),
             _ => continue,
         };
         let provenance: BuildProvenance =

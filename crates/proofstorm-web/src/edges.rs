@@ -1,5 +1,5 @@
 use crate::{
-    canvas_model::{self, CanvasNode, Positions},
+    canvas_model::{CanvasNode, Positions},
     relationships::{self, Edge, EdgeKind},
 };
 use leptos::prelude::*;
@@ -17,11 +17,7 @@ pub fn ObservedEdge(
                 let p = positions.get();
                 let from = items.iter().find(|n| n.id == edge.from)?;
                 let to = items.iter().find(|n| n.id == edge.to)?;
-                Some(relationships::geometry(
-                    canvas_model::world_position(from, &p),
-                    canvas_model::world_position(to, &p),
-                    edge.lane,
-                ))
+                Some(relationships::node_geometry(from, to, &p, edge.lane))
             })
             .unwrap_or_default()
     });
@@ -48,11 +44,18 @@ pub fn ObservedEdge(
                 <path class="channel-local" pathLength="100" d=move ||geometry.get().path stroke-dasharray=move ||{let c=channel.get();format!("{} 100",percent(c.1,c.0))} />
                 <path class="channel-remote" pathLength="100" d=move ||geometry.get().path stroke-dasharray=move ||{let c=channel.get();let remote=percent(c.2,c.0);format!("0 {} {} 100",100.0-remote,remote)} />
             </Show>
+            <Show when=move ||matches!(amounts.get(),Some(EdgeKind::BitcoinPeer))>
+                <path class="connection bitcoin-peer-path" d=move ||geometry.get().path />
+            </Show>
             <Show when=move ||matches!(amounts.get(),Some(EdgeKind::Holding{..}))>
                 <path class="holding-path" d=move ||geometry.get().path />
             </Show>
             <path class="edge-hit" d=move ||geometry.get().path role="button" tabindex="0"
-                aria-label=move ||data.get().map(|e|format!("Inspect {} to {} {}",e.from,e.to,if matches!(e.kind,EdgeKind::Channel{..}){format!("channel {}",e.lane+1)}else{"holdings".into()}))
+                aria-label=move ||data.get().map(|e|{
+                    let items=nodes.get();
+                    let name=|id: &str|items.iter().find(|n|n.id==id).map_or_else(||id.to_owned(),|n|if n.is_embedded(){format!("{} in {}",n.name,n.owner)}else{n.name.clone()});
+                    format!("Inspect {} to {} {}",name(&e.from),name(&e.to),if matches!(e.kind,EdgeKind::Channel{..}){format!("channel {}",e.lane+1)}else if matches!(e.kind,EdgeKind::BitcoinPeer){"Bitcoin peer connection".into()}else{"holdings".into()})
+                })
                 on:pointerdown=|event|event.stop_propagation() on:click=move |_|inspect()
                 on:keydown=move |event|{if matches!(event.key().as_str(),"Enter"|" "){event.prevent_default();inspect();}} />
         </g>

@@ -56,6 +56,47 @@ async fn unshipped_or_mutable_images_fail_before_home_or_docker_access() {
 }
 
 #[test]
+fn renamed_mint_repositories_preserve_saved_locks_only_for_shipped_digests() {
+    let home = tempfile::tempdir().unwrap();
+    let installation = fixture_installation(home.path());
+    for (current, previous) in [
+        ("cdk-mint", "cdk-ldk-mint-management"),
+        ("nutshell-mint", "nutshell-mint-management"),
+    ] {
+        let current_prefix = format!("proofstorm-registry.localhost:5000/{current}@");
+        let current_image = images()
+            .into_iter()
+            .find(|image| image.starts_with(&current_prefix))
+            .unwrap();
+        let previous_image = current_image.replacen(current, previous, 1);
+        let mut lock = sample_lock();
+        lock.entries[0].image.clone_from(&previous_image);
+        let selected = selected_images(&installation, &lock).unwrap();
+        assert!(selected.contains(&previous_image));
+        assert!(!images().contains(&previous_image));
+        assert_eq!(
+            source(&previous_image).unwrap(),
+            previous_image.replace(
+                "proofstorm-registry.localhost:5000",
+                "ghcr.io/orangeshyguy21/proofstorm"
+            )
+        );
+
+        lock.entries[0].image = format!(
+            "proofstorm-registry.localhost:5000/{previous}@sha256:{}",
+            "a".repeat(64)
+        );
+        assert!(selected_images(&installation, &lock).is_err());
+        lock.entries[0].image = previous_image.replace(
+            "proofstorm-registry.localhost:5000",
+            "another-registry:5000",
+        );
+        assert!(selected_images(&installation, &lock).is_err());
+    }
+    assert!(fs::read_dir(home.path()).unwrap().next().is_none());
+}
+
+#[test]
 fn public_sources_preserve_every_shipped_digest() {
     for image in images() {
         let public = source(&image).unwrap();
@@ -67,6 +108,41 @@ fn public_sources_preserve_every_shipped_digest() {
     }
     assert!(source("example.org/image:latest").is_err());
     assert!(source("example.org/image@sha256:bad").is_err());
+}
+
+#[test]
+fn candidate_images_stay_in_the_owning_registry_for_legacy_and_current_locks() {
+    let home = tempfile::tempdir().unwrap();
+    let installation = fixture_installation(home.path());
+    let mut lock = sample_lock();
+    lock.entries[0].source = Some(proofstorm_core::CandidateSource {
+        candidate_id: "test".into(),
+        pull_request_url: "https://github.com/cashubtc/cdk/pull/1".into(),
+        repository: "https://github.com/cashubtc/cdk.git".into(),
+        commit_sha: "a".repeat(40),
+        provenance: None,
+    });
+    for registry in [
+        "proofstorm-registry.localhost".to_owned(),
+        installation.registry_name(),
+    ] {
+        for path in ["candidates", "proofstorm-candidates"] {
+            lock.entries[0].image = format!("{registry}:5000/{path}/cdk@sha256:{}", "b".repeat(64));
+            assert!(
+                selected_images(&installation, &lock)
+                    .unwrap()
+                    .contains(&lock.entries[0].image)
+            );
+        }
+    }
+    lock.entries[0].image = format!(
+        "another-installation:5000/candidates/cdk@sha256:{}",
+        "b".repeat(64)
+    );
+    assert!(selected_images(&installation, &lock).is_err());
+    lock.entries[0].image = "proofstorm-registry.localhost:5000/candidates/cdk:latest".into();
+    assert!(selected_images(&installation, &lock).is_err());
+    assert!(fs::read_dir(home.path()).unwrap().next().is_none());
 }
 
 #[test]

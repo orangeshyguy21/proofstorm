@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:237b6e7e7247354a872b21d16606e09d3edae87b7b49d2ef168401175a808973",
+  "catalog_digest": "sha256:5f91005c6964f33c2b0b2fb4c695b9adc07f93a02dd1619515636a86461c46af",
   "entries": [
     {
       "implementation": "bitcoin-core",
@@ -78,7 +78,7 @@
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd/0.18/v1",
       "config_schema_digest": "sha256:92c3b69fd7d2b84b17fc3c9c5a200b9c18bae0cbe2f472ce32ae596e24aa3dae",
-      "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
       "fields": {
         "contact_email": {
           "classification": "agent_authorable",
@@ -312,7 +312,7 @@
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd-bdk/0.18/v1",
       "config_schema_digest": "sha256:aed34da9bfba6516c60a11354f1e42ecf46b92ea0b8e05e24389ce23fe8dfbba",
-      "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
       "fields": {
         "bdk_mnemonic": {
           "classification": "runtime_policy",
@@ -569,7 +569,7 @@
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd-ldk/0.18/v1",
       "config_schema_digest": "sha256:3ba4589673b0da6165027081ba43e70983b1a8da6a248114a63d3e0fa408515d",
-      "image": "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
       "fields": {
         "chain_backend_credentials": {
           "classification": "runtime_policy",
@@ -1170,7 +1170,7 @@
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
       "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
-      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
       "fields": {
         "auth_max_blind_tokens": {
           "classification": "agent_authorable",
@@ -1496,7 +1496,7 @@
       "support_lifecycle": "preferred",
       "config_version": "nutshell-wallet/0.20/v1",
       "config_schema_digest": "sha256:c3c3c1cfd04bf63de992267beabe8d2b1927575da11d8508bbe865957115281f",
-      "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",

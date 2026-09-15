@@ -17,6 +17,11 @@ pub fn CellPanel(
     telemetry: RwSignal<Option<SystemView>>,
     drawer: RwSignal<&'static str>,
 ) -> impl IntoView {
+    provide_context(crate::inspector::InspectorExpansion {
+        selected: selected_component,
+        cell,
+        open: RwSignal::new(Default::default()),
+    });
     view! {
         <Show when=move || cell.get().is_some()>
             <section class="cell-workspace">

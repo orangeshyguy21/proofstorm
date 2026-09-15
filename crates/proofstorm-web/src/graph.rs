@@ -52,27 +52,22 @@ pub fn Graph(
     let save_error = RwSignal::new(false);
     let drag = RwSignal::new(None::<Drag>);
     let suppress_click = RwSignal::new(false);
+    let inventory = StoredValue::new(canvas_model::CanvasInventory::default());
+    let pending_fit = StoredValue::new(false);
+    let dragging = Memo::new(move |_| drag.get().is_some());
     let fit = move || {
         let items = nodes.get_untracked();
         let p = positions.get_untracked();
         let (mut left, mut top, width, height) = canvas_model::bounds(&items, &p);
         let mut right = left + width;
         let mut bottom = top + height;
-        for edge in relationships
-            .get_untracked()
-            .iter()
-            .filter(|e| !matches!(e.kind, crate::relationships::EdgeKind::Declared))
-        {
+        for edge in relationships.get_untracked().iter() {
             if let Some((from, to)) = items
                 .iter()
                 .find(|n| n.id == edge.from)
                 .zip(items.iter().find(|n| n.id == edge.to))
             {
-                let g = crate::relationships::geometry(
-                    canvas_model::world_position(from, &p),
-                    canvas_model::world_position(to, &p),
-                    edge.lane,
-                );
+                let g = crate::relationships::node_geometry(from, to, &p, edge.lane);
                 left = left.min(g.extent.0 - 20.0);
                 right = right.max(g.extent.0 + 20.0);
                 top = top.min(g.extent.1 - 20.0);
@@ -111,6 +106,13 @@ pub fn Graph(
             cell.layout_id.as_deref().unwrap_or(&cell.id)
         );
         let changed = key != storage_key.get_untracked();
+        let mut previous = inventory.get_value();
+        let added = previous.observe(&key, &current);
+        inventory.set_value(previous);
+        if added {
+            pending_fit.set_value(true);
+        }
+        let dragging = dragging.get();
         let mut next = if changed {
             web_sys::window()
                 .and_then(|w| w.local_storage().ok().flatten())
@@ -126,8 +128,13 @@ pub fn Graph(
             positions.set(next);
         }
         if changed {
+            pending_fit.set_value(false);
             storage_key.set(key);
             interacted.set(false);
+            fitted_observations.set(sampled);
+            fit();
+        } else if pending_fit.get_value() && !dragging {
+            pending_fit.set_value(false);
             fitted_observations.set(sampled);
             fit();
         } else if sampled && !fitted_observations.get_untracked() {
@@ -188,9 +195,7 @@ pub fn Graph(
                             let items=nodes.get();let p=positions.get();
                             relationships.get().into_iter().find(|l|l.id==id).and_then(|link|{
                                 let from=items.iter().find(|n|n.id==link.from)?;let to=items.iter().find(|n|n.id==link.to)?;
-                                let a=canvas_model::world_position(from,&p);let b=canvas_model::world_position(to,&p);
-                                let (sx,ex)=if b.0>=a.0 {(a.0+260.0,b.0)}else{(a.0,b.0+260.0)};let mid=f64::midpoint(sx,ex);
-                                Some(format!("M {sx} {} C {mid} {}, {mid} {}, {ex} {}",a.1+72.0,a.1+72.0,b.1+72.0,b.1+72.0))
+                                Some(crate::relationships::node_geometry(from,to,&p,link.lane).path)
                             }).unwrap_or_default()
                         } />}
                     } />

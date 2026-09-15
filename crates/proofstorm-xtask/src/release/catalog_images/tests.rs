@@ -1,15 +1,43 @@
 use super::*;
 
 #[test]
+fn current_catalog_has_one_cdk_mint_recipe_and_old_receipts_remain_readable() {
+    assert_eq!(
+        RECIPES
+            .iter()
+            .filter(|name| name.ends_with("-mint") && name.starts_with("cdk"))
+            .copied()
+            .collect::<Vec<_>>(),
+        ["cdk-mint"]
+    );
+    assert!(recipe("cdk-mint-management").is_ok());
+    assert!(
+        prepare(
+            Path::new("missing"),
+            Path::new("missing-output"),
+            "cdk-mint-management",
+            "linux/arm64",
+            None
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn probe_outputs_match_reviewed_versions_and_the_cdk_rpc_binary_name() {
     for (name, output) in [
         ("bitcoin-core", "Bitcoin Core version v31.1.0\nCopyright\n"),
         ("cdk-cli-wallet", "cdk-cli 0.18.0\n"),
         ("cocod-wallet", "0.0.17\n"),
         (
+            "nutshell-mint",
+            "Nutshell, version 0.20.3\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
+        ),
+        (
             "nutshell-mint-management",
             "Nutshell, version 0.20.3\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
         ),
+        ("cdk-mint", "cdk-mint-rpc 0.18.0\ncdk-mintd 0.18.0\n"),
         (
             "cdk-mint-management",
             "cdk-mint-rpc 0.18.0\ncdk-mintd 0.18.0\n",
@@ -78,6 +106,42 @@ fn receipt() -> Receipt {
         publication: Publication::Prepared,
         image: None,
         release_ready: false,
+    }
+}
+
+#[test]
+fn mint_image_copies_allow_reviewed_renames_and_keep_historical_receipts_valid() {
+    for (old, current) in [
+        ("cdk-ldk-mint-management", "cdk-mint"),
+        ("nutshell-mint-management", "nutshell-mint"),
+    ] {
+        for destination in [old, current] {
+            let mut copy = receipt();
+            copy.repository = destination.into();
+            copy.tag = format!("{NAMESPACE}/{destination}:upload-{}", copy.publication_id);
+            copy.input = Input::Copy {
+                image: format!("{NAMESPACE}/{old}@sha256:{}", "b".repeat(64)),
+            };
+            copy.validate().unwrap();
+            let saved = serde_json::to_string(&copy).unwrap();
+            let recovered: Receipt = serde_json::from_str(&saved).unwrap();
+            recovered.validate().unwrap();
+            assert_eq!(serde_json::to_string(&recovered).unwrap(), saved);
+        }
+    }
+    // The old non-LDK image must not become the consolidated CDK image.
+    for source in [
+        "cdk-mint-management",
+        "nutshell-mint-management",
+        "cdk-cli-wallet",
+    ] {
+        let mut copy = receipt();
+        copy.repository = "cdk-mint".into();
+        copy.tag = format!("{NAMESPACE}/cdk-mint:upload-{}", copy.publication_id);
+        copy.input = Input::Copy {
+            image: format!("{NAMESPACE}/{source}@sha256:{}", "b".repeat(64)),
+        };
+        assert!(copy.validate().is_err());
     }
 }
 

@@ -208,6 +208,12 @@ enum GuiCommand {
         #[arg(long, value_name = "PATH")]
         project: Option<PathBuf>,
     },
+    /// Print a sign-in link to open in any browser, without opening one.
+    Link {
+        /// Project folder; defaults to the current directory.
+        #[arg(long, value_name = "PATH")]
+        project: Option<PathBuf>,
+    },
     /// Start the GUI service without a browser.
     Start,
     /// Stop the GUI service; cells keep running.
@@ -481,14 +487,18 @@ impl Command {
                 {
                     return Err(clap::Error::raw(
                         clap::error::ErrorKind::ArgumentConflict,
-                        "--project applies to gui open",
+                        "--project applies to gui open or gui link",
                     ));
                 }
+                let no_open = matches!(command, Some(GuiCommand::Link { .. }));
                 match command {
                     Some(GuiCommand::Stop) => Action::Stop,
                     Some(GuiCommand::Status) => Action::GuiStatus,
                     Some(GuiCommand::Start) => Action::GuiStart { allow_development },
-                    Some(GuiCommand::Open { project: selected }) => {
+                    Some(
+                        GuiCommand::Open { project: selected }
+                        | GuiCommand::Link { project: selected },
+                    ) => {
                         if project.is_some() && selected.is_some() {
                             return Err(clap::Error::raw(
                                 clap::error::ErrorKind::ArgumentConflict,
@@ -498,7 +508,7 @@ impl Command {
                         Action::Gui {
                             project: selected.or(project).unwrap_or_else(|| PathBuf::from(".")),
                             allow_development,
-                            no_open: false,
+                            no_open,
                         }
                     }
                     None => Action::Gui {

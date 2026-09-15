@@ -119,6 +119,11 @@ async fn handle(
         return Ok(error(StatusCode::METHOD_NOT_ALLOWED, "read_only"));
     }
     match request.uri().path() {
+        "/v1/catalog" | "/v1/candidates" | "/v1/candidate" => Ok(catalog_route(
+            &cells,
+            request.uri().path(),
+            request.uri().query().unwrap_or_default(),
+        )),
         "/v1/events" => Ok(event_stream(cells, events, telemetry, streams)),
         "/v1/system" => {
             if !can_observe(&cells) {
@@ -146,27 +151,9 @@ async fn handle(
             ) else {
                 return Ok(error(StatusCode::BAD_REQUEST, "invalid_query"));
             };
-            match cells.environment_read(&query, 24 * 1024).await {
-                Ok(view) => Ok(json(StatusCode::OK, &view)),
-                Err(e) => {
-                    eprintln!("environment read failed: {e}");
-                    let code = e
-                        .details
-                        .as_ref()
-                        .and_then(|v| v["code"].as_str())
-                        .unwrap_or("environment_unavailable");
-                    let status = if code == "access_denied" {
-                        StatusCode::FORBIDDEN
-                    } else {
-                        match e.kind {
-                            crate::ErrorKind::Invalid => StatusCode::BAD_REQUEST,
-                            crate::ErrorKind::Missing => StatusCode::NOT_FOUND,
-                            crate::ErrorKind::Failure => StatusCode::SERVICE_UNAVAILABLE,
-                        }
-                    };
-                    Ok(error(status, code))
-                }
-            }
+            Ok(read_response(
+                cells.environment_read(&query, 24 * 1024).await,
+            ))
         }
         "/v1/observer" => {
             if cells
@@ -378,6 +365,49 @@ fn event_stream(
             .insert(name, hyper::header::HeaderValue::from_static(value));
     }
     response
+}
+
+fn catalog_route(cells: &Cells, path: &str, query: &str) -> Response<Body> {
+    match path {
+        "/v1/catalog" => read_response(crate::catalog::http_read(cells, query)),
+        "/v1/candidates" => {
+            read_response(crate::catalog::http_selectors(query).and_then(|query| {
+                crate::candidate::directory(
+                    &cells.store,
+                    &cells.workspace,
+                    &cells.principal,
+                    &query,
+                    32 * 1024,
+                )
+            }))
+        }
+        _ => read_response(crate::catalog::http_selectors(query).and_then(|query| {
+            crate::candidate::read(&cells.store, &cells.workspace, &cells.principal, &query)
+        })),
+    }
+}
+
+fn read_response<T: serde::Serialize>(result: Result<T, crate::Error>) -> Response<Body> {
+    match result {
+        Ok(value) => json(StatusCode::OK, &value),
+        Err(e) => {
+            let code = e
+                .details
+                .as_ref()
+                .and_then(|v| v["code"].as_str())
+                .unwrap_or("read_unavailable");
+            let status = if code == "access_denied" {
+                StatusCode::FORBIDDEN
+            } else {
+                match e.kind {
+                    crate::ErrorKind::Invalid => StatusCode::BAD_REQUEST,
+                    crate::ErrorKind::Missing => StatusCode::NOT_FOUND,
+                    crate::ErrorKind::Failure => StatusCode::SERVICE_UNAVAILABLE,
+                }
+            };
+            error(status, code)
+        }
+    }
 }
 
 #[cfg(test)]

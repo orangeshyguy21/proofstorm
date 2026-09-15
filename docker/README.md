@@ -55,9 +55,10 @@ just catalog-image publish "$scratch/wallet" \
 
 Select `linux/amd64` or `linux/arm64` explicitly. Buildx must support that platform
 and the host must be able to execute its native probes (directly or by emulation).
-Available recipes: `bitcoin-core`, `cdk-mint-management`,
-`cdk-ldk-mint-management`, `nutshell-mint-management`, `cdk-cli-wallet`, and
-`cocod-wallet`. Controller builds remain in the existing
+Available recipes: `bitcoin-core`, `cdk-mint`, `nutshell-mint`, `cdk-cli-wallet`, and
+`cocod-wallet`. The `cdk-mint` image serves all
+three CDK mint presets; backend and storage configuration choose what runs.
+Historical standard-image receipts remain readable. Controller builds remain in the existing
 [`release-controller-*` flow](../scripts/RELEASING.md).
 
 Builds retain a clean source snapshot, recipe hash, exact image ID, source label,
@@ -81,6 +82,13 @@ a public GHCR digest reference is also accepted. There is no implicit port 5111
 or development-cluster fallback. Copies preserve the complete manifest digest,
 including both architectures when present. Every runnable manifest/config is
 hash-checked and its layers checked for availability before and after upload.
+
+New copies of `cdk-ldk-mint-management` and `nutshell-mint-management` automatically
+use the current names `cdk-mint` and `nutshell-mint`. Existing receipts keep their
+recorded destinations. The old non-LDK `cdk-mint-management` image is not a source
+for the consolidated mint image.
+Saved cell locks can still use the previous repository names when their exact
+digests match the shipped images; new cells use the shorter names.
 
 Only `publish` writes to GHCR, using Docker's existing package-write login and a
 unique `upload-*` tag. Existing version/development tags are not overwritten.

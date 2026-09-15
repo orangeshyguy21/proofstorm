@@ -144,22 +144,31 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
 
     assert_resource_contract(&mut client);
 
-    let catalog = client
-        .call_response("catalog_list", json!({}))
-        .expect("list catalog");
-    let structured = catalog
-        .pointer("/result/structuredContent")
-        .expect("structured content");
-    assert_eq!(
-        expect::array(structured, "/items")
-            .expect("catalog items")
-            .len(),
-        15
-    );
-    expect::within_bytes(structured, 8 * 1024, "catalog structured content")
-        .expect("catalog fits the agent budget");
-    expect::within_bytes(&catalog, 20 * 1024, "catalog wire response")
-        .expect("catalog wire response fits");
+    let mut cursor = Value::Null;
+    let mut identities = std::collections::BTreeSet::new();
+    loop {
+        let catalog = client
+            .call_response("catalog_list", json!({"cursor":cursor}))
+            .expect("list catalog");
+        let structured = catalog
+            .pointer("/result/structuredContent")
+            .expect("structured content");
+        assert_eq!(structured["matched_count"], 15);
+        let items = expect::array(structured, "/items").expect("catalog items");
+        assert!(!items.is_empty());
+        for item in items {
+            assert!(identities.insert((item["id"].to_string(), item["version"].to_string())));
+        }
+        expect::within_bytes(structured, 8 * 1024, "catalog structured content")
+            .expect("catalog fits the agent budget");
+        expect::within_bytes(&catalog, 20 * 1024, "catalog wire response")
+            .expect("catalog wire response fits");
+        cursor = structured["next_cursor"].clone();
+        if cursor.is_null() {
+            break;
+        }
+    }
+    assert_eq!(identities.len(), 15);
 }
 
 #[test]

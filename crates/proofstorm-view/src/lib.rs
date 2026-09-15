@@ -382,3 +382,10 @@ pub struct ObserverStatus {
     pub recorded_operations: u64,
     pub error: Option<String>,
 }
+
+mod catalog;
+pub use catalog::*;
+mod directory;
+pub use directory::*;
+mod candidate;
+pub use candidate::*;

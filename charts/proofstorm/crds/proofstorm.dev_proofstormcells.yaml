@@ -361,6 +361,131 @@ spec:
                               type: string
                             commit_sha:
                               type: string
+                            provenance:
+                              nullable: true
+                              properties:
+                                baseline_digest:
+                                  type: string
+                                builder_image:
+                                  type: string
+                                input_digest:
+                                  type: string
+                                platform:
+                                  type: string
+                                profile:
+                                  properties:
+                                    baseline:
+                                      type: string
+                                    catalog_implementations:
+                                      description: |-
+                                        Runtime presets served by this artifact. Empty in historical profiles,
+                                        which remain restricted to the implementation requested at admission.
+                                      items:
+                                        type: string
+                                      type: array
+                                    cpu_limit_millicores:
+                                      format: uint32
+                                      minimum: 0.0
+                                      type: integer
+                                    deadline_seconds:
+                                      format: uint32
+                                      minimum: 0.0
+                                      type: integer
+                                    dockerfile:
+                                      type: string
+                                    features:
+                                      items:
+                                        enum:
+                                        - native_cli
+                                        - native_cli_entrypoints
+                                        - mint_management_rpc
+                                        - regtest
+                                        - persistent_state
+                                        - bolt11
+                                        - bolt12
+                                        - onchain
+                                        - clear_auth
+                                        - blind_auth
+                                        - sqlite
+                                        - postgres
+                                        - redis_cache
+                                        - oidc_provider
+                                        - wallet_operations
+                                        type: string
+                                      type: array
+                                    id:
+                                      type: string
+                                    memory_limit_mib:
+                                      format: uint32
+                                      minimum: 0.0
+                                      type: integer
+                                    notes:
+                                      items:
+                                        type: string
+                                      type: array
+                                    platforms:
+                                      items:
+                                        type: string
+                                      type: array
+                                    prepare:
+                                      description: Trusted, versioned preparation recipe copied into the immutable build record.
+                                      type: string
+                                    repository:
+                                      type: string
+                                    version:
+                                      format: uint32
+                                      minimum: 0.0
+                                      type: integer
+                                  required:
+                                  - baseline
+                                  - cpu_limit_millicores
+                                  - deadline_seconds
+                                  - dockerfile
+                                  - features
+                                  - id
+                                  - memory_limit_mib
+                                  - notes
+                                  - platforms
+                                  - prepare
+                                  - repository
+                                  - version
+                                  type: object
+                                profile_digest:
+                                  type: string
+                                requested_source:
+                                  properties:
+                                    sha:
+                                      type: string
+                                    tag:
+                                      type: string
+                                    type:
+                                      enum:
+                                      - pull_request
+                                      - commit
+                                      - tag
+                                      type: string
+                                    url:
+                                      type: string
+                                  required:
+                                  - type
+                                  type: object
+                                schema_version:
+                                  format: uint32
+                                  minimum: 0.0
+                                  type: integer
+                                source_image:
+                                  type: string
+                              required:
+                              - baseline_digest
+                              - builder_image
+                              - input_digest
+                              - platform
+                              - profile
+                              - profile_digest
+                              - requested_source
+                              - schema_version
+                              - source_image
+                              type: object
                             pull_request_url:
                               type: string
                             repository:

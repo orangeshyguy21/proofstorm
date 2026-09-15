@@ -329,6 +329,14 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
             "attachment not repeatable/project-scoped"
         );
         let entry = &dry["attachment"]["entry"];
+        ensure!(
+            if agent == "codex" {
+                entry["required"] == false
+            } else {
+                entry.get("required").is_none()
+            },
+            "{agent} attachment must not require Proofstorm for agent startup"
+        );
         let (program, args) = if agent == "opencode" {
             let args = entry["command"].as_array().context("managed command")?;
             (&args[0], &args[1..])

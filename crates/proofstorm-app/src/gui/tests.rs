@@ -594,3 +594,132 @@ fn startup_progress_only_relays_complete_known_status_lines() {
     assert_eq!(super::startup_progress(b"proofstorm-gui-startup:Verifying GUI server files\nproofstorm-gui-startup:Checking runtime ownership\n"),
         Some("Checking runtime ownership"));
 }
+
+#[test]
+fn sign_in_links_roundtrip_project_paths_and_keep_credentials_in_the_fragment() {
+    let record = Record {
+        format_version: 1,
+        installation_id: "fixture".into(),
+        instance: "a".repeat(32),
+        token: "b".repeat(64),
+        executable: "/fixture".into(),
+        build_sha256: None,
+        pid: 1,
+        port: 1234,
+    };
+    let project = Path::new("/tmp/project with spaces & # ü");
+    let link = sign_in_url(&record, project).unwrap();
+    let (base, fragment) = link.split_once('#').unwrap();
+    assert_eq!(base, "http://127.0.0.1:1234/");
+    let parameters: std::collections::BTreeMap<String, String> =
+        serde_urlencoded::from_str(fragment).unwrap();
+    assert_eq!(parameters["session"], record.token);
+    assert_eq!(parameters["project"], project.to_str().unwrap());
+}
+
+#[tokio::test]
+async fn older_gui_restarts_under_the_control_lock_but_current_and_busy_guis_are_preserved() {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    for (old, busy) in [(false, false), (true, false), (true, true)] {
+        let root = tempfile::tempdir().unwrap();
+        let installation = Installation::initialize(&root.path().join("home"), None, None).unwrap();
+        let executable = root.path().join("replacement");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\necho replacement-started >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let verified = crate::artifacts::Verified {
+            installation,
+            root: root.path().into(),
+            executable: executable.clone(),
+            executable_sha256: "a".repeat(64),
+            allow_development: true,
+            controller_sha256: None,
+        };
+        let record = Record {
+            format_version: 1,
+            installation_id: verified.installation.id.clone(),
+            instance: "a".repeat(32),
+            token: "b".repeat(64),
+            executable,
+            build_sha256: Some(if old { "c" } else { "a" }.repeat(64)),
+            pid: std::process::id(),
+            port: listener.local_addr().unwrap().port(),
+        };
+        state::save(&verified.installation.home.join(RECORD), &record).unwrap();
+        let lifetime =
+            state::lease(&verified.installation.home, "gui-runtime-lock.sqlite3").unwrap();
+        let _control =
+            state::lease(&verified.installation.home, "gui-control-lock.sqlite3").unwrap();
+        let owned = record.clone();
+        let server = tokio::spawn(async move {
+            let count = if old { 3 } else { 1 };
+            for i in 0..count {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let stopping = old && i == 2;
+                assert!(line.contains(if stopping {
+                    "/v1/gui/stop"
+                } else {
+                    "/v1/gui/health"
+                }));
+                let mut headers = String::new();
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    headers.push_str(&line);
+                }
+                assert!(headers.contains(&owned.token));
+                let (status, body) = if stopping {
+                    (if busy { "409 Conflict" } else { "200 OK" }, "{}".into())
+                } else {
+                    ("200 OK", owned.health().to_string())
+                };
+                reader.get_mut().write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            lifetime
+        });
+        // In the replacement case, release the lifetime lease when stop completes.
+        let releaser = tokio::spawn(async move {
+            let lease = server.await.unwrap();
+            if old && !busy {
+                drop(lease);
+                None
+            } else {
+                Some(lease)
+            }
+        });
+        let result =
+            tokio::time::timeout(Duration::from_secs(5), ensure_service(&verified, &|_| {}))
+                .await
+                .unwrap();
+        let _lease = releaser.await.unwrap();
+        let current =
+            state::record(&verified.installation.home, &verified.installation.id).unwrap();
+        if !old {
+            assert!(result.unwrap().1);
+            assert_eq!(current.unwrap().instance, record.instance);
+        } else if busy {
+            assert!(result.err().unwrap().to_string().contains("busy"));
+            assert_eq!(current.unwrap().instance, record.instance);
+        } else {
+            assert!(
+                result
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("replacement-started")
+            );
+            assert!(current.is_none() || current.unwrap().instance != record.instance);
+        }
+    }
+}
