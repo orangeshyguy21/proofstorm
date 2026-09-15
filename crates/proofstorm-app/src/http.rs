@@ -44,6 +44,7 @@ async fn serve_inner(
             "the environment API only serves local loopback addresses",
         ));
     }
+    let connections = crate::gui::connections::Connections::new();
     let observer = crate::observer::Observer::start(cells.clone());
     let events = crate::events::Events::start(cells.clone(), observer.status.clone());
     let telemetry = crate::telemetry::Telemetry::start(cells.clone());
@@ -51,8 +52,8 @@ async fn serve_inner(
     let mut tasks = JoinSet::new();
     loop {
         tokio::select! {
-            _=tokio::signal::ctrl_c()=>return Ok(()),
-            ()=async { if let Some(session)=&managed { session.shutdown.notified().await; } else { std::future::pending::<()>().await; } }=>return Ok(()),
+            _=tokio::signal::ctrl_c()=>{ connections.shutdown().await; return Ok(()); },
+            ()=async { if let Some(session)=&managed { session.shutdown.notified().await; } else { std::future::pending::<()>().await; } }=>{ connections.shutdown().await; return Ok(()); },
             accepted=listener.accept(),if tasks.len()<16=> {
                 let (socket,_)=accepted.map_err(|e|Error::failure(e.to_string(),None))?;
                 let cells=cells.clone();
@@ -61,12 +62,14 @@ async fn serve_inner(
                 let telemetry=telemetry.receiver.clone();
                 let streams=streams.clone();
                 let managed=managed.clone();
+                let connections=connections.clone();
                 tasks.spawn(async move {
                     let service=service_fn(move |mut request| {
                         let (cells,status,events,telemetry,streams,managed)=(cells.clone(),status.clone(),events.clone(),telemetry.clone(),streams.clone(),managed.clone());
+                        let connections=connections.clone();
                         async move {
                             if let Some(session)=&managed {
-                                if let Some(mut response)=crate::gui::transport::route(&mut request,session.clone()).await {
+                                if let Some(mut response)=crate::gui::transport::route(&mut request,session.clone(),cells.clone(),connections).await {
                                     crate::gui::transport::secure(&mut response);
                                     return Ok::<_,Infallible>(response);
                                 }

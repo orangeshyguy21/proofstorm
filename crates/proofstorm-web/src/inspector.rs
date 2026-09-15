@@ -80,68 +80,107 @@ pub(crate) fn ComponentPanel(
 }
 #[component]
 pub(crate) fn ComponentDiagnostics(
-    component: ComponentView,
-    cell: EnvironmentCell,
+    component: Signal<ComponentView>,
+    cell: Signal<EnvironmentCell>,
 ) -> impl IntoView {
-    let id = component.id.clone();
-    let connection = component
-        .endpoints
-        .iter()
-        .find(|e| e.local_connection_supported)
-        .map(|e| {
-            format!(
-                "proofstorm connect {} {} {} --config connection.json",
-                cell.handle
-                    .as_ref()
-                    .map_or(cell.id.as_str(), |h| h.name.as_str()),
-                component.id,
-                e.name
-            )
-        });
-    let endpoint_summary = format!("{} available", component.endpoints.len());
-    let ready = component
-        .conditions
-        .iter()
-        .filter(|c| c.state == ComponentConditionState::True)
-        .count();
-    let health_summary = if component.conditions.is_empty() {
-        "No observations".into()
-    } else {
-        format!("{ready} of {} ready", component.conditions.len())
-    };
-    let resource_summary = if cell.resource_error.is_some() {
-        "Unavailable".into()
-    } else {
-        cell.resources.as_ref().map_or_else(
-            || "Not reported".into(),
-            |r| {
-                let workloads = r
-                    .workloads
-                    .iter()
-                    .filter(|w| w.component.as_deref() == Some(&id))
-                    .count();
-                let storage = r
-                    .storage
-                    .iter()
-                    .filter(|s| s.component.as_deref() == Some(&id))
-                    .count();
+    let initial_cell = cell.get_untracked();
+    let initial_component = component.get_untracked();
+    let id = StoredValue::new(initial_component.id.clone());
+    let connection = move || {
+        let component = component.get();
+        let cell = cell.get();
+        component
+            .endpoints
+            .iter()
+            .find(|e| {
+                e.local_connection_supported
+                    && component.kind != proofstorm_core::ComponentKind::Mint
+            })
+            .map(|e| {
                 format!(
-                    "{workloads} workload{} · {storage} storage volume{}",
-                    if workloads == 1 { "" } else { "s" },
-                    if storage == 1 { "" } else { "s" }
+                    "proofstorm connect {} {} {} --config connection.json",
+                    cell.handle
+                        .as_ref()
+                        .map_or(cell.id.as_str(), |h| h.name.as_str()),
+                    component.id,
+                    e.name
                 )
-            },
-        )
+            })
     };
+    let endpoint_summary = crate::connections::summary(
+        initial_cell.id.clone(),
+        initial_cell.layout_id.clone().unwrap_or_default(),
+        initial_component.id.clone(),
+        Signal::derive(move || component.get().endpoints.len()),
+    );
+    let mint_supported = move || {
+        let component = component.get();
+        component.kind == proofstorm_core::ComponentKind::Mint
+            && component
+                .endpoints
+                .iter()
+                .any(|e| e.name == "http" && e.local_connection_supported)
+    };
+    let health_summary = Signal::derive(move || {
+        let component = component.get();
+        let ready = component
+            .conditions
+            .iter()
+            .filter(|c| c.state == ComponentConditionState::True)
+            .count();
+        if component.conditions.is_empty() {
+            "No observations".into()
+        } else {
+            format!("{ready} of {} ready", component.conditions.len())
+        }
+    });
+    let resource_summary = Signal::derive(move || {
+        let cell = cell.get();
+        if cell.resource_error.is_some() {
+            "Unavailable".into()
+        } else {
+            cell.resources.as_ref().map_or_else(
+                || "Not reported".into(),
+                |r| {
+                    let id = id.get_value();
+                    let workloads = r
+                        .workloads
+                        .iter()
+                        .filter(|w| w.component.as_deref() == Some(&id))
+                        .count();
+                    let storage = r
+                        .storage
+                        .iter()
+                        .filter(|s| s.component.as_deref() == Some(&id))
+                        .count();
+                    format!(
+                        "{workloads} workload{} · {storage} storage volume{}",
+                        if workloads == 1 { "" } else { "s" },
+                        if storage == 1 { "" } else { "s" }
+                    )
+                },
+            )
+        }
+    });
     view! {<div class="component-diagnostics">
-        <InspectorSection title="Endpoints" summary=Signal::stored(endpoint_summary)>{component.endpoints.is_empty().then(|| view!{<p>"No endpoints"</p>})}
-        {component.endpoints.into_iter().map(|e| view!{<div class="endpoint"><strong>{e.name}</strong><code>{format!("{}:{}",e.cluster_host,e.port)}</code><small>{format!("{} · {}",e.transport,if e.local_connection_supported {"local connection available"} else {"cluster access"})}</small></div>}).collect_view()}
-        {connection.map(|command| view! {<small class="inspector-note">"Connect locally"</small><code class="connect-command">{command}</code>})}
+        <InspectorSection title="Connections" summary=endpoint_summary>
+            <Show when=mint_supported>
+                <crate::connections::MintConnection cell=initial_cell.id.clone() incarnation=initial_cell.layout_id.clone().unwrap_or_default() component=initial_component.id.clone() />
+            </Show>
+            <Show when=move || component.get().endpoints.is_empty()><p>"No endpoints"</p></Show>
+            {move || component.get().endpoints.into_iter().map(|e| view!{<div class="endpoint"><strong>{e.name}</strong><code>{format!("{}:{}",e.cluster_host,e.port)}</code><small>{format!("{} · {}",e.transport,if e.local_connection_supported {"local connection available"} else {"cluster access"})}</small></div>}).collect_view()}
+            {move || connection().map(|command| view! {<small class="inspector-note">"Connect locally"</small><code class="connect-command">{command}</code>})}
         </InspectorSection>
-        <InspectorSection title="Health checks" summary=Signal::stored(health_summary)>{component.conditions.is_empty().then(|| view!{<p>"No observations"</p>})}{component.conditions.into_iter().map(|c|view!{<div class="condition"><strong>{condition_title(c.condition_type)}</strong><span class="check-state">{match c.state { ComponentConditionState::True => "Ready", ComponentConditionState::False => "Not ready", ComponentConditionState::Unknown => "Unknown" }}</span>{(c.state != ComponentConditionState::True).then(||view!{<p>{c.message}</p>})}</div>}).collect_view()}
+        <InspectorSection title="Health checks" summary=health_summary>
+            <Show when=move || component.get().conditions.is_empty()><p>"No observations"</p></Show>
+            {move || component.get().conditions.into_iter().map(|c|view!{<div class="condition"><strong>{condition_title(c.condition_type)}</strong><span class="check-state">{match c.state { ComponentConditionState::True => "Ready", ComponentConditionState::False => "Not ready", ComponentConditionState::Unknown => "Unknown" }}</span>{(c.state != ComponentConditionState::True).then(||view!{<p>{c.message}</p>})}</div>}).collect_view()}
         </InspectorSection>
-        <InspectorSection title="Resources & limits" summary=Signal::stored(resource_summary)>{cell.resource_error.map(|_|view!{<p>"Resource requests unavailable."</p>})}
-        {cell.resources.map(|r|view!{<div>{r.workloads.into_iter().filter(|w|w.component.as_deref()==Some(&id)).map(|w|view!{<div class="demand"><strong>{w.name}" × "{w.replicas}</strong>{w.containers.into_iter().map(|c|view!{<small>{c.name}{format!(" · Reserved: {} · Maximum: {}",quantities(&c.requests),quantities(&c.limits))}</small>}).collect_view()}</div>}).collect_view()}{r.storage.into_iter().filter(|s|s.component.as_deref()==Some(&id)).map(|s|view!{<div class="demand"><strong>"Storage · "{s.name}</strong><small>{quantities(&s.requests)}</small></div>}).collect_view()}</div>})}
+        <InspectorSection title="Resources & limits" summary=resource_summary>
+            <Show when=move || cell.get().resource_error.is_some()><p>"Resource requests unavailable."</p></Show>
+            {move || cell.get().resources.map(|r| {
+                let id = id.get_value();
+                view!{<div>{r.workloads.into_iter().filter(|w|w.component.as_deref()==Some(&id)).map(|w|view!{<div class="demand"><strong>{w.name}" × "{w.replicas}</strong>{w.containers.into_iter().map(|c|view!{<small>{c.name}{format!(" · Reserved: {} · Maximum: {}",quantities(&c.requests),quantities(&c.limits))}</small>}).collect_view()}</div>}).collect_view()}{r.storage.into_iter().filter(|s|s.component.as_deref()==Some(&id)).map(|s|view!{<div class="demand"><strong>"Storage · "{s.name}</strong><small>{quantities(&s.requests)}</small></div>}).collect_view()}</div>}
+            })}
         </InspectorSection>
     </div>}
 }

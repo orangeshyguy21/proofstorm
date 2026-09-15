@@ -8,6 +8,8 @@ mod cell_view;
 #[cfg(target_arch = "wasm32")]
 mod client;
 #[cfg(target_arch = "wasm32")]
+mod connections;
+#[cfg(target_arch = "wasm32")]
 mod edges;
 #[cfg(target_arch = "wasm32")]
 mod freshness;

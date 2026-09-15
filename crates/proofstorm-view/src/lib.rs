@@ -389,3 +389,6 @@ mod directory;
 pub use directory::*;
 mod candidate;
 pub use candidate::*;
+
+mod local_connection;
+pub use local_connection::*;

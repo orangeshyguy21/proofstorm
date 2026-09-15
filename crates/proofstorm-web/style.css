@@ -346,3 +346,25 @@ tbody tr:hover { background: var(--hover); }
 .inspector-section-body .endpoint:last-child,.inspector-section-body .condition:last-child,.inspector-section-body .demand:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
 .inspector-section-body code{overflow-wrap:anywhere;white-space:pre-wrap}
 @media(prefers-reduced-motion:reduce){.inspector-section-chevron{transition:none}}
+
+.mint-local-connection{padding:4px 0 16px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+.mint-local-connection button{border:1px solid var(--line);padding:7px 10px;font-size:11px}
+.mint-local-connection button:disabled{opacity:.5;cursor:default}
+.connection-url-reveal{display:grid;grid-template-rows:0fr;opacity:0;transform:translateY(-5px);transition:grid-template-rows .24s ease,opacity .18s ease,transform .24s ease;pointer-events:none}
+.connection-url-reveal.visible{grid-template-rows:1fr;opacity:1;transform:translateY(0);pointer-events:auto}
+.connection-url-clip{min-height:0;overflow:hidden}
+.connection-url-control{display:flex;align-items:stretch;min-width:0;margin-bottom:10px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg)}
+.connection-url-control:focus-within{border-color:var(--accent)}
+.connection-url-control code{display:block;flex:1;min-width:0;align-self:center;padding:10px;font:11px/1.5 var(--font-mono);user-select:all;overflow-wrap:anywhere}
+.mint-local-connection .connection-copy{position:relative;flex:0 0 38px;align-self:stretch;margin:0;padding:0;border:0;border-left:1px solid var(--line);border-radius:0;color:var(--muted)}
+.connection-copy svg{position:absolute;top:50%;left:50%;width:16px;height:16px;margin:-8px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:opacity .16s ease,transform .2s ease}
+.connection-copy .copy-check{opacity:0;transform:scale(.6) rotate(-12deg);color:var(--ready)}
+.connection-copy.copied .copy-glyph{opacity:0;transform:scale(.65)}
+.connection-copy.copied .copy-check{opacity:1;transform:scale(1) rotate(0)}
+.mint-local-connection .connection-copy.copied:disabled{opacity:1}
+.connection-copy-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.connection-action{display:inline-flex;align-items:center;justify-content:center;min-height:34px;margin-top:4px;transition:background .15s ease,border-color .15s ease}
+.connection-spinner{width:0;height:12px;margin-right:0;opacity:0;border:1.5px solid transparent;border-top-color:currentColor;border-radius:50%;transition:width .18s ease,margin-right .18s ease,opacity .18s ease}
+.connection-action.working .connection-spinner{width:12px;margin-right:8px;opacity:1;animation:connection-spin .7s linear infinite}
+@keyframes connection-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.connection-url-reveal,.connection-copy svg,.connection-action,.connection-spinner{transition:none}.connection-action.working .connection-spinner{animation:none}}

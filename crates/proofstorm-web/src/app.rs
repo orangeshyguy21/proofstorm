@@ -21,6 +21,7 @@ const WORDMARK_SVG: &str = include_str!("../assets/proofstorm-word-mark.svg");
 pub fn App() -> impl IntoView {
     crate::freshness::provide_clock();
     crate::gui::provide_launcher();
+    crate::connections::provide_connections();
     let system_open = RwSignal::new(false);
     let catalog_open = RwSignal::new(false);
     Effect::new(move |_| {

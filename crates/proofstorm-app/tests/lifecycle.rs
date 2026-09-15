@@ -410,12 +410,28 @@ async fn external_configuration_is_private_and_status_has_no_credentials() {
             0o600
         );
     }
+    let local_address = connection
+        .descriptor
+        .url
+        .trim_start_matches("http://")
+        .to_owned();
+    let server = tokio::spawn(connection.serve());
     assert!(cells.connect("demo", "chain", "p2p", 0).await.is_err());
     cells
         .store
         .revoke("local", "developer", Capability::CellConnect)
         .unwrap();
     assert!(cells.connect("demo", "chain", "rpc", 0).await.is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    let _released = tokio::net::TcpListener::bind(local_address)
+        .await
+        .expect("revocation releases the listener");
 }
 
 #[tokio::test]
@@ -1034,3 +1050,41 @@ async fn inspecting_unmaterialized_intent_does_not_require_or_create_a_run() {
 mod shared_lifecycle;
 #[path = "shared_lifecycle/up_admission.rs"]
 mod up_admission;
+
+#[tokio::test]
+async fn local_connection_closes_when_cell_closes_or_runtime_disappears() {
+    for runtime_failure in [false, true] {
+        let store = Store::memory().unwrap();
+        seed(&store);
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        let cells = service(store, cluster.clone());
+        let view = cells.up("demo", &spec()).await.unwrap();
+        let instance = view.runtime.unwrap().instance;
+        let ns = proofstorm_kube::instance_namespace(&instance.instance_key);
+        {
+            let mut api = cluster.lock().unwrap();
+            api.objects.insert(format!("/api/v1/namespaces/{ns}/services/chain"),json!({"apiVersion":"v1","kind":"Service","metadata":{"name":"chain","labels":{"proofstorm.dev/instance":instance.instance_key}},"spec":{"ports":[{"port":18443}]}}));
+            api.objects.insert(format!("/api/v1/namespaces/{ns}/pods"),json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{"metadata":{"name":"chain-0"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}));
+        }
+        let connection = cells.connect("demo", "chain", "rpc", 0).await.unwrap();
+        let address = connection
+            .descriptor
+            .url
+            .trim_start_matches("http://")
+            .to_owned();
+        if runtime_failure {
+            cluster.lock().unwrap().fail_reads = true;
+        } else {
+            cells
+                .store
+                .set_cell_phase("local", "developer", &view.cell, CellHandlePhase::Closing)
+                .unwrap();
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), connection.serve())
+            .await
+            .expect("lifecycle change must close the tunnel");
+        let _released = tokio::net::TcpListener::bind(address)
+            .await
+            .expect("lifecycle cleanup releases the listener");
+    }
+}

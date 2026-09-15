@@ -282,17 +282,41 @@ async fn transport_fixture() -> (
         root.path().join("bundle"),
         true,
     ));
+    let store = proofstorm_store::Store::memory().unwrap();
+    crate::developer::configure(&store, "test", "test").unwrap();
+    store.grant("test", "test", proofstorm_core::Capability::CellConnect).unwrap();
+    let runtime = crate::Runtime {
+        client: kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| async {
+                Ok::<_, std::io::Error>(
+                    http::Response::builder()
+                        .status(503)
+                        .body(kube::client::Body::empty())
+                        .unwrap(),
+                )
+            }),
+            "default",
+        ),
+        control_namespace: "default".into(),
+        cluster_source: "fixture".into(),
+    };
+    let cells = crate::cell::Cells::new(store, runtime, "test".into(), "test".into());
+    let connections = super::connections::Connections::new();
     let state = session.clone();
     let task = tokio::spawn(async move {
         loop {
             let (socket, _) = listener.accept().await.unwrap();
             let state = state.clone();
+            let cells = cells.clone();
+            let connections = connections.clone();
             tokio::spawn(async move {
                 let service = hyper::service::service_fn(move |mut request| {
                     let state = state.clone();
+                    let cells = cells.clone();
+                    let connections = connections.clone();
                     async move {
                         Ok::<_, std::convert::Infallible>(
-                            transport::route(&mut request, state)
+                            transport::route(&mut request, state, cells, connections)
                                 .await
                                 .unwrap_or_else(|| {
                                     crate::http::json(
@@ -722,4 +746,77 @@ async fn older_gui_restarts_under_the_control_lock_but_current_and_busy_guis_are
             assert!(current.is_none() || current.unwrap().instance != record.instance);
         }
     }
+}
+
+#[tokio::test]
+async fn mint_connections_require_authenticated_same_origin_typed_requests() {
+    let (_root, session, task) = transport_fixture().await;
+    let client = client().unwrap();
+    let url = session.record.url();
+    for path in ["/v1/gui/connections", "/v1/gui/connections/events"] {
+        assert_eq!(
+            client
+                .get(format!("{url}{path}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+    }
+    for path in ["open", "close"] {
+        let endpoint = format!("{url}/v1/gui/connections/{path}");
+        assert_eq!(
+            client
+                .post(&endpoint)
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        assert_eq!(
+            client
+                .post(&endpoint)
+                .header("origin", "http://evil.test")
+                .header("authorization", format!("Bearer {}", session.record.token))
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        assert_eq!(
+            client
+                .post(&endpoint)
+                .header("authorization", format!("Bearer {}", session.record.token))
+                .json(&json!({"arbitrary_port":22}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            400
+        );
+    }
+    let closed = client
+        .post(format!("{url}/v1/gui/connections/close"))
+        .header("authorization", format!("Bearer {}", session.record.token))
+        .json(&json!({"id":"already-closed"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(closed.status(), 200);
+    let snapshot = client
+        .get(format!("{url}/v1/gui/connections"))
+        .header("authorization", format!("Bearer {}", session.record.token))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(snapshot, json!([]));
+    task.abort();
 }

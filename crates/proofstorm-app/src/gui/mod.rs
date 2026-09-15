@@ -1,4 +1,5 @@
 //! Installed GUI lifecycle and authenticated, project-scoped onboarding.
+pub(crate) mod connections;
 mod folder;
 mod server;
 mod state;
