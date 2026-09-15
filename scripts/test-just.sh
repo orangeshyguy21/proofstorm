@@ -121,6 +121,10 @@ done
 run doctor --json
 expect proofstorm "$fixture" unset unset doctor --json
 run stop
+expect proofstorm "$fixture" unset unset stop
+run start
+expect proofstorm "$fixture" unset unset start
+run gui-stop
 expect proofstorm "$fixture" unset unset gui stop
 run dev-reset --yes --json
 expect proofstorm "$fixture" unset unset dev reset --yes --json

@@ -24,6 +24,8 @@ async fn main() -> Result<()> {
     let (output_kind, label) = match &command {
         Command::Update { .. } => ("update", Some("Checking official release")),
         Command::Setup { .. } => ("setup", Some("Checking installation")),
+        Command::RuntimeStop { .. } => ("runtime-stop", Some("Stopping Proofstorm")),
+        Command::RuntimeStart { .. } => ("runtime-start", Some("Starting Proofstorm")),
         Command::Gui { .. } | Command::GuiStart { .. } => {
             ("gui", Some("Checking Proofstorm files"))
         }
@@ -51,6 +53,34 @@ async fn main() -> Result<()> {
         }
     };
     let mut output = cli_output::Output::new(args.json, output_kind, label);
+    if let Command::RuntimeStop { timeout } | Command::RuntimeStart { timeout } = &command {
+        let home = args
+            .home
+            .as_ref()
+            .context("start/stop requires an installation home; installed launchers supply it")?;
+        anyhow::ensure!(
+            args.context.is_none()
+                && args.kubeconfig.is_none()
+                && args.database.is_none()
+                && args.workspace == DEFAULT_WORKSPACE
+                && args.principal == "developer"
+                && args.namespace == DEFAULT_NAMESPACE,
+            "start/stop uses only this installation's private runtime; remove runtime overrides"
+        );
+        let result = proofstorm_app::bootstrap::lifecycle::run(
+            home,
+            matches!(command, Command::RuntimeStart { .. }),
+            *timeout,
+            &|label| output.update(label),
+        )
+        .await?;
+        output.show(&result)?;
+        anyhow::ensure!(
+            !matches!(command, Command::RuntimeStart { .. }) || result["ready"] == true,
+            "runtime started, but some services are not ready; inspect the reported workloads or retry start"
+        );
+        return Ok(());
+    }
     if let Command::Update { check } = command {
         let result = proofstorm_app::self_update::run(check, args.home.as_deref(), &|label| {
             output.update(label);
@@ -411,6 +441,8 @@ async fn main() -> Result<()> {
     if let Some(installation) = &environment.installation {
         proofstorm_app::bootstrap::check_deployed_release(installation)?;
     }
+    let _runtime_access =
+        proofstorm_app::bootstrap::lifecycle::access(environment.installation.as_ref())?;
     if let Some(parent) = environment
         .database
         .parent()
@@ -463,6 +495,8 @@ async fn main() -> Result<()> {
         | Command::Update { .. }
         | Command::DevReset { .. }
         | Command::RuntimeDelete { .. }
+        | Command::RuntimeStart { .. }
+        | Command::RuntimeStop { .. }
         | Command::CheckoutRegister { .. }
         | Command::Gui { .. }
         | Command::GuiStart { .. }
@@ -503,6 +537,7 @@ async fn main() -> Result<()> {
                 cells.store.clone(),
                 cells.workspace.clone(),
                 cells.principal.clone(),
+                environment.installation.clone(),
             );
             let waited = if wait == 0 {
                 Ok(None)
@@ -559,6 +594,9 @@ async fn main() -> Result<()> {
         )?,
         Command::Status { name, after } => output.show(&cells.inspect(&name, after).await?)?,
         Command::Sync { name, watch } => loop {
+            if let Some(installation) = &environment.installation {
+                proofstorm_app::bootstrap::lifecycle::ensure_available(&installation.home)?;
+            }
             // Re-arm after each snapshot, but never animate during the watch interval.
             output.stop();
             output = cli_output::Output::new(args.json, "sync", Some("Syncing cell activity"));

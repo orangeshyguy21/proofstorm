@@ -71,6 +71,10 @@ enum Command {
     },
     /// Prepare and start the local runtime.
     Setup(SetupArgs),
+    /// Stop this installation's runtime and GUI; preserve persistent storage.
+    Stop(RuntimeLifecycleArgs),
+    /// Resume this installation's saved runtime and wait for services.
+    Start(RuntimeLifecycleArgs),
     /// Diagnose installation and runtime problems.
     Doctor,
     /// Open or manage the GUI.
@@ -174,6 +178,13 @@ struct SetupArgs {
     /// Download all cell images now.
     #[arg(long, conflicts_with = "prepare_only")]
     prefetch_all: bool,
+}
+
+#[derive(ClapArgs)]
+struct RuntimeLifecycleArgs {
+    /// Seconds to wait for active work, graceful shutdown, or readiness.
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u32).range(1..=3600))]
+    timeout: u32,
 }
 
 #[derive(ClapArgs)]
@@ -442,6 +453,12 @@ impl Command {
     fn action(self) -> Result<Action, clap::Error> {
         Ok(match self {
             Self::Update { check } => Action::Update { check },
+            Self::Stop(args) => Action::RuntimeStop {
+                timeout: args.timeout,
+            },
+            Self::Start(args) => Action::RuntimeStart {
+                timeout: args.timeout,
+            },
             Self::Setup(SetupArgs {
                 allow_development,
                 prepare_only,

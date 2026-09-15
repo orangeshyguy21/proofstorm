@@ -13,6 +13,20 @@ fn command_tree_is_valid() {
 }
 
 #[test]
+fn runtime_start_stop_are_distinct_from_gui_and_deletion() {
+    assert!(matches!(
+        parse(&["stop"]).unwrap(),
+        Action::RuntimeStop { timeout: 300 }
+    ));
+    assert!(matches!(
+        parse(&["start", "--timeout", "60"]).unwrap(),
+        Action::RuntimeStart { timeout: 60 }
+    ));
+    assert!(parse(&["stop", "--timeout", "0"]).is_err());
+    assert!(parse(&["stop", "--force"]).is_err());
+}
+
+#[test]
 fn runtime_retirement_is_explicit_and_not_a_public_cell_command() {
     assert!(parse(&["internal", "runtime-delete"]).is_err());
     assert!(matches!(
@@ -118,7 +132,6 @@ fn removed_command_names_are_rejected() {
         );
     }
     for old in [
-        "stop",
         "attach",
         "open",
         "init",

@@ -183,6 +183,7 @@ pub fn start_recovery(
     store: Store,
     workspace: String,
     principal: String,
+    installation: Option<crate::installation::Installation>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut cleanup_cursor = String::new();
@@ -190,6 +191,9 @@ pub fn start_recovery(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
+            let Ok(_access) = crate::bootstrap::lifecycle::access(installation.as_ref()) else {
+                continue;
+            };
             match crate::lifecycle::sweep(&runtime, &store, &workspace, &principal, &cleanup_cursor)
                 .await
             {

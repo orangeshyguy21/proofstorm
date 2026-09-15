@@ -50,6 +50,19 @@ pub struct CellView {
 }
 
 impl Cells {
+    pub(crate) fn runtime_access(
+        &self,
+    ) -> anyhow::Result<Option<crate::bootstrap::lifecycle::AccessGuard>> {
+        crate::bootstrap::lifecycle::access(self.installation.as_ref())
+    }
+
+    pub(crate) fn runtime_available(&self) -> Result<(), Error> {
+        if let Some(installation) = &self.installation {
+            crate::bootstrap::lifecycle::ensure_available(&installation.home)
+                .map_err(|error| Error::problem("runtime_suspended", error.to_string()))?;
+        }
+        Ok(())
+    }
     #[must_use]
     pub fn new(store: Store, runtime: Runtime, workspace: String, principal: String) -> Self {
         Self {

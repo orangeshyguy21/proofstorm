@@ -81,3 +81,23 @@ fn setup_prefetch_is_explicit_and_incompatible_with_prepare_only() {
     assert_eq!(conflict.status.code(), Some(2));
     assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
 }
+
+#[test]
+fn suspend_resume_require_an_initialized_private_installation() {
+    let root = tempfile::tempdir().unwrap();
+    for action in ["stop", "start"] {
+        let help = cli(root.path()).args([action, "--help"]).output().unwrap();
+        assert!(help.status.success());
+        assert!(String::from_utf8_lossy(&help.stdout).contains("--timeout"));
+        let missing = cli(root.path()).args([action]).output().unwrap();
+        assert!(!missing.status.success());
+        let missing_home = cli(root.path())
+            .arg("--home")
+            .arg(root.path().join("absent"))
+            .arg(action)
+            .output()
+            .unwrap();
+        assert!(!missing_home.status.success());
+    }
+    assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
+}

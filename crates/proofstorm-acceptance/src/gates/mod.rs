@@ -30,6 +30,7 @@ pub mod private_transfer;
 pub mod progress;
 pub mod quote_composition;
 pub mod reliable_exec;
+pub mod runtime_lifecycle;
 pub mod slice2;
 pub mod slice4;
 pub mod slice5;
@@ -39,6 +40,7 @@ pub mod surface;
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
     "smoke",
+    "runtime-lifecycle",
     "mcp-surface",
     "onboarding",
     "gui",
@@ -83,6 +85,7 @@ pub const NAMES: &[&str] = &[
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
         "smoke" => smoke::run(context),
+        "runtime-lifecycle" => runtime_lifecycle::run(context),
         "mcp-surface" => surface::run(context),
         "onboarding" => onboarding::run(context),
         "gui" => gui::run(context),

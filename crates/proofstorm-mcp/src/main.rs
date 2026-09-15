@@ -158,7 +158,13 @@ async fn configured_service(args: Args) -> anyhow::Result<ProofstormMcp> {
     // Managed startup/verification stays passive. Explicit mutations reconcile their
     // own durable intent; CLI-owned recovery remains available for interrupted work.
     let _recovery = (!attached).then(|| {
-        proofstorm_app::updates::start_recovery(runtime.clone(), store, workspace, principal)
+        proofstorm_app::updates::start_recovery(
+            runtime.clone(),
+            store,
+            workspace,
+            principal,
+            environment.installation.clone(),
+        )
     });
     Ok(if let Some(installation) = &environment.installation {
         service.with_installation_runtime(runtime, installation)

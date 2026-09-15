@@ -4134,6 +4134,20 @@ impl ServerHandler for ProofstormMcp {
         if let Some(tool) = proofstorm_core::mcp::tool(&request.name) {
             self.authorize_all(tool.capabilities)?;
         }
+        let installation = self
+            .kubernetes
+            .as_ref()
+            .and_then(|runtime| runtime.installation.as_ref());
+        let runtime_tool =
+            proofstorm_core::mcp::tool(&request.name).is_some_and(|tool| tool.requires_runtime);
+        let _access =
+            proofstorm_app::bootstrap::lifecycle::access(installation.filter(|_| runtime_tool))
+                .map_err(|error| {
+                    app_error(proofstorm_app::Error::problem(
+                        "runtime_suspended",
+                        error.to_string(),
+                    ))
+                })?;
         self.tool_router
             .call(rmcp::handler::server::tool::ToolCallContext::new(
                 self, request, context,
