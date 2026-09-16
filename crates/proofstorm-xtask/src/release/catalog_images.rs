@@ -75,7 +75,9 @@ fn selector(value: &str) -> Result<(&str, &str)> {
 
 fn probe(name: &str) -> Result<&'static str> {
     Ok(match name {
-        "bitcoin-core" => "bitcoind --version",
+        // Version-only probes run with a read-only root filesystem. Recent
+        // bitcoind releases otherwise initialize settings before printing it.
+        "bitcoin-core" => "bitcoind -nosettings --version",
         "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             "cdk-mint-cli --version && cdk-mintd --version"
         }
@@ -449,8 +451,8 @@ fn valid_probe_version(repository: &str, version: &str, output: &str) -> bool {
     }
     match repository {
         "bitcoin-core" => output.lines().next().is_some_and(|line| {
-            line == format!("Bitcoin Core version v{version}")
-                || line == format!("Bitcoin Core version v{version}.0")
+            let suffix = if version == "29.4" { "" } else { " bitcoind" };
+            line == format!("Bitcoin Core daemon version v{version}.0{suffix}")
         }),
         "cdk-cli-wallet" => output.trim() == format!("cdk-cli {version}"),
         "cocod-wallet" => output.trim() == "0.0.17",

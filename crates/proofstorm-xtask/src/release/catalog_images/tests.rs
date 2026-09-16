@@ -60,13 +60,13 @@ fn added_version_recipes_match_their_provenance_and_native_versions() {
             "bitcoin-core",
             "29.4",
             "docker/bitcoin/bitcoin-29.4-provenance.json",
-            "Bitcoin Core version v29.4.0\n",
+            "Bitcoin Core daemon version v29.4.0\n",
         ),
         (
             "bitcoin-core",
             "30.3",
             "docker/bitcoin/bitcoin-30.3-provenance.json",
-            "Bitcoin Core version v30.3.0\n",
+            "Bitcoin Core daemon version v30.3.0 bitcoind\n",
         ),
         (
             "nutshell-mint",
@@ -117,7 +117,10 @@ fn current_catalog_has_one_cdk_mint_recipe_and_old_receipts_remain_readable() {
 #[test]
 fn probe_outputs_match_reviewed_versions_and_the_cdk_rpc_binary_name() {
     for (name, output) in [
-        ("bitcoin-core", "Bitcoin Core version v31.1.0\nCopyright\n"),
+        (
+            "bitcoin-core",
+            "Bitcoin Core daemon version v31.1.0 bitcoind\nCopyright\n",
+        ),
         ("cdk-cli-wallet", "cdk-cli 0.18.0\n"),
         ("cocod-wallet", "0.0.17\n"),
         (
@@ -147,12 +150,38 @@ fn probe_outputs_match_reviewed_versions_and_the_cdk_rpc_binary_name() {
     ));
     assert!(!valid_probe(
         "bitcoin-core",
-        "Bitcoin Core version v31.10.0\n"
+        "Bitcoin Core daemon version v31.10.0 bitcoind\n"
     ));
     assert!(!valid_probe(
         "cdk-mint-management",
         "cdk-mint-rpc 0.18.0\ncdk-mintd 0.17.0\n"
     ));
+}
+
+#[test]
+fn bitcoin_probes_require_the_selected_daemon_and_exact_release_banner() {
+    for (version, banner) in [
+        ("29.4", "Bitcoin Core daemon version v29.4.0"),
+        ("30.3", "Bitcoin Core daemon version v30.3.0 bitcoind"),
+        ("31.1", "Bitcoin Core daemon version v31.1.0 bitcoind"),
+    ] {
+        assert!(valid_probe_version("bitcoin-core", version, banner));
+        assert!(!valid_probe_version(
+            "bitcoin-core",
+            version,
+            &format!("{banner}rc1")
+        ));
+        assert!(!valid_probe_version(
+            "bitcoin-core",
+            version,
+            &format!("Bitcoin Core RPC client version v{version}.0")
+        ));
+        for other in ["29.4", "30.3", "31.1"] {
+            if other != version {
+                assert!(!valid_probe_version("bitcoin-core", other, banner));
+            }
+        }
+    }
 }
 
 #[test]
