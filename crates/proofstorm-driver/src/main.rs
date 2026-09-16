@@ -143,6 +143,16 @@ async fn run() -> Result<()> {
             return Ok(());
         }
         #[cfg(unix)]
+        [command, payment] if command == "cln-mint-rune" && payment == "xpay" => {
+            proofstorm_driver::cln::mint_rune_for_payment(
+                Path::new("/cln/regtest/lightning-rpc"),
+                Path::new("/app/data/.proofstorm/cln.rune"),
+                payment,
+            )
+            .await?;
+            return Ok(());
+        }
+        #[cfg(unix)]
         [command] if command == "cln-mint-rune" => {
             proofstorm_driver::cln::mint_rune(
                 Path::new("/cln/regtest/lightning-rpc"),

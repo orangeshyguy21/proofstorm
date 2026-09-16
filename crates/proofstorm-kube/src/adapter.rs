@@ -2304,6 +2304,20 @@ pub fn render_nutshell_mint_component(
         oidc_discovery_url.as_deref(),
     );
     environment.insert("MINT_AUTH_DATABASE".into(), "/app/data".into());
+    let uses_xpay = plan
+        .execution_context
+        .environment
+        .get("PROOFSTORM_NUTSHELL_VERSION")
+        .is_some_and(|version| version == "0.21.0");
+    if uses_xpay {
+        environment.insert("PROOFSTORM_NUTSHELL_VERSION".into(), "0.21.0".into());
+        if lightning.backend_id == "cln" {
+            environment.insert(
+                "MINT_CLNREST_RUNE".into(),
+                "/app/data/.proofstorm/cln-xpay.rune".into(),
+            );
+        }
+    }
     if database_secret.is_none() {
         environment.insert("MINT_DATABASE".into(), "/app/data".into());
     }
@@ -2328,7 +2342,11 @@ pub fn render_nutshell_mint_component(
         json!([
             "sh",
             "-ec",
-            "/opt/proofstorm/driver cln-mint-rune; exec mint"
+            if uses_xpay {
+                "/opt/proofstorm/driver cln-mint-rune xpay; exec mint"
+            } else {
+                "/opt/proofstorm/driver cln-mint-rune; exec mint"
+            }
         ])
     } else {
         json!(["mint"])

@@ -1168,6 +1168,22 @@ impl Store {
                 id: revision_digest.into(),
             });
         }
+        // Existing instances returned above use their immutable lock even after
+        // retirement. New materializations must pass the current support policy,
+        // including plans published before a release was retired.
+        let catalog = self.effective_catalog_unchecked(workspace)?;
+        let mut locked_cell = revision.cell.clone();
+        for component in &mut locked_cell.components {
+            let locked = revision
+                .lock
+                .entries
+                .iter()
+                .find(|entry| entry.component_id == component.id)
+                .ok_or_else(|| StoreError::Catalog("component lock missing".into()))?;
+            component.version = Some(locked.version.clone());
+        }
+        proofstorm_core::validate_new_cell_versions(&locked_cell, &catalog)
+            .map_err(StoreError::Catalog)?;
         let nonce: String = self
             .lock()?
             .query_row("SELECT hex(randomblob(16))", [], |r| r.get(0))?;

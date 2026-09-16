@@ -1,0 +1,8 @@
+[
+  {"implementation":"lnd","version":"0.21.3-beta","image":"docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c"},
+  {"implementation":"lnd","version":"0.20.4-beta","image":"docker.io/lightninglabs/lnd@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09"},
+  {"implementation":"lnd","version":"0.19.3-beta","image":"docker.io/lightninglabs/lnd@sha256:b175f136c01ffe01e75eee836273dd15b21a7e2cea2bd316ea98ad3640743aaa"},
+  {"implementation":"cln","version":"26.06.7","image":"docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4"},
+  {"implementation":"cln","version":"26.04.1","image":"docker.io/elementsproject/lightningd@sha256:29a2b1df82d04675be289656d0fe681b587acd38bb8e203d00f226cad84ef73d"},
+  {"implementation":"cln","version":"25.12.1","image":"docker.io/elementsproject/lightningd@sha256:618eed33ba923cc459164bba38e8c554f97113f730a2f96e8423b18c0c515d9d"}
+]

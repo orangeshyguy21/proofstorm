@@ -36,6 +36,13 @@ pub enum SupportLifecycle {
     Experimental,
 }
 
+impl SupportLifecycle {
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::Preferred | Self::Supported)
+    }
+}
+
 /// Catalog origin is independent of release stability or compatibility.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -789,23 +796,44 @@ fn implementation_support(
                 .copied()
                 .filter(|entry| entry.support_lifecycle == SupportLifecycle::Preferred)
                 .collect::<Vec<_>>();
-            if preferred.len() > 1 || (preferred.is_empty() && entries.iter().any(|entry| entry.support_lifecycle != SupportLifecycle::Experimental)) {
+            if preferred.len() > 1 || (preferred.is_empty() && entries.iter().any(|entry| entry.support_lifecycle.is_supported())) {
                 return Err(format!(
                     "catalog_preferred_version_ambiguous: implementation {implementation:?} has {} preferred versions",
                     preferred.len()
                 ));
             }
-            let supported_versions = entries
+            let supported = entries
                 .iter()
-                .filter(|entry| entry.support_lifecycle != SupportLifecycle::Experimental)
+                .copied()
+                .filter(|entry| entry.support_lifecycle.is_supported())
+                .collect::<Vec<_>>();
+            let policy = crate::release_policy::release_policy(&implementation);
+            let mut families = BTreeSet::new();
+            for entry in &supported {
+                if let Some(policy) = policy {
+                    let version = policy.parse(&entry.version).filter(|version| policy.is_eligible(*version)).ok_or_else(|| format!(
+                        "catalog_release_ineligible: {implementation:?} version {:?} is not an eligible release", entry.version
+                    ))?;
+                    if !families.insert(policy.family(version)) {
+                        return Err(format!("catalog_release_family_duplicate: {implementation:?} has multiple supported patches in one family"));
+                    }
+                    if families.len() > policy.families {
+                        return Err(format!("catalog_support_window_exceeded: {implementation:?} supports at most {} release families", policy.families));
+                    }
+                }
+            }
+            let minimum = supported.iter().min_by(|left, right| {
+                policy.map_or_else(
+                    || left.version.cmp(&right.version),
+                    |policy| policy.parse(&left.version).cmp(&policy.parse(&right.version)),
+                )
+            });
+            let supported_versions = supported.iter()
                 .map(|entry| entry.version.clone())
                 .collect::<BTreeSet<_>>();
             Ok(CatalogImplementationSupport {
                 implementation,
-                minimum_supported: entries
-                    .iter()
-                    .find(|entry| entry.support_lifecycle != SupportLifecycle::Experimental)
-                    .map(|entry| entry.version.clone()),
+                minimum_supported: minimum.map(|entry| entry.version.clone()),
                 preferred_version: preferred.first().map(|entry| entry.version.clone()),
                 supported_versions,
             })
@@ -1571,6 +1599,31 @@ pub fn validate_component_config(component: &ComponentSpec) -> Result<(), String
     default_backend_registry().validate_component_config(component)
 }
 
+/// Check new-cell admission separately from resolving historical locked cells.
+/// Experimental candidates still require explicit selection through the catalog.
+/// # Errors
+/// Refuses retired exact versions with the current supported alternatives.
+pub fn validate_new_cell_versions(
+    cell: &crate::CellSpec,
+    catalog: &CatalogResponse,
+) -> Result<(), String> {
+    for component in &cell.components {
+        let entry = validate_catalog_component(component, catalog)?;
+        if entry.support_lifecycle == SupportLifecycle::Deprecated {
+            let supported = catalog
+                .implementations
+                .iter()
+                .find(|support| support.implementation == entry.id)
+                .map(|support| &support.supported_versions);
+            return Err(format!(
+                "catalog_version_retired: {:?} version {:?} is retained for existing cells; supported versions are {supported:?}",
+                entry.id, entry.version
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Resolve and validate one component against an installed catalog entry.
 ///
 /// # Errors
@@ -1647,6 +1700,117 @@ pub fn validate_catalog_component<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cdk_support_floor_rejects_active_seventeen_but_allows_archived_entries() {
+        for implementation in ["cdk", "cdk-ldk", "cdk-bdk", "cdk-cli-wallet"] {
+            let mut entries = default_catalog().entries.clone();
+            let mut historical = entries
+                .iter()
+                .find(|entry| entry.id == implementation)
+                .unwrap()
+                .clone();
+            historical.version = "0.17.7".into();
+            historical.support_lifecycle = SupportLifecycle::Supported;
+            entries.push(historical);
+            assert!(
+                CatalogResponse::try_new(entries.clone())
+                    .unwrap_err()
+                    .contains("catalog_release_ineligible")
+            );
+            entries.last_mut().unwrap().support_lifecycle = SupportLifecycle::Deprecated;
+            let catalog = CatalogResponse::try_new(entries).unwrap();
+            let support = catalog
+                .implementations
+                .iter()
+                .find(|entry| entry.implementation == implementation)
+                .unwrap();
+            assert_eq!(support.minimum_supported.as_deref(), Some("0.18.0"));
+            assert_eq!(
+                support.supported_versions,
+                BTreeSet::from(["0.18.0".into()])
+            );
+        }
+    }
+
+    #[test]
+    fn rolling_support_excludes_retired_patches_and_preserves_locked_cells() {
+        let base = default_catalog()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "bitcoin-core")
+            .unwrap()
+            .clone();
+        let entries = [
+            ("31.1", SupportLifecycle::Preferred),
+            ("30.3", SupportLifecycle::Supported),
+            ("29.4", SupportLifecycle::Supported),
+        ]
+        .into_iter()
+        .map(|(version, lifecycle)| {
+            let mut entry = base.clone();
+            entry.version = version.into();
+            entry.support_lifecycle = lifecycle;
+            entry
+        })
+        .collect::<Vec<_>>();
+        let catalog = CatalogResponse::try_new(entries).unwrap();
+        assert_eq!(
+            catalog.implementations[0].minimum_supported.as_deref(),
+            Some("29.4")
+        );
+        let cell = crate::CellSpec {
+            api_version: crate::API_VERSION.into(),
+            name: "retirement".into(),
+            components: vec![crate::ComponentSpec {
+                id: "chain".into(),
+                kind: ComponentKind::Bitcoin,
+                implementation: "bitcoin-core".into(),
+                version: Some("29.4".into()),
+                config_version: base.config_version.clone(),
+                control: ControlClass::Cell,
+                config: BTreeMap::new(),
+            }],
+            links: vec![],
+            policy: crate::CellPolicy::default(),
+        };
+        validate_new_cell_versions(&cell, &catalog).unwrap();
+        let before = crate::resolve_lock(&cell, &catalog).unwrap();
+        let mut retired = catalog.entries.clone();
+        retired[2].support_lifecycle = SupportLifecycle::Deprecated;
+        let retired = CatalogResponse::try_new(retired).unwrap();
+        assert_eq!(
+            retired.implementations[0].minimum_supported.as_deref(),
+            Some("30.3")
+        );
+        assert!(
+            !retired.implementations[0]
+                .supported_versions
+                .contains("29.4")
+        );
+        assert!(
+            validate_new_cell_versions(&cell, &retired)
+                .unwrap_err()
+                .contains("catalog_version_retired")
+        );
+        assert_eq!(crate::resolve_lock(&cell, &retired).unwrap(), before);
+
+        for (version, error) in [
+            ("31.0", "catalog_release_family_duplicate"),
+            ("28.4", "catalog_support_window_exceeded"),
+        ] {
+            let mut entries = catalog.entries.clone();
+            let mut extra = base.clone();
+            extra.version = version.into();
+            extra.support_lifecycle = SupportLifecycle::Supported;
+            entries.push(extra);
+            assert!(
+                CatalogResponse::try_new(entries)
+                    .unwrap_err()
+                    .contains(error)
+            );
+        }
+    }
 
     #[test]
     fn bitcoin_release_provenance_and_publisher_mirrors_are_pinned() {

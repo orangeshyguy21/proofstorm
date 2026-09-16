@@ -1,6 +1,97 @@
 use super::*;
 
 #[test]
+fn explicit_versions_bind_recipes_receipts_and_exact_probe_output() {
+    let output = "Nutshell, version 0.21.0\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n";
+    assert_eq!(
+        selector("nutshell-mint@0.21.0").unwrap(),
+        ("nutshell-mint", "0.21.0")
+    );
+    assert_eq!(
+        selector("nutshell-mint").unwrap(),
+        ("nutshell-mint", "0.20.3")
+    );
+    assert!(valid_probe_version("nutshell-mint", "0.21.0", output));
+    assert!(!valid_probe_version("nutshell-mint", "0.20.3", output));
+    for name in ["cdk-mint", "cdk-cli-wallet"] {
+        assert_eq!(
+            selector(&format!("{name}@0.18.0")).unwrap(),
+            (name, "0.18.0")
+        );
+        assert!(selector(&format!("{name}@0.17.7")).is_err());
+        assert!(selector(&format!("{name}@0.17.6")).is_err());
+    }
+    for selector_value in [
+        "nutshell-mint@latest",
+        "nutshell-mint@0.21.0;false",
+        "nutshell-mint@../Dockerfile",
+        "nutshell-mint@0.22.0",
+    ] {
+        assert!(selector(selector_value).is_err());
+    }
+    let mut record = receipt();
+    record.repository = "nutshell-mint".into();
+    record.tag = format!("{NAMESPACE}/nutshell-mint:upload-{}", record.publication_id);
+    if let Input::Build { version, .. } = &mut record.input {
+        *version = Some("0.21.0".into());
+    }
+    record.validate().unwrap();
+    assert_eq!(
+        record.recipe().unwrap(),
+        "docker/mint/Dockerfile.nutshell-0.21.0"
+    );
+    let saved = serde_json::to_value(&record).unwrap();
+    assert_eq!(saved["input"]["version"], "0.21.0");
+    let mut legacy = saved;
+    legacy["input"].as_object_mut().unwrap().remove("version");
+    let legacy: Receipt = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.version().unwrap(), "0.20.3");
+    assert_eq!(
+        legacy.recipe().unwrap(),
+        "docker/mint/Dockerfile.kube-nutshell"
+    );
+}
+
+#[test]
+fn added_version_recipes_match_their_provenance_and_native_versions() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (name, version, provenance, output) in [
+        (
+            "bitcoin-core",
+            "29.4",
+            "docker/bitcoin/bitcoin-29.4-provenance.json",
+            "Bitcoin Core daemon version v29.4.0\n",
+        ),
+        (
+            "bitcoin-core",
+            "30.3",
+            "docker/bitcoin/bitcoin-30.3-provenance.json",
+            "Bitcoin Core daemon version v30.3.0 bitcoind\n",
+        ),
+        (
+            "nutshell-mint",
+            "0.21.0",
+            "docker/mint/nutshell-0.21.0-provenance.json",
+            "Nutshell, version 0.21.0\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
+        ),
+    ] {
+        let recipe = versioned_recipe(name, version).unwrap();
+        let record: proofstorm_core::BuildProvenance =
+            serde_json::from_slice(&fs::read(root.join(provenance)).unwrap()).unwrap();
+        assert_eq!(
+            record.recipe_digest,
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(fs::read(root.join(recipe)).unwrap())
+            ),
+            "{name}@{version}"
+        );
+        assert!(valid_probe_version(name, version, output));
+        assert!(!valid_probe(name, output));
+    }
+}
+
+#[test]
 fn current_catalog_has_one_cdk_mint_recipe_and_old_receipts_remain_readable() {
     assert_eq!(
         RECIPES
@@ -26,7 +117,10 @@ fn current_catalog_has_one_cdk_mint_recipe_and_old_receipts_remain_readable() {
 #[test]
 fn probe_outputs_match_reviewed_versions_and_the_cdk_rpc_binary_name() {
     for (name, output) in [
-        ("bitcoin-core", "Bitcoin Core version v31.1.0\nCopyright\n"),
+        (
+            "bitcoin-core",
+            "Bitcoin Core daemon version v31.1.0 bitcoind\nCopyright\n",
+        ),
         ("cdk-cli-wallet", "cdk-cli 0.18.0\n"),
         ("cocod-wallet", "0.0.17\n"),
         (
@@ -56,12 +150,38 @@ fn probe_outputs_match_reviewed_versions_and_the_cdk_rpc_binary_name() {
     ));
     assert!(!valid_probe(
         "bitcoin-core",
-        "Bitcoin Core version v31.10.0\n"
+        "Bitcoin Core daemon version v31.10.0 bitcoind\n"
     ));
     assert!(!valid_probe(
         "cdk-mint-management",
         "cdk-mint-rpc 0.18.0\ncdk-mintd 0.17.0\n"
     ));
+}
+
+#[test]
+fn bitcoin_probes_require_the_selected_daemon_and_exact_release_banner() {
+    for (version, banner) in [
+        ("29.4", "Bitcoin Core daemon version v29.4.0"),
+        ("30.3", "Bitcoin Core daemon version v30.3.0 bitcoind"),
+        ("31.1", "Bitcoin Core daemon version v31.1.0 bitcoind"),
+    ] {
+        assert!(valid_probe_version("bitcoin-core", version, banner));
+        assert!(!valid_probe_version(
+            "bitcoin-core",
+            version,
+            &format!("{banner}rc1")
+        ));
+        assert!(!valid_probe_version(
+            "bitcoin-core",
+            version,
+            &format!("Bitcoin Core RPC client version v{version}.0")
+        ));
+        for other in ["29.4", "30.3", "31.1"] {
+            if other != version {
+                assert!(!valid_probe_version("bitcoin-core", other, banner));
+            }
+        }
+    }
 }
 
 #[test]
@@ -100,6 +220,7 @@ fn receipt() -> Receipt {
         input: Input::Build {
             source: json!({"revision":"a".repeat(40),"sha256":"b".repeat(64),"dirty":false}),
             recipe_sha256: "c".repeat(64),
+            version: None,
         },
         local_image_id: None,
         local_verified: false,

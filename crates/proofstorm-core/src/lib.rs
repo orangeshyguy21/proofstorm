@@ -18,6 +18,7 @@ mod network;
 mod operation;
 mod publication;
 mod quote;
+pub mod release_policy;
 mod schema;
 pub mod tool_pins;
 mod update;
@@ -49,6 +50,7 @@ pub use catalog::{
     CatalogPlatform, CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix,
     CatalogVersionSupport, ReleaseChannel, StorageBackend, SupportLifecycle, catalog_for_platform,
     default_catalog, validate_catalog_component, validate_component_config,
+    validate_new_cell_versions,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

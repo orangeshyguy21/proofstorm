@@ -1,4 +1,5 @@
 //! Catalog image maintenance, separate from controller/release promotion and runtime setup.
+mod audit;
 use super::{archive::output_path, build, bundle, registry, sha256, text};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -35,9 +36,48 @@ fn recipe(name: &str) -> Result<&'static str> {
     })
 }
 
+// These defaults also interpret receipts written before explicit version selection.
+// Do not change them when adding releases: old receipts retain their build identity.
+fn legacy_version(name: &str) -> Result<&'static str> {
+    Ok(match name {
+        "bitcoin-core" => "31.1",
+        "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" | "cdk-cli-wallet" => {
+            "0.18.0"
+        }
+        "nutshell-mint" | "nutshell-mint-management" => "0.20.3",
+        "cocod-wallet" => "0.0.17-dev.44e5101c",
+        _ => bail!("unknown catalog image version"),
+    })
+}
+
+fn versioned_recipe(name: &str, version: &str) -> Result<&'static str> {
+    if version == legacy_version(name)? {
+        return recipe(name);
+    }
+    match (name, version) {
+        ("bitcoin-core", "29.4") => Ok("docker/bitcoin/Dockerfile.29.4"),
+        ("bitcoin-core", "30.3") => Ok("docker/bitcoin/Dockerfile.30.3"),
+        ("nutshell-mint", "0.21.0") => Ok("docker/mint/Dockerfile.nutshell-0.21.0"),
+        _ => bail!("unreviewed catalog image version {name}@{version}; use catalog-image list"),
+    }
+}
+
+fn selector(value: &str) -> Result<(&str, &str)> {
+    let (name, version) = if let Some(pair) = value.split_once('@') {
+        pair
+    } else {
+        (value, legacy_version(value)?)
+    };
+    ensure!(RECIPES.contains(&name), "select a current catalog recipe");
+    versioned_recipe(name, version)?;
+    Ok((name, version))
+}
+
 fn probe(name: &str) -> Result<&'static str> {
     Ok(match name {
-        "bitcoin-core" => "bitcoind --version",
+        // Version-only probes run with a read-only root filesystem. Recent
+        // bitcoind releases otherwise initialize settings before printing it.
+        "bitcoin-core" => "bitcoind -nosettings --version",
         "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             "cdk-mint-cli --version && cdk-mintd --version"
         }
@@ -69,6 +109,8 @@ enum Input {
     Build {
         source: Value,
         recipe_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
     },
     Copy {
         image: String,
@@ -101,8 +143,22 @@ struct Receipt {
 }
 
 impl Receipt {
+    fn version(&self) -> Result<&str> {
+        match &self.input {
+            Input::Build {
+                version: Some(version),
+                ..
+            } => Ok(version),
+            _ => legacy_version(&self.repository),
+        }
+    }
+
+    fn recipe(&self) -> Result<&'static str> {
+        versioned_recipe(&self.repository, self.version()?)
+    }
+
     fn validate(&self) -> Result<()> {
-        recipe(&self.repository)?;
+        self.recipe()?;
         registry::architecture(&self.platform)?;
         ensure!(
             self.format_version == 1
@@ -123,6 +179,7 @@ impl Receipt {
             Input::Build {
                 source,
                 recipe_sha256,
+                ..
             } => ensure!(
                 source["dirty"] == false
                     && sha256(text(source, "sha256")?)
@@ -193,15 +250,14 @@ fn load(work: &Path) -> Result<Receipt> {
     if let Input::Build {
         source,
         recipe_sha256,
+        ..
     } = &receipt.input
     {
         build::verify_snapshot(&work.join("source"), source)?;
         ensure!(
             format!(
                 "{:x}",
-                Sha256::digest(fs::read(
-                    work.join("source").join(recipe(&receipt.repository)?)
-                )?)
+                Sha256::digest(fs::read(work.join("source").join(receipt.recipe()?))?)
             ) == *recipe_sha256,
             "recipe changed after preparation"
         );
@@ -272,11 +328,12 @@ fn verify_cocod_archive(work: &Path) -> Result<()> {
 }
 
 fn prepare(root: &Path, work: &Path, name: &str, platform: &str, copy: Option<&str>) -> Result<()> {
+    let (name, version) = selector(name)?;
     ensure!(
         RECIPES.contains(&name),
         "select a current catalog recipe; mint images use cdk-mint and nutshell-mint"
     );
-    recipe(name)?;
+    let recipe = versioned_recipe(name, version)?;
     registry::architecture(platform)?;
     let publication = bundle::read_json(&root.join("release/ghcr.json"))?;
     ensure!(
@@ -309,7 +366,7 @@ fn prepare(root: &Path, work: &Path, name: &str, platform: &str, copy: Option<&s
         let source = build::snapshot(root, &staging.path().join("source"), false, None)?;
         let recipe_sha256 = format!(
             "{:x}",
-            Sha256::digest(fs::read(staging.path().join("source").join(recipe(name)?))?)
+            Sha256::digest(fs::read(staging.path().join("source").join(recipe))?)
         );
         if name == "cocod-wallet" {
             prepare_cocod(staging.path(), &recipe_sha256)?;
@@ -317,6 +374,7 @@ fn prepare(root: &Path, work: &Path, name: &str, platform: &str, copy: Option<&s
         Input::Build {
             source,
             recipe_sha256,
+            version: Some(version.into()),
         }
     };
     let id = format!(
@@ -387,25 +445,37 @@ fn inspect(work: &Path) -> Result<String> {
     Ok(id.into())
 }
 
-fn valid_probe(repository: &str, output: &str) -> bool {
+fn valid_probe_version(repository: &str, version: &str, output: &str) -> bool {
+    if versioned_recipe(repository, version).is_err() {
+        return false;
+    }
     match repository {
-        "bitcoin-core" => matches!(
-            output.lines().next(),
-            Some("Bitcoin Core version v31.1" | "Bitcoin Core version v31.1.0")
-        ),
-        "cdk-cli-wallet" => output.trim() == "cdk-cli 0.18.0",
+        "bitcoin-core" => output.lines().next().is_some_and(|line| {
+            let suffix = if version == "29.4" { "" } else { " bitcoind" };
+            line == format!("Bitcoin Core daemon version v{version}.0{suffix}")
+        }),
+        "cdk-cli-wallet" => output.trim() == format!("cdk-cli {version}"),
         "cocod-wallet" => output.trim() == "0.0.17",
         "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
-            lines == ["cdk-mint-rpc 0.18.0", "cdk-mintd 0.18.0"]
+            lines
+                == [
+                    format!("cdk-mint-rpc {version}"),
+                    format!("cdk-mintd {version}"),
+                ]
         }
         "nutshell-mint" | "nutshell-mint-management" => {
-            output.lines().next() == Some("Nutshell, version 0.20.3")
+            output.lines().next() == Some(format!("Nutshell, version {version}").as_str())
                 && output.contains("Usage: cashu [OPTIONS] COMMAND [ARGS]...")
                 && output.contains("Usage: mint-cli [OPTIONS] COMMAND [ARGS]...")
         }
         _ => false,
     }
+}
+
+#[cfg(test)]
+fn valid_probe(repository: &str, output: &str) -> bool {
+    legacy_version(repository).is_ok_and(|version| valid_probe_version(repository, version, output))
 }
 
 fn local(work: &Path) -> Result<()> {
@@ -414,7 +484,7 @@ fn local(work: &Path) -> Result<()> {
     crate::development::regular(&work.join("probe.stdout"))?;
     let output = fs::read_to_string(work.join("probe.stdout"))?;
     ensure!(
-        valid_probe(&receipt.repository, &output),
+        valid_probe_version(&receipt.repository, receipt.version()?, &output),
         "native image probe did not match its reviewed recipe"
     );
     receipt.local_image_id = Some(id);
@@ -487,6 +557,7 @@ fn published(work: &Path) -> Result<()> {
 
 fn fields(work: &Path) -> Result<()> {
     let receipt = load(work)?;
+    let recipe = receipt.recipe()?;
     let (kind, source) = match &receipt.input {
         Input::Build { .. } => ("build", receipt.local_image_id.clone().unwrap_or_default()),
         Input::Copy { image } => ("copy", image.clone()),
@@ -498,8 +569,8 @@ fn fields(work: &Path) -> Result<()> {
             "cdk-mint" | "cdk-ldk-mint-management"
         )
     {
-        let value =
-            bundle::read_json(&work.join("source/docker/mint/cdk-ldk-management-provenance.json"))?;
+        let provenance = "source/docker/mint/cdk-ldk-management-provenance.json";
+        let value = bundle::read_json(&work.join(provenance))?;
         text(&value, "runtime_image")?.clone_into(&mut mint_image);
         ensure!(
             mint_image.starts_with("docker.io/cashubtc/mintd@sha256:")
@@ -518,7 +589,7 @@ fn fields(work: &Path) -> Result<()> {
         receipt.platform,
         source,
         work.join("source")
-            .join(recipe(&receipt.repository)?)
+            .join(recipe)
             .to_string_lossy()
             .into_owned(),
         context.to_string_lossy().into_owned(),
@@ -568,10 +639,18 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
         .collect::<Result<_>>()?;
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
+        ["audit"] => audit::run(),
         ["list"] => {
             println!(
-                "Catalog recipes (linux/amd64 or linux/arm64):\n{}",
-                RECIPES.join("\n")
+                "Catalog recipes (linux/amd64 or linux/arm64; select RECIPE@VERSION):\n{}\nbitcoin-core@29.4\nbitcoin-core@30.3\nnutshell-mint@0.21.0",
+                RECIPES
+                    .iter()
+                    .map(|name| format!(
+                        "{name}@{}",
+                        legacy_version(name).expect("reviewed recipe")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
             Ok(())
         }

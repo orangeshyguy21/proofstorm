@@ -236,8 +236,11 @@ fn matches(entry: &CatalogEntry, query: &CatalogListRequest) -> bool {
         && query.features_all.is_subset(&entry.features)
         && (query.release_channels.is_empty()
             || query.release_channels.contains(&entry.release_channel))
-        && (query.support_lifecycles.is_empty()
-            || query.support_lifecycles.contains(&entry.support_lifecycle))
+        && (if query.support_lifecycles.is_empty() {
+            entry.support_lifecycle != proofstorm_core::SupportLifecycle::Deprecated
+        } else {
+            query.support_lifecycles.contains(&entry.support_lifecycle)
+        })
         && query.dependency.as_ref().is_none_or(|filter| {
             entry.compatible_dependencies.iter().any(|dep| {
                 dep.link_kind == filter.link_kind
@@ -333,6 +336,21 @@ mod tests {
     }
     fn page(value: Value) -> CatalogPage {
         list(default_catalog(), &query(value), "linux/arm64", 24 * 1024).unwrap()
+    }
+
+    #[test]
+    fn retired_entries_require_an_explicit_discovery_filter() {
+        let mut entry = default_catalog().entries[0].clone();
+        entry.support_lifecycle = proofstorm_core::SupportLifecycle::Deprecated;
+        assert!(!matches(&entry, &CatalogListRequest::default()));
+        assert!(matches(
+            &entry,
+            &query(json!({"support_lifecycles":["deprecated"]}))
+        ));
+        assert!(!matches(
+            &entry,
+            &query(json!({"support_lifecycles":["preferred","supported"]}))
+        ));
     }
 
     #[test]

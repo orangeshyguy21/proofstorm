@@ -7,7 +7,8 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 mode=${1:-help}; [[ $# == 0 ]] || shift
 usage() {
   printf '%s\n' 'Usage: just catalog-image list' \
-    '       just catalog-image build RECIPE linux/amd64|linux/arm64 NEW_EXTERNAL_WORK' \
+    '       just catalog-image audit' \
+    '       just catalog-image build RECIPE@VERSION linux/amd64|linux/arm64 NEW_EXTERNAL_WORK' \
     '       just catalog-image prepare-copy PINNED_SOURCE PLATFORM NEW_EXTERNAL_WORK' \
     '       just catalog-image publish WORK --confirm-namespace ghcr.io/orangeshyguy21/proofstorm' \
     '       just catalog-image verify-work WORK' \
@@ -15,7 +16,7 @@ usage() {
 }
 case "$mode" in
   help|-h|--help) usage; exit 0 ;;
-  list) [[ $# == 0 ]] || exit 2 ;;
+  list|audit) [[ $# == 0 ]] || exit 2 ;;
   build|prepare-copy|verify) [[ $# == 3 ]] || { usage >&2; exit 2; } ;;
   publish) [[ $# == 3 && "$2" == --confirm-namespace && "$3" == ghcr.io/orangeshyguy21/proofstorm ]] || { usage >&2; exit 2; } ;;
   verify-work) [[ $# == 1 ]] || exit 2 ;;
@@ -27,7 +28,7 @@ stage='maintainer checks'
 (cd "$root"; CARGO_TARGET_DIR="$root/target/check" cargo build --quiet --locked -p proofstorm-xtask)
 helper="$root/target/check/debug/proofstorm-xtask"
 case "$mode" in
-  list) exec "$helper" catalog-image list ;;
+  list|audit) exec "$helper" catalog-image "$mode" ;;
   verify) exec "$helper" catalog-image verify "$@" ;;
   build|prepare-copy)
     stage='source preparation'

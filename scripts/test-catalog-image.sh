@@ -8,10 +8,13 @@ scratch=$(mktemp -d)
 scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf -- "$scratch"' EXIT
 fixture="$scratch/checkout with spaces"
-mkdir -p "$fixture/scripts" "$fixture/release" "$fixture/docker/wallet" "$scratch/bin" "$scratch/registry"
+mkdir -p "$fixture/scripts" "$fixture/release" "$fixture/docker/wallet" "$fixture/docker/bitcoin" "$scratch/bin" "$scratch/registry"
 cp "$root/scripts/catalog-image.sh" "$fixture/scripts/"
 cp "$root/release/ghcr.json" "$fixture/release/"
 printf 'FROM fixture\n' > "$fixture/docker/wallet/Dockerfile.kube-cdk"
+for recipe in Dockerfile Dockerfile.29.4 Dockerfile.30.3; do
+  printf 'FROM fixture\n' > "$fixture/docker/bitcoin/$recipe"
+done
 printf 'target/\n' > "$fixture/.gitignore"
 git -C "$fixture" init -q
 git -C "$fixture" add .
@@ -52,7 +55,15 @@ case "$1 $2" in
   'run --rm')
     [[ " $* " == *' --network none '* && " $* " == *' --read-only '* && " $* " == *' --cap-drop ALL '* && " $* " == *" $IMAGE_TEST_CONFIG "* ]] || exit 97
     [[ ${IMAGE_TEST_FAIL:-} != probe ]] || exit 42
-    printf 'cdk-cli 0.18.0\n' ;;
+    if [[ -n ${IMAGE_TEST_BITCOIN_VERSION:-} ]]; then
+      # Bitcoin 31 initializes settings even for --version unless disabled.
+      [[ ${!#} == 'bitcoind -nosettings --version' ]] || exit 42
+      suffix=' bitcoind'
+      [[ "$IMAGE_TEST_BITCOIN_VERSION" != 29.4 ]] || suffix=''
+      printf 'Bitcoin Core daemon version v%s.0%s\n' "$IMAGE_TEST_BITCOIN_VERSION" "$suffix"
+    else
+      printf 'cdk-cli 0.18.0\n'
+    fi ;;
   'buildx imagetools')
     if [[ "$3" == create ]]; then [[ " $* " == *' --prefer-index=false '* ]] || exit 97
     else
@@ -93,7 +104,10 @@ namespace=ghcr.io/orangeshyguy21/proofstorm
 for arch in amd64 arm64; do
   registry "$arch"
   : > "$IMAGE_TEST_TRACE"
-  run build cdk-cli-wallet "linux/$arch" "$scratch/$arch"
+  recipe=cdk-cli-wallet
+  [[ "$arch" != amd64 ]] || recipe=cdk-cli-wallet@0.18.0
+  run build "$recipe" "linux/$arch" "$scratch/$arch"
+  grep -q '"version": "0.18.0"' "$scratch/$arch/image.json"
   if grep -q 'docker push\|imagetools create' "$IMAGE_TEST_TRACE"; then exit 1; fi
   run publish "$scratch/$arch" --confirm-namespace "$namespace"
   grep -q '"publication": "verified"' "$scratch/$arch/image.json"
@@ -105,6 +119,13 @@ for arch in amd64 arm64; do
   grep -q '"publication": "uploaded"' "$scratch/$arch/image.json"
   unset IMAGE_TEST_MOVED
   run verify-work "$scratch/$arch"
+  for version in 29.4 30.3 31.1; do
+    export IMAGE_TEST_BITCOIN_VERSION=$version
+    run build "bitcoin-core@$version" "linux/$arch" "$scratch/bitcoin-$version-$arch"
+    grep -q '"local_verified": true' "$scratch/bitcoin-$version-$arch/image.json"
+    grep -q "\"version\": \"$version\"" "$scratch/bitcoin-$version-$arch/image.json"
+    unset IMAGE_TEST_BITCOIN_VERSION
+  done
 done
 registry amd64
 : > "$IMAGE_TEST_TRACE"

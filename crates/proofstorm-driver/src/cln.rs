@@ -51,6 +51,24 @@ async fn connected(mut stream: UnixStream, method: &str, params: Value) -> Resul
 /// # Errors
 /// Returns a sanitized-at-caller transport or private file error.
 pub async fn mint_rune(socket: &Path, path: &Path) -> Result<()> {
+    mint_rune_for_payment(socket, path, "pay").await
+}
+
+/// Create an exact payment-method credential in a separate persistent file.
+/// The xpay contract never adopts or overwrites a legacy pay credential.
+/// # Errors
+/// Rejects unknown payment contracts and unavailable private state or RPC.
+pub async fn mint_rune_for_payment(socket: &Path, legacy_path: &Path, payment: &str) -> Result<()> {
+    ensure!(
+        matches!(payment, "pay" | "xpay"),
+        "unsupported payment contract"
+    );
+    let selected_path = if payment == "xpay" {
+        legacy_path.with_file_name("cln-xpay.rune")
+    } else {
+        legacy_path.to_path_buf()
+    };
+    let path = selected_path.as_path();
     if std::fs::read_to_string(path).is_ok_and(|value| !value.trim().is_empty()) {
         return Ok(());
     }
@@ -70,7 +88,7 @@ pub async fn mint_rune(socket: &Path, path: &Path) -> Result<()> {
     .await
     .context("rune startup deadline")?;
     let result = timeout(Duration::from_secs(10), connected(stream, "createrune", json!({"restrictions":[[
-        "method=listfunds","method=invoice","method=pay","method=listinvoices","method=listpays","method=waitanyinvoice"
+        "method=listfunds","method=invoice",format!("method={payment}"),"method=listinvoices","method=listpays","method=waitanyinvoice"
     ]]}))).await.context("rune RPC deadline")??;
     let rune = result["rune"]
         .as_str()
