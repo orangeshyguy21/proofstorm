@@ -284,7 +284,9 @@ async fn transport_fixture() -> (
     ));
     let store = proofstorm_store::Store::memory().unwrap();
     crate::developer::configure(&store, "test", "test").unwrap();
-    store.grant("test", "test", proofstorm_core::Capability::CellConnect).unwrap();
+    store
+        .grant("test", "test", proofstorm_core::Capability::CellConnect)
+        .unwrap();
     let runtime = crate::Runtime {
         client: kube::Client::new(
             tower::service_fn(|_: http::Request<kube::client::Body>| async {
@@ -641,10 +643,57 @@ fn sign_in_links_roundtrip_project_paths_and_keep_credentials_in_the_fragment() 
     assert_eq!(parameters["project"], project.to_str().unwrap());
 }
 
+async fn serve_gui_lifecycle(
+    listener: tokio::net::TcpListener,
+    record: Record,
+    old: bool,
+    busy: bool,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let count = if old { 3 } else { 1 };
+    for i in 0..count {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(socket);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let stopping = old && i == 2;
+        assert!(line.contains(if stopping {
+            "/v1/gui/stop"
+        } else {
+            "/v1/gui/health"
+        }));
+        let mut headers = String::new();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            headers.push_str(&line);
+        }
+        assert!(headers.contains(&record.token));
+        let (status, body) = if stopping {
+            (if busy { "409 Conflict" } else { "200 OK" }, "{}".into())
+        } else {
+            ("200 OK", record.health().to_string())
+        };
+        reader
+            .get_mut()
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn older_gui_restarts_under_the_control_lock_but_current_and_busy_guis_are_preserved() {
     use std::os::unix::fs::PermissionsExt;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     for (old, busy) in [(false, false), (true, false), (true, true)] {
         let root = tempfile::tempdir().unwrap();
         let installation = Installation::initialize(&root.path().join("home"), None, None).unwrap();
@@ -681,35 +730,7 @@ async fn older_gui_restarts_under_the_control_lock_but_current_and_busy_guis_are
             state::lease(&verified.installation.home, "gui-control-lock.sqlite3").unwrap();
         let owned = record.clone();
         let server = tokio::spawn(async move {
-            let count = if old { 3 } else { 1 };
-            for i in 0..count {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut reader = BufReader::new(socket);
-                let mut line = String::new();
-                reader.read_line(&mut line).await.unwrap();
-                let stopping = old && i == 2;
-                assert!(line.contains(if stopping {
-                    "/v1/gui/stop"
-                } else {
-                    "/v1/gui/health"
-                }));
-                let mut headers = String::new();
-                loop {
-                    line.clear();
-                    reader.read_line(&mut line).await.unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    headers.push_str(&line);
-                }
-                assert!(headers.contains(&owned.token));
-                let (status, body) = if stopping {
-                    (if busy { "409 Conflict" } else { "200 OK" }, "{}".into())
-                } else {
-                    ("200 OK", owned.health().to_string())
-                };
-                reader.get_mut().write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
-            }
+            serve_gui_lifecycle(listener, owned, old, busy).await;
             lifetime
         });
         // In the replacement case, release the lifetime lease when stop completes.

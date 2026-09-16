@@ -84,6 +84,28 @@ pub(super) fn checked(mut channel: ObservedChannel) -> Option<ObservedChannel> {
         .then_some(channel)
 }
 
+// BOLT #2: XOR the funding output index into the last two txid bytes.
+fn channel_id(point: &str) -> Option<String> {
+    use std::fmt::Write;
+    let (txid, index) = point.split_once(':')?;
+    let index: u16 = index.parse().ok()?;
+    if txid.len() != 64 || !txid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut bytes = (0..32)
+        .map(|i| u8::from_str_radix(&txid[i * 2..i * 2 + 2], 16).ok())
+        .collect::<Option<Vec<_>>>()?;
+    bytes.reverse(); // Bitcoin RPC prints txids in reverse of their wire byte order.
+    let [high, low] = index.to_be_bytes();
+    bytes[30] ^= high;
+    bytes[31] ^= low;
+    let mut id = String::new();
+    for byte in bytes {
+        write!(&mut id, "{byte:02x}").ok()?;
+    }
+    Some(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,7 +126,7 @@ mod tests {
     }
     #[test]
     fn funding_outpoint_matches_ldk_wire_order_with_nonzero_output() {
-        let txid = (0_u8..32).map(|b| format!("{b:02x}")).collect::<String>();
+        let txid = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
         assert_eq!(
             channel_id(&format!("{txid}:258")).unwrap(),
             "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020002"
@@ -133,26 +155,4 @@ mod tests {
             .is_empty()
         );
     }
-}
-
-// BOLT #2: XOR the funding output index into the last two txid bytes.
-fn channel_id(point: &str) -> Option<String> {
-    use std::fmt::Write;
-    let (txid, index) = point.split_once(':')?;
-    let index: u16 = index.parse().ok()?;
-    if txid.len() != 64 || !txid.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    let mut bytes = (0..32)
-        .map(|i| u8::from_str_radix(&txid[i * 2..i * 2 + 2], 16).ok())
-        .collect::<Option<Vec<_>>>()?;
-    bytes.reverse(); // Bitcoin RPC prints txids in reverse of their wire byte order.
-    let [high, low] = index.to_be_bytes();
-    bytes[30] ^= high;
-    bytes[31] ^= low;
-    let mut id = String::new();
-    for byte in bytes {
-        write!(&mut id, "{byte:02x}").ok()?;
-    }
-    Some(id)
 }

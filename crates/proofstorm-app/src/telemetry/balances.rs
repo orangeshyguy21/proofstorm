@@ -118,30 +118,7 @@ async fn observe(
     result: &mut ComponentBalance,
 ) {
     match implementation {
-        "bitcoin-core" => {
-            let command = |action: &str| {
-                vec![
-                    "bitcoin-cli".into(),
-                    "-regtest".into(),
-                    format!("-rpcuser={}", proofstorm_kube::BITCOIN_RPC_USER),
-                    format!("-rpcpassword={}", proofstorm_kube::BITCOIN_RPC_PASSWORD),
-                    action.into(),
-                ]
-            };
-            let (info, peers) = tokio::join!(
-                read(pods, pod, command("getblockchaininfo")),
-                read(pods, pod, command("getpeerinfo")),
-            );
-            result.block_height = info.and_then(|v| v["blocks"].as_u64());
-            if let Some(observation) =
-                peers.and_then(|v| super::bitcoin::project(cell, inventory, &v))
-            {
-                result.bitcoin = Some(observation);
-            }
-            if result.block_height.is_some() {
-                result.error = None;
-            }
-        }
+        "bitcoin-core" => observe_bitcoin(cell, pods, pod, inventory, result).await,
         "cdk-ldk" => {
             let (dashboard, channels) = tokio::join!(
                 super::ldk::page(pods, pod, "/"),
@@ -229,6 +206,36 @@ async fn observe(
         }
     }
 }
+
+async fn observe_bitcoin(
+    cell: &ProofstormCell,
+    pods: &Api<Pod>,
+    pod: &str,
+    inventory: &[Pod],
+    result: &mut ComponentBalance,
+) {
+    let command = |action: &str| {
+        vec![
+            "bitcoin-cli".into(),
+            "-regtest".into(),
+            format!("-rpcuser={}", proofstorm_kube::BITCOIN_RPC_USER),
+            format!("-rpcpassword={}", proofstorm_kube::BITCOIN_RPC_PASSWORD),
+            action.into(),
+        ]
+    };
+    let (info, peers) = tokio::join!(
+        read(pods, pod, command("getblockchaininfo")),
+        read(pods, pod, command("getpeerinfo")),
+    );
+    result.block_height = info.and_then(|v| v["blocks"].as_u64());
+    if let Some(observation) = peers.and_then(|v| super::bitcoin::project(cell, inventory, &v)) {
+        result.bitcoin = Some(observation);
+    }
+    if result.block_height.is_some() {
+        result.error = None;
+    }
+}
+
 fn lnd_amounts(funds: &Value, observation: &LightningObservation) -> Option<Vec<BalanceAmount>> {
     if observation.error.is_some() {
         return None;

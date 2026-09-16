@@ -36,7 +36,7 @@ pub(super) fn project(dashboard: &str, balance: &str) -> Option<LightningObserva
     }).collect::<Option<Vec<_>>>()?;
     if channels
         .iter()
-        .map(|c| c.id())
+        .map(ObservedChannel::id)
         .collect::<std::collections::BTreeSet<_>>()
         .len()
         != channels.len()

@@ -32,7 +32,7 @@ impl CanvasInventory {
     pub fn observe(&mut self, cell: &str, nodes: &[CanvasNode]) -> bool {
         let current = nodes.iter().map(|n| n.id.clone()).collect::<BTreeSet<_>>();
         let added = self.cell == cell && current.difference(&self.nodes).next().is_some();
-        self.cell = cell.to_owned();
+        cell.clone_into(&mut self.cell);
         self.nodes = current;
         added
     }
