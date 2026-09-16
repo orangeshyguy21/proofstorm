@@ -122,6 +122,8 @@ impl Cells {
         }
         let effective = proofstorm_core::resolve_effective_cell(spec, &catalog)
             .map_err(|e| Error::problem("cell_invalid", e.to_string()))?;
+        proofstorm_core::validate_new_cell_versions(&effective, &catalog)
+            .map_err(|e| Error::problem("cell_invalid", e))?;
         proofstorm_core::resolve_lock(&effective, &catalog)
             .map_err(|e| Error::problem("cell_invalid", e.to_string()))?;
         let digest = proofstorm_core::digest_json(spec);

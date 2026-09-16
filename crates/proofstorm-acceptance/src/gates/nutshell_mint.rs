@@ -96,6 +96,7 @@ fn expected_settings() -> Value {
         "lightning_reserve_fee_min": 7000,
         "backend": "LndRestWallet",
         "lnd_endpoint": "https://lightning:8080",
+        "cln_endpoint": null,
         "database": "/app/data",
         "private_key_length": 64
     })

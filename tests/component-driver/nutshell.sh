@@ -15,7 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 [[ $(id -u) == 1000 ]]
-[[ $(mint --version) == 'Nutshell, version 0.20.3' ]]
+[[ $(mint --version) == "Nutshell, version ${PROOFSTORM_NUTSHELL_VERSION:-0.20.3}" ]]
 tls=/management-client/tls
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -subj /CN=contract-ca \
     -keyout "$tls/ca.key" -out "$tls/ca.pem" >/dev/null 2>&1

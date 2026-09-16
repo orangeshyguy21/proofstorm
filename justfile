@@ -93,8 +93,13 @@ test-native-supervisor:
     cargo test --locked -p proofstorm-exec --features contract-tests --test supervisor
 
 # Check a native driver against an explicit local component image, with no external network.
-check-component-driver component driver-image component-image platform='linux/arm64':
-    bash scripts/test-component-driver.sh "$1" "$2" "$3" "$4"
+check-component-driver component driver-image component-image platform='linux/arm64' *version:
+    bash scripts/test-component-driver.sh "$@"
+
+# Fund, pay, and restart explicit image pairings in disposable regtest networks.
+check-component-compat matrix platform work:
+    CARGO_TARGET_DIR="$PWD/target/check" cargo build --quiet --locked -p proofstorm-xtask
+    bash tests/component-compat/bitcoin-lightning.sh "$1" "$2" "$3"
 
 # Validate release metadata offline; this does not publish or prove release readiness.
 release-check +args:

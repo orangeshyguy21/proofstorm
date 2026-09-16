@@ -1,0 +1,166 @@
+name: Component image qualification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/component-images.yml'
+      - 'Dockerfile.proofstormd'
+      - 'Cargo.lock'
+      - 'crates/proofstorm-driver/**'
+      - 'crates/proofstorm-core/src/release_policy.rs'
+      - 'crates/proofstorm-xtask/src/release/catalog_images/**'
+      - 'crates/proofstorm-xtask/src/release/catalog_images.rs'
+      - 'docker/**'
+      - 'scripts/catalog-image.sh'
+      - 'scripts/test-component-driver.sh'
+      - 'tests/component-driver/**'
+      - 'tests/component-compat/**'
+      - 'crates/proofstorm-kube/tests/golden/**'
+      - 'crates/proofstorm-kube/src/adapter.rs'
+      - 'crates/proofstorm-core/src/backend.rs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: component-images-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-components:
+    name: Native components (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            machine: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            machine: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      ARCH: ${{ matrix.arch }}
+      NATIVE_MACHINE: ${{ matrix.machine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check native platform and build tools
+        run: |
+          test "$(uname -s)/$(uname -m)" = "Linux/$NATIVE_MACHINE"
+          rustup show active-toolchain
+          docker info
+          docker buildx version
+          jq --version
+          mkdir -p "$RUNNER_TEMP/component-evidence" "$RUNNER_TEMP/component-builds"
+      - name: Build exact helper used by component contracts
+        run: |
+          set -o pipefail
+          docker buildx build --platform "linux/$ARCH" --provenance=false --load \
+            --file Dockerfile.proofstormd --target native \
+            --tag proofstorm-qualification-driver:local . \
+            2>&1 | tee "$RUNNER_TEMP/component-evidence/driver-build.log"
+          docker image inspect proofstorm-qualification-driver:local \
+            > "$RUNNER_TEMP/component-evidence/driver-inspect.json"
+      - name: Build reviewed versions and run offline contracts
+        run: |
+          set -o pipefail
+          driver=proofstorm-qualification-driver:local
+          for selection in bitcoin-core@31.1 bitcoin-core@29.4 bitcoin-core@30.3 \
+              nutshell-mint@0.20.3 nutshell-mint@0.21.0 \
+              cdk-cli-wallet@0.18.0 cdk-mint@0.18.0; do
+            work="$RUNNER_TEMP/component-builds/$selection"
+            bash scripts/catalog-image.sh build "$selection" "linux/$ARCH" "$work" \
+              2>&1 | tee "$RUNNER_TEMP/component-evidence/$selection-build.log"
+            cp "$work/image.json" "$RUNNER_TEMP/component-evidence/$selection-image.json"
+            cp "$work/probe.stdout" "$RUNNER_TEMP/component-evidence/$selection-probe.stdout"
+            component_image=$(jq -er '.tag' "$work/image.json")
+            test "$(docker image inspect --format '{{.Id}}' "$component_image")" \
+              = "$(jq -er '.local_image_id' "$work/image.json")"
+            case "$selection" in
+              bitcoin-core@*) contract=(bitcoin "$driver" "$component_image" "linux/$ARCH") ;;
+              nutshell-mint@*) contract=(nutshell "$driver" "$component_image" "linux/$ARCH" "${selection#*@}") ;;
+              cdk-cli-wallet@*) contract=(cdk "$driver" "$component_image" "linux/$ARCH") ;;
+              cdk-mint@*) continue ;; # Version probes only; live backend qualification remains separate.
+            esac
+            bash scripts/test-component-driver.sh "${contract[@]}" \
+              2>&1 | tee "$RUNNER_TEMP/component-evidence/$selection-contract.log"
+          done
+      - name: Probe pinned upstream Lightning releases
+        run: |
+          while read -r implementation version image; do
+            case "$implementation" in
+              cln) command=lightningd; expected="v$version" ;;
+              lnd) command=lnd; expected="lnd version $version commit=v$version" ;;
+            esac
+            output="$RUNNER_TEMP/component-evidence/$implementation-$version-probe.stdout"
+            timeout 120 docker run --rm --platform "linux/$ARCH" --network none \
+              --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --memory 256m --cpus 1 --pids-limit 128 \
+              --entrypoint "$command" "$image" --version > "$output"
+            test "$(cat "$output")" = "$expected"
+            docker image inspect "$image" \
+              > "$RUNNER_TEMP/component-evidence/$implementation-$version-inspect.json"
+          done < <(jq -r '.[]|[.implementation,.version,.image]|@tsv' tests/component-compat/lightning.json)
+      - name: Qualify all Bitcoin and Lightning release pairings
+        run: |
+          set -o pipefail
+          jq -n --slurpfile lightning tests/component-compat/lightning.json \
+            --slurpfile btc31 "$RUNNER_TEMP/component-builds/bitcoin-core@31.1/image.json" \
+            --slurpfile btc30 "$RUNNER_TEMP/component-builds/bitcoin-core@30.3/image.json" \
+            --slurpfile btc29 "$RUNNER_TEMP/component-builds/bitcoin-core@29.4/image.json" \
+            '{bitcoin: [[$btc31[0],"31.1"],[$btc30[0],"30.3"],[$btc29[0],"29.4"]] | map({version:.[1],image:.[0].local_image_id}),lightning:$lightning[0]}' \
+            > "$RUNNER_TEMP/bitcoin-lightning.json"
+          bash tests/component-compat/bitcoin-lightning.sh "$RUNNER_TEMP/bitcoin-lightning.json" \
+            "linux/$ARCH" "$RUNNER_TEMP/bitcoin-lightning" \
+            2>&1 | tee "$RUNNER_TEMP/component-evidence/bitcoin-lightning.log"
+      - name: Qualify Nutshell mint and wallet families against each Lightning release
+        run: |
+          set -o pipefail
+          jq --slurpfile ns20 "$RUNNER_TEMP/component-builds/nutshell-mint@0.20.3/image.json" \
+            --slurpfile ns21 "$RUNNER_TEMP/component-builds/nutshell-mint@0.21.0/image.json" \
+            '.bitcoin=[.bitcoin[0]] | .driver="proofstorm-qualification-driver:local" |
+             .mints=[{implementation:"nutshell",version:"0.21.0",image:$ns21[0].local_image_id},{implementation:"nutshell",version:"0.20.3",image:$ns20[0].local_image_id}] |
+             .wallets=[.mints[]|.implementation="nutshell-wallet"]' \
+            "$RUNNER_TEMP/bitcoin-lightning.json" > "$RUNNER_TEMP/nutshell-compat.json"
+          bash tests/component-compat/bitcoin-lightning.sh "$RUNNER_TEMP/nutshell-compat.json" \
+            "linux/$ARCH" "$RUNNER_TEMP/nutshell-compat" \
+            2>&1 | tee "$RUNNER_TEMP/component-evidence/nutshell-compat.log"
+      - name: Qualify the CDK 0.18 wallet against both Nutshell mint families
+        run: |
+          set -o pipefail
+          jq --slurpfile cdk18 "$RUNNER_TEMP/component-builds/cdk-cli-wallet@0.18.0/image.json" \
+            '.lightning=[.lightning[0]] |
+             .wallets=[{implementation:"cdk-cli-wallet",version:"0.18.0",image:$cdk18[0].local_image_id}]' \
+            "$RUNNER_TEMP/nutshell-compat.json" > "$RUNNER_TEMP/cdk-wallet-compat.json"
+          bash tests/component-compat/bitcoin-lightning.sh "$RUNNER_TEMP/cdk-wallet-compat.json" \
+            "linux/$ARCH" "$RUNNER_TEMP/cdk-wallet-compat" \
+            2>&1 | tee "$RUNNER_TEMP/component-evidence/cdk-wallet-compat.log"
+      - name: Retain compatibility receipts
+        if: always()
+        run: |
+          # Raw runtime logs can contain disposable wallet seeds, runes and tokens.
+          # Retain identity, stages and assertions; keep private state out of artifacts.
+          for matrix in bitcoin-lightning nutshell-compat cdk-wallet-compat; do
+            if test -d "$RUNNER_TEMP/$matrix"; then
+              while IFS= read -r receipt; do
+                relative=${receipt#"$RUNNER_TEMP/"}
+                mkdir -p "$RUNNER_TEMP/component-evidence/$(dirname "$relative")"
+                cp "$receipt" "$RUNNER_TEMP/component-evidence/$relative"
+              done < <(find "$RUNNER_TEMP/$matrix" -type f \( -name result.json -o -name selection.json -o -name input.json -o -name driver-inspect.json \))
+            fi
+          done
+      - name: Save native qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: component-images-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          # No source snapshots, build caches, credentials, or image publication.
+          path: ${{ runner.temp }}/component-evidence/
+          if-no-files-found: warn
+          retention-days: 14

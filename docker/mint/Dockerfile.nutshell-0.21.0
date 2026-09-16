@@ -1,0 +1,5 @@
+# Nutshell 0.21.0, upstream multi-platform release image.
+FROM docker.io/cashubtc/nutshell@sha256:beed25e291357368e35e1698bf2e4645d97ed435232a8f8ff6501c77d67c0b90
+# Install the exact project already contained in the image. Dependencies stay pinned.
+RUN poetry install --only-root --no-interaction \
+    && mint --version && cashu --help && mint-cli --help

@@ -20,6 +20,21 @@ fn boolean(env: &BTreeMap<String, String>, name: &str) -> Result<bool> {
     );
     Ok(value.eq_ignore_ascii_case("true"))
 }
+
+fn verify_version(env: &BTreeMap<String, String>, version: &str) -> Result<()> {
+    let expected = env
+        .get("PROOFSTORM_NUTSHELL_VERSION")
+        .map_or("0.20.3", String::as_str);
+    ensure!(
+        matches!(expected, "0.20.3" | "0.21.0"),
+        "unsupported mint contract"
+    );
+    ensure!(
+        version == expected,
+        "mint version differs from selected contract"
+    );
+    Ok(())
+}
 /// Corroborate public settings against the live mint; project no credential values.
 /// # Errors
 /// Rejects unavailable/mismatched mint responses and missing explicit configuration.
@@ -29,7 +44,7 @@ pub async fn settings(mode: &str, env: &BTreeMap<String, String>) -> Result<Valu
     ensure!(status.is_success(), "mint info unavailable");
     let version = info["version"].as_str().context("mint version missing")?;
     let version = version.strip_prefix("Nutshell/").unwrap_or(version);
-    ensure!(version == "0.20.3", "unsupported mint version");
+    verify_version(env, version)?;
     ensure!(
         info["name"] == required(env, "MINT_INFO_NAME")?,
         "public mint name differs"
@@ -105,7 +120,8 @@ pub async fn settings(mode: &str, env: &BTreeMap<String, String>) -> Result<Valu
                 "max_balance_sat":number(env,"MINT_MAX_BALANCE")?,"global_rate_limit":number(env,"MINT_GLOBAL_RATE_LIMIT_PER_MINUTE")?,
                 "transaction_rate_limit":number(env,"MINT_TRANSACTION_RATE_LIMIT_PER_MINUTE")?,"lightning_fee_percent":percent,
                 "lightning_reserve_fee_min":number(env,"LIGHTNING_RESERVE_FEE_MIN")?,"backend":required(env,"MINT_BACKEND_BOLT11_SAT")?,
-                "lnd_endpoint":required(env,"MINT_LND_REST_ENDPOINT")?,"database":required(env,"MINT_DATABASE")?,"private_key_length":required(env,"MINT_PRIVATE_KEY")?.len()}),
+                "lnd_endpoint":env.get("MINT_LND_REST_ENDPOINT"),"cln_endpoint":env.get("MINT_CLNREST_URL"),
+                "database":required(env,"MINT_DATABASE")?,"private_key_length":required(env,"MINT_PRIVATE_KEY")?.len()}),
             )
         }
         _ => anyhow::bail!("unsupported mint settings observation"),
@@ -119,7 +135,16 @@ pub async fn settings(mode: &str, env: &BTreeMap<String, String>) -> Result<Valu
 pub async fn rune_probe() -> Result<Value> {
     use sha2::{Digest, Sha256};
     use std::{io::Read, os::unix::fs::PermissionsExt};
-    let path = std::path::Path::new("/app/data/.proofstorm/cln.rune");
+    let configured = std::env::var("MINT_CLNREST_RUNE")
+        .unwrap_or_else(|_| "/app/data/.proofstorm/cln.rune".into());
+    ensure!(
+        matches!(
+            configured.as_str(),
+            "/app/data/.proofstorm/cln.rune" | "/app/data/.proofstorm/cln-xpay.rune"
+        ),
+        "unexpected mint rune path"
+    );
+    let path = std::path::Path::new(&configured);
     let mut bytes = String::new();
     std::fs::File::open(path)?
         .take(16_385)
@@ -130,15 +155,17 @@ pub async fn rune_probe() -> Result<Value> {
         "invalid rune size"
     );
     let client = crate::http::client(Duration::from_secs(10))?;
+    let endpoint = std::env::var("MINT_CLNREST_URL").context("CLN REST endpoint missing")?;
+    let endpoint = endpoint.trim_end_matches('/');
     let allowed = client
-        .post("http://mint-cln:3010/v1/listfunds")
+        .post(format!("{endpoint}/v1/listfunds"))
         .header("rune", rune)
         .header("accept", "application/json")
         .send()
         .await?
         .status();
     let forbidden = client
-        .post("http://mint-cln:3010/v1/withdraw")
+        .post(format!("{endpoint}/v1/withdraw"))
         .header("rune", rune)
         .header("accept", "application/json")
         .form(&[("destination", "x"), ("satoshi", "all")])
@@ -149,4 +176,21 @@ pub async fn rune_probe() -> Result<Value> {
         json!({"length":rune.len(),"mode":format!("0o{:o}",std::fs::metadata(path)?.permissions().mode()&0o777),
         "digest":format!("{:x}",Sha256::digest(rune.as_bytes())),"allowed":allowed.as_u16(),"forbidden":forbidden.as_u16()}),
     )
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn settings_verify_the_selected_exact_release() {
+        let mut env = BTreeMap::new();
+        assert!(verify_version(&env, "0.20.3").is_ok());
+        assert!(verify_version(&env, "0.21.0").is_err());
+        env.insert("PROOFSTORM_NUTSHELL_VERSION".into(), "0.21.0".into());
+        assert!(verify_version(&env, "0.21.0").is_ok());
+        assert!(verify_version(&env, "0.20.3").is_err());
+        env.insert("PROOFSTORM_NUTSHELL_VERSION".into(), "0.22.0".into());
+        assert!(verify_version(&env, "0.22.0").is_err());
+    }
 }

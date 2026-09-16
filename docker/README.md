@@ -40,6 +40,9 @@ image, and recipe digest.
 
 ## Build or publish a catalog image
 
+See [Rolling image support](ROLLING-SUPPORT.md) for release-family policy,
+versioned preparation recipes, and qualification/retirement requirements.
+
 This is maintainer work, separate from `storm setup`. Use a clean checkout,
 Rust, Bash, just, curl, and Docker with Buildx. The workflow uses the existing
 reviewed recipes; it does not change versions, catalog pins, or provenance.
@@ -47,7 +50,7 @@ reviewed recipes; it does not change versions, catalog pins, or provenance.
 ```sh
 just catalog-image list
 scratch="$(mktemp -d)"
-just catalog-image build cdk-cli-wallet linux/arm64 "$scratch/wallet"
+just catalog-image build cdk-cli-wallet@0.18.0 linux/arm64 "$scratch/wallet"
 # Inspect image.json and probe.stdout before authorizing a push:
 just catalog-image publish "$scratch/wallet" \
   --confirm-namespace ghcr.io/orangeshyguy21/proofstorm

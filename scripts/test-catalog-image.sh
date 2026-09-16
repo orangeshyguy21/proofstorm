@@ -93,7 +93,10 @@ namespace=ghcr.io/orangeshyguy21/proofstorm
 for arch in amd64 arm64; do
   registry "$arch"
   : > "$IMAGE_TEST_TRACE"
-  run build cdk-cli-wallet "linux/$arch" "$scratch/$arch"
+  recipe=cdk-cli-wallet
+  [[ "$arch" != amd64 ]] || recipe=cdk-cli-wallet@0.18.0
+  run build "$recipe" "linux/$arch" "$scratch/$arch"
+  grep -q '"version": "0.18.0"' "$scratch/$arch/image.json"
   if grep -q 'docker push\|imagetools create' "$IMAGE_TEST_TRACE"; then exit 1; fi
   run publish "$scratch/$arch" --confirm-namespace "$namespace"
   grep -q '"publication": "verified"' "$scratch/$arch/image.json"

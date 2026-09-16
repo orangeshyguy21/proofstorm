@@ -704,6 +704,13 @@ impl BackendContractRegistry {
             .as_ref()
             .map(|probe| compile_protocol_probe(probe, &backend.service_ports))
             .transpose()?;
+        let mut execution_environment = backend.execution_environment.clone();
+        if input.lock.catalog_id == "nutshell"
+            && input.lock.protocol_action_adapter_version.as_deref()
+                == Some("nutshell-mint/0.21/v1")
+        {
+            execution_environment.insert("PROOFSTORM_NUTSHELL_VERSION".into(), "0.21.0".into());
+        }
         Ok(ComponentPlanContract {
             instance_key: input.instance_key.clone(),
             revision_digest: input.revision_digest.clone(),
@@ -719,7 +726,7 @@ impl BackendContractRegistry {
                 image: input.lock.image.clone(),
                 state_contract: backend.execution_state_contract.clone(),
                 mounts: execution_mounts,
-                environment: backend.execution_environment.clone(),
+                environment: execution_environment,
             },
             target_descriptor: TargetDescriptorContract {
                 component_id: input.component.id.clone(),

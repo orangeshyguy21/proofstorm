@@ -1394,6 +1394,57 @@ fn cdk_cln_cell_matches_its_golden_contract() {
 }
 
 #[test]
+fn nutshell_021_contract_selects_xpay_without_changing_the_020_contract() {
+    let mut catalog = default_catalog().clone();
+    let old = catalog
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == "nutshell")
+        .unwrap();
+    old.support_lifecycle = proofstorm_core::SupportLifecycle::Supported;
+    // Synthetic catalog entry exercises contract dispatch; real image validation
+    // belongs to the component-driver and live qualification gates.
+    let mut newer = old.clone();
+    newer.version = "0.21.0".into();
+    newer.support_lifecycle = proofstorm_core::SupportLifecycle::Preferred;
+    newer.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
+    catalog.entries.push(newer);
+    let catalog = proofstorm_core::CatalogResponse::try_new(catalog.entries).unwrap();
+    let mut spec = nutshell_cln_cell();
+    spec.components
+        .iter_mut()
+        .find(|component| component.id == "mint")
+        .unwrap()
+        .version = Some("0.21.0".into());
+    let lock = resolve_lock(&spec, &catalog).unwrap();
+    let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+    let config = rendered
+        .config_maps
+        .iter()
+        .find(|config| config.metadata.name.as_deref() == Some("mint-config"))
+        .unwrap()
+        .data
+        .as_ref()
+        .unwrap();
+    assert_eq!(config["PROOFSTORM_NUTSHELL_VERSION"], "0.21.0");
+    assert_eq!(
+        config["MINT_CLNREST_RUNE"],
+        "/app/data/.proofstorm/cln-xpay.rune"
+    );
+    let mint = rendered
+        .deployments
+        .iter()
+        .find(|deployment| deployment.metadata.name.as_deref() == Some("mint"))
+        .unwrap();
+    let mint = serde_json::to_value(mint).unwrap();
+    assert_eq!(
+        mint.pointer("/spec/template/spec/containers/0/command/2")
+            .unwrap(),
+        "/opt/proofstorm/driver cln-mint-rune xpay; exec mint"
+    );
+}
+
+#[test]
 fn nutshell_cln_cell_uses_restricted_runtime_rune_contract() {
     let spec = nutshell_cln_cell();
     let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell+CLN lock");
