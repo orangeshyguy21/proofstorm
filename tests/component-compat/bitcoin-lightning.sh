@@ -46,7 +46,8 @@ cp "$root/crates/proofstorm-kube/tests/golden/bitcoin-core.json" "$work/bitcoin-
 cp "$root/crates/proofstorm-kube/tests/golden/lnd.json" "$work/lnd-render.json"
 cp "$root/crates/proofstorm-kube/tests/golden/cln.json" "$work/cln-render.json"
 
-# shellcheck disable=SC2329 # Exported and invoked by each independent Bash case.
+# ShellCheck 0.9 cannot follow exported calls into independent Bash cases.
+# shellcheck disable=SC2317,SC2329
 pair() (
   set -Eeuo pipefail
   btc=$1 ln=$2 index=$3

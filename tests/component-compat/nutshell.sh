@@ -23,7 +23,8 @@ else
   node "$prefix-north" pay "$invoice" > "$pair_directory/liquidity-payment.json"
   jq -e '.status=="complete"' "$pair_directory/liquidity-payment.json" >/dev/null
 fi
-# shellcheck disable=SC2329 # Exported and invoked by each independent Bash case.
+# ShellCheck 0.9 cannot follow exported calls into independent Bash cases.
+# shellcheck disable=SC2317,SC2329
 mint_case() (
   set -Eeuo pipefail
   entry=$1 index=$2
