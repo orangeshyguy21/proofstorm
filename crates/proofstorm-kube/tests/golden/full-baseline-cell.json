@@ -1370,7 +1370,7 @@
           "CDK_MINTD_WORK_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+        "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
         "mounts": [
           {
             "mount_path": "/config",
@@ -1494,7 +1494,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:ba65339344df26f360e79113d81f1153de252b63d7f69b2e35abeef3ea703b11",
+      "rollout_digest": "sha256:192be62cf946e5806b3b238f3bf590911f213694712b45b26969e38d23c2a5ed",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -1575,7 +1575,7 @@
           "HOME": "/wallet",
           "PROOFSTORM_WALLET": "{component_id}"
         },
-        "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
+        "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
         "mounts": [
           {
             "mount_path": "/wallet",
@@ -1653,7 +1653,7 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:d91ef44a00e591689d862bdc816735f052813716cb4d44f6f6773066df7bffe5",
+      "rollout_digest": "sha256:de4700766399248402b1bc5c5d6b6856ed5aade7ef3d4617af6c48208c2d9c99",
       "storage": [
         {
           "claim_name": "wallet-data"
@@ -1819,7 +1819,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:ba65339344df26f360e79113d81f1153de252b63d7f69b2e35abeef3ea703b11"
+                "proofstorm.dev/rollout-digest": "sha256:192be62cf946e5806b3b238f3bf590911f213694712b45b26969e38d23c2a5ed"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1859,7 +1859,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -1939,7 +1939,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "securityContext": {
@@ -2086,7 +2086,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:d91ef44a00e591689d862bdc816735f052813716cb4d44f6f6773066df7bffe5"
+                "proofstorm.dev/rollout-digest": "sha256:de4700766399248402b1bc5c5d6b6856ed5aade7ef3d4617af6c48208c2d9c99"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2128,7 +2128,7 @@
                       "value": "wallet"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
+                  "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "securityContext": {

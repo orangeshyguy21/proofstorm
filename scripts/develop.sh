@@ -76,7 +76,7 @@ resources=$("$helper" resources "$root")
 "$helper" launchers "$root"
 printf '\nCheckout ready: %s/bin/proofstorm\n' "$work"
 printf '%s\n' 'Commands: setup, doctor, gui, up, agent open.' \
-  'Runtime unchanged. Restart an existing GUI: gui stop, then gui.'
+  'Runtime unchanged. Run gui to open it; older GUI builds restart automatically.'
 if [[ "$mode" == --shell ]]; then
   printf 'Development shell selected. Run proofstorm setup first. Exit returns to your normal shell.\n'
   exec "$helper" shell "$root"

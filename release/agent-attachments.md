@@ -3,6 +3,18 @@
 Generated project attachments support Codex, OpenCode 1.x and Claude Code 2.x. No global agent configuration, model, provider, login,
 permission mode, or project trust choice is changed.
 
+Proofstorm is optional for agent startup. Codex attachments explicitly set
+`required = false`, so an unavailable Proofstorm server does not prevent Codex
+from starting or resuming. OpenCode and Claude attachments do not set a startup
+requirement. Reconfiguring an owned Codex attachment migrates the old
+`required = true` setting.
+
+Codex's desktop MCP settings currently disable the enable/disable toggle for
+project-sourced entries. This is a Codex UI restriction triggered by our project
+scope, not by `required`. Project scope is intentional. Checked September 15,
+2026 against the installed desktop app and the
+[official MCP configuration reference](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
 From the project directory:
 
 ```sh

@@ -15,7 +15,7 @@ use crate::{GateContext, cell, http, json as expect, postgres};
 const INSTANCE: &str = "cdk-bdk-instance";
 const DATABASE: &str = "proofstorm_bdk";
 const MARKER: &str = "bdk-persistent";
-const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint-management@sha256:36f0613c6ecd4140f9f29bc1441c222dd579d14f478e4e5c8e1f43760d3c6909";
+const IMAGE: &str = proofstorm_core::CDK_MINT_IMAGE;
 const PUBKEY: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const QUOTES: usize = 24;
 
@@ -112,18 +112,54 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
 }
 
 pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
-    let mut client = context.default_session("cdk-bdk-stress-live", "designer")?;
+    let client = context.default_session("cdk-bdk-stress-live", "designer")?;
+    run_selected(context, client, postgres_enabled, "0.18.0", IMAGE)
+}
 
-    let preview = client.call("cell_plan",json!({"name":INSTANCE,"cell":cell_document(postgres_enabled),"request_id":"create-cdk-bdk"}))?;
+pub(super) fn run_candidate(
+    context: &GateContext,
+    client: crate::McpClient,
+    receipt: &Value,
+) -> Result<()> {
+    run_selected(
+        context,
+        client,
+        false,
+        expect::string(receipt, "/catalog_entry/version")?,
+        expect::string(receipt, "/image")?,
+    )
+}
+
+fn run_selected(
+    context: &GateContext,
+    mut client: crate::McpClient,
+    postgres_enabled: bool,
+    selected_version: &str,
+    selected_image: &str,
+) -> Result<()> {
+    let mut document = cell_document(postgres_enabled);
+    document["components"][1]["version"] = json!(selected_version);
+
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":document,"request_id":"create-cdk-bdk"}),
+    )?;
     let published = crate::cell::review(&mut client, &preview)?;
     let entry = cell::lock_entry(&published, "cdk-bdk")?;
-    if expect::string(entry, "/version")? != "0.18.0" || expect::string(entry, "/image")? != IMAGE {
+    if expect::string(entry, "/version")? != selected_version
+        || expect::string(entry, "/image")? != selected_image
+    {
         bail!("unexpected CDK-BDK lock: {entry}");
     }
+    context.record("cdk-bdk-selected-plan.json", &published)?;
 
     crate::cell::apply(&mut client, &preview)?;
     let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
+    if selected_version.starts_with("candidate-") {
+        super::candidates::pod_image(context, namespace, selected_image)?;
+    }
+    context.record("cdk-bdk-selected-ready.json", &ready)?;
 
     let config = context.kubectl.exec(
         namespace,
@@ -192,6 +228,8 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
             })
             .collect()
     })?;
+
+    context.record("cdk-bdk-selected-quotes.json", &json!(quotes))?;
 
     let mut addresses: Vec<&str> = quotes
         .iter()
@@ -274,6 +312,10 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     {
         bail!("sub-minimum on-chain deposit was credited: {dust_status}");
     }
+    context.record(
+        "cdk-bdk-selected-settlement.json",
+        &json!({"funded":settled,"dust":dust_status,"missing_pubkey_status":refused}),
+    )?;
 
     if postgres_enabled {
         postgres::seed_sentinel(postgres_enabled, &context.kubectl, namespace, MARKER)?;
@@ -299,6 +341,7 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
                 .iter()
                 .all(|item| item.get("amount_paid").and_then(Value::as_u64).unwrap_or(0) >= 1200)
             {
+                context.record("cdk-bdk-selected-after-restart.json", &json!(items))?;
                 survived = true;
                 break;
             }

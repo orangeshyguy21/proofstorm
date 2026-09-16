@@ -154,11 +154,9 @@ pub fn bootstrap(
             quote(pubkey)
         ),
     )?;
-    let point = format!(
-        "{}:{}",
-        expect::string(&opened, "/funding_txid")?,
-        expect::integer(&opened, "/output_index")?
-    );
+    // lncli can acknowledge the funding transaction without an output index.
+    // Discover the actual outpoint from the active channel, never guess index 0.
+    expect::string(&opened, "/funding_txid")?;
     mine(
         client,
         name,
@@ -178,20 +176,53 @@ pub fn bootstrap(
             &format!("{id}-active-{attempt}"),
             &format!("{LND} listchannels"),
         )?;
-        if expect::array(&channels, "/channels")?
-            .iter()
-            .any(|channel| channel["channel_point"] == point && channel["active"] == true)
-        {
-            break;
+        if let Some(point) = active_channel_point(&opened, &channels)? {
+            return Ok(point);
         }
         ensure!(
             std::time::Instant::now() < deadline,
-            "accepted channel {point} did not become active: {channels}"
+            "accepted funding transaction {opened} did not become active: {channels}"
         );
         attempt += 1;
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    Ok(point)
+}
+
+fn active_channel_point(opened: &Value, channels: &Value) -> Result<Option<String>> {
+    let txid = expect::string(opened, "/funding_txid")?;
+    ensure!(
+        txid.len() == 64 && txid.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid accepted funding transaction"
+    );
+    let expected_index = opened
+        .get("output_index")
+        .map(|value| {
+            value
+                .as_u64()
+                .filter(|index| u32::try_from(*index).is_ok())
+                .ok_or_else(|| anyhow::anyhow!("invalid accepted output index"))
+        })
+        .transpose()?;
+    let prefix = format!("{txid}:");
+    let mut points = Vec::new();
+    for channel in expect::array(channels, "/channels")? {
+        let point = expect::string(channel, "/channel_point")?;
+        if channel["active"] == true
+            && let Some(index) = point.strip_prefix(&prefix)
+        {
+            let index: u32 = index.parse()?;
+            ensure!(
+                expected_index.is_none_or(|expected| expected == u64::from(index)),
+                "active outpoint differs from accepted output index"
+            );
+            points.push(point.to_owned());
+        }
+    }
+    ensure!(
+        points.len() <= 1,
+        "funding transaction matches multiple active channels"
+    );
+    Ok(points.pop())
 }
 
 pub fn mine(
@@ -213,4 +244,38 @@ pub fn mine(
         ),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_identity_comes_from_observation_when_acknowledgement_omits_index() {
+        let txid = "a".repeat(64);
+        let opened = json!({"funding_txid":txid});
+        let point = format!("{txid}:3");
+        let channels = json!({"channels":[{"channel_point":point,"active":true}]});
+        assert_eq!(
+            active_channel_point(&opened, &channels).unwrap(),
+            Some(point)
+        );
+        assert!(
+            active_channel_point(&json!({"funding_txid":txid,"output_index":0}), &channels)
+                .is_err()
+        );
+        assert_eq!(
+            active_channel_point(&opened, &json!({"channels":[]})).unwrap(),
+            None
+        );
+        assert_eq!(
+            active_channel_point(
+                &opened,
+                &json!({"channels":[{"channel_point":format!("{txid}:3"),"active":false}]})
+            )
+            .unwrap(),
+            None
+        );
+        assert!(active_channel_point(&opened, &json!({"channels":[{"channel_point":format!("{txid}:0"),"active":true},{"channel_point":format!("{txid}:1"),"active":true}]})).is_err());
+    }
 }

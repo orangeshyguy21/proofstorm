@@ -9,6 +9,8 @@ pub const PRESET: &str = "proofstorm/default/v1";
 pub fn capabilities() -> Vec<Capability> {
     proofstorm_core::mcp::default_capabilities()
         .into_iter()
+        // Local application access is a CLI/GUI capability, not an MCP tool.
+        .chain([Capability::CellConnect])
         .collect()
 }
 
@@ -21,4 +23,14 @@ pub fn configure(store: &Store, workspace: &str, principal: &str) -> Result<()> 
     store.put_principal(principal)?;
     store.replace_grants(workspace, principal, capabilities())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn local_developer_can_connect_without_expanding_agent_tool_grants() {
+        assert!(capabilities().contains(&Capability::CellConnect));
+        assert!(!proofstorm_core::mcp::default_capabilities().contains(&Capability::CellConnect));
+    }
 }

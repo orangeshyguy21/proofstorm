@@ -130,4 +130,12 @@ run verify "$namespace/cdk-cli-wallet@$IMAGE_TEST_MANIFEST" linux/amd64 "$scratc
 grep -q '"anonymous_verified": true' "$scratch/verify.json"
 if run verify "$namespace/cdk-cli-wallet@$IMAGE_TEST_MANIFEST" linux/arm64 "$scratch/wrong-platform.json"; then exit 1; fi
 grep -q '"anonymous_verified": false' "$scratch/wrong-platform.json"
+for rename in cdk-ldk-mint-management:cdk-mint nutshell-mint-management:nutshell-mint; do
+  old=${rename%%:*} current=${rename#*:}
+  run prepare-copy "$namespace/$old@$IMAGE_TEST_MANIFEST" linux/amd64 "$scratch/$current"
+  grep -q "\"repository\": \"$current\"" "$scratch/$current/image.json"
+  run publish "$scratch/$current" --confirm-namespace "$namespace"
+  grep -q "\"image\": \"$namespace/$current@$IMAGE_TEST_MANIFEST\"" "$scratch/$current/image.json"
+  grep -q '"publication": "verified"' "$scratch/$current/image.json"
+done
 echo 'Catalog image builds, copies, publication guards and partial receipts passed'

@@ -67,6 +67,22 @@ the cursor after an invalidation. Old plain session cursors must also restart.
 
 ## Examples
 
+Catalog discovery uses shared MCP/HTTP selectors: `catalog_list` accepts `query`,
+`regex`, `case_insensitive` (default true), `origins`, `scan`, `fields` and its existing
+exact implementation/kind/feature/lifecycle/dependency filters. For example,
+`{"query":"cdk","kinds":["mint"]}` selects CDK mint images across visible origins.
+Filters precede paging; complete wire size and snapshot-bound cursors remain bounded.
+A new CDK mint build supplies all three runtime presets with one image; use a selector
+from `catalog_entries` to choose a preset without another build. Catalog summaries
+expose `shared_image_implementations`; each entry retains its own configuration contract.
+
+`candidate_list` scans at most 500 stored records per call and reports `scanned_count`;
+`matched_count` is null because an exact total would require scanning all history.
+Continue through empty pages with a next cursor. Build updates invalidate that cursor.
+Candidate record/log resources provide digest-bound text pages with `next_uri` so recipe
+and retained diagnostic bodies do not need to fit a directory response. See
+[Cashu candidate images](../../CANDIDATES.md) for source forms and evidence boundaries.
+
 Find Bitcoin cells owned by an actor with `environment_read`:
 
 ```json

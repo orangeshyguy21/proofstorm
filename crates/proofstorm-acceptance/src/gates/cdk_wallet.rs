@@ -127,7 +127,7 @@ fn balance(
     Ok(())
 }
 
-fn exercise(
+pub(super) fn exercise(
     context: &GateContext,
     client: &mut McpClient,
     directory: &Path,

@@ -897,6 +897,49 @@ pub(crate) fn workload_observation(
     }
 }
 
+fn pod_scheduling_observation(
+    pod: &Pod,
+) -> Option<(
+    ComponentConditionState,
+    ComponentConditionReason,
+    &'static str,
+)> {
+    let condition = pod.status.as_ref()?.conditions.as_ref()?.iter().find(|c| {
+        c.type_ == "PodScheduled"
+            && c.status == "False"
+            && c.reason.as_deref() == Some("Unschedulable")
+    })?;
+    // A Deployment may be observed before the StatefulSet controller creates
+    // its shared credential/storage claim. This is ordinary startup progress.
+    let missing_claim = condition.message.as_deref().is_some_and(|message| {
+        pod.spec
+            .as_ref()
+            .and_then(|spec| spec.volumes.as_ref())
+            .into_iter()
+            .flatten()
+            .filter_map(|volume| volume.persistent_volume_claim.as_ref())
+            .any(|claim| {
+                message.contains(&format!(
+                    "persistentvolumeclaim \"{}\" not found",
+                    claim.claim_name
+                ))
+            })
+    });
+    Some(if missing_claim {
+        (
+            ComponentConditionState::False,
+            ComponentConditionReason::StoragePending,
+            "Pod is waiting for a referenced persistent volume claim to be created.",
+        )
+    } else {
+        (
+            ComponentConditionState::False,
+            ComponentConditionReason::PodUnschedulable,
+            "Pod cannot be scheduled. Check cluster capacity, volume binding, and placement constraints.",
+        )
+    })
+}
+
 fn pod_startup_failure<'a>(
     plan: &ComponentPlanContract,
     pods: impl IntoIterator<Item = &'a Pod>,
@@ -930,18 +973,8 @@ fn pod_startup_failure<'a>(
         let Some(status) = &pod.status else {
             continue;
         };
-        if status.conditions.as_ref().is_some_and(|conditions| {
-            conditions.iter().any(|c| {
-                c.type_ == "PodScheduled"
-                    && c.status == "False"
-                    && c.reason.as_deref() == Some("Unschedulable")
-            })
-        }) {
-            return Some((
-                ComponentConditionState::False,
-                Reason::PodUnschedulable,
-                "Pod cannot be scheduled. Check cluster capacity, volume binding, and placement constraints.",
-            ));
+        if let Some(scheduling) = pod_scheduling_observation(pod) {
+            return Some(scheduling);
         }
         for container in status
             .init_container_statuses
@@ -3807,6 +3840,30 @@ mod tests {
             pod_startup_failure(plan, &[pod]).unwrap().1,
             ComponentConditionReason::PodUnschedulable
         );
+    }
+
+    #[test]
+    fn new_claim_scheduling_races_do_not_hide_capacity_failures() {
+        let mut pod: Pod = serde_json::from_value(json!({
+            "spec":{"containers":[],"volumes":[{"name":"credentials","persistentVolumeClaim":{"claimName":"data-mint-lnd-0"}}]},
+            "status":{"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable",
+                "message":"0/2 nodes are available: persistentvolumeclaim \"data-mint-lnd-0\" not found. not found"}]}
+        })).unwrap();
+        let observation = pod_scheduling_observation(&pod).unwrap();
+        assert_eq!(observation.0, ComponentConditionState::False);
+        assert_eq!(observation.1, ComponentConditionReason::StoragePending);
+        assert!(!observation.1.blocks_startup());
+        for message in [
+            "0/2 nodes are available: Insufficient memory. SECRET node detail",
+            "persistentvolumeclaim \"unreferenced-claim\" not found",
+        ] {
+            pod.status.as_mut().unwrap().conditions.as_mut().unwrap()[0].message =
+                Some(message.into());
+            let observation = pod_scheduling_observation(&pod).unwrap();
+            assert_eq!(observation.1, ComponentConditionReason::PodUnschedulable);
+            assert!(observation.1.blocks_startup());
+            assert!(!observation.2.contains("SECRET"));
+        }
     }
 
     #[test]

@@ -139,6 +139,7 @@ fn human(command: &str, value: &Value) -> String {
         "setup" if value["prepared"] == true => {
             format!("Tools prepared. Runtime not started.\nStart it: {bin} setup\n")
         }
+        "gui" if value["sign_in_link"] == true => format!("{}\n", field(value, "url")),
         "gui" => format!(
             "GUI {}: {}\nStop the GUI: {bin} gui stop\n",
             match value["browser"].as_str() {
@@ -685,5 +686,18 @@ mod tests {
             &json!({"changes_applied":false,"attachment":{"project":"/project","entry":{"command":"/bin/mcp"}}}),
         );
         assert!(preview.contains("changes applied: false") && preview.contains("/bin/mcp"));
+    }
+    #[test]
+    fn gui_link_prints_only_the_requested_sign_in_url() {
+        let link = "http://127.0.0.1:1234/#session=example&project=%2Ftmp";
+        assert_eq!(
+            human("gui", &serde_json::json!({"sign_in_link":true,"url":link})),
+            format!("{link}\n")
+        );
+        let ordinary = human(
+            "gui",
+            &serde_json::json!({"url":"http://127.0.0.1:1234","browser":"opened_default_browser"}),
+        );
+        assert!(!ordinary.contains("session="));
     }
 }

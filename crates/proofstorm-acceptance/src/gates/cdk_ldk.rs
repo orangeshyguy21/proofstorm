@@ -15,7 +15,7 @@ use crate::{GateContext, cell, http, json as expect, postgres};
 const INSTANCE: &str = "cdk-ldk-instance";
 const DATABASE: &str = "proofstorm_ldk";
 const MARKER: &str = "ldk-persistent";
-const IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-ldk-mint-management@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
+const IMAGE: &str = proofstorm_core::CDK_MINT_IMAGE;
 
 fn cell_document(postgres_enabled: bool) -> Value {
     let mut cell = json!({
@@ -48,17 +48,51 @@ fn ldk_node_id(logs: &str) -> Option<&str> {
 }
 
 pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
-    let mut client = context.default_session("cdk-ldk-live", "designer")?;
+    let client = context.default_session("cdk-ldk-live", "designer")?;
+    run_selected(context, client, postgres_enabled, "0.18.0", IMAGE)
+}
 
-    let preview = client.call("cell_plan",json!({"name":INSTANCE,"cell":cell_document(postgres_enabled),"request_id":"create-cdk-ldk"}))?;
+pub(super) fn run_candidate(
+    context: &GateContext,
+    client: crate::McpClient,
+    receipt: &Value,
+) -> Result<()> {
+    run_selected(
+        context,
+        client,
+        false,
+        expect::string(receipt, "/catalog_entry/version")?,
+        expect::string(receipt, "/image")?,
+    )
+}
+
+fn run_selected(
+    context: &GateContext,
+    mut client: crate::McpClient,
+    postgres_enabled: bool,
+    selected_version: &str,
+    selected_image: &str,
+) -> Result<()> {
+    let mut document = cell_document(postgres_enabled);
+    document["components"][2]["version"] = json!(selected_version);
+
+    let preview = client.call(
+        "cell_plan",
+        json!({"name":INSTANCE,"cell":document,"request_id":"create-cdk-ldk"}),
+    )?;
     let published = crate::cell::review(&mut client, &preview)?;
     let entry = cell::lock_entry(&published, "cdk-ldk")?;
-    expect::equals(entry, "/version", &Value::from("0.18.0"))?;
-    expect::equals(entry, "/image", &Value::from(IMAGE))?;
+    expect::equals(entry, "/version", &Value::from(selected_version))?;
+    expect::equals(entry, "/image", &Value::from(selected_image))?;
+    context.record("cdk-ldk-selected-plan.json", &published)?;
 
     crate::cell::apply(&mut client, &preview)?;
     let ready = cell::wait_ready(&mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
+    if selected_version.starts_with("candidate-") {
+        super::candidates::pod_image(context, namespace, selected_image)?;
+    }
+    context.record("cdk-ldk-selected-ready.json", &ready)?;
 
     let config = context.kubectl.exec(
         namespace,
@@ -141,6 +175,7 @@ pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     if expect::string(&quote, "/unit")? != "sat" || expect::integer(&quote, "/amount")? != 100 {
         bail!("BOLT12 quote returned unexpected terms: {quote}");
     }
+    context.record("cdk-ldk-selected-quote.json", &quote)?;
 
     if postgres_enabled {
         let quote_id = expect::string(&quote, "/quote")?.to_string();

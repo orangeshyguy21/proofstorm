@@ -3,7 +3,9 @@ use futures::{StreamExt, stream};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, ResourceExt, api::AttachParams};
 use proofstorm_kube::{COMPONENT_LABEL, ProofstormCell, ROLLOUT_DIGEST_ANNOTATION};
-use proofstorm_view::{BalanceAmount, ComponentBalance, HoldingsObservation, LightningObservation};
+use proofstorm_view::{
+    BalanceAmount, BitcoinObservation, ComponentBalance, HoldingsObservation, LightningObservation,
+};
 use serde_json::Value;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -24,6 +26,7 @@ pub(super) async fn sample(
                     "bitcoin-core"
                         | "lnd"
                         | "cln"
+                        | "cdk-ldk"
                         | "cdk-cli-wallet"
                         | "cocod-wallet"
                         | "nutshell-wallet"
@@ -57,32 +60,36 @@ pub(super) async fn sample(
                         )
                 })
         });
-        let mut result = ComponentBalance {
-            component: component.id.clone(),
-            rollout_digest: entry.map(|e| e.rollout_digest.clone()),
-            observed_at_unix: super::now(),
-            error: Some("Observation unavailable".into()),
-            amounts: vec![],
-            block_height: None,
-            lightning: matches!(component.implementation.as_str(), "lnd" | "cln").then(|| {
-                LightningObservation {
-                    error: Some("Channel observation unavailable".into()),
-                    ..Default::default()
-                }
-            }),
-            holdings: component
-                .implementation
-                .ends_with("wallet")
-                .then(|| HoldingsObservation {
-                    error: Some("Holdings observation unavailable".into()),
+        let mut result =
+            ComponentBalance {
+                bitcoin: (component.implementation == "bitcoin-core").then(|| BitcoinObservation {
+                    error: Some("Peer observation unavailable".into()),
                     ..Default::default()
                 }),
-        };
+                component: component.id.clone(),
+                rollout_digest: entry.map(|e| e.rollout_digest.clone()),
+                observed_at_unix: super::now(),
+                error: Some("Observation unavailable".into()),
+                amounts: vec![],
+                block_height: None,
+                lightning: matches!(component.implementation.as_str(), "lnd" | "cln" | "cdk-ldk")
+                    .then(|| LightningObservation {
+                        error: Some("Channel observation unavailable".into()),
+                        ..Default::default()
+                    }),
+                holdings: component.implementation.ends_with("wallet").then(|| {
+                    HoldingsObservation {
+                        error: Some("Holdings observation unavailable".into()),
+                        ..Default::default()
+                    }
+                }),
+            };
         if let Some(pod) = pod {
             observe(
                 cell,
                 pods,
                 &pod.name_any(),
+                inventory,
                 &component.implementation,
                 &mut result,
             )
@@ -106,25 +113,22 @@ async fn observe(
     cell: &ProofstormCell,
     pods: &Api<Pod>,
     pod: &str,
+    inventory: &[Pod],
     implementation: &str,
     result: &mut ComponentBalance,
 ) {
     match implementation {
-        "bitcoin-core" => {
-            result.block_height = read(
-                pods,
-                pod,
-                vec![
-                    "bitcoin-cli".into(),
-                    "-regtest".into(),
-                    format!("-rpcuser={}", proofstorm_kube::BITCOIN_RPC_USER),
-                    format!("-rpcpassword={}", proofstorm_kube::BITCOIN_RPC_PASSWORD),
-                    "getblockchaininfo".into(),
-                ],
-            )
-            .await
-            .and_then(|v| v["blocks"].as_u64());
-            if result.block_height.is_some() {
+        "bitcoin-core" => observe_bitcoin(cell, pods, pod, inventory, result).await,
+        "cdk-ldk" => {
+            let (dashboard, channels) = tokio::join!(
+                super::ldk::page(pods, pod, "/"),
+                super::ldk::page(pods, pod, "/balance")
+            );
+            if let Some(observation) = dashboard
+                .zip(channels)
+                .and_then(|(d, c)| super::ldk::project(&d, &c))
+            {
+                result.lightning = Some(observation);
                 result.error = None;
             }
         }
@@ -202,6 +206,36 @@ async fn observe(
         }
     }
 }
+
+async fn observe_bitcoin(
+    cell: &ProofstormCell,
+    pods: &Api<Pod>,
+    pod: &str,
+    inventory: &[Pod],
+    result: &mut ComponentBalance,
+) {
+    let command = |action: &str| {
+        vec![
+            "bitcoin-cli".into(),
+            "-regtest".into(),
+            format!("-rpcuser={}", proofstorm_kube::BITCOIN_RPC_USER),
+            format!("-rpcpassword={}", proofstorm_kube::BITCOIN_RPC_PASSWORD),
+            action.into(),
+        ]
+    };
+    let (info, peers) = tokio::join!(
+        read(pods, pod, command("getblockchaininfo")),
+        read(pods, pod, command("getpeerinfo")),
+    );
+    result.block_height = info.and_then(|v| v["blocks"].as_u64());
+    if let Some(observation) = peers.and_then(|v| super::bitcoin::project(cell, inventory, &v)) {
+        result.bitcoin = Some(observation);
+    }
+    if result.block_height.is_some() {
+        result.error = None;
+    }
+}
+
 fn lnd_amounts(funds: &Value, observation: &LightningObservation) -> Option<Vec<BalanceAmount>> {
     if observation.error.is_some() {
         return None;

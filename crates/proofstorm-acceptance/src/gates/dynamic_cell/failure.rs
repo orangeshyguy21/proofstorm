@@ -14,6 +14,7 @@ pub fn check(
     let store = proofstorm_store::Store::open(context.database())?;
     store.grant(&workspace, "agent", Capability::CandidateBuild)?;
     let fixture = CandidateBuild {
+        diagnostics: None,
         api_version: proofstorm_core::CANDIDATE_BUILD_API_VERSION.into(),
         id: "missing-image-test-fixture".into(),
         workspace_id: workspace.clone(),
@@ -23,6 +24,7 @@ pub fn check(
         pull_request_url: "https://github.com/cashubtc/nutshell/pull/1".into(),
         resource_name: "synthetic-missing-image-fixture".into(),
         request_digest: "sha256:test-fixture".into(),
+        provenance: None,
         build_features: [
             proofstorm_core::CatalogFeature::MintManagementRpc,
             proofstorm_core::CatalogFeature::NativeCliEntrypoints,

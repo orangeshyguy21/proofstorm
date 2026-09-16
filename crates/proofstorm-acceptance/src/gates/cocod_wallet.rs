@@ -29,7 +29,7 @@ pub(super) fn relay_invoice(receipt: &Value, amount_sat: u64) -> Result<&str> {
     expect::string(receipt, "/selected_output/payment_request")
 }
 
-fn document() -> Value {
+pub(super) fn document() -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cocod-wallet-checkpoint",
         "components":[
@@ -233,7 +233,7 @@ fn identity(client: &mut McpClient, directory: &Path, wallet: &str, id: &str) ->
     Ok(serde_json::from_str(&value)?)
 }
 
-fn exercise(
+pub(super) fn exercise(
     context: &GateContext,
     client: &mut McpClient,
     directory: &Path,

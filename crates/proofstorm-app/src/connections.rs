@@ -96,7 +96,12 @@ impl Cells {
         )?;
         let (target_port, authentication) = endpoint(&revision, component, endpoint_name)?;
         // Verify a real service and ready target before advertising a local address.
-        resolve_pod(&self.runtime, &instance, component, target_port).await?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            resolve_pod(&self.runtime, &instance, component, target_port),
+        )
+        .await
+        .map_err(|_| Error::problem("connection_timeout", "Connection setup timed out"))??;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, local_port))
             .await
             .map_err(io_error)?;
@@ -141,34 +146,51 @@ impl Connection {
     /// Bounded concurrent TCP forwarding. Dropping this future aborts accepted
     /// connections; each connection re-resolves the current workload after restart.
     pub async fn serve(self) -> Result<(), Error> {
+        self.serve_until(std::future::pending()).await
+    }
+
+    /// Cancel cooperatively so all forwarded sockets are closed before returning.
+    pub(crate) async fn serve_until(
+        self,
+        stop: impl std::future::Future<Output = ()>,
+    ) -> Result<(), Error> {
         let mut tasks = JoinSet::new();
-        let mut health = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            tokio::select! {
-                accepted=self.listener.accept(), if tasks.len()<32 => {
-                    let (socket,_)=accepted.map_err(io_error)?;
-                    let runtime=self.cells.runtime.clone();
-                    let instance=self.instance.clone();
-                    let component=self.descriptor.component.clone();
-                    let port=self.target_port;
-                    tasks.spawn(async move {forward(runtime,instance,component,port,socket).await});
-                },
-                completed=tasks.join_next(), if !tasks.is_empty() => {
-                    if let Some(result)=completed {
-                        match result {Ok(Ok(()))=>{},Ok(Err(error))=>eprintln!("connection ended: {error}"),Err(error)=>eprintln!("connection task ended: {error}")}
+        let result = {
+            let serving = async {
+                let mut health = tokio::time::interval(Duration::from_secs(1));
+                loop {
+                    tokio::select! {
+                        accepted=self.listener.accept(), if tasks.len()<32 => {
+                            let (socket,_)=accepted.map_err(io_error)?;
+                            let runtime=self.cells.runtime.clone();
+                            let instance=self.instance.clone();
+                            let component=self.descriptor.component.clone();
+                            let port=self.target_port;
+                            tasks.spawn(async move {forward(runtime,instance,component,port,socket).await});
+                        },
+                        completed=tasks.join_next(), if !tasks.is_empty() => {
+                            if let Some(result)=completed {
+                                match result {Ok(Ok(()))=>{},Ok(Err(error))=>eprintln!("connection ended: {error}"),Err(error)=>eprintln!("connection task ended: {error}")}
+                            }
+                        },
+                        _=health.tick()=> {
+                            self.cells.runtime_available()?;
+                            self.cells.store.authorize(&self.cells.workspace,&self.cells.principal,Capability::CellConnect)?;
+                            let cell=self.cells.resolve(&self.descriptor.cell)?;
+                            if cell.phase!=CellHandlePhase::Open || self.cells.resolve_instance(&self.descriptor.cell)?.instance_key!=self.instance.instance_key {return Ok(());}
+                            let cells=Api::<proofstorm_kube::ProofstormCell>::namespaced(self.cells.runtime.client.clone(),&self.cells.runtime.control_namespace);
+                            let Some(cell)=tokio::time::timeout(Duration::from_secs(5), cells.get_opt(&self.instance.resource_name)).await.map_err(|_| Error::problem("connection_health_timeout", "runtime health check timed out; connection closed"))?? else {return Ok(());};
+                            if proofstorm_kube::require_open_cell(&cell).is_err() {return Ok(());}
+                        }
                     }
-                },
-                _=health.tick()=> {
-                    self.cells.runtime_available()?;
-                    self.cells.store.authorize(&self.cells.workspace,&self.cells.principal,Capability::CellConnect)?;
-                    let cell=self.cells.resolve(&self.descriptor.cell)?;
-                    if cell.phase!=CellHandlePhase::Open || self.cells.resolve_instance(&self.descriptor.cell)?.instance_key!=self.instance.instance_key {return Ok(());}
-                    let cells=Api::<proofstorm_kube::ProofstormCell>::namespaced(self.cells.runtime.client.clone(),&self.cells.runtime.control_namespace);
-                    let Some(cell)=tokio::time::timeout(Duration::from_secs(5), cells.get_opt(&self.instance.resource_name)).await.map_err(|_| Error::problem("connection_health_timeout", "runtime health check timed out; connection closed"))?? else {return Ok(());};
-                    if proofstorm_kube::require_open_cell(&cell).is_err() {return Ok(());}
                 }
-            }
-        }
+            };
+            tokio::pin!(serving);
+            tokio::select! { biased; () = stop => Ok(()), result = &mut serving => result }
+        };
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+        result
     }
 }
 
@@ -247,12 +269,21 @@ async fn forward(
     port: u16,
     mut socket: TcpStream,
 ) -> Result<(), Error> {
-    let pod = resolve_pod(&runtime, &instance, &component, port).await?;
+    let pod = tokio::time::timeout(
+        Duration::from_secs(10),
+        resolve_pod(&runtime, &instance, &component, port),
+    )
+    .await
+    .map_err(|_| Error::problem("connection_timeout", "Workload lookup timed out"))??;
     let pods = Api::<Pod>::namespaced(
         runtime.client.clone(),
         &proofstorm_kube::instance_namespace(&instance.instance_key),
     );
-    let mut forwarder = ForwardGuard(pods.portforward(&pod, &[port]).await?);
+    let mut forwarder = ForwardGuard(
+        tokio::time::timeout(Duration::from_secs(10), pods.portforward(&pod, &[port]))
+            .await
+            .map_err(|_| Error::problem("connection_timeout", "Tunnel setup timed out"))??,
+    );
     let mut stream = forwarder.0.take_stream(port).ok_or_else(|| {
         Error::problem(
             "connection_stream_missing",

@@ -100,6 +100,8 @@ struct FolderRequest {
 pub(crate) async fn route(
     request: &mut Request<Incoming>,
     session: Arc<Session>,
+    cells: crate::cell::Cells,
+    connections: Arc<super::connections::Connections>,
 ) -> Option<Response<Body>> {
     let path = request.uri().path().to_owned();
     let origin = session.record.url();
@@ -147,12 +149,53 @@ pub(crate) async fn route(
         return Some(fail(
             StatusCode::UNAUTHORIZED,
             &format!(
-                "Run {} gui to open an authenticated browser session.",
+                "Run {} gui link, then open the printed link in this browser.",
                 crate::command_name()
             ),
         ));
     }
     let response = match (request.method().as_str(), path.as_str()) {
+        ("GET", "/v1/gui/connections") => {
+            if cells
+                .store
+                .authorize(
+                    &cells.workspace,
+                    &cells.principal,
+                    proofstorm_core::Capability::CellConnect,
+                )
+                .is_err()
+            {
+                fail(StatusCode::FORBIDDEN, "Local connection access denied")
+            } else {
+                json(StatusCode::OK, &connections.snapshot())
+            }
+        }
+        ("GET", "/v1/gui/connections/events") => connection_events(&connections, cells),
+        ("POST", "/v1/gui/connections/open") => {
+            if session.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                fail(StatusCode::CONFLICT, "GUI is stopping")
+            } else {
+                match body::<proofstorm_view::OpenLocalConnection>(request).await {
+                    Ok(input) => match connections.open(cells, input) {
+                        Ok(view) => json(StatusCode::OK, &view),
+                        Err(error) => fail(StatusCode::CONFLICT, &error.to_string()),
+                    },
+                    Err(_) => fail(
+                        StatusCode::BAD_REQUEST,
+                        "A cell, incarnation and mint component are required",
+                    ),
+                }
+            }
+        }
+        ("POST", "/v1/gui/connections/close") => {
+            match body::<proofstorm_view::CloseLocalConnection>(request).await {
+                Ok(input) => {
+                    connections.close(&input.id).await;
+                    json(StatusCode::OK, &serde_json::json!({"closed":true}))
+                }
+                Err(_) => fail(StatusCode::BAD_REQUEST, "A connection ID is required"),
+            }
+        }
         ("GET", "/v1/gui/health") if bearer => json(StatusCode::OK, &session.record.health()),
         ("GET", "/v1/gui/context") => {
             let s = session.clone();
@@ -303,4 +346,70 @@ pub(crate) fn secure(response: &mut Response<Body>) {
             .headers_mut()
             .insert(name, hyper::header::HeaderValue::from_static(value));
     }
+}
+
+fn connection_events(
+    manager: &Arc<super::connections::Connections>,
+    cells: crate::cell::Cells,
+) -> Response<Body> {
+    use http_body_util::StreamBody;
+    use hyper::body::{Bytes, Frame};
+    let can_connect = |cells: &crate::cell::Cells| {
+        cells
+            .store
+            .authorize(
+                &cells.workspace,
+                &cells.principal,
+                proofstorm_core::Capability::CellConnect,
+            )
+            .is_ok()
+    };
+    if !can_connect(&cells) {
+        return fail(StatusCode::FORBIDDEN, "Local connection access denied");
+    }
+    let Ok(permit) = manager.streams.clone().try_acquire_owned() else {
+        return fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Too many connection streams",
+        );
+    };
+    let stream = futures::stream::unfold(
+        (manager.subscribe(), true, cells, permit),
+        move |(mut updates, first, cells, permit)| async move {
+            let changed = if first {
+                true
+            } else {
+                tokio::select! {
+                    result = updates.changed() => { if result.is_err() { return None; } true },
+                    () = tokio::time::sleep(Duration::from_secs(2)) => false,
+                }
+            };
+            if !can_connect(&cells) {
+                return None;
+            }
+            let data = if changed {
+                format!(
+                    "event: connections\ndata: {}\n\n",
+                    serde_json::to_string(&*updates.borrow_and_update()).unwrap()
+                )
+            } else {
+                ": keepalive\n\n".into()
+            };
+            Some((
+                Ok::<_, std::convert::Infallible>(Frame::data(Bytes::from(data))),
+                (updates, false, cells, permit),
+            ))
+        },
+    );
+    let mut response = Response::new(BodyExt::boxed(StreamBody::new(stream)));
+    for (name, value) in [
+        ("content-type", "text/event-stream"),
+        ("cache-control", "no-store"),
+        ("x-accel-buffering", "no"),
+    ] {
+        response
+            .headers_mut()
+            .insert(name, hyper::header::HeaderValue::from_static(value));
+    }
+    response
 }

@@ -93,6 +93,8 @@ pub struct ProofstormCellStatus {
 )]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormCandidateBuildSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<proofstorm_core::CandidateProvenance>,
     pub workspace_id: String,
     pub candidate_id: String,
     pub principal_id: String,
@@ -111,6 +113,8 @@ pub struct ProofstormCandidateBuildSpec {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofstormCandidateBuildStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<proofstorm_core::CandidateDiagnostics>,
     pub phase: CandidateBuildPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,

@@ -535,7 +535,7 @@
           "CASHU_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
+        "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
         "mounts": [
           {
             "mount_path": "/app/data",
@@ -650,7 +650,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:506f9b6bc7cba3707874f2444fccfbeb5ebc7fbf55fbde49045a81e3212fcd51",
+      "rollout_digest": "sha256:cd56c282b9869c62e19377b6b185217164a914b15c4ee2fdc0c294fa4241ab04",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -783,7 +783,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:506f9b6bc7cba3707874f2444fccfbeb5ebc7fbf55fbde49045a81e3212fcd51"
+                "proofstorm.dev/rollout-digest": "sha256:cd56c282b9869c62e19377b6b185217164a914b15c4ee2fdc0c294fa4241ab04"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -831,7 +831,7 @@
                       }
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
+                  "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [

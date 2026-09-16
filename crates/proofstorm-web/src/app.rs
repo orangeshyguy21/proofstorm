@@ -21,7 +21,14 @@ const WORDMARK_SVG: &str = include_str!("../assets/proofstorm-word-mark.svg");
 pub fn App() -> impl IntoView {
     crate::freshness::provide_clock();
     crate::gui::provide_launcher();
+    crate::connections::provide_connections();
     let system_open = RwSignal::new(false);
+    let catalog_open = RwSignal::new(false);
+    Effect::new(move |_| {
+        if system_open.get() {
+            catalog_open.set(false);
+        }
+    });
     let navigation = RwSignal::new(
         web_sys::window()
             .and_then(|w| w.inner_width().ok())
@@ -224,13 +231,23 @@ pub fn App() -> impl IntoView {
                     environment.get().map(|v| v.cells.items.into_iter().filter(|cell| cell_name(cell).to_lowercase().contains(&query)).map(|cell| {
                         let id = cell.id.clone(); let active_id = id.clone();
                         let name = cell_name(&cell); let name_title = name.clone(); let status = cell_phase(&cell);
-                        view! { <button class=move || if !system_open.get() && selected.get() == active_id { "cell-item selected" } else { "cell-item" } on:click=move |_| {
+                        view! { <button class=move || if !catalog_open.get() && !system_open.get() && selected.get() == active_id { "cell-item selected" } else { "cell-item" } on:click=move |_| {
                             system_open.set(false);
+                            catalog_open.set(false);
                             if selected.get_untracked() != id { selected.set(id.clone()); detail.set(None); zoom.set(1.0); pan.set((0.0,0.0)); component.set(String::new()); history_pages.set(1); }
                         }><span class="cell-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M7 16H6a4 4 0 1 1 .8-7.92A6 6 0 0 1 18 7a4.5 4.5 0 0 1 .5 8.97H17M13 12l-3 5h4l-3 5" /></svg></span><span class="cell-item-text"><strong title=name_title>{name}</strong><small>{status}</small></span></button> }
                     }).collect_view())
                 }}</nav>
-                <footer class="sidebar-footer"><span class="sidebar-footer-label">"Theme"</span><ThemePicker /></footer>
+                <footer class="sidebar-footer">
+                    <button class=move || if catalog_open.get() { "sidebar-footer-link selected" } else { "sidebar-footer-link" } aria-pressed=move || catalog_open.get() on:click=move |_| {
+                        system_open.set(false);
+                        catalog_open.set(true);
+                        if web_sys::window().and_then(|w| w.inner_width().ok()).and_then(|v| v.as_f64()).is_some_and(|width| width <= 760.0) {
+                            navigation.set(false);
+                        }
+                    }><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" /></svg><span>"Component catalog"</span><svg class="ui-icon footer-link-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></button>
+                    <div class="sidebar-footer-theme"><span class="sidebar-footer-label">"Theme"</span><ThemePicker /></div>
+                </footer>
             </aside>
             <main class=move || if !connected.get() || telemetry_error.get() { "measurements-stale" } else { "" }>
                 <div class="notifications">
@@ -240,7 +257,8 @@ pub fn App() -> impl IntoView {
                     <Show when=move || telemetry_error.get()><div class="notice warning">"Measurements could not refresh. Showing last observed values."</div></Show>
                 </div>
                 <Show when=move || system_open.get()><SystemPanel telemetry selected_cell=selected selected_component=component open=system_open /></Show>
-                <Show when=move || !system_open.get()>
+                <Show when=move || catalog_open.get()><crate::catalog::CatalogHome /></Show>
+                <Show when=move || !system_open.get() && !catalog_open.get()>
                     <CellPanel cell=detail selected_component=component history_pages zoom pan telemetry drawer />
                     <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark" aria-hidden="true" inner_html=LOGO_SVG></span><Show when=move || !loaded.get() || !selected.get().is_empty()><h1>"Loading cell…"</h1></Show><Show when=move || loaded.get() && selected.get().is_empty()><crate::gui::EmptyAgentLauncher /></Show></div></Show>
                 </Show>

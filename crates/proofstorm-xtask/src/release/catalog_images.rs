@@ -16,9 +16,8 @@ use std::{
 const NAMESPACE: &str = "ghcr.io/orangeshyguy21/proofstorm";
 const RECIPES: &[&str] = &[
     "bitcoin-core",
-    "cdk-mint-management",
-    "cdk-ldk-mint-management",
-    "nutshell-mint-management",
+    "cdk-mint",
+    "nutshell-mint",
     "cdk-cli-wallet",
     "cocod-wallet",
 ];
@@ -26,8 +25,10 @@ const RECIPES: &[&str] = &[
 fn recipe(name: &str) -> Result<&'static str> {
     Ok(match name {
         "bitcoin-core" => "docker/bitcoin/Dockerfile",
-        "cdk-mint-management" | "cdk-ldk-mint-management" => "docker/mint/Dockerfile.kube-cdk",
-        "nutshell-mint-management" => "docker/mint/Dockerfile.kube-nutshell",
+        "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
+            "docker/mint/Dockerfile.kube-cdk"
+        }
+        "nutshell-mint" | "nutshell-mint-management" => "docker/mint/Dockerfile.kube-nutshell",
         "cdk-cli-wallet" => "docker/wallet/Dockerfile.kube-cdk",
         "cocod-wallet" => "docker/wallet/Dockerfile.kube-cocod",
         _ => bail!("unknown catalog image; controller builds use release-controller-build"),
@@ -37,14 +38,29 @@ fn recipe(name: &str) -> Result<&'static str> {
 fn probe(name: &str) -> Result<&'static str> {
     Ok(match name {
         "bitcoin-core" => "bitcoind --version",
-        "cdk-mint-management" | "cdk-ldk-mint-management" => {
+        "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             "cdk-mint-cli --version && cdk-mintd --version"
         }
-        "nutshell-mint-management" => "mint --version && cashu --help && mint-cli --help",
+        "nutshell-mint" | "nutshell-mint-management" => {
+            "mint --version && cashu --help && mint-cli --help"
+        }
         "cdk-cli-wallet" => "cdk-cli --version",
         "cocod-wallet" => "cocod --version",
         _ => bail!("unknown catalog probe"),
     })
+}
+
+/// New copies use the current names; existing receipts retain their destinations.
+fn current_repository(name: &str) -> &str {
+    match name {
+        "cdk-ldk-mint-management" => "cdk-mint",
+        "nutshell-mint-management" => "nutshell-mint",
+        _ => name,
+    }
+}
+
+fn copy_repository_matches(source: &str, destination: &str) -> bool {
+    source == destination || current_repository(source) == destination
 }
 
 #[derive(Deserialize, Serialize)]
@@ -119,16 +135,21 @@ impl Receipt {
                     && (self.publication == Publication::Prepared || self.local_verified),
                 "unverified source snapshot"
             ),
-            Input::Copy { image } => ensure!(
-                registry::Reference::parse(image)?
-                    .repository
-                    .rsplit('/')
-                    .next()
-                    == Some(self.repository.as_str())
-                    && self.local_image_id.is_none()
-                    && !self.local_verified,
-                "copy source repository changed"
-            ),
+            Input::Copy { image } => {
+                let reference = registry::Reference::parse(image)?;
+                ensure!(
+                    reference
+                        .repository
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|source| {
+                            copy_repository_matches(source, &self.repository)
+                        })
+                        && self.local_image_id.is_none()
+                        && !self.local_verified,
+                    "copy source repository changed"
+                );
+            }
         }
         if let Some(id) = &self.local_image_id {
             ensure!(
@@ -251,6 +272,10 @@ fn verify_cocod_archive(work: &Path) -> Result<()> {
 }
 
 fn prepare(root: &Path, work: &Path, name: &str, platform: &str, copy: Option<&str>) -> Result<()> {
+    ensure!(
+        RECIPES.contains(&name),
+        "select a current catalog recipe; mint images use cdk-mint and nutshell-mint"
+    );
     recipe(name)?;
     registry::architecture(platform)?;
     let publication = bundle::read_json(&root.join("release/ghcr.json"))?;
@@ -269,7 +294,11 @@ fn prepare(root: &Path, work: &Path, name: &str, platform: &str, copy: Option<&s
     let input = if let Some(image) = copy {
         let reference = registry::Reference::parse(image)?;
         ensure!(
-            reference.repository.rsplit('/').next() == Some(name),
+            reference
+                .repository
+                .rsplit('/')
+                .next()
+                .is_some_and(|source| copy_repository_matches(source, name)),
             "copy source repository mismatch"
         );
         registry::verify(image, None, platform, false)?;
@@ -366,11 +395,11 @@ fn valid_probe(repository: &str, output: &str) -> bool {
         ),
         "cdk-cli-wallet" => output.trim() == "cdk-cli 0.18.0",
         "cocod-wallet" => output.trim() == "0.0.17",
-        "cdk-mint-management" | "cdk-ldk-mint-management" => {
+        "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
             lines == ["cdk-mint-rpc 0.18.0", "cdk-mintd 0.18.0"]
         }
-        "nutshell-mint-management" => {
+        "nutshell-mint" | "nutshell-mint-management" => {
             output.lines().next() == Some("Nutshell, version 0.20.3")
                 && output.contains("Usage: cashu [OPTIONS] COMMAND [ARGS]...")
                 && output.contains("Usage: mint-cli [OPTIONS] COMMAND [ARGS]...")
@@ -463,7 +492,12 @@ fn fields(work: &Path) -> Result<()> {
         Input::Copy { image } => ("copy", image.clone()),
     };
     let mut mint_image = String::new();
-    if kind == "build" && receipt.repository == "cdk-ldk-mint-management" {
+    if kind == "build"
+        && matches!(
+            receipt.repository.as_str(),
+            "cdk-mint" | "cdk-ldk-mint-management"
+        )
+    {
         let value =
             bundle::read_json(&work.join("source/docker/mint/cdk-ldk-management-provenance.json"))?;
         text(&value, "runtime_image")?.clone_into(&mut mint_image);
@@ -553,7 +587,7 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
             prepare(
                 &Path::new(root).canonicalize()?,
                 Path::new(work),
-                reference.repository.rsplit('/').next().unwrap(),
+                current_repository(reference.repository.rsplit('/').next().unwrap()),
                 platform,
                 Some(image),
             )

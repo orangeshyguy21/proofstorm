@@ -1,7 +1,9 @@
 //! One bounded sampler per server. HTTP reads only return its cached snapshot.
 mod balances;
+mod bitcoin;
 mod channels;
 mod holdings;
+mod ldk;
 mod retention;
 use crate::{Error, cell::Cells};
 use futures::{StreamExt, stream};
@@ -344,5 +346,72 @@ mod tests {
         assert_eq!(totals.cpu_millicores, Some(10.0));
         assert!(rows[1].cpu_millicores.is_none());
         assert!(rows[2].cpu_millicores.is_none());
+    }
+}
+
+#[cfg(test)]
+mod live_relationship_tests {
+    use super::*;
+    /// Opt-in read-only check against an existing cell; never creates peers/channels.
+    #[tokio::test]
+    #[ignore = "requires an explicit existing test cell and kubeconfig"]
+    async fn existing_cell_exposes_bitcoin_peers_and_embedded_channels() {
+        let path = std::env::var("PROOFSTORM_TEST_KUBECONFIG").unwrap();
+        let name = std::env::var("PROOFSTORM_TEST_CELL").unwrap();
+        let config = kube::config::Kubeconfig::read_from(path).unwrap();
+        let config = kube::Config::from_custom_kubeconfig(
+            config,
+            &kube::config::KubeConfigOptions::default(),
+        )
+        .await
+        .unwrap();
+        let client = kube::Client::try_from(config).unwrap();
+        let cells = Api::<ProofstormCell>::namespaced(client.clone(), "proofstorm-system");
+        let cell = cells.get(&name).await.unwrap();
+        let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
+        let inventory = pods.list(&ListParams::default()).await.unwrap().items;
+        let observations = balances::sample(&cell, &pods, &inventory).await;
+        let bitcoin = observations
+            .iter()
+            .filter_map(|b| b.bitcoin.as_ref())
+            .collect::<Vec<_>>();
+        assert!(
+            bitcoin.iter().all(|o| o.error.is_none()),
+            "Bitcoin observation unavailable"
+        );
+        assert!(
+            bitcoin.iter().any(|o| !o.peers.is_empty()),
+            "test cell needs connected Bitcoin peers"
+        );
+        let ldk = cell
+            .spec
+            .cell
+            .components
+            .iter()
+            .find(|c| c.implementation == "cdk-ldk")
+            .unwrap();
+        let ldk = observations
+            .iter()
+            .find(|b| b.component == ldk.id)
+            .unwrap()
+            .lightning
+            .as_ref()
+            .unwrap();
+        assert!(ldk.error.is_none(), "LDK observation unavailable");
+        assert!(
+            !ldk.channels.is_empty(),
+            "test cell needs an open LDK channel"
+        );
+        for channel in &ldk.channels {
+            let other = observations
+                .iter()
+                .filter_map(|b| b.lightning.as_ref())
+                .find(|o| o.node_pubkey.as_deref() == Some(&channel.peer_pubkey))
+                .unwrap();
+            assert!(
+                other.channels.iter().any(|c| c.id() == channel.id()),
+                "channel identity differs between endpoints"
+            );
+        }
     }
 }

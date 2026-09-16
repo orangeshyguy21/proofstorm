@@ -151,7 +151,7 @@ pub fn provide_launcher() {
             } else if response.status() == 401 {
                 managed.set(true);
                 error.set(Some(
-                    "Run proofstorm gui again to unlock this browser session.".into(),
+                    "Run storm gui link, then open the printed link in this browser.".into(),
                 ));
             }
         }

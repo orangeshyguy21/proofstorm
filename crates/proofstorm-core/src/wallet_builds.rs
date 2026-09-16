@@ -32,9 +32,9 @@ pub(crate) fn cocod(amd64: bool) -> (&'static str, &'static str) {
 
 pub(crate) fn nutshell(amd64: bool) -> &'static str {
     if amd64 {
-        "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754"
+        "proofstorm-registry.localhost:5000/nutshell-mint@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754"
     } else {
-        "proofstorm-registry.localhost:5000/nutshell-mint-management@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f"
+        "proofstorm-registry.localhost:5000/nutshell-mint@sha256:ce57c9623d564201e37e7a4515b111e07e73e0d74c3e4ec7f97df9fccce47c3f"
     }
 }
 

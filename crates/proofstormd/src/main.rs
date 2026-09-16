@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod candidate_tests;
 mod component_lifecycle;
 mod probes;
 #[cfg(test)]
@@ -35,6 +37,7 @@ use kube::{
 };
 use proofstorm_core::CandidateBuildPhase;
 use proofstorm_core::WorkloadControllerKind;
+use proofstorm_kube::CANDIDATE_BUILD_LABEL;
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
@@ -194,6 +197,22 @@ async fn reconcile_candidate_build(
         .as_ref()
         .is_some_and(|status| status.phase.terminal())
     {
+        if build
+            .status
+            .as_ref()
+            .is_some_and(|s| s.diagnostics.is_some())
+        {
+            let jobs = Api::<Job>::namespaced(context.client.clone(), &namespace);
+            let job_name = format!("{}-build", build.name_any());
+            if jobs.get_opt(&job_name).await?.is_some() {
+                jobs.patch(
+                    &job_name,
+                    &PatchParams::default(),
+                    &Patch::Merge(serde_json::json!({"spec":{"ttlSecondsAfterFinished":600}})),
+                )
+                .await?;
+            }
+        }
         return Ok(Action::await_change());
     }
     let jobs = Api::<Job>::namespaced(context.client.clone(), &namespace);
@@ -202,7 +221,16 @@ async fn reconcile_candidate_build(
         .annotations()
         .contains_key(CANDIDATE_CANCEL_ANNOTATION)
     {
-        let _ = jobs
+        let diagnostics =
+            if let Some(diagnostics) = build.status.as_ref().and_then(|s| s.diagnostics.clone()) {
+                diagnostics
+            } else {
+                archive_candidate_logs(build.as_ref(), &context).await?
+            };
+        let mut archived = build.status.clone().unwrap_or_default();
+        archived.diagnostics = Some(diagnostics.clone());
+        patch_candidate_status(build.as_ref(), &context, archived).await?;
+        let deleted = jobs
             .delete(
                 &job_name,
                 &DeleteParams {
@@ -211,11 +239,17 @@ async fn reconcile_candidate_build(
                 },
             )
             .await;
+        if let Err(error) = deleted
+            && !matches!(&error, kube::Error::Api(response) if response.code == 404)
+        {
+            return Err(error.into());
+        }
         patch_candidate_status(
             build.as_ref(),
             &context,
             ProofstormCandidateBuildStatus {
                 phase: CandidateBuildPhase::Cancelled,
+                diagnostics: Some(diagnostics),
                 observed_generation: build.metadata.generation,
                 job_name: Some(job_name),
                 started_at_unix: build
@@ -242,6 +276,7 @@ async fn reconcile_candidate_build(
                 &context,
                 ProofstormCandidateBuildStatus {
                     phase: CandidateBuildPhase::Failed,
+                    diagnostics: Some(archive_candidate_logs(build.as_ref(), &context).await?),
                     observed_generation: build.metadata.generation,
                     job_name: Some(job_name),
                     started_at_unix: build
@@ -312,7 +347,7 @@ async fn reconcile_candidate_build(
     let pods = pod_api
         .list(&ListParams::default().labels(&format!("job-name={job_name}")))
         .await?;
-    let terminal = if failed {
+    let mut terminal = if failed {
         let failure = candidate_failure_message(&pod_api, &status, &pods.items).await;
         ProofstormCandidateBuildStatus {
             phase: CandidateBuildPhase::Failed,
@@ -358,8 +393,78 @@ async fn reconcile_candidate_build(
             }
         }
     };
+    terminal.diagnostics = Some(archive_candidate_logs(build.as_ref(), &context).await?);
     patch_candidate_status(build.as_ref(), &context, terminal).await?;
+    // Cleanup becomes eligible only after diagnostics are durably committed to the CRD.
+    jobs.patch(
+        &format!("{}-build", build.name_any()),
+        &PatchParams::default(),
+        &Patch::Merge(serde_json::json!({"spec":{"ttlSecondsAfterFinished":600}})),
+    )
+    .await?;
     Ok(Action::await_change())
+}
+
+async fn archive_candidate_logs(
+    build: &ProofstormCandidateBuild,
+    context: &Context,
+) -> Result<proofstorm_core::CandidateDiagnostics, Error> {
+    let namespace = build
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(build.name_any()))?;
+    let pods = Api::<Pod>::namespaced(context.client.clone(), &namespace);
+    let observed = pods
+        .list(
+            &ListParams::default().labels(&format!("{CANDIDATE_BUILD_LABEL}={}", build.name_any())),
+        )
+        .await?;
+    let mut logs = std::collections::BTreeMap::new();
+    for container in ["source", "buildkit"] {
+        let result = if let Some(pod) = observed.items.first() {
+            pods.logs(
+                &pod.name_any(),
+                &kube::api::LogParams {
+                    container: Some(container.into()),
+                    // A byte limit alone reads the beginning of a long build.
+                    // Request recent lines so terminal diagnostics survive cleanup.
+                    tail_lines: Some(128),
+                    limit_bytes: Some(32_769),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())
+        } else {
+            Err("Build Pod is unavailable; no log was captured".into())
+        };
+        let log = match result {
+            Ok(mut text) => {
+                let truncated = text.len() > 32_768 || text.lines().count() >= 128;
+                if text.len() > 32_768 {
+                    let mut start = text.len() - 32_768;
+                    while !text.is_char_boundary(start) {
+                        start += 1;
+                    }
+                    text.drain(..start);
+                }
+                proofstorm_core::CandidateLog {
+                    text,
+                    truncated,
+                    unavailable: None,
+                }
+            }
+            Err(message) => proofstorm_core::CandidateLog {
+                text: String::new(),
+                truncated: false,
+                unavailable: Some(message.chars().take(1000).collect()),
+            },
+        };
+        logs.insert(container.into(), log);
+    }
+    Ok(proofstorm_core::CandidateDiagnostics {
+        captured_at_unix: now_unix(),
+        logs,
+    })
 }
 
 async fn candidate_failure_message(

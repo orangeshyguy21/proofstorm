@@ -19,7 +19,7 @@ async fn get<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
             .as_ref()
             .and_then(|body| body["error"]["code"].as_str());
         return Err(match (status, code) {
-            (401, _) => "GUI session expired. Run proofstorm gui again to reopen it.".into(),
+            (401, _) => "This browser is not signed in. Run storm gui link and open the printed link here.".into(),
             (403, _) => "Access denied. Check the server's workspace permissions.".into(),
             (_, Some("store_failure")) => {
                 "The server could not read the workspace database. Check the server terminal."
@@ -62,6 +62,27 @@ pub async fn environment() -> Result<EnvironmentView, String> {
 }
 pub async fn observer() -> Result<ObserverStatus, String> {
     get("/v1/observer").await
+}
+pub async fn catalog(
+    query: &proofstorm_view::CatalogListRequest,
+) -> Result<proofstorm_view::CatalogPage, String> {
+    let selectors = serde_json::to_string(query).map_err(|e| e.to_string())?;
+    get(&format!("/v1/catalog?selectors={}", encode(&selectors))).await
+}
+pub async fn builds(query: &proofstorm_view::DirectoryQuery) -> Result<serde_json::Value, String> {
+    let selectors = serde_json::to_string(query).map_err(|e| e.to_string())?;
+    get(&format!("/v1/candidates?selectors={}", encode(&selectors))).await
+}
+pub async fn candidate(
+    id: &str,
+    path: &str,
+    offset: usize,
+    digest: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let selectors =
+        serde_json::json!({"id":id,"path":path,"offset":offset,"expected_digest":digest})
+            .to_string();
+    get(&format!("/v1/candidate?selectors={}", encode(&selectors))).await
 }
 pub async fn system() -> Result<proofstorm_view::SystemView, String> {
     get("/v1/system").await

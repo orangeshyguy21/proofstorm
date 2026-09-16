@@ -8,6 +8,8 @@ pub mod bootstrap;
 mod command_name;
 pub mod config;
 pub use command_name::command_name;
+pub mod candidate;
+pub mod catalog;
 pub mod cell;
 pub mod connections;
 pub mod dev_reset;

@@ -22,6 +22,21 @@ pub struct CanvasNode {
     pub kind: ComponentKind,
     pub children_height: f64,
 }
+/// Track visible identities, independently of saved positions and live metrics.
+#[derive(Clone, Default)]
+pub struct CanvasInventory {
+    cell: String,
+    nodes: BTreeSet<String>,
+}
+impl CanvasInventory {
+    pub fn observe(&mut self, cell: &str, nodes: &[CanvasNode]) -> bool {
+        let current = nodes.iter().map(|n| n.id.clone()).collect::<BTreeSet<_>>();
+        let added = self.cell == cell && current.difference(&self.nodes).next().is_some();
+        cell.clone_into(&mut self.cell);
+        self.nodes = current;
+        added
+    }
+}
 pub fn embedded_id(parent: &str, resource: &str) -> String {
     format!(
         "embedded:{}",
@@ -446,5 +461,28 @@ mod tests {
         ensure_positions(&items, &mut p);
         assert!(p["oidc"].0.is_finite());
         assert_eq!(appearance(items[0].kind).1, "Identity / OIDC");
+    }
+    #[test]
+    fn refit_detects_additions_without_reacting_to_updates_removals_or_cell_switches() {
+        let mut inventory = CanvasInventory::default();
+        let mut items = vec![node("bitcoin", ComponentKind::Bitcoin)];
+        assert!(!inventory.observe("cell:one", &items));
+        items[0].name = "Updated name".into();
+        assert!(!inventory.observe("cell:one", &items));
+        items.push(node("mint", ComponentKind::Mint));
+        assert!(inventory.observe("cell:one", &items));
+        items.reverse();
+        assert!(!inventory.observe("cell:one", &items));
+        items.push(node(
+            &embedded_id("mint", "ldk-node"),
+            ComponentKind::Lightning,
+        ));
+        assert!(inventory.observe("cell:one", &items));
+        let embedded = items.pop().unwrap();
+        assert!(!inventory.observe("cell:one", &items));
+        items.push(embedded);
+        assert!(inventory.observe("cell:one", &items));
+        assert!(!inventory.observe("cell:two", &items));
+        assert!(!inventory.observe("cell:two", &items));
     }
 }

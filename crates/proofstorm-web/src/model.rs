@@ -285,6 +285,7 @@ mod tests {
     #[test]
     fn height_tracks_the_current_cell_and_can_decrease() {
         let observation = |height, error| proofstorm_view::ComponentBalance {
+            bitcoin: None,
             rollout_digest: None,
             lightning: None,
             holdings: None,

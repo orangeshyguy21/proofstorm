@@ -480,13 +480,18 @@ fn selected_images(
     let candidate_prefixes = [
         "proofstorm-registry.localhost:5000/candidates/".to_owned(),
         format!("{}:5000/candidates/", installation.registry_name()),
+        "proofstorm-registry.localhost:5000/proofstorm-candidates/".to_owned(),
+        format!(
+            "{}:5000/proofstorm-candidates/",
+            installation.registry_name()
+        ),
     ];
     let mut selected = BTreeSet::from([proofstorm_kube::images::PROBE_IMAGE.to_owned()]);
     for entry in &lock.entries {
         // A stored lock may also select a candidate built into this private registry.
         // Never attempt to fetch candidate names from the public publisher namespace.
         ensure!(
-            shipped.contains(&entry.image)
+            is_shipped_image(&entry.image, &shipped)
                 || (entry.source.is_some()
                     && candidate_prefixes
                         .iter()
@@ -497,6 +502,25 @@ fn selected_images(
         selected.insert(entry.image.clone());
     }
     Ok(selected)
+}
+
+fn is_shipped_image(image: &str, shipped: &BTreeSet<String>) -> bool {
+    if shipped.contains(image) {
+        return true;
+    }
+    // Saved locks retain the repository name used when they were published.
+    // Accept a renamed repository only when its exact digest is still shipped.
+    let Some((repository, digest)) = image.split_once('@') else {
+        return false;
+    };
+    let current = match repository {
+        "proofstorm-registry.localhost:5000/cdk-ldk-mint-management" => "cdk-mint",
+        "proofstorm-registry.localhost:5000/nutshell-mint-management" => "nutshell-mint",
+        _ => return false,
+    };
+    shipped.contains(&format!(
+        "proofstorm-registry.localhost:5000/{current}@{digest}"
+    ))
 }
 
 fn mirror(installation: &Installation, selected: BTreeSet<String>) -> Result<()> {
@@ -515,7 +539,9 @@ fn mirror_with_progress(
         progress(&format!("Checking catalog image {} of {total}", index + 1));
         if let Some(local) = image
             .strip_prefix("proofstorm-registry.localhost:5000/")
-            .filter(|local| !local.starts_with("candidates/"))
+            .filter(|local| {
+                !local.starts_with("candidates/") && !local.starts_with("proofstorm-candidates/")
+            })
         {
             let (repository, sha) = local
                 .split_once("@sha256:")

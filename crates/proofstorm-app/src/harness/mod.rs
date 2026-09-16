@@ -139,6 +139,13 @@ pub fn plan_for(
     }
 }
 
+fn server_entry(command: &Path, home: &Path, project: &Path, actor: &str) -> Value {
+    // Proofstorm is an optional tool: an unavailable installation must never
+    // prevent the coding agent from starting or resuming unrelated work.
+    json!({"command":command,"args":["--home",home,"--attachment",actor],"cwd":project,
+        "startup_timeout_sec":60,"tool_timeout_sec":1800,"required":false,"enabled":true})
+}
+
 pub(crate) fn plan_confirmed(
     harness: Harness,
     home: &Path,
@@ -215,8 +222,7 @@ pub(crate) fn plan_confirmed(
     } else {
         bundle.join("bin/proofstorm-mcp")
     };
-    let server_entry = json!({"command":command,"args":["--home",installation.home,"--attachment",actor],"cwd":project,
-        "startup_timeout_sec":60,"tool_timeout_sec":1800,"required":true,"enabled":true});
+    let server_entry = server_entry(&command, &installation.home, &project, &actor);
     let entry = agents::entry(harness, &server_entry)?;
     let original = config::read(&config_path)?;
     let proposed = replacement::merge(

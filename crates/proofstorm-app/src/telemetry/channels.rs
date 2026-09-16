@@ -33,7 +33,7 @@ pub(super) fn project(
         error: None,
     })
 }
-fn pubkey(key: &str) -> Option<String> {
+pub(super) fn pubkey(key: &str) -> Option<String> {
     (key.len() == 66
         && (key.starts_with("02") || key.starts_with("03"))
         && key.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -47,6 +47,8 @@ fn outpoint(value: &str) -> Option<String> {
 }
 fn lnd(c: &Value) -> Option<ObservedChannel> {
     checked(ObservedChannel {
+        channel_id: None,
+        capacity_only: false,
         funding_outpoint: outpoint(c["channel_point"].as_str()?)?,
         peer_pubkey: pubkey(c["remote_pubkey"].as_str()?)?,
         active: c["active"].as_bool()?,
@@ -59,6 +61,8 @@ fn cln(c: &Value) -> Option<ObservedChannel> {
     let capacity = millisats(&c["total_msat"])?;
     let local = millisats(&c["to_us_msat"])?;
     checked(ObservedChannel {
+        channel_id: None,
+        capacity_only: false,
         funding_outpoint: outpoint(&format!(
             "{}:{}",
             c["funding_txid"].as_str()?,
@@ -71,10 +75,35 @@ fn cln(c: &Value) -> Option<ObservedChannel> {
         remote_msat: capacity.checked_sub(local)?,
     })
 }
-fn checked(channel: ObservedChannel) -> Option<ObservedChannel> {
+pub(super) fn checked(mut channel: ObservedChannel) -> Option<ObservedChannel> {
+    if channel.channel_id.is_none() {
+        channel.channel_id = channel_id(&channel.funding_outpoint);
+    }
     (channel.capacity_msat > 0
         && channel.local_msat.checked_add(channel.remote_msat)? <= channel.capacity_msat)
         .then_some(channel)
+}
+
+// BOLT #2: XOR the funding output index into the last two txid bytes.
+fn channel_id(point: &str) -> Option<String> {
+    use std::fmt::Write;
+    let (txid, index) = point.split_once(':')?;
+    let index: u16 = index.parse().ok()?;
+    if txid.len() != 64 || !txid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut bytes = (0..32)
+        .map(|i| u8::from_str_radix(&txid[i * 2..i * 2 + 2], 16).ok())
+        .collect::<Option<Vec<_>>>()?;
+    bytes.reverse(); // Bitcoin RPC prints txids in reverse of their wire byte order.
+    let [high, low] = index.to_be_bytes();
+    bytes[30] ^= high;
+    bytes[31] ^= low;
+    let mut id = String::new();
+    for byte in bytes {
+        write!(&mut id, "{byte:02x}").ok()?;
+    }
+    Some(id)
 }
 
 #[cfg(test)]
@@ -94,6 +123,15 @@ mod tests {
         assert_eq!(result.channels.len(), 1);
         assert_eq!(result.channels[0].remote_msat, 3999);
         assert_eq!(result.channels[0].funding_outpoint, point);
+    }
+    #[test]
+    fn funding_outpoint_matches_ldk_wire_order_with_nonzero_output() {
+        let txid = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+        assert_eq!(
+            channel_id(&format!("{txid}:258")).unwrap(),
+            "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020002"
+        );
+        assert!(channel_id(&format!("{txid}:65536")).is_none());
     }
     #[test]
     fn malformed_channels_are_unavailable_instead_of_empty() {

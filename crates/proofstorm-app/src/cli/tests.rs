@@ -61,6 +61,18 @@ fn gui_has_explicit_lifecycle_and_project_scope() {
             matches!(parse(&args).unwrap(), Action::Gui { project, .. } if project == PathBuf::from("/a project"))
         );
     }
+    assert!(
+        matches!(parse(&["gui", "link"]).unwrap(), Action::Gui { no_open: true, project, .. } if project == PathBuf::from("."))
+    );
+    for args in [
+        vec!["gui", "link", "--project", "/a project"],
+        vec!["gui", "--project", "/a project", "link"],
+    ] {
+        assert!(
+            matches!(parse(&args).unwrap(), Action::Gui { no_open: true, project, .. } if project == PathBuf::from("/a project"))
+        );
+    }
+    assert!(parse(&["gui", "--project", "/one", "link", "--project", "/two"]).is_err());
     assert!(matches!(
         parse(&["gui", "start"]).unwrap(),
         Action::GuiStart { .. }

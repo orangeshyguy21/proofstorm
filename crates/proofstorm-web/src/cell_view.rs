@@ -17,6 +17,11 @@ pub fn CellPanel(
     telemetry: RwSignal<Option<SystemView>>,
     drawer: RwSignal<&'static str>,
 ) -> impl IntoView {
+    provide_context(crate::inspector::InspectorExpansion {
+        selected: selected_component,
+        cell,
+        open: RwSignal::new(Default::default()),
+    });
     view! {
         <Show when=move || cell.get().is_some()>
             <section class="cell-workspace">
@@ -33,7 +38,18 @@ pub fn CellPanel(
                             <div class="inspector-heading"><span>"Component"</span><button class="icon-button" aria-label="Close component details" on:click=move |_| selected_component.set(String::new())>"×"</button></div>
                             {move || cell.get().and_then(|cell| crate::canvas_model::selected_owner(&cell, &selected_component.get()).cloned().map(|component| (cell,component))).map(|(cell,component)| view!{<ComponentPanel component cell telemetry selection=selected_component.get() />})}
                             <crate::relationship_panel::RelationshipPanel telemetry cell selected=selected_component />
-                            {move || cell.get().and_then(|cell|cell.components.items.iter().find(|c|c.id==selected_component.get()).cloned().map(|c|(cell,c))).map(|(cell,component)|view!{<ComponentDiagnostics component cell />})}
+                            // Keep interactive diagnostics mounted across environment snapshots.
+                            // A different component or cell incarnation gets a fresh control state.
+                            <For
+                                each=move || cell.get().and_then(|cell|cell.components.items.iter().find(|c|c.id==selected_component.get()).cloned().map(|c|(cell,c)))
+                                key=|(cell,component)| (cell.id.clone(),cell.layout_id.clone(),component.id.clone())
+                                children=move |(initial_cell,initial_component)| {
+                                    let id = initial_component.id.clone();
+                                    let live_component = Signal::derive(move || cell.get().and_then(|cell|cell.components.items.into_iter().find(|c|c.id==id)).unwrap_or_else(||initial_component.clone()));
+                                    let live_cell = Signal::derive(move || cell.get().unwrap_or_else(||initial_cell.clone()));
+                                    view!{<ComponentDiagnostics component=live_component cell=live_cell />}
+                                }
+                            />
                         </aside>
                     </Show>
                 </div>
