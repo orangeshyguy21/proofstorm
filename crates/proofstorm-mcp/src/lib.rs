@@ -1863,8 +1863,23 @@ impl ProofstormMcp {
     }
 
     #[tool(
+        name = "workspace_upload",
+        description = "Upload a local file into a workspace component without putting its contents in MCP arguments. source_path must be readable on the MCP server host; relative paths use the server working directory (the attached project for managed agents). path is relative to /workspace, usually src/script.py. Supports binary files up to 16 MiB and preserves whether the source is executable. The destination is replaced atomically after size and SHA-256 verification. Returns a recorded operation: operation_wait, then inspect exit_code and stdout JSON for path, bytes and sha256. Retry the same request_id with unchanged destination, bytes and executable permission; a changed file needs a new request_id. Interrupted staging leaves the destination unchanged and can be retried. Files survive workspace restarts and are deleted with the cell."
+    )]
+    async fn proofstorm_workspace_upload(
+        &self,
+        Parameters(request): Parameters<proofstorm_app::cell::WorkspaceUploadRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.cells()?
+            .workspace_upload(&request)
+            .await
+            .map_err(app_error)
+            .and_then(operation_result)
+    }
+
+    #[tool(
         name = "workspace_file",
-        description = "Write, read, list or remove workspace files. Paths are relative to /workspace; use src for editable code, data for shared state, output/<task_id> for results. Files survive workspace restarts and are deleted with the cell. Writes replace a UTF-8 file atomically (8192 bytes maximum); reads return 1024-byte slices with next_offset; lists paginate with next_after. Symlinks, traversal and supervisor state are refused. Returns a bounded operation; operation_wait then read stdout JSON. Read explicitly exposes file contents. Use a new request_id for each fresh read. Larger/binary files can be handled with ordinary cell_exec."
+        description = "Write, read, list or remove workspace files. Paths are relative to /workspace; use src for editable code, data for shared state, output/<task_id> for results. Files survive workspace restarts and are deleted with the cell. Writes replace a UTF-8 file atomically (8192 bytes maximum); reads return 1024-byte slices with next_offset; lists paginate with next_after. Symlinks, traversal and supervisor state are refused. Returns a bounded operation; operation_wait then read stdout JSON. Read explicitly exposes file contents. Use a new request_id for each fresh read. Use workspace_upload for local scripts and binary files up to 16 MiB."
     )]
     async fn proofstorm_workspace_file(
         &self,
@@ -3224,6 +3239,7 @@ impl ProofstormMcp {
             operation.phase,
             OperationPhase::Succeeded | OperationPhase::Failed | OperationPhase::Cancelled
         ) {
+            self.finish_workspace_upload(&operation).await?;
             return Ok(Json(operation));
         }
         let token = proofstorm_core::digest_json(&(
@@ -3239,16 +3255,30 @@ impl ProofstormMcp {
         {
             return Ok(Json(operation));
         }
+        let (phase, artifact) = if operation.phase == OperationPhase::Pending {
+            (
+                OperationPhase::Cancelled,
+                serde_json::json!({"code":"action_cancelled", "cancelled":true, "submitted":false}),
+            )
+        } else {
+            (OperationPhase::Failed, missing_action_artifact(&operation))
+        };
         let finalized = self
             .store
-            .record_operation_result(
-                &self.workspace,
-                &operation.id,
-                OperationPhase::Failed,
-                missing_action_artifact(&operation),
-            )
+            .record_operation_result(&self.workspace, &operation.id, phase, artifact)
             .map_err(store_error)?;
+        self.finish_workspace_upload(&finalized).await?;
         Ok(Json(finalized))
+    }
+
+    async fn finish_workspace_upload(&self, operation: &CellOperation) -> Result<(), ErrorData> {
+        if proofstorm_app::cell::Cells::is_workspace_upload(operation) {
+            self.cells()?
+                .finish_workspace_upload(operation)
+                .await
+                .map_err(app_error)?;
+        }
+        Ok(())
     }
 
     #[tool(
@@ -5900,6 +5930,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_before_submission_is_cancelled_but_missing_running_action_is_failed() {
+        let store = seeded_store();
+        for capability in [
+            Capability::ComponentExecLive,
+            Capability::CellOperate,
+            Capability::ExperimentRead,
+            Capability::ActionCancel,
+            Capability::ArtifactRead,
+        ] {
+            store.grant("alpha", "designer", capability).unwrap();
+        }
+        let spec = serde_json::from_value(serde_json::json!({
+            "api_version":"proofstorm/v1alpha1","name":"cancel","links":[],
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
+        })).unwrap();
+        store
+            .create_draft("alpha", "designer", "cancel", &spec, "draft")
+            .unwrap();
+        let revision = store
+            .publish("alpha", "designer", "cancel", 1, "publish")
+            .unwrap();
+        store
+            .materialize("alpha", "designer", "cancel", &revision.digest, "apply")
+            .unwrap();
+        let client = kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| async {
+                Ok::<_, std::io::Error>(http::Response::builder().status(404)
+                .body(kube::client::Body::from(r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","code":404}"#.as_bytes().to_vec())).unwrap())
+            }),
+            "system",
+        );
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client, "system");
+        for (id, phase, expected, code) in [
+            (
+                "pending",
+                OperationPhase::Pending,
+                OperationPhase::Cancelled,
+                "action_cancelled",
+            ),
+            (
+                "running",
+                OperationPhase::Running,
+                OperationPhase::Failed,
+                "action_runtime_not_found",
+            ),
+        ] {
+            store
+                .create_operation(
+                    "alpha",
+                    "designer",
+                    "cancel",
+                    "",
+                    "",
+                    id,
+                    OperationKind::ComponentExecLive,
+                    &serde_json::json!({"component":"chain","argv":["true"]}),
+                    id,
+                    Capability::ComponentExecLive,
+                )
+                .unwrap();
+            if phase == OperationPhase::Running {
+                store.update_operation_phase("alpha", id, phase).unwrap();
+            }
+            for _ in 0..2 {
+                let reply = service.request_cancellation(Parameters(serde_json::from_value(
+                    serde_json::json!({"operation_id":id,"request_id":format!("cancel-{id}")})
+                ).unwrap())).await.unwrap().0;
+                assert_eq!(reply.phase, expected);
+                assert_eq!(reply.artifact.unwrap().content["code"], code);
+            }
+        }
+    }
+
+    #[tokio::test]
     #[allow(
         clippy::too_many_lines,
         reason = "raw requests and a mock cluster verify automatic admission, unready logs and replay end to end"
@@ -6184,7 +6290,7 @@ mod tests {
             service.tool_names().into_iter().collect::<BTreeSet<_>>(),
             expected
         );
-        assert_eq!(expected.len(), 47);
+        assert_eq!(expected.len(), 48);
         assert_optional_tracking(&service);
         let wire=serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"tools":service.tool_router.list_all()}})).unwrap();
         eprintln!(

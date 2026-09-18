@@ -87,6 +87,7 @@ pub const TOOLS: &[PublicTool] = &[
     tool!("cell_exec", true, [ComponentExecLive]),
     tool!("workspace_task", true, [ComponentExecLive, ArtifactRead]),
     tool!("workspace_file", true, [ComponentExecLive, ArtifactRead]),
+    tool!("workspace_upload", true, [ComponentExecLive, ArtifactRead]),
     tool!(
         "workspace_capture",
         false,

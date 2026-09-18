@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 pub mod control;
 #[path = "workspace_evidence.rs"]
 pub mod evidence;
+#[path = "workspace_upload.rs"]
+pub mod upload;
+#[path = "workspace_wire.rs"]
+pub mod wire;
 
 pub const WORKSPACE_PATH: &str = "/workspace";
 pub const WORKSPACE_RUNNER: &str = "/opt/proofstorm/workspace";
@@ -15,6 +19,7 @@ pub const MAX_TASKS: usize = 128;
 pub const MAX_ACTIVE_TASKS: usize = 16;
 pub const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_SOURCE_FILES: usize = 512;
+pub const MAX_FILE_WRITE_BYTES: usize = 8192;
 pub const LOG_SEGMENT_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -165,6 +170,7 @@ pub enum FileRequest {
 pub enum WorkspaceRequest {
     Task(TaskRequest),
     File(FileRequest),
+    Upload(upload::UploadRequest),
     Ping,
     Capture(evidence::CaptureRequest),
     ReleaseCapture { capture_id: String },
@@ -175,6 +181,7 @@ impl WorkspaceRequest {
     /// Rejects invalid task input, unsafe paths or oversized file writes.
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
+            Self::Upload(request) => request.validate(),
             Self::Capture(request) => request.validate(),
             Self::ReleaseCapture { capture_id } => validate_task_id(capture_id),
             Self::Task(TaskRequest::Start(start)) => start.validate(),
@@ -185,7 +192,7 @@ impl WorkspaceRequest {
             ) => validate_task_id(task_id),
             Self::File(FileRequest::Write { path, content }) => {
                 validate_path(path)?;
-                if content.len() > 8192 {
+                if content.len() > MAX_FILE_WRITE_BYTES {
                     return Err("file write exceeds 8192 bytes");
                 }
                 Ok(())

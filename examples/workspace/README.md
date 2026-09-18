@@ -9,16 +9,37 @@ The catalog kind is still `attacker`; the implementation is `workspace`.
 
 ## Files and reusable functions
 
-Use `workspace_file` to write scripts and supporting modules under `src/`:
+Create scripts and supporting modules locally, then use `workspace_upload` to
+copy them under `src/` without putting their contents in MCP arguments:
+
+For this example, save `echo hello` in `examples/workspace/greeting.sh` first.
 
 ```json
 {
   "name": "workspace-demo",
   "component": "scripts",
-  "request_id": "write-greeting",
-  "file": {"action": "write", "path": "src/greeting.sh", "content": "echo hello\n"}
+  "request_id": "upload-greeting",
+  "source_path": "examples/workspace/greeting.sh",
+  "path": "src/greeting.sh"
 }
 ```
+
+`source_path` names a regular file on the MCP server host. Relative paths use
+the server's working directory, which is the attached project for managed
+agents. Uploads support text and binary files up to 16 MiB and preserve whether
+the source is executable. Size and SHA-256 are verified before an atomic
+replacement; the operation receipt records the destination, size, checksum and
+executable flag. File contents do not enter MCP arguments or the activity journal.
+Retry an interrupted upload with the same request ID and unchanged file. Changed
+bytes, destination or executable permission require a new request ID.
+
+Uploads are staged before their recorded commit. The next upload reclaims
+abandoned staging older than one hour; staging is bounded to 16 files and 32 MiB
+per workspace. Completed and cancelled uploads release their staging space;
+late duplicate calls cannot recreate it. If cancellation reports that cleanup
+needs a running workspace, retry `operation_cancel` once the workspace is ready.
+A failed staging transfer leaves the destination unchanged. The 16 MiB total
+source snapshot limit still applies when starting a task.
 
 Each file or task control call returns an ordinary operation ID. Use
 `operation_wait`, verify the native exit code, and read the JSON in `stdout`.
@@ -37,9 +58,9 @@ existing state migration rules still apply.
 
 `workspace_file` supports atomic UTF-8 writes up to 8192 bytes, 1024-byte paged
 reads, directory listing, and removal of regular files. Omit the list path to
-discover the workspace root. Use ordinary `cell_exec` for larger files, binary
-data, or bulk transfers. File paths are relative to
-`/workspace`, and the file tool refuses symlinks and supervisor internals.
+discover the workspace root. Use `workspace_upload` for local scripts and binary
+data. File paths are relative to `/workspace`, and the file tool refuses symlinks
+and supervisor internals.
 
 ## Tasks
 

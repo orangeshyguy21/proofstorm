@@ -200,3 +200,78 @@ under `/tmp/proofstorm-workspace-kube.4CpuY0`; `summary.json` records the passed
 checks and bundle digests. This validates the default workspace
 runtime on this dev cluster; controller/node failure and custom runtime images
 were not exercised in this live run. No product-code fix was needed.
+
+## Local file uploads and text-write limits
+
+Strict workspace Clippy and all 850 repository tests across 54 targets pass,
+with four intentionally ignored fixtures. Formatting and diff checks pass.
+MCP discovery includes 48 tools within the existing 128 KiB budget.
+
+`workspace_upload` accepts a local source path and workspace destination, with no
+inline file body. Application tests cover binary bytes, executable permission,
+metadata-only operation records, exact and changed retries, interrupted staging,
+pod replacement, cancelled operations, revoked permissions, unsafe destinations,
+wrong components, missing files, FIFOs and the 16 MiB source boundary.
+
+The Linux ARM64 suite passes nine portable/staging tests, eight native supervisor
+tests and thirteen workspace integration tests. Uploads exercise empty files,
+binary files larger than the inline limit, an exact 16 MiB file, truncated and
+corrupted transfers, an oversized request, staging capacity/expiry, destination
+symlinks and an uploaded executable launched as a managed task. Staging leaves
+the destination unchanged; commit verifies the checksum and replaces it atomically.
+
+The inline-write regression accepts all 8192 raw UTF-8 bytes even when JSON
+escaping would exceed the native command budget. Tests include quotes,
+backslashes, newlines, NUL and multibyte text, reject 8193 bytes, and preserve
+the original encoding of previously accepted requests for exact retries.
+
+These initial upload checks used simulated Kubernetes APIs in application tests
+and real Linux helper/supervisor processes. Subsequent live validation and fixes
+are recorded below.
+
+Logs: `/tmp/proofstorm-workspace-upload-check-rust-final.log`,
+`/tmp/proofstorm-workspace-upload-linux-final.log` and
+`/tmp/proofstorm-workspace-upload-linux-clippy-final.log`.
+
+
+## Upload fault regressions — September 18, 2026
+
+The first live upload run exposed stranded staging after cancellation and late
+duplicates, simultaneous exact-retry admission conflicts, and cancellation
+incorrectly recorded as a missing-runtime failure. The fixes pass strict host
+and Linux Clippy, 852 repository tests across 54 targets (four intentionally
+ignored fixtures), and 33 Linux helper/supervisor/workspace tests. Formatting
+and diff checks pass.
+
+The fixed checkout was built and deployed normally to the dev Kubernetes cluster.
+Using a disposable workspace and independent stdio MCP connections:
+
+* Eight simultaneous identical first uploads returned one operation without
+  conflicts. The database regression additionally exercises eight connections
+  over eight fresh admission rounds.
+* A duplicate helper was paused until the first upload committed. Resuming it
+  returned the original success and left no staged payload.
+* Two 16 MiB uploads were cancelled while staging was blocked. Both reported
+  `cancelled` with `action_cancelled` and `submitted: false`, preserved their
+  absent destinations, and released all staged payloads. A fresh upload then
+  succeeded immediately, without expiry or manual cleanup.
+* Executable upload and managed task execution, exact 16 MiB binary hashes,
+  empty files, unsafe source/path refusals, unchanged and changed retries, and
+  all five 8192-byte escaping boundaries passed again.
+* MCP disconnection and workspace restart during staging left destinations
+  unchanged; same-request retries recovered with matching hashes.
+* The helper upgrade preserved workspace files and cleanly stopped the old task.
+* The test cell and namespace were removed. Existing `pr-1131` and `demo` cell
+  identities, revisions and generations were unchanged; both cells and all 17
+  associated component/prober pods were ready.
+
+The tested controller image is
+`sha256:b2f782dc8b1cbd69cde29a1813cb7e12c766bbe1ff09c6ca24df5ced05d87dc6`.
+The dev cluster remains on this build. Cancellation cleanup needs a running
+workspace; an unavailable workspace produces an explicit cleanup retry message.
+
+Reproductions, transcripts, receipts and cleanup evidence are retained in
+`/tmp/proofstorm-upload-fix-live-0918`. Host check log:
+`/tmp/proofstorm-upload-fix-check-rust-final.log`; Linux check logs:
+`/tmp/proofstorm-upload-fix-linux.log` and
+`/tmp/proofstorm-upload-fix-linux-clippy.log`.

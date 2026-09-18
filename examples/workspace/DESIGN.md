@@ -10,7 +10,7 @@ verified controller image before workspace startup.
 ## Implemented contract
 
 * Persistent files, optional pinned runtime image and one configurable service port.
-* `workspace_file` and `workspace_task` agent tools, using existing execution
+* `workspace_upload`, `workspace_file` and `workspace_task` agent tools, using existing execution
   authority and short recorded operations.
 * Source snapshots and command digests; exact task-ID retries; no automatic replay.
 * Per-task supervisor with the native executor's Linux descendant cleanup.
@@ -21,6 +21,25 @@ verified controller image before workspace startup.
 The default remains the existing pinned shell image. Custom runtimes select an
 immutable image in the cell lock, and only workspace components admit those
 custom images. Other components retain their shipped/candidate restrictions.
+
+Local uploads carry source and destination paths through MCP. The application
+freezes at most 16 MiB of bytes and records a pending operation containing only
+destination, size, SHA-256 and executable permission. It streams the bytes to a
+bounded staging area in the selected workspace pod, verifies the staging receipt
+and cell/pod identity, then submits the existing native operation to commit.
+The supervisor verifies the staged bytes again and atomically replaces the file.
+Exact retries reuse the operation; changed content is refused before transfer.
+Failed staging remains pending and retryable. Cancellation and permissions are
+rechecked after staging. Commit completion (including failure) and cancellation
+release staged payloads under the upload lock. Small terminal receipts remain for
+the cell lifetime, outside staging quotas, so delayed writers cannot recreate
+finished uploads or overwrite newer destination contents. Cancellation before
+native submission is recorded as cancelled; if the workspace is unavailable,
+retry cancellation when it is ready to finish staging cleanup. New uploads reclaim
+abandoned staging older than one hour; staging is bounded to 16 files and 32 MiB.
+Operation admission and its idempotency record share one database transaction,
+so concurrent exact retries retain the winning operation and session identity.
+File bytes are never carried in the operation journal.
 
 ## Cases covered
 

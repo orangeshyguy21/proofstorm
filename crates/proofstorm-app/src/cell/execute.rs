@@ -16,6 +16,22 @@ impl Cells {
         request: &proofstorm_core::workspace::WorkspaceRequest,
         request_id: &str,
     ) -> Result<CellOperation, Error> {
+        self.workspace_request_prepared(name, component, request, request_id, |_| async { Ok(()) })
+            .await
+    }
+
+    pub(super) async fn workspace_request_prepared<F, Fut>(
+        &self,
+        name: &str,
+        component: &str,
+        request: &proofstorm_core::workspace::WorkspaceRequest,
+        request_id: &str,
+        prepare: F,
+    ) -> Result<CellOperation, Error>
+    where
+        F: FnOnce(proofstorm_core::CellInstance) -> Fut,
+        Fut: std::future::Future<Output = Result<(), Error>>,
+    {
         self.authorize(&[Capability::ComponentExecLive, Capability::ArtifactRead])?;
         request
             .validate()
@@ -56,10 +72,9 @@ impl Cells {
                 "control components must belong to this cell",
             ));
         }
-        let encoded = serde_json::to_string(request).map_err(|_| {
-            Error::problem("invalid_workspace_request", "request serialization failed")
-        })?;
-        self.exec(
+        let encoded = proofstorm_core::workspace::wire::encode(request)
+            .map_err(|error| Error::problem("invalid_workspace_request", error))?;
+        self.exec_prepared(
             name,
             component,
             NativeCommand {
@@ -78,6 +93,7 @@ impl Cells {
                 },
             },
             request_id,
+            prepare,
         )
         .await
     }
@@ -89,6 +105,26 @@ impl Cells {
         command: NativeCommand,
         request_id: &str,
     ) -> Result<CellOperation, Error> {
+        self.exec_prepared(name, component, command, request_id, |_| async { Ok(()) })
+            .await
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep authorization, admission, preparation and controller submission in order"
+    )]
+    async fn exec_prepared<F, Fut>(
+        &self,
+        name: &str,
+        component: &str,
+        command: NativeCommand,
+        request_id: &str,
+        prepare: F,
+    ) -> Result<CellOperation, Error>
+    where
+        F: FnOnce(proofstorm_core::CellInstance) -> Fut,
+        Fut: std::future::Future<Output = Result<(), Error>>,
+    {
         self.authorize(&[Capability::ComponentExecLive, Capability::ArtifactRead])?;
         command
             .validate()
@@ -152,6 +188,16 @@ impl Cells {
             request_id,
             Capability::ComponentExecLive,
         )?;
+        let op = self
+            .store
+            .operation(&self.workspace, &self.principal, &op.id)?;
+        if op.phase != OperationPhase::Pending {
+            return Ok(op);
+        }
+        prepare(instance.clone()).await?;
+        // Preparation can stream a file. Honor cancellation or permission changes
+        // that arrived while it was in flight before submitting its commit.
+        self.authorize(&[Capability::ComponentExecLive, Capability::ArtifactRead])?;
         let op = self
             .store
             .operation(&self.workspace, &self.principal, &op.id)?;

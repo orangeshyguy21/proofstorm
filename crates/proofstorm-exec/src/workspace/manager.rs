@@ -1,13 +1,13 @@
 use super::{
-    MAX_MESSAGE, Result, atomic_write, bounded_read, file_request, local_path, now, read_json,
-    snapshot, socket_path, write_json,
+    Result, atomic_write, bounded_read, file_request, local_path, now, read_json, snapshot,
+    socket_path, write_json,
 };
 use nix::{
     fcntl::{Flock, FlockArg},
     sys::signal::{SigSet, SigmaskHow, Signal, pthread_sigmask},
 };
 use proofstorm_core::workspace::{
-    MAX_ACTIVE_TASKS, MAX_TASKS, TaskRequest, TaskStart, WorkspaceRequest,
+    MAX_ACTIVE_TASKS, MAX_TASKS, TaskRequest, TaskStart, WorkspaceRequest, wire,
 };
 use serde_json::{Value, json};
 use std::{
@@ -84,11 +84,10 @@ pub(super) fn serve(root: &Path) -> Result<()> {
                         let request = serde_json::from_value(value["request"].clone())?;
                         return manager.bridge(request);
                     }
-                    if bytes.len() as u64 > MAX_MESSAGE {
+                    if bytes.len() > wire::MAX_MESSAGE_BYTES {
                         return Err("workspace request too large".into());
                     }
-                    let request: WorkspaceRequest = serde_json::from_value(value)?;
-                    request.validate()?;
+                    let request = wire::decode(value)?;
                     manager.request(request)
                 })()
                 .unwrap_or_else(|error| json!({"error":error.to_string()}));
@@ -166,6 +165,7 @@ impl Manager {
             }
             WorkspaceRequest::Ping => Ok(json!({"ready":true,"version":"proofstorm-workspace/v1"})),
             WorkspaceRequest::File(request) => file_request(&self.root, &request),
+            WorkspaceRequest::Upload(request) => super::upload::commit(&self.root, &request),
             WorkspaceRequest::Task(TaskRequest::Start(start)) => {
                 if start.control.is_some() {
                     return Err("controlled tasks must be started through the controller".into());

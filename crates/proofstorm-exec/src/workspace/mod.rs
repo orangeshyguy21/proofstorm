@@ -14,7 +14,7 @@ use std::{
 };
 
 use proofstorm_core::workspace::{
-    FileRequest, MAX_SOURCE_BYTES, MAX_SOURCE_FILES, WorkspaceRequest, validate_path,
+    FileRequest, MAX_FILE_WRITE_BYTES, MAX_SOURCE_BYTES, MAX_SOURCE_FILES, validate_path, wire,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -25,9 +25,10 @@ mod control;
 mod manager;
 #[cfg(test)]
 mod tests;
+#[cfg(target_os = "linux")]
+mod upload;
 
 pub(super) type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const MAX_MESSAGE: u64 = 16384;
 const READ_BYTES: u64 = 1024;
 
 pub(super) fn entry(mut args: impl Iterator<Item = String>) -> Result<()> {
@@ -43,12 +44,13 @@ pub(super) fn entry(mut args: impl Iterator<Item = String>) -> Result<()> {
         }
         "request" => {
             let request = args.next().ok_or("workspace request missing")?;
-            if request.len() as u64 > MAX_MESSAGE {
+            if request.len() > wire::MAX_MESSAGE_BYTES {
                 return Err("workspace request too large".into());
             }
-            let request: WorkspaceRequest = serde_json::from_str(&request)?;
-            request.validate()?;
-            let reply = exchange(&serde_json::to_value(request)?)?;
+            let request: Value = serde_json::from_str(&request)?;
+            wire::decode(request.clone())?;
+            // Forward the compact form; re-encoding decoded text would expand it again.
+            let reply = exchange(&request)?;
             println!("{}", serde_json::to_string(&reply)?);
             if reply.get("error").is_some() {
                 return Err("workspace request refused".into());
@@ -63,13 +65,32 @@ pub(super) fn entry(mut args: impl Iterator<Item = String>) -> Result<()> {
         }
         "call" => control::call(&args.next().ok_or("control call missing")?)?,
         #[cfg(target_os = "linux")]
+        "upload" => {
+            let encoded = args.next().ok_or("upload metadata missing")?;
+            if encoded.len() > wire::MAX_MESSAGE_BYTES {
+                return Err("upload metadata too large".into());
+            }
+            let request = serde_json::from_str(&encoded)?;
+            let receipt = upload::stage(&root, &request, &mut std::io::stdin().lock())?;
+            println!("{receipt}");
+        }
+        #[cfg(target_os = "linux")]
+        "upload-finish" => {
+            let encoded = args.next().ok_or("upload metadata missing")?;
+            if encoded.len() > wire::MAX_MESSAGE_BYTES {
+                return Err("upload metadata too large".into());
+            }
+            let request = serde_json::from_str(&encoded)?;
+            println!("{}", upload::finish(&root, &request)?);
+        }
+        #[cfg(target_os = "linux")]
         "capture" => {
             let request: proofstorm_core::workspace::evidence::CaptureRequest =
                 serde_json::from_str(&args.next().ok_or("capture request missing")?)?;
             request.validate()?;
-            let reply = exchange(&serde_json::to_value(WorkspaceRequest::Capture(
-                request.clone(),
-            ))?)?;
+            let reply = exchange(&serde_json::to_value(
+                proofstorm_core::workspace::WorkspaceRequest::Capture(request.clone()),
+            )?)?;
             if reply.get("error").is_some() {
                 return Err("workspace capture refused; inspect file selection, source integrity and capture limits".into());
             }
@@ -132,6 +153,10 @@ fn read_json(path: &Path) -> Result<Value> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_mode(path, bytes, 0o600)
+}
+
+fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let temporary = path.with_file_name(format!(
         ".write-{}-{}",
         std::process::id(),
@@ -141,7 +166,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
-            .mode(0o600)
+            .mode(mode)
             .open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -187,7 +212,7 @@ fn local_path(root: &Path, relative: &str, create_parents: bool) -> Result<PathB
 fn file_request(root: &Path, request: &FileRequest) -> Result<Value> {
     match request {
         FileRequest::Write { path, content } => {
-            if content.len() > 8192 {
+            if content.len() > MAX_FILE_WRITE_BYTES {
                 return Err("file write exceeds 8192 bytes".into());
             }
             let target = local_path(root, path, true)?;

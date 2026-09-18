@@ -17,6 +17,249 @@ struct Workspace {
     socket: PathBuf,
 }
 
+fn upload_manifest(
+    id: u8,
+    path: &str,
+    bytes: &[u8],
+    executable: bool,
+) -> proofstorm_core::workspace::upload::UploadRequest {
+    use sha2::{Digest, Sha256};
+    proofstorm_core::workspace::upload::UploadRequest {
+        upload_id: format!("{id:064x}"),
+        path: path.into(),
+        bytes: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+        executable,
+    }
+}
+
+fn stage_upload(
+    workspace: &Workspace,
+    manifest: &proofstorm_core::workspace::upload::UploadRequest,
+    bytes: &[u8],
+) -> std::process::Output {
+    let mut process = Command::new(env!("CARGO_BIN_EXE_proofstorm-exec"))
+        .args([
+            "workspace",
+            "upload",
+            &serde_json::to_string(manifest).unwrap(),
+        ])
+        .env("PROOFSTORM_WORKSPACE_ROOT", workspace.directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    process.stdin.take().unwrap().write_all(bytes).unwrap();
+    process.wait_with_output().unwrap()
+}
+
+#[test]
+fn local_uploads_stream_binary_files_and_commit_atomically_at_the_size_boundary() {
+    use proofstorm_core::workspace::upload::MAX_UPLOAD_BYTES;
+    use std::os::unix::fs::PermissionsExt;
+    let workspace = Workspace::new();
+    let destination = workspace.directory.path().join("src/upload");
+    for (id, bytes) in [
+        vec![],
+        [0, 255, 128, 34, 10, 92].repeat(6000),
+        vec![255; usize::try_from(MAX_UPLOAD_BYTES).unwrap()],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fs::write(&destination, b"original").unwrap();
+        let manifest = upload_manifest(u8::try_from(id).unwrap(), "src/upload", &bytes, id == 1);
+        let staged = stage_upload(&workspace, &manifest, &bytes);
+        assert!(staged.status.success(), "{:?}", staged.stderr);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&staged.stdout).unwrap(),
+            json!(manifest)
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"original");
+        // A disconnected client can safely restage identical bytes before commit.
+        assert!(stage_upload(&workspace, &manifest, &bytes).status.success());
+        let receipt = workspace.request(json!({"kind":"upload","request":manifest}));
+        assert_eq!(receipt["bytes"], bytes.len());
+        assert_eq!(receipt["sha256"], manifest.sha256);
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            if id == 1 { 0o700 } else { 0o600 }
+        );
+        assert!(
+            !workspace
+                .directory
+                .path()
+                .join(".proofstorm/uploads")
+                .join(&manifest.upload_id)
+                .exists()
+        );
+        fs::write(&destination, b"later edit").unwrap();
+        assert!(
+            workspace
+                .request(json!({"kind":"upload","request":manifest}))
+                .get("error")
+                .is_some()
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"later edit");
+    }
+    let script = b"#!/bin/sh\necho uploaded-script-ran\n";
+    let manifest = upload_manifest(9, "src/upload", script, true);
+    assert!(stage_upload(&workspace, &manifest, script).status.success());
+    let receipt = workspace.request(json!({"kind":"upload","request":manifest}));
+    assert_eq!(receipt["bytes"], script.len());
+    workspace.task(json!({"action":"start","task_id":"uploaded-script","argv":["./upload"]}));
+    assert_eq!(workspace.wait("uploaded-script")["phase"], "succeeded");
+    let logs = workspace.task(json!({"action":"logs","task_id":"uploaded-script"}));
+    assert!(
+        logs["tail"]
+            .as_str()
+            .unwrap()
+            .contains("uploaded-script-ran")
+    );
+}
+
+#[test]
+fn uploads_reject_truncation_corruption_oversize_and_links_without_replacing_files() {
+    use proofstorm_core::workspace::upload::MAX_UPLOAD_BYTES;
+    let workspace = Workspace::new();
+    let target = workspace.directory.path().join("src/upload");
+    fs::write(&target, b"original").unwrap();
+    let manifest = upload_manifest(1, "src/upload", b"content", false);
+    for bytes in [
+        b"conten".as_slice(),
+        b"corrupt".as_slice(),
+        b"contents".as_slice(),
+    ] {
+        assert!(!stage_upload(&workspace, &manifest, bytes).status.success());
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+    }
+    let mut oversized = manifest.clone();
+    oversized.bytes = MAX_UPLOAD_BYTES + 1;
+    assert!(!stage_upload(&workspace, &oversized, &[]).status.success());
+    assert!(
+        stage_upload(&workspace, &manifest, b"content")
+            .status
+            .success()
+    );
+    let changed = upload_manifest(1, "src/upload", b"changed", false);
+    assert!(
+        !stage_upload(&workspace, &changed, b"changed")
+            .status
+            .success()
+    );
+    fs::write(
+        workspace
+            .directory
+            .path()
+            .join(".proofstorm/uploads")
+            .join(&manifest.upload_id)
+            .join("payload"),
+        b"corrupt",
+    )
+    .unwrap();
+    assert!(
+        workspace
+            .request(json!({"kind":"upload","request":manifest}))
+            .get("error")
+            .is_some()
+    );
+    assert_eq!(fs::read(&target).unwrap(), b"original");
+    assert!(
+        !workspace
+            .directory
+            .path()
+            .join(".proofstorm/uploads")
+            .join(&manifest.upload_id)
+            .exists()
+    );
+    // A terminal failure needs a new request identity to attempt another commit.
+    let manifest = upload_manifest(2, "src/upload", b"content", false);
+    assert!(
+        stage_upload(&workspace, &manifest, b"content")
+            .status
+            .success()
+    );
+    fs::remove_file(&target).unwrap();
+    let outside = workspace.directory.path().join("outside");
+    fs::write(&outside, b"untouched").unwrap();
+    std::os::unix::fs::symlink(&outside, &target).unwrap();
+    assert!(
+        workspace
+            .request(json!({"kind":"upload","request":manifest}))
+            .get("error")
+            .is_some()
+    );
+    assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+}
+
+#[test]
+fn file_writes_preserve_limit_sized_content_through_native_helper_and_socket() {
+    use proofstorm_core::workspace::{FileRequest, WorkspaceRequest, wire};
+    let workspace = Workspace::new();
+    for (index, content) in [
+        "a".repeat(8192),
+        "\n".repeat(8192),
+        "\"".repeat(8192),
+        "\\".repeat(8192),
+        "\0".repeat(8192),
+        "界\n😀".repeat(1024),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(content.len(), 8192);
+        let directory = workspace.directory.path().join(format!("write-{index}"));
+        fs::create_dir(&directory).unwrap();
+        let path = format!("src/file-{index}");
+        let request = WorkspaceRequest::File(FileRequest::Write {
+            path: path.clone(),
+            content: content.clone(),
+        });
+        let encoded = wire::encode(&request).unwrap();
+        let command = json!({"argv":[env!("CARGO_BIN_EXE_proofstorm-exec"),"workspace","request",encoded],"timeout_seconds":5,"output":{"mode":"public"}});
+        let mut child = Command::new(env!("CARGO_BIN_EXE_proofstorm-exec"))
+            .arg("start")
+            .arg(&directory)
+            .env("PROOFSTORM_WORKSPACE_SOCKET", &workspace.socket)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&command).unwrap())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !directory.join("receipt.json").exists() {
+            assert!(Instant::now() < deadline, "file write did not finish");
+            sleep(Duration::from_millis(10));
+        }
+        let receipt: Value =
+            serde_json::from_slice(&fs::read(directory.join("receipt.json")).unwrap()).unwrap();
+        assert_eq!(receipt["exit_code"], 0, "{receipt}");
+        assert_eq!(receipt["cleanup_verified"], true);
+        let reply: Value = serde_json::from_str(receipt["stdout"].as_str().unwrap()).unwrap();
+        assert_eq!(reply["bytes"], 8192);
+        assert_eq!(
+            fs::read(workspace.directory.path().join(&path)).unwrap(),
+            content.as_bytes()
+        );
+        let refused = workspace.request(json!({"kind":"file","request":{
+            "action":"write","path":path,"content":"x".repeat(8193)
+        }}));
+        assert_eq!(refused["error"], "file write exceeds 8192 bytes");
+        assert_eq!(
+            fs::read(workspace.directory.path().join(&path)).unwrap(),
+            content.as_bytes()
+        );
+    }
+}
+
 #[test]
 fn capture_helper_preserves_running_tasks_and_retries_the_frozen_transfer_after_restart() {
     use proofstorm_core::workspace::evidence::TaskCapture;

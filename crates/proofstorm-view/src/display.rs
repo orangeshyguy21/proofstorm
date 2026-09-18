@@ -84,6 +84,7 @@ pub fn tool_title(name: &str) -> Option<&'static str> {
         "cell_exec" => "Cell exec",
         "workspace_task" => "Workspace task",
         "workspace_file" => "Workspace file",
+        "workspace_upload" => "Upload workspace file",
         "workspace_capture" => "Capture workspace evidence",
         "component_forensics" => action_title(OperationKind::ComponentForensics),
         "component_logs" => action_title(OperationKind::ComponentLogs),

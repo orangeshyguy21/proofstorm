@@ -275,6 +275,72 @@ async fn workspace_control_uses_bounded_recorded_exec_and_exact_retry_identity()
 }
 
 #[tokio::test]
+async fn workspace_file_write_limits_count_content_bytes_and_preserve_retries() {
+    use proofstorm_core::workspace::{FileRequest, WorkspaceRequest, wire};
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let cells = service(store, cluster.clone());
+    let mut cell = spec();
+    cell.components.push(ComponentSpec {
+        id: "scripts".into(),
+        kind: ComponentKind::Attacker,
+        implementation: "workspace".into(),
+        version: None,
+        config_version: "workspace/0.1/v1".into(),
+        control: ControlClass::Attacker,
+        config: BTreeMap::new(),
+    });
+    cells.up("demo", &cell).await.unwrap();
+    for (index, content) in ["a".repeat(8192), "\n".repeat(8192), "\0".repeat(8192)]
+        .into_iter()
+        .enumerate()
+    {
+        let request_id = format!("write-{index}");
+        let request = WorkspaceRequest::File(FileRequest::Write {
+            path: "src/file".into(),
+            content: content.clone(),
+        });
+        let first = cells
+            .workspace_request("demo", "scripts", &request, &request_id)
+            .await
+            .unwrap();
+        let retry = cells
+            .workspace_request("demo", "scripts", &request, &request_id)
+            .await
+            .unwrap();
+        assert_eq!(first.id, retry.id);
+        let mut command = first.request;
+        command.as_object_mut().unwrap().remove("component");
+        let command: NativeCommand = serde_json::from_value(command).unwrap();
+        command.validate().unwrap();
+        let decoded = wire::decode(serde_json::from_str(&command.argv[3]).unwrap()).unwrap();
+        assert_eq!(json!(decoded), json!(request));
+        let changed = WorkspaceRequest::File(FileRequest::Write {
+            path: "src/file".into(),
+            content: "changed".into(),
+        });
+        assert!(
+            cells
+                .workspace_request("demo", "scripts", &changed, &request_id)
+                .await
+                .is_err()
+        );
+        let before = cluster.lock().unwrap().requests.len();
+        let oversized = WorkspaceRequest::File(FileRequest::Write {
+            path: "src/file".into(),
+            content: format!("{content}x"),
+        });
+        let error = cells
+            .workspace_request("demo", "scripts", &oversized, "oversized")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("file write exceeds 8192 bytes"));
+        assert_eq!(cluster.lock().unwrap().requests.len(), before);
+    }
+}
+
+#[tokio::test]
 #[allow(
     clippy::too_many_lines,
     reason = "one end-to-end reconnection and teardown contract"
