@@ -168,7 +168,7 @@ fn large_private_manifest_stdin_and_retirement() {
     let body = "private-transfer-canary-".repeat(24_000).into_bytes();
     let source = h.start(
         fixture(&["repeat", "private-transfer-canary-", "24000", "", "0"]),
-        json!({"private_io":{"kind":"capture","maximum_bytes":600000,"format":"bytes"}}),
+        json!({"private_io":{"kind":"capture","maximum_bytes":600_000,"format":"bytes"}}),
         None,
     );
     let receipt = Harness::receipt(&source);

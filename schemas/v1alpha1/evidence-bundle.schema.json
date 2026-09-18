@@ -305,6 +305,64 @@
       ],
       "type": "string"
     },
+    "CaptureSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "include_logs": {
+          "default": false,
+          "description": "Include the retained stdout/stderr segments. Logs may contain raw private data.",
+          "type": "boolean"
+        },
+        "output_paths": {
+          "default": [],
+          "description": "Exact regular-file paths relative to `output/<task_id>`. No directory expansion.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "CapturedFile": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_length": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "content_base64": {
+          "description": "Standard base64 preserves arbitrary binary output exactly.",
+          "type": "string"
+        },
+        "executable_bits": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "executable_bits",
+        "byte_length",
+        "sha256",
+        "content_base64"
+      ],
+      "type": "object"
+    },
     "CatalogDependencySupport": {
       "additionalProperties": false,
       "properties": {
@@ -500,6 +558,50 @@
         "oracle"
       ],
       "type": "string"
+    },
+    "ControlScope": {
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "description": "Only these components in the task's original cell revision may be called.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lifecycle": {
+          "description": "Components on which start, stop and restart are explicitly permitted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_calls": {
+          "default": 256,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_fault_seconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_timeout_seconds": {
+          "default": 30,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "network": {
+          "description": "Exact bidirectional pairs on which temporary partitions may be created.",
+          "items": {
+            "$ref": "#/$defs/NetworkPair"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "DependencyBinding": {
       "additionalProperties": false,
@@ -713,6 +815,13 @@
           "description": "Immutable configurations actually used by the journal, including earlier cell generations.",
           "items": {
             "$ref": "#/$defs/PublishedRevision"
+          },
+          "type": "array"
+        },
+        "workspace_captures": {
+          "description": "Explicit, immutable captures of cell-owned tasks; tasks may continue running.",
+          "items": {
+            "$ref": "#/$defs/WorkspaceEvidence"
           },
           "type": "array"
         },
@@ -940,6 +1049,22 @@
       ],
       "type": "object"
     },
+    "NetworkPair": {
+      "additionalProperties": false,
+      "properties": {
+        "from_component": {
+          "type": "string"
+        },
+        "to_component": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_component",
+        "to_component"
+      ],
+      "type": "object"
+    },
     "OperationArtifact": {
       "additionalProperties": false,
       "properties": {
@@ -1058,6 +1183,181 @@
         "api_version",
         "digest",
         "entries"
+      ],
+      "type": "object"
+    },
+    "TaskCapture": {
+      "additionalProperties": false,
+      "properties": {
+        "capture_id": {
+          "type": "string"
+        },
+        "capture_request_digest": {
+          "type": "string"
+        },
+        "files": {
+          "description": "A sequential observation, not an atomic filesystem or application checkpoint.",
+          "items": {
+            "$ref": "#/$defs/CapturedFile"
+          },
+          "type": "array"
+        },
+        "observed_at_unix": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request": {
+          "$ref": "#/$defs/TaskStart"
+        },
+        "selection": {
+          "$ref": "#/$defs/CaptureSelection"
+        },
+        "task": true
+      },
+      "required": [
+        "capture_id",
+        "capture_request_digest",
+        "selection",
+        "observed_at_unix",
+        "task",
+        "request",
+        "files"
+      ],
+      "type": "object"
+    },
+    "TaskStart": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "control": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional authority for calls through the controller. Fixed for the lifetime of this task."
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "script": {
+          "default": "",
+          "description": "Shell script instead of argv. Runs in the captured source directory.",
+          "type": "string"
+        },
+        "source": {
+          "default": "src",
+          "description": "Snapshot this workspace-relative directory before starting. Defaults to src.",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Stable ID for this task. Exact retries return the original task; changed input is refused.",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": null,
+          "description": "Omit to run until stopped. A deadline is measured from process start.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "WorkspaceEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_length": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "content": {
+          "$ref": "#/$defs/WorkspaceEvidenceContent"
+        },
+        "digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "digest",
+        "byte_length",
+        "content"
+      ],
+      "type": "object"
+    },
+    "WorkspaceEvidenceContent": {
+      "additionalProperties": false,
+      "properties": {
+        "capture_id": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "controller_actions": {
+          "items": true,
+          "type": "array"
+        },
+        "controller_observed_at_unix": {
+          "description": "Later controller observation; snapshots never claim a distributed atomic checkpoint.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "instance_key": {
+          "type": "string"
+        },
+        "principal_id": {
+          "type": "string"
+        },
+        "revision_digest": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/TaskCapture"
+        },
+        "workspace_pod_uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "capture_id",
+        "run_id",
+        "principal_id",
+        "instance_id",
+        "instance_key",
+        "revision_digest",
+        "component",
+        "workspace_pod_uid",
+        "snapshot",
+        "controller_observed_at_unix",
+        "controller_actions"
       ],
       "type": "object"
     }

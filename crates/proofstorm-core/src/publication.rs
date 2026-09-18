@@ -106,6 +106,12 @@ pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<Resolv
         .map(|component| {
             let entry = validate_catalog_component(component, catalog)?;
             let backend = backends.require(&entry.id)?;
+            let image = runtime_image(component, entry);
+            let source_digest = if image == entry.image {
+                entry.source_digest.clone()
+            } else {
+                digest_json(&("workspace-runtime/v1", &image))
+            };
             let effective_config_digest = digest_json(&(
                 EFFECTIVE_CONFIG_DIGEST_VERSION,
                 &component.config_version,
@@ -151,7 +157,7 @@ pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<Resolv
                 ROLLOUT_DIGEST_VERSION,
                 &entry.id,
                 &entry.adapter_version,
-                &entry.image,
+                &image,
                 &entry.config_schema_digest,
                 &effective_config_digest,
                 &linked_target_contracts,
@@ -171,8 +177,8 @@ pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<Resolv
                 compatible_dependencies: entry.compatible_dependencies.clone(),
                 effective_config_digest,
                 rollout_digest,
-                image: entry.image.clone(),
-                source_digest: entry.source_digest.clone(),
+                image,
+                source_digest,
                 source: entry.source.clone(),
                 build_provenance: entry.build_provenance.clone(),
             })
@@ -185,6 +191,19 @@ pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<Resolv
         digest,
         entries,
     })
+}
+
+fn runtime_image(component: &crate::ComponentSpec, entry: &CatalogEntry) -> String {
+    if entry.id == "workspace" {
+        component
+            .config
+            .get("runtime_image")
+            .and_then(serde_json::Value::as_str)
+            .filter(|image| !image.is_empty())
+            .map_or_else(|| entry.image.clone(), crate::catalog::mirror_image)
+    } else {
+        entry.image.clone()
+    }
 }
 
 fn is_rollout_relevant_link(kind: LinkKind) -> bool {

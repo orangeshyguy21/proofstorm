@@ -444,3 +444,33 @@ async fn stop_then_edit_then_start_retains_storage_and_uses_the_new_configuratio
         );
     }
 }
+
+#[tokio::test]
+async fn sequential_task_controls_share_an_origin_but_yield_to_newer_user_controls() {
+    let (plan, cluster, context) = fixture(true, Control::Stop);
+    tick(&plan, &cluster, &context, Control::Stop).await;
+    assert_eq!(cluster.lock().unwrap().workload["spec"]["replicas"], 0);
+    cluster.lock().unwrap().action.spec.operation_id = "task-start-step".into();
+    tick(&plan, &cluster, &context, Control::Start).await;
+    assert_eq!(cluster.lock().unwrap().workload["spec"]["replicas"], 1);
+    cluster.lock().unwrap().action.spec.operation_id = "task-restart-step".into();
+    tick(&plan, &cluster, &context, Control::Restart).await;
+    let applied = cluster.lock().unwrap().patches.len();
+    tick(&plan, &cluster, &context, Control::Restart).await;
+    assert_eq!(cluster.lock().unwrap().patches.len(), applied);
+    {
+        let mut c = cluster.lock().unwrap();
+        c.workload["metadata"]["annotations"][LIFECYCLE_SEQUENCE_ANNOTATION] = json!("11");
+        c.workload["metadata"]["annotations"][LIFECYCLE_STATE_ANNOTATION] = json!("stopped");
+        c.workload["spec"]["replicas"] = json!(0);
+        c.action.spec.operation_id = "task-stale-start".into();
+    }
+    tick(&plan, &cluster, &context, Control::Start).await;
+    let c = cluster.lock().unwrap();
+    assert_eq!(c.patches.len(), applied);
+    assert_eq!(c.workload["spec"]["replicas"], 0);
+    assert_eq!(
+        c.action.status.as_ref().unwrap().error.as_ref().unwrap()["code"],
+        "lifecycle_action_superseded"
+    );
+}

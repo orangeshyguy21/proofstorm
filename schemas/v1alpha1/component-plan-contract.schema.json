@@ -519,13 +519,17 @@
         },
         {
           "properties": {
+            "config": {
+              "$ref": "#/$defs/WorkspaceConfig"
+            },
             "implementation": {
               "const": "workspace",
               "type": "string"
             }
           },
           "required": [
-            "implementation"
+            "implementation",
+            "config"
           ],
           "type": "object"
         }
@@ -1121,6 +1125,29 @@
         "kind",
         "name",
         "desired_replicas"
+      ],
+      "type": "object"
+    },
+    "WorkspaceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "runtime_image": {
+          "type": "string"
+        },
+        "service_port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "storage_size": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtime_image",
+        "storage_size",
+        "service_port"
       ],
       "type": "object"
     }

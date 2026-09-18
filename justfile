@@ -90,7 +90,7 @@ audit-mcp binary:
 # Exercise real supervisor process cleanup and private I/O on Linux.
 test-native-supervisor:
     @test "$(uname -s)" = Linux || { printf 'Native supervisor contracts require Linux.\n' >&2; exit 1; }
-    cargo test --locked -p proofstorm-exec --features contract-tests --test supervisor
+    cargo test --locked -p proofstorm-exec --features contract-tests
 
 # Check a native driver against an explicit local component image, with no external network.
 check-component-driver component driver-image component-image platform='linux/arm64' *version:

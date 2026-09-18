@@ -9,6 +9,7 @@ mod delegation;
 mod onboarding;
 mod previews;
 mod runs;
+mod workspace_evidence;
 pub use previews::CellPreview;
 mod session_directory;
 #[cfg(test)]
@@ -438,6 +439,7 @@ impl Store {
         updates::initialize_schema(&connection)?;
         previews::initialize_schema(&connection)?;
         runs::initialize_schema(&connection)?;
+        workspace_evidence::initialize_schema(&connection)?;
         lifecycle::initialize_schema(&connection)?;
         Ok(Self {
             lifecycle_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),

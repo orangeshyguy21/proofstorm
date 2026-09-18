@@ -90,7 +90,7 @@ compatibility details.
 | PostgreSQL | `postgresql` | Persistent database |
 | Redis | `redis` | Ephemeral cache |
 | Keycloak | `keycloak` | Test OIDC provider |
-| Workspace | `workspace` | General-purpose shell for commands and testing cell services |
+| Workspace | `workspace` | Custom scripts, files and services |
 
 ## Updates
 

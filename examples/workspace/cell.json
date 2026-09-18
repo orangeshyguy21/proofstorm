@@ -1,0 +1,25 @@
+{
+  "api_version": "proofstorm/v1alpha1",
+  "name": "workspace-demo",
+  "components": [
+    {
+      "id": "chain",
+      "kind": "bitcoin",
+      "implementation": "bitcoin-core",
+      "version": "31.1",
+      "config_version": "bitcoin-core/31/v1",
+      "control": "cell",
+      "config": {}
+    },
+    {
+      "id": "scripts",
+      "kind": "attacker",
+      "implementation": "workspace",
+      "config_version": "workspace/0.1/v1",
+      "control": "attacker",
+      "config": {"storage_size": "1Gi", "service_port": 8080}
+    }
+  ],
+  "links": [],
+  "policy": {"allow": []}
+}

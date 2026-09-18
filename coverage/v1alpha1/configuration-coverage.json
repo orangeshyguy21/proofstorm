@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:5f91005c6964f33c2b0b2fb4c695b9adc07f93a02dd1619515636a86461c46af",
+  "catalog_digest": "sha256:91ea38828c42a97da9e73acc2c811dd53a63d83c6d9bdb23282481de1e787bce",
   "entries": [
     {
       "implementation": "bitcoin-core",
@@ -1637,14 +1637,26 @@
       "release_channel": "prerelease",
       "support_lifecycle": "preferred",
       "config_version": "workspace/0.1/v1",
-      "config_schema_digest": "sha256:2663c06fb602ee4ed1ad7551f3e689bdd8722bf0dc170509b39e983bc4398be4",
+      "config_schema_digest": "sha256:5b0d08ebfc2eb28dbda21d0a609b5efb3278401b851bb8b8650d4dabe98bda9f",
       "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
       "fields": {
-        "idle_process": {
-          "classification": "runtime_policy",
+        "runtime_image": {
+          "classification": "agent_authorable",
           "required": true
         },
         "service_account_access": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "service_port": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "storage_size": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "task_supervisor": {
           "classification": "runtime_policy",
           "required": true
         },
@@ -1655,7 +1667,7 @@
       },
       "support": {
         "storage": [
-          "ephemeral"
+          "persistent_volume"
         ],
         "payment_methods": [],
         "payment_backends": [],

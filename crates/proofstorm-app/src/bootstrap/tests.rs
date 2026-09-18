@@ -39,6 +39,23 @@ fn on_demand_selects_only_locked_components_and_probe() {
     assert!(fs::read_dir(home.path()).unwrap().next().is_none());
 }
 
+#[test]
+fn pinned_custom_runtime_is_admitted_only_for_workspace_components() {
+    let home = tempfile::tempdir().unwrap();
+    let installation = fixture_installation(home.path());
+    let mut lock = sample_lock();
+    lock.entries[0].image = format!("ghcr.io/example/workspace@sha256:{}", "a".repeat(64));
+    assert!(selected_images(&installation, &lock).is_err());
+    lock.entries[0].catalog_id = "workspace".into();
+    assert!(
+        selected_images(&installation, &lock)
+            .unwrap()
+            .contains(&lock.entries[0].image)
+    );
+    lock.entries[0].image = "ghcr.io/example/workspace:latest".into();
+    assert!(selected_images(&installation, &lock).is_err());
+}
+
 #[tokio::test]
 async fn unshipped_or_mutable_images_fail_before_home_or_docker_access() {
     let home = tempfile::tempdir().unwrap();

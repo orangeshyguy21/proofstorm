@@ -37,7 +37,7 @@ pub use backend::{
     NutshellMintConfig, OperationAdmissionContract, OperationClass, PostgresConfig,
     ProtocolProbeContract, ProtocolProbePlan, ReadinessPrerequisite, RedisConfig,
     StorageObservationContract, StorageRequirementTemplate, TargetDescriptorContract,
-    WorkloadControllerKind, WorkloadObservationContract, default_backend_registry,
+    WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig, default_backend_registry,
 };
 pub use candidate::{
     CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateDiagnostics,
@@ -93,6 +93,7 @@ pub use quote::{
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, validate_cell};
 pub mod native;
+pub mod workspace;
 
 pub mod private_io;
 

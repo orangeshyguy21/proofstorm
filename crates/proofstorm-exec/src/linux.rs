@@ -87,15 +87,22 @@ pub fn entry() -> Result<()> {
             println!("{{\"started\":true}}");
         }
         "run" => {
-            if supervise(&directory).is_err() {
+            if supervise(&directory, None).is_err() {
                 finish(
                     &directory,
                     &json!({"runner_error":"native_runner_failed", "cleanup_verified":false}),
                 )?;
             }
         }
-        "child" => {
-            let command = spec(&directory)?;
+        "child" | "workspace-child" => {
+            let task = (mode == "workspace-child")
+                .then(|| workspace_spec(&directory))
+                .transpose()?;
+            let command = if let Some(task) = &task {
+                workspace_command(task)
+            } else {
+                spec(&directory)?
+            };
             pthread_sigmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)?;
             let mut argv = if command.argv.is_empty() {
                 vec!["/bin/sh".into(), "-c".into(), command.script]
@@ -115,7 +122,12 @@ pub fn entry() -> Result<()> {
                 }
                 argv[*index as usize] = text;
             }
-            let error = Command::new(&argv[0]).args(&argv[1..]).exec();
+            let mut process = Command::new(&argv[0]);
+            process.args(&argv[1..]);
+            if let Some(task) = task {
+                process.current_dir(directory.join("source")).envs(task.env);
+            }
+            let error = process.exec();
             return Err(error.into());
         }
         "status" => match fs::read(directory.join("receipt.json")) {
@@ -204,6 +216,7 @@ fn capture(
     mut reader: impl Read + Send + 'static,
     path: PathBuf,
     limit: usize,
+    rotating_log: bool,
 ) -> mpsc::Receiver<(Vec<u8>, usize)> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -212,16 +225,20 @@ fn capture(
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
-                .open(path)?;
+                .open(&path)?;
             let mut retained = Vec::new();
             let mut total = 0_usize;
             let mut buffer = [0; 4096];
+            let mut log = rotating_log.then(|| RotatingLog::new(&path)).transpose()?;
             loop {
                 let count = reader.read(&mut buffer)?;
                 if count == 0 {
                     break;
                 }
                 total = total.saturating_add(count);
+                if let Some(log) = &mut log {
+                    log.write(&buffer[..count])?;
+                }
                 let keep = count.min(limit.saturating_sub(retained.len()));
                 file.write_all(&buffer[..keep])?;
                 retained.extend_from_slice(&buffer[..keep]);
@@ -234,6 +251,77 @@ fn capture(
         }
     });
     receiver
+}
+
+struct RotatingLog {
+    path: PathBuf,
+    file: fs::File,
+    bytes: usize,
+}
+
+impl RotatingLog {
+    fn new(path: &Path) -> Result<Self> {
+        let path = path.with_extension("log");
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            file,
+            bytes: 0,
+        })
+    }
+
+    fn write(&mut self, mut bytes: &[u8]) -> Result<()> {
+        let limit = proofstorm_core::workspace::LOG_SEGMENT_BYTES;
+        while !bytes.is_empty() {
+            if self.bytes == limit {
+                self.file.sync_all()?;
+                fs::rename(&self.path, self.path.with_extension("log.previous"))?;
+                self.file = OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(&self.path)?;
+                self.bytes = 0;
+            }
+            let count = bytes.len().min(limit - self.bytes);
+            self.file.write_all(&bytes[..count])?;
+            self.bytes += count;
+            bytes = &bytes[count..];
+        }
+        Ok(())
+    }
+}
+
+fn workspace_spec(directory: &Path) -> Result<proofstorm_core::workspace::TaskStart> {
+    let task: proofstorm_core::workspace::TaskStart =
+        serde_json::from_slice(&bounded_file(&directory.join("task.json"), 16384)?)?;
+    task.validate()?;
+    Ok(task)
+}
+
+fn workspace_command(task: &proofstorm_core::workspace::TaskStart) -> NativeCommand {
+    NativeCommand {
+        private_io: None,
+        script: task.script.clone(),
+        argv: task.argv.clone(),
+        timeout_seconds: 300,
+        output: proofstorm_core::native::NativeOutput::default(),
+    }
+}
+
+pub(super) fn run_workspace(directory: &Path) -> Result<()> {
+    let task = workspace_spec(directory)?;
+    if supervise(directory, Some(&task)).is_err() {
+        finish(
+            directory,
+            &json!({"runner_error":"workspace_runner_failed","cleanup_verified":false}),
+        )?;
+    }
+    Ok(())
 }
 
 // Only signal our direct children: they cannot be PID-reused until we reap them.
@@ -262,8 +350,13 @@ fn read_input(directory: &Path, expected: u32, digest: &str) -> Result<Vec<u8>> 
     clippy::too_many_lines,
     reason = "supervision keeps process ownership, cleanup and receipt construction together"
 )]
-fn supervise(directory: &Path) -> Result<()> {
-    let command = spec(directory)?;
+fn supervise(directory: &Path, task: Option<&proofstorm_core::workspace::TaskStart>) -> Result<()> {
+    let command = if let Some(task) = task {
+        workspace_command(task)
+    } else {
+        spec(directory)?
+    };
+    let deadline = task.map_or(Some(command.timeout_seconds), |task| task.timeout_seconds);
     set_child_subreaper(true)?;
     let mut signals = SigSet::empty();
     signals.add(Signal::SIGTERM);
@@ -297,7 +390,11 @@ fn supervise(directory: &Path) -> Result<()> {
         _ => CAPTURE_LIMIT,
     };
     let mut child = Command::new(std::env::current_exe()?)
-        .arg("child")
+        .arg(if task.is_some() {
+            "workspace-child"
+        } else {
+            "child"
+        })
         .arg(directory)
         .stdin(input)
         .stdout(Stdio::piped())
@@ -309,11 +406,13 @@ fn supervise(directory: &Path) -> Result<()> {
         child.stdout.take().ok_or("stdout unavailable")?,
         directory.join("stdout"),
         capture_limit,
+        task.is_some(),
     );
     let stderr = capture(
         child.stderr.take().ok_or("stderr unavailable")?,
         directory.join("stderr"),
         CAPTURE_LIMIT,
+        task.is_some(),
     );
     let mut exit_code = None;
     let mut exit_signal = None;
@@ -354,8 +453,9 @@ fn supervise(directory: &Path) -> Result<()> {
         }
         if cleanup_started.is_none() {
             cancelled = directory.join("cancel").exists() || interrupted.load(Ordering::SeqCst);
-            timed_out =
-                started.elapsed() >= Duration::from_secs(u64::from(command.timeout_seconds));
+            timed_out = deadline.is_some_and(|seconds| {
+                started.elapsed() >= Duration::from_secs(u64::from(seconds))
+            });
             if main_finished || cancelled || timed_out {
                 cleanup_started = Some(Instant::now());
             }

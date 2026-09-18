@@ -492,11 +492,13 @@ fn selected_images(
         // Never attempt to fetch candidate names from the public publisher namespace.
         ensure!(
             is_shipped_image(&entry.image, &shipped)
+                || (entry.catalog_id == "workspace"
+                    && proofstorm_core::workspace::is_runtime_image(&entry.image))
                 || (entry.source.is_some()
                     && candidate_prefixes
                         .iter()
                         .any(|p| entry.image.starts_with(p))),
-            "cell image is neither shipped nor an installation-local candidate"
+            "cell image is neither shipped, a pinned workspace runtime nor an installation-local candidate"
         );
         source(&entry.image)?; // Require an immutable digest for every image.
         selected.insert(entry.image.clone());

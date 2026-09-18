@@ -13,6 +13,9 @@ pub const EVIDENCE_MEDIA_TYPE: &str = "application/vnd.proofstorm.evidence.v1alp
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceBundleContent {
+    /// Explicit, immutable captures of cell-owned tasks; tasks may continue running.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_captures: Vec<crate::workspace::evidence::WorkspaceEvidence>,
     /// Immutable configurations actually used by the journal, including earlier cell generations.
     #[serde(default)]
     pub revisions: Vec<PublishedRevision>,

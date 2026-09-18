@@ -267,6 +267,12 @@
     {
       "api_version": "v1",
       "kind": "PersistentVolumeClaim",
+      "name": "attacker-data",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "v1",
+      "kind": "PersistentVolumeClaim",
       "name": "mint-data",
       "namespace": "proofstorm-i-golden-b2"
     },
@@ -323,6 +329,7 @@
     {
       "applicable_conditions": [
         "workload_ready",
+        "storage_ready",
         "component_ready",
         "experiment_controllable"
       ],
@@ -331,7 +338,8 @@
       "condition_aggregation": [
         {
           "all_of": [
-            "workload_ready"
+            "workload_ready",
+            "storage_ready"
           ],
           "condition": "component_ready"
         }
@@ -346,6 +354,11 @@
         "experiment_controllable": [
           "control_available",
           "control_unavailable"
+        ],
+        "storage_ready": [
+          "not_observed",
+          "storage_bound",
+          "storage_pending"
         ],
         "workload_ready": [
           "not_observed",
@@ -365,15 +378,30 @@
       },
       "credentials": [],
       "effective_config": {
+        "config": {
+          "runtime_image": "",
+          "service_port": 0,
+          "storage_size": "1Gi"
+        },
         "implementation": "workspace"
       },
       "execution_context": {
         "component_id": "attacker",
         "environment": {
-          "HOME": "/tmp"
+          "HOME": "/workspace",
+          "PROOFSTORM_WORKSPACE": "/workspace"
         },
         "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-        "mounts": [],
+        "mounts": [
+          {
+            "mount_path": "/workspace",
+            "name": "workspace",
+            "read_only": false,
+            "source": {
+              "source": "component_persistent_data"
+            }
+          }
+        ],
         "state_contract": "proofstorm/workspace-state/v1"
       },
       "instance_key": "i-golden-b2",
@@ -441,8 +469,12 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:c118506f4d0919d71a89f282817b8361bbd93395810c6e4f62376d1738bd89b9",
-      "storage": [],
+      "rollout_digest": "sha256:e2130bb2f119bbf52cab4972a85364c271832640d52a6cd6b985b6ecb32ddbca",
+      "storage": [
+        {
+          "claim_name": "attacker-data"
+        }
+      ],
       "target_descriptor": {
         "backend_id": "workspace",
         "component_id": "attacker",
@@ -1722,10 +1754,13 @@
               "proofstorm.dev/network-identity": "attacker"
             }
           },
+          "strategy": {
+            "type": "Recreate"
+          },
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:c118506f4d0919d71a89f282817b8361bbd93395810c6e4f62376d1738bd89b9"
+                "proofstorm.dev/rollout-digest": "sha256:e2130bb2f119bbf52cab4972a85364c271832640d52a6cd6b985b6ecb32ddbca"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1753,13 +1788,49 @@
               "containers": [
                 {
                   "command": [
-                    "sh",
-                    "-c",
-                    "trap : TERM INT; sleep infinity & wait"
+                    "/opt/proofstorm/workspace",
+                    "workspace",
+                    "serve"
+                  ],
+                  "env": [
+                    {
+                      "name": "HOME",
+                      "value": "/workspace"
+                    },
+                    {
+                      "name": "PROOFSTORM_WORKSPACE",
+                      "value": "/workspace"
+                    },
+                    {
+                      "name": "PROOFSTORM_RUNTIME_IMAGE",
+                      "value": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+                    }
                   ],
                   "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "/opt/proofstorm/workspace",
+                        "workspace",
+                        "request",
+                        "{\"kind\":\"ping\"}"
+                      ]
+                    },
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "cpu": "2",
+                      "memory": "1Gi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1767,10 +1838,60 @@
                         "ALL"
                       ]
                     }
-                  }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/workspace",
+                      "name": "workspace"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-workspace",
+                      "readOnly": true
+                    }
+                  ],
+                  "workingDir": "/workspace"
                 }
               ],
               "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-exec",
+                    "workspace",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-workspace",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-workspace"
+                    }
+                  ]
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -1780,7 +1901,20 @@
                   "type": "RuntimeDefault"
                 }
               },
-              "serviceAccountName": "proofstorm-workload"
+              "serviceAccountName": "proofstorm-workload",
+              "terminationGracePeriodSeconds": 15,
+              "volumes": [
+                {
+                  "name": "workspace",
+                  "persistentVolumeClaim": {
+                    "claimName": "attacker-data"
+                  }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-workspace"
+                }
+              ]
             }
           }
         }
@@ -2797,6 +2931,30 @@
       }
     ],
     "persistentVolumeClaims": [
+      {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "attacker",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "attacker"
+          },
+          "name": "attacker-data",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "1Gi"
+            }
+          }
+        }
+      },
       {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",

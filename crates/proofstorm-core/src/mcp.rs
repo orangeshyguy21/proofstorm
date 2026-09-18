@@ -85,6 +85,13 @@ pub const TOOLS: &[PublicTool] = &[
         [ExperimentClose, ExperimentRead, ArtifactRead]
     ),
     tool!("cell_exec", true, [ComponentExecLive]),
+    tool!("workspace_task", true, [ComponentExecLive, ArtifactRead]),
+    tool!("workspace_file", true, [ComponentExecLive, ArtifactRead]),
+    tool!(
+        "workspace_capture",
+        false,
+        [ComponentExecLive, ArtifactRead, ExperimentRead]
+    ),
     tool!("component_forensics", true, [ComponentForensics]),
     tool!("component_logs", true, [ComponentLogs]),
     tool!("component_start", true, [ComponentControl]),
