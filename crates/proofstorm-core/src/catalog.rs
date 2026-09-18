@@ -714,15 +714,15 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             "workspace",
             backends,
             ComponentKind::Attacker,
-            "General-purpose shell workspace for running commands and testing cell services",
+            "Persistent programmable workspace with managed tasks, source snapshots, rotating logs and optional custom runtime",
             adapter_version,
             "0.1.0-alpha.1",
             ReleaseChannel::Prerelease,
             "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-            BTreeSet::from([CatalogFeature::NativeCli]),
+            BTreeSet::from([CatalogFeature::NativeCli, CatalogFeature::PersistentState]),
             vec![],
             support_matrix(
-                &[StorageBackend::Ephemeral],
+                &[StorageBackend::PersistentVolume],
                 &[],
                 &[],
                 &[],
@@ -1188,7 +1188,7 @@ fn catalog_entry_with_lifecycle(
 
 /// Preserve the upstream repository and digest while serving published images
 /// from the local registry. Locally packaged images already name that registry.
-fn mirror_image(image: &str) -> String {
+pub(crate) fn mirror_image(image: &str) -> String {
     if image.starts_with("docker.io/") || image.starts_with("quay.io/") {
         format!("proofstorm-registry.localhost:5000/upstream/{image}")
     } else {
@@ -1491,7 +1491,21 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             ],
             &[],
         )],
-        "redis" | "postgresql" | "workspace" => {
+        "workspace" => vec![runtime_endpoint(
+            "component",
+            "workspace",
+            &[
+                "workspace_task",
+                "workspace_file",
+                "workspace_upload",
+                "workspace_capture",
+                "component_logs",
+            ],
+            &[
+                "Use workspace_upload to copy local scripts or binary files up to 16 MiB into /workspace without inline contents. Use workspace_file for small edits, reads and listing, and workspace_task for managed background tasks. Each task captures its source directory (default src), survives agent disconnection and never automatically replays after restart. Stop through workspace_task. Optional task control.components grants native command calls on named cell components: invoke $PROOFSTORM_CONTROL workspace call with JSON {call_id,component,command}; command uses the cell_exec contract. Reuse call_id only for an exact retry. Receipts are under output/<task_id>/control/<call_id>.json. Scope defaults to 256 calls and 30 seconds per command. control.lifecycle grants start/stop/restart targets; control.network grants exact partition pairs with max_fault_seconds (default 60, maximum 3600). Typed calls use {call_id,operation:{kind,...}}. Partitions expire and are healed on task exit; inspect task control_cleanup after stopping. Lifecycle effects persist. Use workspace_capture to attach source, inputs, selected output files and control receipts to an open run without stopping the task. Evidence exports include captures; download the resource before cell teardown. Runtime defaults to BusyBox; a pinned runtime_image supplies other languages. An optional service_port exposes one cell-local TCP endpoint.",
+            ],
+        )],
+        "redis" | "postgresql" => {
             vec![runtime_endpoint("component", "service", OBSERVE, &[])]
         }
         _ => vec![runtime_endpoint(

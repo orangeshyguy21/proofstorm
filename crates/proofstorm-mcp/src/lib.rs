@@ -3,6 +3,8 @@ use proofstorm_core::default_catalog;
 mod directories;
 #[cfg(test)]
 mod surface_tests;
+#[cfg(test)]
+mod workspace_evidence_tests;
 pub use directories::{DirectoryQuery, EnvironmentRequest};
 mod cell_read;
 mod submission;
@@ -113,6 +115,26 @@ pub struct CellExecRequest {
     /// except in `json_fields` mode. Private output cannot be read from the receipt.
     #[serde(default)]
     pub output: proofstorm_core::native::NativeOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceTaskRequest {
+    pub name: String,
+    pub component: String,
+    /// Exact retry key for this control call. Use a new key for each fresh status/log read.
+    pub request_id: String,
+    pub task: proofstorm_core::workspace::TaskRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceFileRequest {
+    pub name: String,
+    pub component: String,
+    /// Exact retry key for this control call. Use a new key for each fresh read.
+    pub request_id: String,
+    pub file: proofstorm_core::workspace::FileRequest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1254,6 +1276,7 @@ pub struct EvidenceExportResponse {
     pub lock_digest: String,
     pub journal_count: u32,
     pub artifact_count: u32,
+    pub workspace_capture_count: u32,
     /// Always true: every experiment action and its artifact descriptor is in the journal.
     pub journal_complete: bool,
     /// Artifact bodies are optional enrichments; their count need not equal `journal_count`.
@@ -1274,6 +1297,7 @@ pub enum EvidenceSection {
     Lock,
     Journal,
     Artifact,
+    WorkspaceCapture,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1295,6 +1319,9 @@ pub struct EvidenceSectionReadRequest {
     /// Required for artifact reads and ignored for other sections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
+    /// Required for `workspace_capture` section reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_id: Option<String>,
     /// Journal sequence boundary; ignored for other sections.
     #[serde(default)]
     pub after_sequence: u64,
@@ -1612,9 +1639,18 @@ impl ProofstormMcp {
                 artifact,
             });
         }
+        let workspace_captures = self
+            .store
+            .workspace_captures(&self.workspace, &self.principal, &request.experiment_id)
+            .map_err(store_error)?;
         let revisions = actions
             .iter()
             .map(|a| a.revision_digest.as_str())
+            .chain(
+                workspace_captures
+                    .iter()
+                    .map(|capture| capture.content.revision_digest.as_str()),
+            )
             .filter(|d| !d.is_empty())
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -1625,6 +1661,7 @@ impl ProofstormMcp {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let content = EvidenceBundleContent {
+            workspace_captures,
             revisions,
             api_version: EVIDENCE_API_VERSION.to_owned(),
             workspace_id: self.workspace.clone(),
@@ -1770,6 +1807,94 @@ impl ProofstormMcp {
             .await?
             .0;
         operation_result(operation)
+    }
+
+    #[tool(
+        name = "workspace_task",
+        description = "Start, inspect, stop, list or read logs of cell-owned workspace tasks. A task outlives this call and agent disconnection; timeout_seconds omitted means until stopped. Start snapshots the source directory (default src); same task_id and identical input return the original task even after interruption, changed input is refused. Tasks are never automatically replayed after a workspace restart. Returns a bounded control operation: operation_wait then inspect exit_code and stdout JSON for task state. A successful start is not task completion. Use a new request_id for each fresh read. Logs explicitly expose raw output. Stopping the control operation does not stop the task; use task action stop and wait for terminal task state. Optional control.components grants native calls through $PROOFSTORM_CONTROL workspace call with JSON {call_id,component,command}. Reuse call_id only for exact retries; receipts are output/<task_id>/control/<call_id>.json. control.lifecycle grants component start/stop/restart; control.network grants exact temporary partition pairs. Typed calls use {call_id,operation:{kind,...}}. Lifecycle needs component.control; partitions need network.partition and network.heal. Partitions heal on task exit or expiry; task status control_cleanup reports pending_faults and observed task_phase. Lifecycle effects persist."
+    )]
+    async fn proofstorm_workspace_task(
+        &self,
+        Parameters(request): Parameters<WorkspaceTaskRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.cells()?
+            .workspace_request(
+                &request.name,
+                &request.component,
+                &proofstorm_core::workspace::WorkspaceRequest::Task(request.task),
+                &request.request_id,
+            )
+            .await
+            .map_err(app_error)
+            .and_then(operation_result)
+    }
+
+    #[tool(
+        name = "workspace_capture",
+        description = "Attach an immutable workspace task snapshot to an open run in the same cell. selection contains task_id, optional output_paths relative to output/<task_id>, and include_logs (default false). Includes captured source, task command/environment, task state, control mailbox and current controller receipts; selected files and logs are raw data shared with run readers. Does not stop or wait for the task. Files are observed sequentially; this is not an atomic application checkpoint. Retry the entire request unchanged for the same capture. Finish after its receipt, then evidence_export includes captures automatically. Download its resource before cell removal, which purges local run history. Returns metadata only; use evidence_section_read section workspace_capture with capture_id and a JSON pointer after run_finish. Limits: 64 output paths, 4096 files, 24 MiB file content and 40 MiB total capture. Missing, linked, oversized or changing selected files fail the capture."
+    )]
+    async fn proofstorm_workspace_capture(
+        &self,
+        Parameters(request): Parameters<proofstorm_app::cell::WorkspaceCaptureRequest>,
+    ) -> Result<Json<proofstorm_app::cell::WorkspaceCaptureReceipt>, ErrorData> {
+        self.authorize_all(&[
+            Capability::ComponentExecLive,
+            Capability::ArtifactRead,
+            Capability::ExperimentRead,
+        ])?;
+        let id = request.capture_id(&self.workspace, &self.principal);
+        if let Some(previous) = self
+            .store
+            .workspace_capture(
+                &self.workspace,
+                &self.principal,
+                &id,
+                &digest_json(&request),
+            )
+            .map_err(store_error)?
+        {
+            return Ok(Json((&previous).into()));
+        }
+        self.cells()?
+            .workspace_capture(&request)
+            .await
+            .map(Json)
+            .map_err(app_error)
+    }
+
+    #[tool(
+        name = "workspace_upload",
+        description = "Upload a local file into a workspace component without putting its contents in MCP arguments. source_path must be readable on the MCP server host; relative paths use the server working directory (the attached project for managed agents). path is relative to /workspace, usually src/script.py. Supports binary files up to 16 MiB and preserves whether the source is executable. The destination is replaced atomically after size and SHA-256 verification. Returns a recorded operation: operation_wait, then inspect exit_code and stdout JSON for path, bytes and sha256. Retry the same request_id with unchanged destination, bytes and executable permission; a changed file needs a new request_id. Interrupted staging leaves the destination unchanged and can be retried. Files survive workspace restarts and are deleted with the cell."
+    )]
+    async fn proofstorm_workspace_upload(
+        &self,
+        Parameters(request): Parameters<proofstorm_app::cell::WorkspaceUploadRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.cells()?
+            .workspace_upload(&request)
+            .await
+            .map_err(app_error)
+            .and_then(operation_result)
+    }
+
+    #[tool(
+        name = "workspace_file",
+        description = "Write, read, list or remove workspace files. Paths are relative to /workspace; use src for editable code, data for shared state, output/<task_id> for results. Files survive workspace restarts and are deleted with the cell. Writes replace a UTF-8 file atomically (8192 bytes maximum); reads return 1024-byte slices with next_offset; lists paginate with next_after. Symlinks, traversal and supervisor state are refused. Returns a bounded operation; operation_wait then read stdout JSON. Read explicitly exposes file contents. Use a new request_id for each fresh read. Use workspace_upload for local scripts and binary files up to 16 MiB."
+    )]
+    async fn proofstorm_workspace_file(
+        &self,
+        Parameters(request): Parameters<WorkspaceFileRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.cells()?
+            .workspace_request(
+                &request.name,
+                &request.component,
+                &proofstorm_core::workspace::WorkspaceRequest::File(request.file),
+                &request.request_id,
+            )
+            .await
+            .map_err(app_error)
+            .and_then(operation_result)
     }
 
     #[tool(
@@ -3114,6 +3239,7 @@ impl ProofstormMcp {
             operation.phase,
             OperationPhase::Succeeded | OperationPhase::Failed | OperationPhase::Cancelled
         ) {
+            self.finish_workspace_upload(&operation).await?;
             return Ok(Json(operation));
         }
         let token = proofstorm_core::digest_json(&(
@@ -3129,16 +3255,30 @@ impl ProofstormMcp {
         {
             return Ok(Json(operation));
         }
+        let (phase, artifact) = if operation.phase == OperationPhase::Pending {
+            (
+                OperationPhase::Cancelled,
+                serde_json::json!({"code":"action_cancelled", "cancelled":true, "submitted":false}),
+            )
+        } else {
+            (OperationPhase::Failed, missing_action_artifact(&operation))
+        };
         let finalized = self
             .store
-            .record_operation_result(
-                &self.workspace,
-                &operation.id,
-                OperationPhase::Failed,
-                missing_action_artifact(&operation),
-            )
+            .record_operation_result(&self.workspace, &operation.id, phase, artifact)
             .map_err(store_error)?;
+        self.finish_workspace_upload(&finalized).await?;
         Ok(Json(finalized))
+    }
+
+    async fn finish_workspace_upload(&self, operation: &CellOperation) -> Result<(), ErrorData> {
+        if proofstorm_app::cell::Cells::is_workspace_upload(operation) {
+            self.cells()?
+                .finish_workspace_upload(operation)
+                .await
+                .map_err(app_error)?;
+        }
+        Ok(())
     }
 
     #[tool(
@@ -3243,6 +3383,9 @@ impl ProofstormMcp {
                         )
                     })?;
                 evidence_pointer(evidence_json(artifact)?, &request.pointer, "artifact")?
+            }
+            EvidenceSection::WorkspaceCapture => {
+                evidence_capture_section(&bundle, request.capture_id.as_deref(), &request.pointer)?
             }
             EvidenceSection::Journal => unreachable!("journal returned above"),
         };
@@ -3453,6 +3596,31 @@ fn cell_validation_result_with_catalog(
     result
 }
 
+fn evidence_capture_section(
+    bundle: &EvidenceBundle,
+    capture_id: Option<&str>,
+    pointer: &str,
+) -> Result<serde_json::Value, ErrorData> {
+    let id = capture_id.ok_or_else(|| {
+        coded_invalid_request(
+            "evidence_capture_id_required",
+            "capture_id is required for workspace capture reads",
+        )
+    })?;
+    let capture = bundle
+        .content
+        .workspace_captures
+        .iter()
+        .find(|capture| capture.content.capture_id == id)
+        .ok_or_else(|| {
+            coded_invalid_request(
+                "evidence_capture_unknown",
+                "capture_id is not attached to this run",
+            )
+        })?;
+    evidence_pointer(evidence_json(capture)?, pointer, "workspace_capture")
+}
+
 fn evidence_export_response(
     bundle: EvidenceBundle,
     resource_uri: String,
@@ -3468,6 +3636,7 @@ fn evidence_export_response(
         lock_digest: bundle.content.instance.lock_digest.clone(),
         journal_count: u32::try_from(bundle.content.journal.len()).unwrap_or(u32::MAX),
         artifact_count: u32::try_from(bundle.content.artifacts.len()).unwrap_or(u32::MAX),
+        workspace_capture_count: u32::try_from(bundle.content.workspace_captures.len()).unwrap_or(u32::MAX),
         journal_complete: true,
         artifact_bodies_optional: true,
         guidance: "Evidence is complete: the journal covers every action and artifact descriptor. Do not retry merely to make artifact_count equal journal_count; explicit artifact IDs only embed optional full bodies."
@@ -5761,6 +5930,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_before_submission_is_cancelled_but_missing_running_action_is_failed() {
+        let store = seeded_store();
+        for capability in [
+            Capability::ComponentExecLive,
+            Capability::CellOperate,
+            Capability::ExperimentRead,
+            Capability::ActionCancel,
+            Capability::ArtifactRead,
+        ] {
+            store.grant("alpha", "designer", capability).unwrap();
+        }
+        let spec = serde_json::from_value(serde_json::json!({
+            "api_version":"proofstorm/v1alpha1","name":"cancel","links":[],
+            "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
+        })).unwrap();
+        store
+            .create_draft("alpha", "designer", "cancel", &spec, "draft")
+            .unwrap();
+        let revision = store
+            .publish("alpha", "designer", "cancel", 1, "publish")
+            .unwrap();
+        store
+            .materialize("alpha", "designer", "cancel", &revision.digest, "apply")
+            .unwrap();
+        let client = kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| async {
+                Ok::<_, std::io::Error>(http::Response::builder().status(404)
+                .body(kube::client::Body::from(r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","code":404}"#.as_bytes().to_vec())).unwrap())
+            }),
+            "system",
+        );
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client, "system");
+        for (id, phase, expected, code) in [
+            (
+                "pending",
+                OperationPhase::Pending,
+                OperationPhase::Cancelled,
+                "action_cancelled",
+            ),
+            (
+                "running",
+                OperationPhase::Running,
+                OperationPhase::Failed,
+                "action_runtime_not_found",
+            ),
+        ] {
+            store
+                .create_operation(
+                    "alpha",
+                    "designer",
+                    "cancel",
+                    "",
+                    "",
+                    id,
+                    OperationKind::ComponentExecLive,
+                    &serde_json::json!({"component":"chain","argv":["true"]}),
+                    id,
+                    Capability::ComponentExecLive,
+                )
+                .unwrap();
+            if phase == OperationPhase::Running {
+                store.update_operation_phase("alpha", id, phase).unwrap();
+            }
+            for _ in 0..2 {
+                let reply = service.request_cancellation(Parameters(serde_json::from_value(
+                    serde_json::json!({"operation_id":id,"request_id":format!("cancel-{id}")})
+                ).unwrap())).await.unwrap().0;
+                assert_eq!(reply.phase, expected);
+                assert_eq!(reply.artifact.unwrap().content["code"], code);
+            }
+        }
+    }
+
+    #[tokio::test]
     #[allow(
         clippy::too_many_lines,
         reason = "raw requests and a mock cluster verify automatic admission, unready logs and replay end to end"
@@ -6045,7 +6290,7 @@ mod tests {
             service.tool_names().into_iter().collect::<BTreeSet<_>>(),
             expected
         );
-        assert_eq!(expected.len(), 44);
+        assert_eq!(expected.len(), 48);
         assert_optional_tracking(&service);
         let wire=serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"tools":service.tool_router.list_all()}})).unwrap();
         eprintln!(
@@ -7049,6 +7294,7 @@ mod tests {
                     section: EvidenceSection::Journal,
                     pointer: String::new(),
                     operation_id: None,
+                    capture_id: None,
                     after_sequence,
                     limit: 50,
                 }))
@@ -7078,6 +7324,7 @@ mod tests {
                 section: EvidenceSection::Artifact,
                 pointer: "/artifact/content/synthetic_fixture".into(),
                 operation_id: Some("observation-125".into()),
+                capture_id: None,
                 after_sequence: 0,
                 limit: 50,
             }))
@@ -7283,6 +7530,7 @@ mod tests {
                 section: EvidenceSection::Revision,
                 pointer: "/digest".into(),
                 operation_id: None,
+                capture_id: None,
                 after_sequence: 0,
                 limit: 20,
             }))
@@ -7300,6 +7548,7 @@ mod tests {
                 section: EvidenceSection::Journal,
                 pointer: String::new(),
                 operation_id: None,
+                capture_id: None,
                 after_sequence: 0,
                 limit: 1,
             }))

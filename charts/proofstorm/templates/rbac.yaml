@@ -11,7 +11,8 @@ rules:
     verbs: ["get", "patch", "update"]
   - apiGroups: ["proofstorm.dev"]
     resources: ["proofstormcellactions"]
-    verbs: ["get", "list", "watch", "delete"]
+    # Workspace task calls create child actions and cancel them on task exit.
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: ["proofstorm.dev"]
     resources: ["proofstormcellactions/status"]
     verbs: ["get", "patch", "update"]

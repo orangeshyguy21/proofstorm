@@ -9,6 +9,7 @@ mod delegation;
 mod onboarding;
 mod previews;
 mod runs;
+mod workspace_evidence;
 pub use previews::CellPreview;
 mod session_directory;
 #[cfg(test)]
@@ -438,6 +439,7 @@ impl Store {
         updates::initialize_schema(&connection)?;
         previews::initialize_schema(&connection)?;
         runs::initialize_schema(&connection)?;
+        workspace_evidence::initialize_schema(&connection)?;
         lifecycle::initialize_schema(&connection)?;
         Ok(Self {
             lifecycle_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1669,6 +1671,7 @@ impl Store {
                 "action run must be open and belong to this cell".into(),
             ));
         }
+        let automatic_session = session_id.is_empty();
         let session = self.track_session(workspace, principal, experiment_id, session_id)?;
         let session_id = session.id.as_str();
         let digest = proofstorm_core::digest_json(&(
@@ -1682,6 +1685,47 @@ impl Store {
         let accepted_at = now_unix();
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Admission and its retry record are one transaction. Another connection may
+        // have admitted this request after our optimistic lookup and session tracking.
+        if let Some(previous) = Self::idempotent_response_from::<CellOperation, _>(
+            &transaction,
+            workspace,
+            principal,
+            idempotency_key,
+            "cell.operation.create",
+            &envelope,
+        )? {
+            return Self::operation_from(&transaction, workspace, &previous.id);
+        }
+        match Self::operation_from(&transaction, workspace, operation_id) {
+            Ok(existing) => {
+                if existing.instance_id != instance_id
+                    || existing.principal_id != principal
+                    || existing.experiment_id != experiment_id
+                    || existing.request_digest != proofstorm_core::digest_json(request)
+                    || existing.kind != kind
+                    || (!automatic_session && existing.session_id != session_id)
+                {
+                    return Err(StoreError::Conflict {
+                        resource: "operation",
+                        id: operation_id.into(),
+                    });
+                }
+                Self::record_idempotency_in(
+                    &transaction,
+                    workspace,
+                    principal,
+                    idempotency_key,
+                    "cell.operation.create",
+                    &envelope,
+                    &existing,
+                )?;
+                transaction.commit()?;
+                return Ok(existing);
+            }
+            Err(StoreError::NotFound { .. }) => {}
+            Err(error) => return Err(error),
+        }
         let run_open:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM experiments WHERE workspace_id=?1 AND id=?2 AND instance_id=?3 AND phase_json='\"active\"')",params![workspace,experiment_id,instance_id],|row|row.get(0))?;
         if !run_open {
             return Err(StoreError::Validation(
@@ -1740,8 +1784,8 @@ impl Store {
             completed_at_unix: None,
             artifact: None,
         };
-        let inserted = transaction.execute(
-            "INSERT OR IGNORE INTO actions(workspace_id, id, instance_id, experiment_id, session_id,
+        transaction.execute(
+            "INSERT INTO actions(workspace_id, id, instance_id, experiment_id, session_id,
              principal_id, sequence, kind_json, capability_json, resource_name, request_digest,
              request_json, phase_json, accepted_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
@@ -1762,29 +1806,6 @@ impl Store {
                 accepted_at
             ],
         )?;
-        if inserted == 0 {
-            let (existing_digest, existing_kind, existing_session) = transaction.query_row(
-                "SELECT request_digest, kind_json, session_id FROM actions
-                 WHERE workspace_id = ?1 AND id = ?2",
-                params![workspace, operation_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )?;
-            if existing_digest != operation.request_digest
-                || existing_kind != serde_json::to_string(&kind)?
-                || existing_session != session_id
-            {
-                return Err(StoreError::Conflict {
-                    resource: "operation",
-                    id: operation_id.to_owned(),
-                });
-            }
-        }
         if let Some(claim) = payment_claim {
             let claim_inserted = transaction.execute(
                 "INSERT OR IGNORE INTO wallet_payment_claims(
@@ -1830,30 +1851,8 @@ impl Store {
                 }
             }
         }
-        transaction.commit()?;
-        drop(connection);
-        if inserted == 0 {
-            let existing = self.operation_unchecked(workspace, operation_id)?;
-            if existing.request_digest != operation.request_digest
-                || existing.kind != kind
-                || existing.session_id != session_id
-            {
-                return Err(StoreError::Conflict {
-                    resource: "operation",
-                    id: operation_id.to_owned(),
-                });
-            }
-            self.record_idempotency(
-                workspace,
-                principal,
-                idempotency_key,
-                "cell.operation.create",
-                &envelope,
-                &existing,
-            )?;
-            return Ok(existing);
-        }
-        self.record_idempotency(
+        Self::record_idempotency_in(
+            &transaction,
             workspace,
             principal,
             idempotency_key,
@@ -1861,6 +1860,7 @@ impl Store {
             &envelope,
             &operation,
         )?;
+        transaction.commit()?;
         Ok(operation)
     }
 
@@ -2354,7 +2354,15 @@ impl Store {
     }
 
     fn operation_unchecked(&self, workspace: &str, id: &str) -> Result<CellOperation, StoreError> {
-        self.lock()?
+        Self::operation_from(&*self.lock()?, workspace, id)
+    }
+
+    fn operation_from(
+        connection: &Connection,
+        workspace: &str,
+        id: &str,
+    ) -> Result<CellOperation, StoreError> {
+        connection
             .query_row(
                 "SELECT instance_id, experiment_id, session_id, principal_id, sequence, kind_json,
                         capability_json, resource_name, request_digest, request_json, phase_json,
@@ -2481,8 +2489,25 @@ impl Store {
         operation: &str,
         request: &R,
     ) -> Result<Option<T>, StoreError> {
-        let found = self
-            .lock()?
+        Self::idempotent_response_from(
+            &*self.lock()?,
+            workspace,
+            principal,
+            key,
+            operation,
+            request,
+        )
+    }
+
+    fn idempotent_response_from<T: DeserializeOwned, R: Serialize>(
+        connection: &Connection,
+        workspace: &str,
+        principal: &str,
+        key: &str,
+        operation: &str,
+        request: &R,
+    ) -> Result<Option<T>, StoreError> {
+        let found = connection
             .query_row(
                 "SELECT operation, request_hash, response_json FROM idempotency
              WHERE workspace_id = ?1 AND principal_id = ?2 AND key = ?3",
@@ -2517,7 +2542,27 @@ impl Store {
         request: &R,
         response: &T,
     ) -> Result<(), StoreError> {
-        self.lock()?.execute(
+        Self::record_idempotency_in(
+            &*self.lock()?,
+            workspace,
+            principal,
+            key,
+            operation,
+            request,
+            response,
+        )
+    }
+
+    fn record_idempotency_in<T: Serialize, R: Serialize>(
+        connection: &Connection,
+        workspace: &str,
+        principal: &str,
+        key: &str,
+        operation: &str,
+        request: &R,
+        response: &T,
+    ) -> Result<(), StoreError> {
+        connection.execute(
             "INSERT INTO idempotency(workspace_id, principal_id, key, operation, request_hash, response_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![workspace, principal, key, operation, proofstorm_core::digest_json(request), serde_json::to_string(response)?],

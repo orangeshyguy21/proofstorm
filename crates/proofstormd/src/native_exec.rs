@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn exec_bounded(
+pub(super) async fn exec_bounded(
     pods: &Api<Pod>,
     pod: &str,
     container: &str,
@@ -157,6 +157,18 @@ pub async fn reconcile(
         timeout_seconds: request.timeout_seconds,
         output: request.output.clone(),
     };
+    if let Some(start) = super::workspace_bridge::controlled_start(action, cell) {
+        command.argv = vec![
+            proofstorm_core::workspace::WORKSPACE_RUNNER.into(),
+            "workspace".into(),
+            "bridge".into(),
+            serde_json::to_string(&proofstorm_core::workspace::control::BridgeRequest::Start {
+                start,
+                owner: action.spec.operation_id.clone(),
+            })
+            .map_err(|_| Error::ControllerInvariant("workspace start serialization failed"))?,
+        ];
+    }
     if let Err(message) = command.validate() {
         return patch_invalid_action(action, context, message).await;
     }

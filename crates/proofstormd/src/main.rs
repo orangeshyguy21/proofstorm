@@ -6,6 +6,8 @@ mod probes;
 use component_lifecycle::same_lifecycle_identity;
 mod cell_updates;
 mod component_logs;
+mod workspace_bridge;
+mod workspace_faults;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -543,11 +545,17 @@ async fn reconcile_action(
     let control_namespace = action
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
+    if workspace_faults::is_owned_network(&action) {
+        return workspace_faults::reconcile(&action, &context).await;
+    }
     if action
         .status
         .as_ref()
         .is_some_and(|status| is_terminal_action(status.phase))
     {
+        if workspace_bridge::is_controlled_start(&action) {
+            return workspace_bridge::reconcile(&action, &context).await;
+        }
         return Ok(Action::await_change());
     }
     if action.annotations().contains_key(ACTION_CANCEL_ANNOTATION) {
@@ -566,6 +574,23 @@ async fn reconcile_action(
     }
     let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
     let cell = cells.get(&action.spec.cell_name).await?;
+    if action
+        .annotations()
+        .contains_key(workspace_bridge::PARENT_ANNOTATION)
+        && action
+            .status
+            .as_ref()
+            .is_none_or(|status| status.native_execution.is_none())
+        && !workspace_bridge::admit_child(&action, &cell, &context).await?
+    {
+        return patch_action_failure(
+            &action,
+            &context,
+            "workspace_control_closed",
+            "task control is no longer active; effects already applied are not rolled back",
+        )
+        .await;
+    }
     if action
         .annotations()
         .get("proofstorm.dev/action-revision")
@@ -1006,8 +1031,7 @@ async fn reconcile_network_fault(
         return Ok(Action::requeue(Duration::from_secs(1)));
     }
 
-    let active =
-        apply_network_fault_policies(cell, &actions, Some(action.spec.sequence), context).await?;
+    let active = apply_network_fault_policies(cell, Some(action.spec.sequence), context).await?;
     let partition_operation_id = match &action.spec.action {
         CellAction::NetworkPartition(_) => &action.spec.operation_id,
         CellAction::NetworkHeal(request) => &request.partition_operation_id,
@@ -1076,7 +1100,11 @@ fn active_network_partitions(
     ordered.sort_by_key(|action| action.spec.sequence);
     let mut active = BTreeMap::new();
     for action in ordered {
-        if maximum_sequence.is_some_and(|maximum| action.spec.sequence > maximum)
+        if workspace_faults::is_owned_network(action) {
+            if !workspace_faults::is_active(action, now_unix()) {
+                continue;
+            }
+        } else if maximum_sequence.is_some_and(|maximum| action.spec.sequence > maximum)
             || action.status.as_ref().is_some_and(|status| {
                 matches!(status.phase, ActionPhase::Failed | ActionPhase::Cancelled)
             })
@@ -1101,11 +1129,40 @@ fn active_network_partitions(
 
 async fn apply_network_fault_policies(
     cell: &ProofstormCell,
-    actions: &[ProofstormCellAction],
     maximum_sequence: Option<u64>,
     context: &Context,
 ) -> Result<BTreeMap<String, (String, String)>, Error> {
-    let active = active_network_partitions(actions, maximum_sequence);
+    // All policy writers read the journal under this lock. An older queued write
+    // cannot resurrect a lease after cleanup has reconciled its release marker.
+    static WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _writer = WRITER.lock().await;
+    let policies = Api::<NetworkPolicy>::namespaced(
+        context.client.clone(),
+        &instance_namespace(&cell.spec.instance_key),
+    );
+    let mut versions = BTreeMap::new();
+    // Read policy versions BEFORE the action journal. Across controller restarts,
+    // a delayed old write must conflict with any subsequently completed cleanup.
+    for component in &cell.spec.cell.components {
+        versions.insert(
+            component.id.clone(),
+            policies
+                .get_opt(&component.id)
+                .await?
+                .and_then(|policy| policy.metadata.resource_version),
+        );
+    }
+    let namespace = cell
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+    let actions = Api::<ProofstormCellAction>::namespaced(context.client.clone(), &namespace)
+        .list(&ListParams::default().labels(&format!(
+            "proofstorm.dev/instance={}",
+            cell.spec.instance_key
+        )))
+        .await?
+        .items;
+    let active = active_network_partitions(&actions, maximum_sequence);
     let mut exclusions = cell
         .spec
         .cell
@@ -1121,19 +1178,25 @@ async fn apply_network_fault_policies(
             peers.insert(from.clone());
         }
     }
-    let namespace = instance_namespace(&cell.spec.instance_key);
-    let policies = Api::<NetworkPolicy>::namespaced(context.client.clone(), &namespace);
     for (component, peers) in exclusions {
         let peers = peers.into_iter().collect::<Vec<_>>();
-        let policy = render_component_network_policy(&cell.spec.instance_key, &component, &peers)
-            .map_err(|_| Error::ControllerInvariant("network policy did not serialize"))?;
-        policies
-            .patch(
-                &component,
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(&policy),
-            )
-            .await?;
+        let mut policy =
+            render_component_network_policy(&cell.spec.instance_key, &component, &peers)
+                .map_err(|_| Error::ControllerInvariant("network policy did not serialize"))?;
+        if let Some(version) = versions.remove(&component).flatten() {
+            policy.metadata.resource_version = Some(version);
+            policies
+                .patch(
+                    &component,
+                    &PatchParams::apply(FIELD_MANAGER).force(),
+                    &Patch::Apply(&policy),
+                )
+                .await?;
+        } else {
+            policies
+                .create(&kube::api::PostParams::default(), &policy)
+                .await?;
+        }
     }
     Ok(active)
 }
@@ -2006,17 +2069,7 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             )
             .await?;
     }
-    let control_namespace = cell
-        .namespace()
-        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
-    let network_actions =
-        Api::<ProofstormCellAction>::namespaced(context.client.clone(), &control_namespace)
-            .list(&ListParams::default().labels(&format!(
-                "proofstorm.dev/instance={}",
-                cell.spec.instance_key
-            )))
-            .await?;
-    apply_network_fault_policies(&cell, &network_actions.items, None, context).await?;
+    apply_network_fault_policies(&cell, None, context).await?;
 
     let (pruned, retained, retained_storage) = cell_updates::prune(&cell, context).await?;
     let mut inventory = workloads.inventory();

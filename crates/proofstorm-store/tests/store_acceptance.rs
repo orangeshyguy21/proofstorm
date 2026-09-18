@@ -1078,3 +1078,87 @@ fn overlapping_sessions_do_not_block_control_or_close() {
         .instance_for_close("alpha", "designer", "leased-instance")
         .expect("unleased instance closes");
 }
+
+#[test]
+fn simultaneous_identical_admission_across_connections_keeps_one_operation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("store.sqlite3");
+    let store = Store::open(&path).unwrap();
+    seed(&store);
+    for capability in [
+        Capability::CellOperate,
+        Capability::ComponentExecLive,
+        Capability::ArtifactRead,
+        Capability::ExperimentRead,
+    ] {
+        store.grant("alpha", "designer", capability).unwrap();
+    }
+    let spec = serde_json::from_value(serde_json::json!({
+        "api_version":"proofstorm/v1alpha1","name":"race","links":[],
+        "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
+    })).unwrap();
+    store
+        .create_draft("alpha", "designer", "race", &spec, "draft")
+        .unwrap();
+    let revision = store
+        .publish("alpha", "designer", "race", 1, "publish")
+        .unwrap();
+    store
+        .materialize("alpha", "designer", "race", &revision.digest, "apply")
+        .unwrap();
+    let request = serde_json::json!({"component":"chain","argv":["true"],"script":"","timeout_seconds":25,"output":{"mode":"public","fields":[]}});
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let workers = (0..8)
+        .map(|_| {
+            let store = Store::open(&path).unwrap();
+            let barrier = barrier.clone();
+            let request = request.clone();
+            std::thread::spawn(move || {
+                (0..8)
+                    .map(|round| {
+                        let id = format!("race-{round}");
+                        barrier.wait();
+                        store.create_operation(
+                            "alpha",
+                            "designer",
+                            "race",
+                            "",
+                            "",
+                            &id,
+                            OperationKind::ComponentExecLive,
+                            &request,
+                            &id,
+                            Capability::ComponentExecLive,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    for round in 0..8 {
+        let first = results[0][round].as_ref().unwrap();
+        for results in &results {
+            assert_eq!(results[round].as_ref().unwrap(), first);
+        }
+    }
+    let changed = serde_json::json!({"component":"chain","argv":["false"]});
+    assert!(matches!(
+        store.create_operation(
+            "alpha",
+            "designer",
+            "race",
+            "",
+            "",
+            "race-0",
+            OperationKind::ComponentExecLive,
+            &changed,
+            "race-0",
+            Capability::ComponentExecLive
+        ),
+        Err(StoreError::IdempotencyConflict { .. })
+    ));
+}

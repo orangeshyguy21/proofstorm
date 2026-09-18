@@ -18,7 +18,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -26,6 +26,7 @@ repository = "https://github.com/orangeshyguy21/proofstorm"
 
 [workspace.dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 futures = "0.3"
 getrandom = "0.3"
 lightning-invoice = { version = "=0.34.1", features = ["std"] }

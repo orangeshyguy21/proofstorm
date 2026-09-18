@@ -224,7 +224,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     cell::wait_closed(&mut client, NAME)?;
     context.record(
         "surface-result.json",
-        &json!({"passed":true,"connection":"managed","tool_count":44}),
+        &json!({"passed":true,"connection":"managed","tool_count":names.len()}),
     )?;
     Ok(())
 }

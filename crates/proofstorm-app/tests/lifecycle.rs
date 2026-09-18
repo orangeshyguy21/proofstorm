@@ -203,6 +203,144 @@ fn command() -> NativeCommand {
 }
 
 #[tokio::test]
+async fn workspace_control_uses_bounded_recorded_exec_and_exact_retry_identity() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let cells = service(store.clone(), cluster.clone());
+    let mut cell = spec();
+    cell.components.push(ComponentSpec {
+        id: "scripts".into(),
+        kind: ComponentKind::Attacker,
+        implementation: "workspace".into(),
+        version: None,
+        config_version: "workspace/0.1/v1".into(),
+        control: ControlClass::Attacker,
+        config: BTreeMap::new(),
+    });
+    cells.up("demo", &cell).await.unwrap();
+    let outside = proofstorm_core::workspace::WorkspaceRequest::Task(
+        serde_json::from_value(json!({"action":"start","task_id":"outside","script":"true","control":{"components":["another-cell"]}})).unwrap(),
+    );
+    assert!(
+        cells
+            .workspace_request("demo", "scripts", &outside, "outside-scope")
+            .await
+            .is_err()
+    );
+    let request = proofstorm_core::workspace::WorkspaceRequest::Task(
+        serde_json::from_value(json!({"action":"start","task_id":"miner","script":"sleep 600","control":{"components":["chain"]}}))
+            .unwrap(),
+    );
+    assert!(
+        cells
+            .workspace_request("demo", "chain", &request, "wrong-component")
+            .await
+            .is_err()
+    );
+    let first = cells
+        .workspace_request("demo", "scripts", &request, "start-miner")
+        .await
+        .unwrap();
+    let second = cells
+        .workspace_request("demo", "scripts", &request, "start-miner")
+        .await
+        .unwrap();
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.request["timeout_seconds"], 25);
+    assert_eq!(
+        first.request["argv"][0],
+        proofstorm_core::workspace::WORKSPACE_RUNNER
+    );
+    let control: Value = serde_json::from_str(first.request["argv"][3].as_str().unwrap()).unwrap();
+    assert_eq!(control["request"]["timeout_seconds"], Value::Null);
+    let changed = proofstorm_core::workspace::WorkspaceRequest::Task(
+        serde_json::from_value(json!({"action":"stop","task_id":"miner"})).unwrap(),
+    );
+    assert!(
+        cells
+            .workspace_request("demo", "scripts", &changed, "start-miner")
+            .await
+            .is_err()
+    );
+    store
+        .revoke("local", "developer", Capability::ComponentExecLive)
+        .unwrap();
+    assert!(
+        cells
+            .workspace_request("demo", "scripts", &changed, "stop-miner")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn workspace_file_write_limits_count_content_bytes_and_preserve_retries() {
+    use proofstorm_core::workspace::{FileRequest, WorkspaceRequest, wire};
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let cells = service(store, cluster.clone());
+    let mut cell = spec();
+    cell.components.push(ComponentSpec {
+        id: "scripts".into(),
+        kind: ComponentKind::Attacker,
+        implementation: "workspace".into(),
+        version: None,
+        config_version: "workspace/0.1/v1".into(),
+        control: ControlClass::Attacker,
+        config: BTreeMap::new(),
+    });
+    cells.up("demo", &cell).await.unwrap();
+    for (index, content) in ["a".repeat(8192), "\n".repeat(8192), "\0".repeat(8192)]
+        .into_iter()
+        .enumerate()
+    {
+        let request_id = format!("write-{index}");
+        let request = WorkspaceRequest::File(FileRequest::Write {
+            path: "src/file".into(),
+            content: content.clone(),
+        });
+        let first = cells
+            .workspace_request("demo", "scripts", &request, &request_id)
+            .await
+            .unwrap();
+        let retry = cells
+            .workspace_request("demo", "scripts", &request, &request_id)
+            .await
+            .unwrap();
+        assert_eq!(first.id, retry.id);
+        let mut command = first.request;
+        command.as_object_mut().unwrap().remove("component");
+        let command: NativeCommand = serde_json::from_value(command).unwrap();
+        command.validate().unwrap();
+        let decoded = wire::decode(serde_json::from_str(&command.argv[3]).unwrap()).unwrap();
+        assert_eq!(json!(decoded), json!(request));
+        let changed = WorkspaceRequest::File(FileRequest::Write {
+            path: "src/file".into(),
+            content: "changed".into(),
+        });
+        assert!(
+            cells
+                .workspace_request("demo", "scripts", &changed, &request_id)
+                .await
+                .is_err()
+        );
+        let before = cluster.lock().unwrap().requests.len();
+        let oversized = WorkspaceRequest::File(FileRequest::Write {
+            path: "src/file".into(),
+            content: format!("{content}x"),
+        });
+        let error = cells
+            .workspace_request("demo", "scripts", &oversized, "oversized")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("file write exceeds 8192 bytes"));
+        assert_eq!(cluster.lock().unwrap().requests.len(), before);
+    }
+}
+
+#[tokio::test]
 #[allow(
     clippy::too_many_lines,
     reason = "one end-to-end reconnection and teardown contract"
@@ -1087,4 +1225,84 @@ async fn local_connection_closes_when_cell_closes_or_runtime_disappears() {
             .await
             .expect("lifecycle cleanup releases the listener");
     }
+}
+
+#[tokio::test]
+async fn workspace_lifecycle_and_fault_grants_check_capabilities_even_through_native_exec() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let cells = service(store.clone(), cluster.clone());
+    let mut cell = spec();
+    cell.components.push(ComponentSpec {
+        id: "scripts".into(),
+        kind: ComponentKind::Attacker,
+        implementation: "workspace".into(),
+        version: None,
+        config_version: "workspace/0.1/v1".into(),
+        control: ControlClass::Attacker,
+        config: BTreeMap::new(),
+    });
+    cells.up("demo", &cell).await.unwrap();
+    let request: proofstorm_core::workspace::WorkspaceRequest = serde_json::from_value(json!({"kind":"task","request":{"action":"start","task_id":"outage","script":"sleep 30","control":{"lifecycle":["chain"],"network":[{"from_component":"chain","to_component":"scripts"}]}}})).unwrap();
+    assert!(
+        cells
+            .workspace_request("demo", "scripts", &request, "denied")
+            .await
+            .is_err()
+    );
+    let mut native = command();
+    native.script.clear();
+    native.argv = vec![
+        proofstorm_core::workspace::WORKSPACE_RUNNER.into(),
+        "workspace".into(),
+        "request".into(),
+        serde_json::to_string(&request).unwrap(),
+    ];
+    assert!(
+        cells
+            .exec("demo", "scripts", native.clone(), "raw-denied")
+            .await
+            .is_err()
+    );
+    store
+        .grant("local", "developer", Capability::ComponentControl)
+        .unwrap();
+    store
+        .grant("local", "developer", Capability::NetworkPartition)
+        .unwrap();
+    assert!(
+        cells
+            .exec("demo", "scripts", native.clone(), "no-heal-permission")
+            .await
+            .is_err()
+    );
+    store
+        .grant("local", "developer", Capability::NetworkHeal)
+        .unwrap();
+    let operation = cells
+        .exec("demo", "scripts", native, "allowed")
+        .await
+        .unwrap();
+    let value = cluster
+        .lock()
+        .unwrap()
+        .objects
+        .values()
+        .find(|value| value["spec"]["operationId"] == operation.id)
+        .unwrap()
+        .clone();
+    assert!(
+        value["metadata"]["annotations"][proofstorm_core::workspace::control::GRANT_ANNOTATION]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    let self_control: proofstorm_core::workspace::WorkspaceRequest = serde_json::from_value(json!({"kind":"task","request":{"action":"start","task_id":"self-stop","script":"true","control":{"lifecycle":["scripts"]}}})).unwrap();
+    assert!(
+        cells
+            .workspace_request("demo", "scripts", &self_control, "self-stop")
+            .await
+            .is_err()
+    );
 }

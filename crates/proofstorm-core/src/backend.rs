@@ -482,6 +482,14 @@ pub struct KeycloakConfig {
     pub access_token_lifespan_seconds: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceConfig {
+    pub runtime_image: String,
+    pub storage_size: String,
+    pub service_port: u16,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "implementation", content = "config")]
 pub enum EffectiveComponentConfig {
@@ -512,7 +520,7 @@ pub enum EffectiveComponentConfig {
     #[serde(rename = "cocod-wallet")]
     CocodWallet,
     #[serde(rename = "workspace")]
-    AttackerWorkspace,
+    AttackerWorkspace(WorkspaceConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -644,6 +652,10 @@ impl BackendContractRegistry {
     /// # Errors
     ///
     /// Returns a stable diagnostic for an unknown backend or kind mismatch.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "compile all immutable component identities and execution contracts together"
+    )]
     pub fn compile_contract(
         &self,
         input: &ComponentPlanInput,
@@ -671,6 +683,8 @@ impl BackendContractRegistry {
         require_native_entrypoints(input)?;
         let effective = self.resolve_effective_component(&input.component)?;
         let effective_config = EffectiveComponentConfig::try_from_component(&effective)?;
+        let service_ports = workspace_service_ports(&effective_config)
+            .unwrap_or_else(|| backend.service_ports.clone());
         let mut relevant_links = input.relevant_links.clone();
         relevant_links.sort();
         for link in &relevant_links {
@@ -733,7 +747,7 @@ impl BackendContractRegistry {
                 kind: input.component.kind,
                 backend_id: input.lock.catalog_id.clone(),
                 version: input.lock.version.clone(),
-                ports: backend.service_ports.clone(),
+                ports: service_ports,
             },
             workload: WorkloadObservationContract {
                 kind: backend.workload_kind,
@@ -749,6 +763,17 @@ impl BackendContractRegistry {
             operation_admission: backend.operation_admission.clone(),
         })
     }
+}
+
+fn workspace_service_ports(config: &EffectiveComponentConfig) -> Option<BTreeMap<String, u16>> {
+    let EffectiveComponentConfig::AttackerWorkspace(config) = config else {
+        return None;
+    };
+    Some(if config.service_port == 0 {
+        BTreeMap::new()
+    } else {
+        BTreeMap::from([("http".into(), config.service_port)])
+    })
 }
 
 fn require_mint_management_image(input: &ComponentPlanInput) -> Result<(), String> {
@@ -942,7 +967,14 @@ impl EffectiveComponentConfig {
             "nutshell-wallet" => Ok(Self::NutshellWallet),
             "cdk-cli-wallet" => Ok(Self::CdkCliWallet),
             "cocod-wallet" => Ok(Self::CocodWallet),
-            "workspace" => Ok(Self::AttackerWorkspace),
+            "workspace" => Ok(Self::AttackerWorkspace(WorkspaceConfig {
+                runtime_image: string("runtime_image")?,
+                storage_size: string("storage_size")?,
+                service_port: required_config_value(component, "service_port")?
+                    .as_u64()
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| typed_config_error(component, "service_port"))?,
+            })),
             implementation => Err(format!(
                 "backend_typed_config_missing: implementation {implementation:?} has no typed effective configuration"
             )),
@@ -1056,6 +1088,22 @@ impl ComponentBackendContract {
                 component,
                 "database_name",
                 "must begin with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, or '_'",
+            ));
+        }
+        if self.id == "workspace"
+            && component
+                .config
+                .get("runtime_image")
+                .and_then(Value::as_str)
+                .is_some_and(|image| {
+                    !image.is_empty() && !crate::workspace::is_runtime_image(image)
+                })
+        {
+            return Err(config_diagnostic(
+                "image_digest_required",
+                component,
+                "runtime_image",
+                "must be empty for the built-in shell image or a fully qualified image pinned by SHA-256 digest",
             ));
         }
         if self.id == "nutshell"
@@ -1806,16 +1854,47 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             "workspace",
             ComponentKind::Attacker,
             "workspace/0.1/v1",
-            BTreeMap::new(),
+            workspace_config_fields(),
             BTreeMap::new(),
             "proofstorm/workspace-state/v1",
             BTreeSet::from([
                 ComponentConditionType::WorkloadReady,
+                ComponentConditionType::StorageReady,
                 ComponentConditionType::ComponentReady,
                 ComponentConditionType::ExperimentControllable,
             ]),
         ),
     ]
+}
+
+fn workspace_config_fields() -> BTreeMap<String, ConfigFieldContract> {
+    let mut port = config_field(
+        "Optional cell-local TCP service port; zero disables the service",
+        ConfigValueKind::Integer,
+        ConfigDefault::Literal(json!(0)),
+    );
+    port.minimum = Some(0.0);
+    port.maximum = Some(65535.0);
+    BTreeMap::from([
+        (
+            "runtime_image".into(),
+            config_field(
+                "Pinned custom runtime image; empty uses the built-in shell image. Must provide /bin/sh and run as UID 1000. Dependencies belong in the image.",
+                ConfigValueKind::String,
+                ConfigDefault::Literal(json!("")),
+            ),
+        ),
+        (
+            "storage_size".into(),
+            config_field(
+                "Persistent workspace volume size",
+                ConfigValueKind::String,
+                ConfigDefault::Literal(json!("1Gi")),
+            )
+            .with_enum_values(&["1Gi", "2Gi", "5Gi", "10Gi"]),
+        ),
+        ("service_port".into(), port),
+    ])
 }
 
 fn config_field(
@@ -2732,8 +2811,11 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
         ]),
         "workspace" => BTreeMap::from([
             (
-                "idle_process".into(),
-                string("Persistent workspace process", Policy),
+                "task_supervisor".into(),
+                string(
+                    "Cell-owned managed task supervisor; interrupted tasks are never replayed",
+                    Policy,
+                ),
             ),
             (
                 "service_account_access".into(),
@@ -2741,7 +2823,10 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "workspace_profile".into(),
-                string("Pinned general-purpose shell workspace", Policy),
+                string(
+                    "Persistent files, immutable task source snapshots and bounded rotating logs",
+                    Policy,
+                ),
             ),
         ]),
         "postgresql" => BTreeMap::from([
@@ -3018,7 +3103,9 @@ fn observation_contract(
             (WorkloadControllerKind::StatefulSet, vec![stateful_data()])
         }
         "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" | "nutshell-wallet" | "cdk-cli-wallet"
-        | "cocod-wallet" => (WorkloadControllerKind::Deployment, vec![component_data()]),
+        | "cocod-wallet" | "workspace" => {
+            (WorkloadControllerKind::Deployment, vec![component_data()])
+        }
         _ => (WorkloadControllerKind::Deployment, vec![]),
     }
 }
@@ -3204,7 +3291,18 @@ fn execution_contract(
                 ("PROOFSTORM_WALLET".into(), "{component_id}".into()),
             ]),
         ),
-        "workspace" => (vec![], BTreeMap::from([("HOME".into(), "/tmp".into())])),
+        "workspace" => (
+            vec![binding(
+                "workspace",
+                "/workspace",
+                false,
+                Source::ComponentPersistentData,
+            )],
+            BTreeMap::from([
+                ("HOME".into(), "/workspace".into()),
+                ("PROOFSTORM_WORKSPACE".into(), "/workspace".into()),
+            ]),
+        ),
         _ => (vec![], BTreeMap::new()),
     }
 }

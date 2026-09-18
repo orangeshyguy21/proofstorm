@@ -2809,32 +2809,66 @@ fn nutshell_mint_environment(
     environment
 }
 
-/// Render a disposable attacker workspace from a compiled plan without
+/// Render a persistent programmable workspace from a compiled plan without
 /// cluster I/O.
 ///
 /// # Errors
 ///
 /// Returns an error when the plan does not select the attacker backend.
+///
+/// # Panics
+/// Panics only if the generated workspace deployment lacks its required pod specification.
 pub fn render_attacker_component(
     plan: &ComponentPlanContract,
 ) -> Result<RenderedComponent, AdapterError> {
     require_plan_backend(plan, "workspace", ComponentKind::Attacker)?;
+    let EffectiveComponentConfig::AttackerWorkspace(config) = &plan.effective_config else {
+        return Err(AdapterError::InvalidPlan(
+            "workspace configuration expected".into(),
+        ));
+    };
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
+    let namespace = instance_namespace(&plan.instance_key);
+    let data_name = format!("{}-data", plan.component_id);
     let mut rendered = RenderedComponent::default();
+    rendered.persistent_volume_claims.push(resource(json!({
+        "apiVersion":"v1","kind":"PersistentVolumeClaim",
+        "metadata":metadata(&data_name,&plan.instance_key,&namespace,Some(&plan.component_id)),
+        "spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":config.storage_size}}}
+    }))?);
+    if config.service_port != 0 {
+        rendered.services.push(resource(service_from_plan(plan))?);
+    }
     rendered.deployments.push(resource(json!({
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": plan_workload_metadata(plan),
-        "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
+        "spec": {"replicas": 1, "strategy":{"type":"Recreate"}, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
+                "terminationGracePeriodSeconds":15,
                 "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
-                    "command": ["sh", "-c", "trap : TERM INT; sleep infinity & wait"],
-                    "securityContext": container_security()
-                }]
+                    "command": [proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","serve"],
+                    "workingDir":"/workspace",
+                    "env":[{"name":"HOME","value":"/workspace"},{"name":"PROOFSTORM_WORKSPACE","value":"/workspace"},{"name":"PROOFSTORM_RUNTIME_IMAGE","value":plan.execution_context.image}],
+                    "securityContext": container_security(),
+                    "resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"2","memory":"1Gi"}},
+                    "readinessProbe":{"exec":{"command":[proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","request","{\"kind\":\"ping\"}"]},"timeoutSeconds":3,"periodSeconds":3},
+                    "volumeMounts":[{"name":"workspace","mountPath":"/workspace"}]
+                }],"volumes":[{"name":"workspace","persistentVolumeClaim":{"claimName":data_name}}]
             }
         }}
     }))?);
+    crate::drivers::install_workspace(
+        rendered.deployments[0]
+            .spec
+            .as_mut()
+            .expect("workspace deployment spec")
+            .template
+            .spec
+            .as_mut()
+            .expect("workspace pod spec"),
+    )?;
     Ok(rendered)
 }
 
@@ -3420,6 +3454,17 @@ where
 
 #[must_use]
 pub fn component_ports(component: &ComponentSpec) -> BTreeMap<String, u16> {
+    if component.implementation == "workspace" {
+        return component
+            .config
+            .get("service_port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port > 0)
+            .map_or_else(BTreeMap::new, |port| {
+                BTreeMap::from([("http".into(), port)])
+            });
+    }
     match component.kind {
         ComponentKind::Bitcoin => BTreeMap::from([
             ("p2p".into(), 18_444),
@@ -3992,7 +4037,7 @@ mod tests {
         assert_eq!(first_plan.target_descriptor.ports["rpc"], 18_443);
 
         let mut mistyped_plan = first_plan.clone();
-        mistyped_plan.effective_config = EffectiveComponentConfig::AttackerWorkspace;
+        mistyped_plan.effective_config = EffectiveComponentConfig::CdkCliWallet;
         assert!(matches!(
             render_bitcoin_component(&mistyped_plan),
             Err(AdapterError::InvalidPlan(message))
@@ -4767,7 +4812,7 @@ mod tests {
     }
 
     #[test]
-    fn attacker_plan_is_disposable_locked_and_restricted() {
+    fn workspace_plan_has_persistent_storage_supervision_and_restricted_authority() {
         let cell = workspace_cell();
         let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
         let plans =
@@ -4781,14 +4826,26 @@ mod tests {
         assert!(rendered.config_maps.is_empty());
         assert!(rendered.services.is_empty());
         assert!(rendered.stateful_sets.is_empty());
-        assert!(rendered.persistent_volume_claims.is_empty());
+        assert_eq!(rendered.persistent_volume_claims.len(), 1);
         let deployment =
             serde_json::to_value(&rendered.deployments[0]).expect("attacker deployment");
         assert_eq!(
             deployment["spec"]["template"]["spec"]["automountServiceAccountToken"],
             false
         );
-        assert!(deployment["spec"]["template"]["spec"]["volumes"].is_null());
+        assert_eq!(deployment["spec"]["strategy"]["type"], "Recreate");
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["containers"][0]["command"][2],
+            "serve"
+        );
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["mountPath"],
+            "/workspace"
+        );
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["initContainers"][0]["command"][2],
+            "install"
+        );
         assert_eq!(
             deployment["spec"]["template"]["spec"]["containers"][0]["image"],
             plan.execution_context.image
@@ -4796,6 +4853,89 @@ mod tests {
         assert_eq!(
             deployment["spec"]["template"]["spec"]["containers"][0]["securityContext"]["allowPrivilegeEscalation"],
             false
+        );
+    }
+
+    #[test]
+    fn workspace_custom_runtime_storage_and_service_are_locked_and_rendered() {
+        let mut cell = workspace_cell();
+        let component = cell
+            .components
+            .iter_mut()
+            .find(|c| c.id == "attacker")
+            .unwrap();
+        component.config.insert(
+            "runtime_image".into(),
+            json!("docker.io/example/runtime:latest"),
+        );
+        assert!(resolve_lock(&cell, default_catalog()).is_err());
+        let image = format!("docker.io/example/runtime@sha256:{}", "a".repeat(64));
+        let component = cell
+            .components
+            .iter_mut()
+            .find(|c| c.id == "attacker")
+            .unwrap();
+        component
+            .config
+            .insert("runtime_image".into(), json!(image));
+        component.config.insert("storage_size".into(), json!("2Gi"));
+        component.config.insert("service_port".into(), json!(8080));
+        assert_eq!(component_ports(component)["http"], 8080);
+        let lock = resolve_lock(&cell, default_catalog()).unwrap();
+        let entry = lock
+            .entries
+            .iter()
+            .find(|entry| entry.component_id == "attacker")
+            .unwrap();
+        assert!(entry.image.ends_with(&image));
+        let plans = compile_component_plans("i-workspace", "revision", &cell, &lock).unwrap();
+        let plan = plans
+            .iter()
+            .find(|plan| plan.component_id == "attacker")
+            .unwrap();
+        let mut rendered = render_attacker_component(plan).unwrap();
+        assert_eq!(plan.target_descriptor.ports["http"], 8080);
+        assert_eq!(
+            rendered.services[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .ports
+                .as_ref()
+                .unwrap()[0]
+                .port,
+            8080
+        );
+        assert_eq!(
+            rendered.persistent_volume_claims[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .resources
+                .as_ref()
+                .unwrap()
+                .requests
+                .as_ref()
+                .unwrap()["storage"]
+                .0,
+            "2Gi"
+        );
+        let pod = rendered.deployments[0]
+            .spec
+            .as_mut()
+            .unwrap()
+            .template
+            .spec
+            .as_mut()
+            .unwrap();
+        assert_eq!(
+            pod.containers[0].image.as_deref(),
+            Some(entry.image.as_str())
+        );
+        crate::drivers::bind_image(pod, "controller@sha256:verified");
+        assert_eq!(
+            pod.init_containers.as_ref().unwrap()[0].image.as_deref(),
+            Some("controller@sha256:verified")
         );
     }
 
@@ -5087,12 +5227,10 @@ mod tests {
             .iter()
             .find(|plan| plan.component_id == "attacker")
             .expect("attacker plan");
-        let workload = available_deployment(
-            render_attacker_component(attacker)
-                .expect("attacker render")
-                .deployments
-                .remove(0),
-        );
+        let mut rendered = render_attacker_component(attacker).expect("attacker render");
+        let workload = available_deployment(rendered.deployments.remove(0));
+        let mut claim = rendered.persistent_volume_claims.remove(0);
+        claim.status = Some(serde_json::from_value(json!({"phase":"Bound"})).unwrap());
         let resources = ComponentObservationResources {
             protocol: &std::collections::BTreeMap::new(),
             deployments: std::slice::from_ref(&workload),
@@ -5101,6 +5239,19 @@ mod tests {
             services: &[],
             endpoint_slices: &[],
             pods: &[],
+        };
+        let pending =
+            observe_component_statuses("instance", &plans, &resources, &[], &BTreeSet::new(), 10);
+        assert!(
+            !pending
+                .iter()
+                .find(|status| status.id == "attacker")
+                .unwrap()
+                .ready
+        );
+        let resources = ComponentObservationResources {
+            persistent_volume_claims: std::slice::from_ref(&claim),
+            ..resources
         };
         let observed =
             observe_component_statuses("instance", &plans, &resources, &[], &BTreeSet::new(), 10);

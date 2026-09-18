@@ -34,11 +34,36 @@ pub fn install(pod: &mut PodSpec) -> Result<(), serde_json::Error> {
 /// Bind the generated helper placeholder to this controller's verified image.
 pub fn bind_image(pod: &mut PodSpec, image: &str) {
     for container in pod.init_containers.iter_mut().flatten() {
-        if container.name == "proofstorm-driver" && container.image.as_deref() == Some(DRIVER_IMAGE)
+        if matches!(
+            container.name.as_str(),
+            "proofstorm-driver" | "proofstorm-workspace"
+        ) && container.image.as_deref() == Some(DRIVER_IMAGE)
         {
             container.image = Some(image.into());
         }
     }
+}
+
+/// Install the workspace supervisor from the same verified controller image as native exec.
+/// # Errors
+/// Rejects an invalid generated container or volume shape.
+pub fn install_workspace(pod: &mut PodSpec) -> Result<(), serde_json::Error> {
+    pod.volumes
+        .get_or_insert_default()
+        .push(serde_json::from_value(
+            json!({"name":"proofstorm-workspace","emptyDir":{}}),
+        )?);
+    for container in &mut pod.containers {
+        container.volume_mounts.get_or_insert_default().push(serde_json::from_value(json!({"name":"proofstorm-workspace","mountPath":"/opt/proofstorm","readOnly":true}))?);
+    }
+    pod.init_containers.get_or_insert_default().push(serde_json::from_value(json!({
+        "name":"proofstorm-workspace","image":DRIVER_IMAGE,"imagePullPolicy":"IfNotPresent",
+        "command":["/usr/local/lib/proofstorm-exec","workspace","install"],
+        "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true},
+        "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"cpu":"200m","memory":"128Mi"}},
+        "volumeMounts":[{"name":"proofstorm-workspace","mountPath":"/opt/proofstorm"}]
+    }))?);
+    Ok(())
 }
 
 #[cfg(test)]
