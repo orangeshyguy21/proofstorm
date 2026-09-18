@@ -26,6 +26,7 @@ mod status_search;
 pub use activity_search::ActivitySearchRequest;
 mod operation_read;
 pub use operation_read::OperationReadRequest;
+mod tool_schema;
 
 use proofstorm_app::runtime::missing_action_artifact;
 use proofstorm_app::runtime::runtime_action_resource;
@@ -1420,6 +1421,7 @@ impl ProofstormMcp {
         let mut tool_router = Self::tool_router();
         for route in tool_router.map.values_mut() {
             route.attr.title = proofstorm_view::tool_title(&route.attr.name).map(str::to_owned);
+            route.attr.input_schema = tool_schema::portable_input(&route.attr.input_schema);
         }
         for (tool, required) in tool_capabilities() {
             if !required
@@ -6275,6 +6277,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn all_advertised_input_unions_are_portable_and_keep_candidate_constraints() {
+        let store = seeded_store();
+        proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+        let service = ProofstormMcp::new(store, "alpha", "designer").unwrap();
+        let tools = service.tool_router.list_all();
+        for tool in &tools {
+            let encoded = serde_json::to_string(&tool.input_schema).unwrap();
+            assert!(
+                !encoded.contains("\"oneOf\":"),
+                "{} has a union that needs a portable representation",
+                tool.name
+            );
+        }
+        let tool = tools
+            .into_iter()
+            .find(|tool| tool.name == "candidate_build")
+            .unwrap();
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        let source = &schema["properties"]["source"];
+        assert_eq!(source["anyOf"][1], serde_json::json!({"type":"null"}));
+        let reference = source["anyOf"][0]["$ref"].as_str().unwrap();
+        let variants = schema
+            .pointer(reference.strip_prefix('#').unwrap())
+            .unwrap();
+        let branches = variants["anyOf"].as_array().unwrap();
+        assert_eq!(branches.len(), 3);
+        for branch in branches {
+            assert_eq!(branch["additionalProperties"], false);
+            let expected = match branch["properties"]["type"]["const"].as_str().unwrap() {
+                "pull_request" => serde_json::json!(["type", "url"]),
+                "commit" => serde_json::json!(["type"]),
+                "tag" => serde_json::json!(["type", "tag"]),
+                other => panic!("unexpected source variant {other}"),
+            };
+            assert_eq!(branch["required"], expected);
+        }
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("source"))
+        );
     }
 
     #[test]

@@ -392,7 +392,7 @@ fn assert_private_transfer_schema(tool: &Value) {
     let transfer = schema
         .pointer(reference.strip_prefix('#').unwrap())
         .unwrap();
-    let branches = transfer["oneOf"]
+    let branches = transfer["anyOf"]
         .as_array()
         .expect("method-specific schema");
     assert_eq!(branches.len(), 5);
