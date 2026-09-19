@@ -89,7 +89,8 @@ mint_case() (
   # Alias and contract marker are the same transformations covered by renderer tests.
   jq -r --arg version "$version" --arg implementation "$implementation" '
     if $implementation=="lnd" then .MINT_LND_REST_ENDPOINT="https://north:8080" else .MINT_CLNREST_URL="http://north:3010" end |
-    if $version=="0.21.0" then .PROOFSTORM_NUTSHELL_VERSION=$version | if $implementation=="cln" then .MINT_CLNREST_RUNE="/app/data/.proofstorm/cln-xpay.rune" else . end else . end |
+    if $version=="0.21.0" then .PROOFSTORM_NUTSHELL_VERSION=$version | if $implementation=="cln" then .MINT_CLNREST_RUNE="/app/data/.proofstorm/cln-xpay.rune" else . end
+    else del(.PROOFSTORM_NUTSHELL_VERSION) | if $implementation=="cln" then .MINT_CLNREST_RUNE="/app/data/.proofstorm/cln.rune" else . end end |
     to_entries[]|"\(.key)=\(.value)"' "$directory/rendered-env.json" > "$directory/mint.env"
   printf 'MINT_PRIVATE_KEY=disposable-%s\n' "$name" >> "$directory/mint.env"
   volume_new "$name-data"

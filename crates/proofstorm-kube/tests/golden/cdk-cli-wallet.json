@@ -59,7 +59,7 @@
         "HOME": "/wallet",
         "PROOFSTORM_WALLET": "{component_id}"
       },
-      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:31e18a419bb3cafcc795a5c99dcfbb07460bba5ad76f2c1d104341e151cb22e9",
+      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:e1a8b08345e387bfaac8d672059eede8d4c1dd8ea788a6bd687f9fe04138abf0",
       "mounts": [
         {
           "mount_path": "/wallet",
@@ -137,7 +137,7 @@
     ],
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:ddeb3bc1fd97f034da5fbb8bb88777830094345e2fc1c3dfc280128a3041d5f1",
+    "rollout_digest": "sha256:ad536bc7555bfc9af842d3bfd1d37a436bac9d8d97f428341cf7da640ab9306b",
     "storage": [
       {
         "claim_name": "wallet-data"
@@ -148,7 +148,7 @@
       "component_id": "wallet",
       "kind": "wallet",
       "ports": {},
-      "version": "0.18.0"
+      "version": "0.18.1"
     },
     "workload": {
       "desired_replicas": 1,
@@ -193,7 +193,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:ddeb3bc1fd97f034da5fbb8bb88777830094345e2fc1c3dfc280128a3041d5f1"
+                "proofstorm.dev/rollout-digest": "sha256:ad536bc7555bfc9af842d3bfd1d37a436bac9d8d97f428341cf7da640ab9306b"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -235,7 +235,7 @@
                       "value": "wallet"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:31e18a419bb3cafcc795a5c99dcfbb07460bba5ad76f2c1d104341e151cb22e9",
+                  "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:e1a8b08345e387bfaac8d672059eede8d4c1dd8ea788a6bd687f9fe04138abf0",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

@@ -98,7 +98,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "components":[
             {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
             {"id":"lightning","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
-            {"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
+            {"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.1","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],"links":[{"id":"chain-link","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}],
         "policy":{"allow":["component.exec_live"],"limits":{"max_components":4,"max_links":4,"max_config_bytes":16384}}});
     let preview = client.call(

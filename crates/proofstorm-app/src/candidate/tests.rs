@@ -49,7 +49,7 @@ async fn candidate_source_forms_preserve_admission_and_legacy_null() {
         json!({"source":{"type":"commit","sha":sha}}),
         json!({"source":{"type":"commit","url":format!("https://github.com/cashubtc/cdk/commit/{sha}")}}),
         json!({"source":{"type":"commit","sha":sha,"url":null}}),
-        json!({"source":{"type":"tag","tag":"v0.18.0"}}),
+        json!({"source":{"type":"tag","tag":"v0.18.1"}}),
         json!({"pull_request_url":"https://github.com/cashubtc/cdk/pull/123"}),
         json!({"source":null,"pull_request_url":"https://github.com/cashubtc/cdk/pull/123"}),
     ].into_iter().enumerate() {
@@ -173,7 +173,7 @@ async fn candidate_legacy_replay_keeps_exact_record_without_fabricating_provenan
     let store = store();
     let mut legacy: CandidateBuild = serde_json::from_value(json!({
         "api_version":proofstorm_core::CANDIDATE_BUILD_API_VERSION,"id":"legacy","workspace_id":"workspace","principal_id":"agent",
-        "implementation":"cdk","base_version":"0.18.0","pull_request_url":"https://github.com/cashubtc/cdk/pull/123/",
+        "implementation":"cdk","base_version":"0.18.1","pull_request_url":"https://github.com/cashubtc/cdk/pull/123/",
         "resource_name":"candidate-legacy","request_digest":"legacy-fingerprint","phase":"pending","accepted_at_unix":1,
         "repository":"https://github.com/cashubtc/cdk.git","commit_sha":"a".repeat(40),"version":"candidate-pr123-aaaaaaaa"
     })).unwrap();
@@ -204,12 +204,16 @@ async fn candidate_legacy_replay_keeps_exact_record_without_fabricating_provenan
 }
 
 #[tokio::test]
-async fn candidate_profiles_admit_every_catalog_mint_and_wallet_and_preserve_replays() {
+async fn candidate_profiles_admit_every_current_baseline_and_preserve_replays() {
     let store = store();
     let cashu = default_catalog()
         .entries
         .iter()
         .filter(|e| matches!(e.kind, ComponentKind::Mint | ComponentKind::Wallet))
+        .filter(|e| {
+            proofstorm_core::candidate_build_profile(&e.id)
+                .is_some_and(|profile| profile.baseline == e.version)
+        })
         .collect::<Vec<_>>();
     assert_eq!(cashu.len(), 7);
     for entry in cashu {

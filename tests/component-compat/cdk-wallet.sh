@@ -5,7 +5,7 @@ main() {
 umask 077
 [[ $# == 7 ]] || exit 2
 wallet_name=$1 mint_name=$2 directory=$3 version=$4 prefix=$5 implementation=$6 helper=$7
-case "$version" in 0.18.0) ;; *) exit 2 ;; esac
+case "$version" in 0.18.0|0.18.1) ;; *) exit 2 ;; esac
 run() { "$helper" release-run 60 docker "$@"; }
 node() {
   if [[ "$implementation" == lnd ]]; then run exec "$prefix-south" lncli --lnddir=/home/lnd/.lnd --network=regtest "$@"

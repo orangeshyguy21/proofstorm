@@ -1,4 +1,4 @@
-//! CDK 0.18.0 embedded LDK: BOLT12 offer quoting through the mint's own HTTP
+//! CDK 0.18.1 embedded LDK: BOLT12 offer quoting through the mint's own HTTP
 //! API, an inbound CLN peer connection to the embedded node, and, on the
 //! PostgreSQL variant, quote survival across database and mint restarts.
 //!
@@ -24,7 +24,7 @@ fn cell_document(postgres_enabled: bool) -> Value {
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {"id": "peer", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "cell", "config": {"alias": "proofstorm-ldk-introduction-peer"}},
-            {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.0", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 cell"}}
+            {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.1", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 cell"}}
         ],
         "links": [
             {"id": "peer-chain", "kind": "chain_backend", "from": "peer", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -49,7 +49,7 @@ fn ldk_node_id(logs: &str) -> Option<&str> {
 
 pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     let client = context.default_session("cdk-ldk-live", "designer")?;
-    run_selected(context, client, postgres_enabled, "0.18.0", IMAGE)
+    run_selected(context, client, postgres_enabled, "0.18.1", IMAGE)
 }
 
 pub(super) fn run_candidate(
@@ -125,7 +125,7 @@ fn run_selected(
         context
             .kubectl
             .exec(namespace, "deployment/mint", &["cdk-mintd", "--version"])?;
-    if !version.contains("0.18.0") {
+    if !version.contains("0.18.1") {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
@@ -208,7 +208,7 @@ fn run_selected(
         println!("CDK embedded LDK + PostgreSQL MCP BOLT12 persistence and teardown passed");
     } else {
         println!(
-            "CDK 0.18.0 embedded-LDK MCP materialization, database-backed configuration, BOLT12 quote, readiness, and teardown passed"
+            "CDK 0.18.1 embedded-LDK MCP materialization, database-backed configuration, BOLT12 quote, readiness, and teardown passed"
         );
     }
     Ok(())

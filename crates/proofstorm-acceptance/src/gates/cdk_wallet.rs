@@ -22,9 +22,9 @@ pub(super) fn document(input_fee_ppk: u64) -> Value {
             {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
             {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
-            {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.0","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":input_fee_ppk}},
-            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}},
-            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.0","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
+            {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.1","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":input_fee_ppk}},
+            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.1","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}},
+            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.1","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],
         "links":[
             {"id":"mint-chain","kind":"chain_backend","from":"mint-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
@@ -242,7 +242,7 @@ pub(super) fn exercise(
     {
         bail!("funding payment did not settle with verified cleanup: {payment}");
     }
-    // v0.18.0's mint-pending checks pending proofs, despite its help text.
+    // v0.18.1's mint-pending checks pending proofs, despite its help text.
     // Resume the exact persisted quote through the native mint command.
     native(
         client,

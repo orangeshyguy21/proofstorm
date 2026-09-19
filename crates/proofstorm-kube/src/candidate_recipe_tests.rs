@@ -57,7 +57,7 @@ fn candidate_mint_builds_copy_complete_workspace_and_keep_upstream_features() {
         )));
         assert!(patched.ends_with("FROM debian:trixie-slim\nCMD [\"cdk-mintd\"]\n"));
         let profile = proofstorm_core::candidate_build_profile(implementation).unwrap();
-        assert_eq!(profile.version, 7);
+        assert_eq!(profile.version, 8);
         assert_eq!(profile.id, "cdk-mint-source");
         assert_eq!(profile.dockerfile, "Dockerfile.ldk-node");
         assert_eq!(

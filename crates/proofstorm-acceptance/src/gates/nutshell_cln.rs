@@ -1,4 +1,4 @@
-//! Nutshell 0.20.3 + Core Lightning 26.06.7 REST: restricted rune contract,
+//! Nutshell 0.21.0 + Core Lightning 26.06.7 REST: restricted rune contract,
 //! wallet round trip, balance accounting, and verified teardown.
 //!
 //! Ported from `tests/kubernetes/nutshell_cln_mcp_client.py`.
@@ -20,8 +20,8 @@ fn cell_document() -> Value {
             {"id": "seed-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cln-seed"}},
             {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cln-payer"}},
             {"id": "mint-cln", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "cell", "config": {"alias": "proofstorm-cln-mint"}},
-            {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell CLN", "description": "Core Lightning REST acceptance", "clnrest_enable_mpp": true}},
-            {"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.20.3", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}
+            {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.21.0", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell CLN", "description": "Core Lightning REST acceptance", "clnrest_enable_mpp": true}},
+            {"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.21.0", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}
         ],
         "links": [
             {"id": "seed-chain", "kind": "chain_backend", "from": "seed-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -122,7 +122,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     for (key, value) in [
         ("MINT_BACKEND_BOLT11_SAT", "CLNRestWallet"),
         ("MINT_CLNREST_ENABLE_MPP", "TRUE"),
-        ("MINT_CLNREST_RUNE", "/app/data/.proofstorm/cln.rune"),
+        ("MINT_CLNREST_RUNE", "/app/data/.proofstorm/cln-xpay.rune"),
         ("MINT_CLNREST_URL", "http://mint-cln:3010"),
     ] {
         expect::equals(&mint_config, &format!("/data/{key}"), &Value::from(value))?;
@@ -133,7 +133,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
     if data.values().any(|value| {
         value.as_str().is_some_and(|text| {
-            text.to_lowercase().contains("rune") && text != "/app/data/.proofstorm/cln.rune"
+            text.to_lowercase().contains("rune") && text != "/app/data/.proofstorm/cln-xpay.rune"
         })
     }) {
         bail!("Nutshell CLN public configuration contains rune material");
@@ -360,7 +360,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     println!(
-        "Nutshell 0.20.3 + Core Lightning 26.06.7 REST, restricted rune, wallet round-trip, balance accounting, and teardown passed"
+        "Nutshell 0.21.0 + Core Lightning 26.06.7 REST, restricted rune, wallet round-trip, balance accounting, and teardown passed"
     );
     Ok(())
 }

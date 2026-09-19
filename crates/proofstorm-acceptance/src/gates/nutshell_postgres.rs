@@ -1,4 +1,4 @@
-//! Nutshell 0.20.3 + PostgreSQL: secret stability across a controller restart,
+//! Nutshell 0.21.0 + PostgreSQL: secret stability across a controller restart,
 //! database persistence across a workload restart, and verified teardown.
 //!
 //! Ported from `tests/kubernetes/nutshell_postgres_mcp_client.py`.
@@ -21,7 +21,7 @@ fn cell_document() -> Value {
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
             {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-nutshell-postgres"}},
             {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"database_name": "nutshell_mint", "storage_size": "2Gi"}},
-            {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell PostgreSQL", "description": "Secret-backed persistence acceptance", "mint_quote_ttl_seconds": 701, "melt_quote_ttl_seconds": 131}}
+            {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.21.0", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell PostgreSQL", "description": "Secret-backed persistence acceptance", "mint_quote_ttl_seconds": 701, "melt_quote_ttl_seconds": 131}}
         ],
         "links": [
             {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -130,7 +130,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     let settings: Value = serde_json::from_str(rendered.trim())?;
     let expected = json!({
-        "version": "0.20.3",
+        "version": "0.21.0",
         "name": "Proofstorm Nutshell PostgreSQL",
         "database_host": "database",
         "database_name": "nutshell_mint",
@@ -207,7 +207,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     cell::wait_phase(&mut client, INSTANCE, "closed", 80, Duration::from_secs(3))?;
 
     println!(
-        "Nutshell 0.20.3 + PostgreSQL secret stability, database persistence, mint restart, readiness, and teardown passed"
+        "Nutshell 0.21.0 + PostgreSQL secret stability, database persistence, mint restart, readiness, and teardown passed"
     );
     Ok(())
 }

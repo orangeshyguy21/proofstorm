@@ -1395,28 +1395,14 @@ fn cdk_cln_cell_matches_its_golden_contract() {
 
 #[test]
 fn nutshell_021_contract_selects_xpay_without_changing_the_020_contract() {
-    let mut catalog = default_catalog().clone();
-    let old = catalog
-        .entries
-        .iter_mut()
-        .find(|entry| entry.id == "nutshell")
-        .unwrap();
-    old.support_lifecycle = proofstorm_core::SupportLifecycle::Supported;
-    // Synthetic catalog entry exercises contract dispatch; real image validation
-    // belongs to the component-driver and live qualification gates.
-    let mut newer = old.clone();
-    newer.version = "0.21.0".into();
-    newer.support_lifecycle = proofstorm_core::SupportLifecycle::Preferred;
-    newer.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
-    catalog.entries.push(newer);
-    let catalog = proofstorm_core::CatalogResponse::try_new(catalog.entries).unwrap();
+    let catalog = default_catalog();
     let mut spec = nutshell_cln_cell();
     spec.components
         .iter_mut()
         .find(|component| component.id == "mint")
         .unwrap()
         .version = Some("0.21.0".into());
-    let lock = resolve_lock(&spec, &catalog).unwrap();
+    let lock = resolve_lock(&spec, catalog).unwrap();
     let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
     let config = rendered
         .config_maps
@@ -1446,7 +1432,12 @@ fn nutshell_021_contract_selects_xpay_without_changing_the_020_contract() {
 
 #[test]
 fn nutshell_cln_cell_uses_restricted_runtime_rune_contract() {
-    let spec = nutshell_cln_cell();
+    let mut spec = nutshell_cln_cell();
+    spec.components
+        .iter_mut()
+        .find(|component| component.id == "mint")
+        .unwrap()
+        .version = Some("0.20.3".into());
     let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell+CLN lock");
     let rendered =
         render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell+CLN full render");

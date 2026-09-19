@@ -35,7 +35,8 @@ identity after process restart. Their scope does not include PostgreSQL, Redis,
 OIDC, Kubernetes network policies, or controller admission and mutation flows.
 CDK 0.18 mint/backend qualification remains separate from this Nutshell matrix.
 
-Wallet entries can also select `implementation: "cdk-cli-wallet"` at 0.18.0.
+Wallet entries can also select `implementation: "cdk-cli-wallet"` at 0.18.1
+(the retained 0.18.0 contract is also accepted).
 Those cases check native quote persistence and resumption, real issuance,
 token transfer, the driver's native melt receipt, independent invoice settlement,
 and identity/balance preservation after restart. CI covers the CDK 0.18 wallet with

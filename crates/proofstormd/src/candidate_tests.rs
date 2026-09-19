@@ -16,7 +16,7 @@ fn fixture(cancel: bool) -> (Arc<Mutex<Cluster>>, Arc<Context>) {
     let mut build: ProofstormCandidateBuild = serde_json::from_value(json!({
         "apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCandidateBuild",
         "metadata":{"name":"candidate-test","namespace":"system","uid":"uid-1"},
-        "spec":{"workspaceId":"workspace","candidateId":"test","principalId":"agent","implementation":"cdk","baseVersion":"0.18.0",
+        "spec":{"workspaceId":"workspace","candidateId":"test","principalId":"agent","implementation":"cdk","baseVersion":"0.18.1",
             "pullRequestUrl":"https://github.com/cashubtc/cdk/pull/123","repository":"https://github.com/cashubtc/cdk.git","commitSha":"a".repeat(40),
             "version":"candidate-test","requestDigest":"digest","acceptedAtUnix":1,"imageRepository":"registry:5000/candidates/cdk","dockerfile":"Dockerfile"},
         "status":{"phase":"building","startedAtUnix":2}

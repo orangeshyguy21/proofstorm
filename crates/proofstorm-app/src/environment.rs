@@ -602,7 +602,7 @@ mod canvas_tests {
     fn lock(catalog_id: &str) -> LockEntry {
         serde_json::from_value(serde_json::json!({
             "component_id":"mint", "catalog_id":catalog_id,
-            "adapter_version":"adapter-1", "version":"0.18.0",
+            "adapter_version":"adapter-1", "version":"0.18.1",
             "config_version":"test/v1", "config_schema_digest":"schema",
             "features":[], "compatible_dependencies":[],
             "effective_config_digest":"config", "rollout_digest":"rollout",
@@ -618,8 +618,8 @@ mod canvas_tests {
             ("cdk-bdk", "bdk", ComponentKind::Wallet),
         ] {
             let details = component_details(&lock(catalog), true);
-            assert_eq!(details.resolved_version, "0.18.0");
-            assert_eq!(details.observed_version.as_deref(), Some("0.18.0"));
+            assert_eq!(details.resolved_version, "0.18.1");
+            assert_eq!(details.observed_version.as_deref(), Some("0.18.1"));
             assert_eq!(details.embedded.len(), 1);
             assert_eq!(details.embedded[0].id, id);
             assert_eq!(details.embedded[0].kind, kind);

@@ -1,4 +1,4 @@
-//! CDK 0.18.0 embedded BDK: full agent-authored metadata rendering, 24
+//! CDK 0.18.1 embedded BDK: full agent-authored metadata rendering, 24
 //! concurrent NUT-30 on-chain quotes with unique addresses, NUT-20 pubkey
 //! enforcement, dust rejection, and settled-state survival across a restart.
 //!
@@ -26,7 +26,7 @@ fn cell_document(postgres_enabled: bool) -> Value {
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {
-                "id": "mint", "kind": "mint", "implementation": "cdk-bdk", "version": "0.18.0",
+                "id": "mint", "kind": "mint", "implementation": "cdk-bdk", "version": "0.18.1",
                 "config_version": "cdk-mintd-bdk/0.18/v1", "control": "target",
                 "config": {
                     "name": "Proofstorm CDK BDK",
@@ -113,7 +113,7 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
 
 pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     let client = context.default_session("cdk-bdk-stress-live", "designer")?;
-    run_selected(context, client, postgres_enabled, "0.18.0", IMAGE)
+    run_selected(context, client, postgres_enabled, "0.18.1", IMAGE)
 }
 
 pub(super) fn run_candidate(
@@ -186,7 +186,7 @@ fn run_selected(
         context
             .kubectl
             .exec(namespace, "deployment/mint", &["cdk-mintd", "--version"])?;
-    if !version.contains("0.18.0") {
+    if !version.contains("0.18.1") {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
@@ -362,7 +362,7 @@ fn run_selected(
         println!("CDK embedded BDK + PostgreSQL MCP NUT-30 persistence and teardown passed");
     } else {
         println!(
-            "CDK 0.18.0 embedded-BDK database-backed configuration, NUT-30 stress, restart persistence, and teardown passed"
+            "CDK 0.18.1 embedded-BDK database-backed configuration, NUT-30 stress, restart persistence, and teardown passed"
         );
     }
     Ok(())

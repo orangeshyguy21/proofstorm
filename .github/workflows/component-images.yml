@@ -73,7 +73,7 @@ jobs:
           driver=proofstorm-qualification-driver:local
           for selection in bitcoin-core@31.1 bitcoin-core@29.4 bitcoin-core@30.3 \
               nutshell-mint@0.20.3 nutshell-mint@0.21.0 \
-              cdk-cli-wallet@0.18.0 cdk-mint@0.18.0; do
+              cdk-cli-wallet@0.18.1 cdk-mint@0.18.1; do
             work="$RUNNER_TEMP/component-builds/$selection"
             bash scripts/catalog-image.sh build "$selection" "linux/$ARCH" "$work" \
               2>&1 | tee "$RUNNER_TEMP/component-evidence/$selection-build.log"
@@ -134,9 +134,9 @@ jobs:
       - name: Qualify the CDK 0.18 wallet against both Nutshell mint families
         run: |
           set -o pipefail
-          jq --slurpfile cdk18 "$RUNNER_TEMP/component-builds/cdk-cli-wallet@0.18.0/image.json" \
+          jq --slurpfile cdk18 "$RUNNER_TEMP/component-builds/cdk-cli-wallet@0.18.1/image.json" \
             '.lightning=[.lightning[0]] |
-             .wallets=[{implementation:"cdk-cli-wallet",version:"0.18.0",image:$cdk18[0].local_image_id}]' \
+             .wallets=[{implementation:"cdk-cli-wallet",version:"0.18.1",image:$cdk18[0].local_image_id}]' \
             "$RUNNER_TEMP/nutshell-compat.json" > "$RUNNER_TEMP/cdk-wallet-compat.json"
           bash tests/component-compat/bitcoin-lightning.sh "$RUNNER_TEMP/cdk-wallet-compat.json" \
             "linux/$ARCH" "$RUNNER_TEMP/cdk-wallet-compat" \

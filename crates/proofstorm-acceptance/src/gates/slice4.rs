@@ -37,7 +37,7 @@ fn cell_document() -> Value {
                 "id": "mint",
                 "kind": "mint",
                 "implementation": "cdk",
-                "version": "0.18.0",
+                "version": "0.18.1",
                 "config_version": "cdk-mintd/0.18/v1",
                 "control": "target",
                 "config": {

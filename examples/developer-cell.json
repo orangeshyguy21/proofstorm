@@ -15,7 +15,7 @@
       "id": "mint",
       "kind": "mint",
       "implementation": "cdk-bdk",
-      "version": "0.18.0",
+      "version": "0.18.1",
       "config_version": "cdk-mintd-bdk/0.18/v1",
       "control": "target",
       "config": {}

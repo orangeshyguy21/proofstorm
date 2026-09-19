@@ -410,10 +410,10 @@ mod tests {
             page(json!({"query":"cdk","kinds":["mint"]})).matched_count,
             3
         );
-        assert_eq!(page(json!({"kinds":["mint"]})).matched_count, 4);
+        assert_eq!(page(json!({"kinds":["mint"]})).matched_count, 5);
         assert_eq!(page(json!({"implementations":["cdk"]})).matched_count, 1);
         let wallets = page(json!({"kinds":["wallet"],"origins":["built_in"]}));
-        assert_eq!(wallets.matched_count, 3);
+        assert_eq!(wallets.matched_count, 4);
         assert!(
             wallets
                 .items
@@ -446,7 +446,7 @@ mod tests {
             changed.origins.insert(CatalogOrigin::Candidate);
             assert!(list(default_catalog(), &changed, "linux/arm64", 24 * 1024).is_err());
         }
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
         assert_eq!(
             ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
             4

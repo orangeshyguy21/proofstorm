@@ -4909,7 +4909,7 @@ mod tests {
             .expect("wallet");
         wallet.implementation = "cdk-cli-wallet".into();
         wallet.config_version = "cdk-cli-wallet/0.18/v1".into();
-        wallet.version = Some("0.18.0".into());
+        wallet.version = Some("0.18.1".into());
         cell.spec.lock = resolve_lock(&cell.spec.cell, default_catalog()).expect("CDK lock");
         action.spec.capability = Capability::WalletControl;
         action.spec.action = CellAction::WalletBalance(WalletBalanceAction {

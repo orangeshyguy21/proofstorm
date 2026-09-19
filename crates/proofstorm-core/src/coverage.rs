@@ -116,13 +116,13 @@ mod tests {
         let manifest =
             configuration_coverage_manifest(default_catalog(), default_backend_registry())
                 .expect("coverage manifest");
-        assert_eq!(manifest.entries.len(), 15);
+        assert_eq!(manifest.entries.len(), 21);
         let cdk = manifest
             .entries
             .iter()
-            .find(|entry| entry.implementation == "cdk")
+            .find(|entry| entry.implementation == "cdk" && entry.support_lifecycle.is_supported())
             .expect("CDK coverage");
-        assert_eq!(cdk.upstream_version, "0.18.0");
+        assert_eq!(cdk.upstream_version, "0.18.1");
         assert_eq!(cdk.config_version, "cdk-mintd/0.18/v1");
         assert_eq!(
             cdk.support.storage,

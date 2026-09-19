@@ -20,7 +20,7 @@ pub fn check(
         workspace_id: workspace.clone(),
         principal_id: "agent".into(),
         implementation: "nutshell".into(),
-        base_version: "0.20.3".into(),
+        base_version: "0.21.0".into(),
         pull_request_url: "https://github.com/cashubtc/nutshell/pull/1".into(),
         resource_name: "synthetic-missing-image-fixture".into(),
         request_digest: "sha256:test-fixture".into(),

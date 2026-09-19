@@ -40,9 +40,9 @@ impl CandidateBuildProfile {
 #[must_use]
 pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildProfile> {
     let (repository, baseline, dockerfile) = match implementation {
-        "cdk" | "cdk-bdk" | "cdk-ldk" => ("cashubtc/cdk", "0.18.0", "Dockerfile.ldk-node"),
-        "cdk-cli-wallet" => ("cashubtc/cdk", "0.18.0", "Proofstorm.candidate.Dockerfile"),
-        "nutshell" | "nutshell-wallet" => ("cashubtc/nutshell", "0.20.3", "Dockerfile"),
+        "cdk" | "cdk-bdk" | "cdk-ldk" => ("cashubtc/cdk", "0.18.1", "Dockerfile.ldk-node"),
+        "cdk-cli-wallet" => ("cashubtc/cdk", "0.18.1", "Proofstorm.candidate.Dockerfile"),
+        "nutshell" | "nutshell-wallet" => ("cashubtc/nutshell", "0.21.0", "Dockerfile"),
         "cocod-wallet" => (
             "cashubtc/coco",
             "0.0.17-dev.44e5101c",
@@ -95,8 +95,9 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             BTreeSet::new()
         },
         version: match implementation {
-            "cdk" | "cdk-ldk" | "cdk-bdk" => 7,
-            "cdk-cli-wallet" => 2,
+            "cdk" | "cdk-ldk" | "cdk-bdk" => 8,
+            "cdk-cli-wallet" => 3,
+            "nutshell" | "nutshell-wallet" => 2,
             _ => 1,
         },
         repository: repository.into(),
