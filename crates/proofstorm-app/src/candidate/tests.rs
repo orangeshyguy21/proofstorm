@@ -42,6 +42,64 @@ fn succeed(store: &Store, mut candidate: CandidateBuild) -> CandidateBuild {
 }
 
 #[tokio::test]
+async fn candidate_source_forms_preserve_admission_and_legacy_null() {
+    let sha = "a".repeat(40);
+    for (index, fields) in [
+        json!({"source":{"type":"pull_request","url":"https://github.com/cashubtc/cdk/pull/123"}}),
+        json!({"source":{"type":"commit","sha":sha}}),
+        json!({"source":{"type":"commit","url":format!("https://github.com/cashubtc/cdk/commit/{sha}")}}),
+        json!({"source":{"type":"commit","sha":sha,"url":null}}),
+        json!({"source":{"type":"tag","tag":"v0.18.1"}}),
+        json!({"pull_request_url":"https://github.com/cashubtc/cdk/pull/123"}),
+        json!({"source":null,"pull_request_url":"https://github.com/cashubtc/cdk/pull/123"}),
+    ].into_iter().enumerate() {
+        let store = store();
+        let mut value = json!({"candidate_id":format!("source-{index}"),"implementation":"cdk","request_id":format!("source-{index}")});
+        value.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+        let request = serde_json::from_value(value).unwrap();
+        let candidate = admit_with_resolver(&store, "workspace", "agent", &request, |_, repository| async move {
+            Ok((format!("https://github.com/{repository}.git"), "a".repeat(40)))
+        }).await.unwrap();
+        assert_eq!(candidate.phase, CandidateBuildPhase::Pending);
+        assert!(candidate.provenance.is_some());
+    }
+}
+
+#[tokio::test]
+async fn candidate_source_validation_rejects_invalid_variants_before_resolution() {
+    for source in [
+        json!({"type":"pull_request"}),
+        json!({"type":"tag"}),
+        json!({"type":"tag","tag":"v1","sha":"a".repeat(40)}),
+        json!({"type":"unknown","url":"https://github.com/cashubtc/cdk/pull/123"}),
+    ] {
+        let value = json!({"candidate_id":"invalid","implementation":"cdk","request_id":"invalid","source":source});
+        assert!(serde_json::from_value::<CandidateBuildRequest>(value).is_err());
+    }
+    for source in [
+        json!({"type":"commit"}),
+        json!({"type":"commit","sha":"a".repeat(40),"url":format!("https://github.com/cashubtc/cdk/commit/{}", "a".repeat(40))}),
+        json!({"type":"commit","sha":"abc123"}),
+        json!({"type":"pull_request","url":"https://github.com/other/repo/pull/123"}),
+        json!({"type":"tag","tag":"bad tag"}),
+    ] {
+        let store = store();
+        let request = serde_json::from_value(json!({"candidate_id":"invalid","implementation":"cdk","request_id":"invalid","source":source})).unwrap();
+        let result = admit_with_resolver(&store, "workspace", "agent", &request, |_, _| async {
+            panic!("invalid source must fail before resolution")
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(
+            store
+                .candidate_builds("workspace", "agent")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
 async fn candidate_source_failure_is_recorded_and_never_resolved_again_on_replay() {
     let store = store();
     let mut request = request("cdk", "missing-tag");
@@ -115,7 +173,7 @@ async fn candidate_legacy_replay_keeps_exact_record_without_fabricating_provenan
     let store = store();
     let mut legacy: CandidateBuild = serde_json::from_value(json!({
         "api_version":proofstorm_core::CANDIDATE_BUILD_API_VERSION,"id":"legacy","workspace_id":"workspace","principal_id":"agent",
-        "implementation":"cdk","base_version":"0.18.0","pull_request_url":"https://github.com/cashubtc/cdk/pull/123/",
+        "implementation":"cdk","base_version":"0.18.1","pull_request_url":"https://github.com/cashubtc/cdk/pull/123/",
         "resource_name":"candidate-legacy","request_digest":"legacy-fingerprint","phase":"pending","accepted_at_unix":1,
         "repository":"https://github.com/cashubtc/cdk.git","commit_sha":"a".repeat(40),"version":"candidate-pr123-aaaaaaaa"
     })).unwrap();
@@ -146,12 +204,16 @@ async fn candidate_legacy_replay_keeps_exact_record_without_fabricating_provenan
 }
 
 #[tokio::test]
-async fn candidate_profiles_admit_every_catalog_mint_and_wallet_and_preserve_replays() {
+async fn candidate_profiles_admit_every_current_baseline_and_preserve_replays() {
     let store = store();
     let cashu = default_catalog()
         .entries
         .iter()
         .filter(|e| matches!(e.kind, ComponentKind::Mint | ComponentKind::Wallet))
+        .filter(|e| {
+            proofstorm_core::candidate_build_profile(&e.id)
+                .is_some_and(|profile| profile.baseline == e.version)
+        })
         .collect::<Vec<_>>();
     assert_eq!(cashu.len(), 7);
     for entry in cashu {

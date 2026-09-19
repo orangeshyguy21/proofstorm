@@ -1,4 +1,4 @@
-//! Nutshell 0.20.3 + LND materialization, typed configuration, generated key,
+//! Nutshell 0.21.0 + LND materialization, typed configuration, generated key,
 //! readiness, and verified teardown.
 //!
 //! Ported from `tests/kubernetes/nutshell_mint_mcp_client.py`.
@@ -37,7 +37,7 @@ fn cell_document() -> Value {
                 "id": "mint",
                 "kind": "mint",
                 "implementation": "nutshell",
-                "version": "0.20.3",
+                "version": "0.21.0",
                 "config_version": "nutshell-mint/0.20/v1",
                 "control": "target",
                 "config": {
@@ -81,7 +81,7 @@ fn cell_document() -> Value {
 
 fn expected_settings() -> Value {
     json!({
-        "version": "0.20.3",
+        "version": "0.21.0",
         "name": "Proofstorm Nutshell Native",
         "description": "Native Nutshell and LND cell",
         "input_fee_ppk": 123,
@@ -113,7 +113,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let published = crate::cell::review(&mut client, &preview)?;
 
     let entry = cell::lock_entry(&published, "nutshell")?;
-    expect::equals(entry, "/version", &Value::from("0.20.3"))?;
+    expect::equals(entry, "/version", &Value::from("0.21.0"))?;
     expect::equals(
         entry,
         "/config_version",
@@ -122,7 +122,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let image = &proofstorm_core::default_catalog()
         .entries
         .iter()
-        .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
+        .find(|entry| entry.id == "nutshell" && entry.version == "0.21.0")
         .context("Nutshell catalog build missing")?
         .image;
     expect::equals(entry, "/image", &Value::from(image.clone()))?;
@@ -147,7 +147,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     cell::wait_closed(&mut client, INSTANCE)?;
 
     println!(
-        "Nutshell 0.20.3 + LND MCP materialization, typed configuration, generated key, readiness, and teardown passed"
+        "Nutshell 0.21.0 + LND MCP materialization, typed configuration, generated key, readiness, and teardown passed"
     );
     Ok(())
 }

@@ -58,6 +58,8 @@ fn versioned_recipe(name: &str, version: &str) -> Result<&'static str> {
         ("bitcoin-core", "29.4") => Ok("docker/bitcoin/Dockerfile.29.4"),
         ("bitcoin-core", "30.3") => Ok("docker/bitcoin/Dockerfile.30.3"),
         ("nutshell-mint", "0.21.0") => Ok("docker/mint/Dockerfile.nutshell-0.21.0"),
+        ("cdk-mint", "0.18.1") => Ok("docker/mint/Dockerfile.cdk-0.18.1"),
+        ("cdk-cli-wallet", "0.18.1") => Ok("docker/wallet/Dockerfile.cdk-0.18.1"),
         _ => bail!("unreviewed catalog image version {name}@{version}; use catalog-image list"),
     }
 }
@@ -569,7 +571,10 @@ fn fields(work: &Path) -> Result<()> {
             "cdk-mint" | "cdk-ldk-mint-management"
         )
     {
-        let provenance = "source/docker/mint/cdk-ldk-management-provenance.json";
+        let provenance = match receipt.version()? {
+            "0.18.1" => "source/docker/mint/cdk-0.18.1-provenance.json",
+            _ => "source/docker/mint/cdk-ldk-management-provenance.json",
+        };
         let value = bundle::read_json(&work.join(provenance))?;
         text(&value, "runtime_image")?.clone_into(&mut mint_image);
         ensure!(
@@ -642,7 +647,7 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
         ["audit"] => audit::run(),
         ["list"] => {
             println!(
-                "Catalog recipes (linux/amd64 or linux/arm64; select RECIPE@VERSION):\n{}\nbitcoin-core@29.4\nbitcoin-core@30.3\nnutshell-mint@0.21.0",
+                "Catalog recipes (linux/amd64 or linux/arm64; select RECIPE@VERSION):\n{}\nbitcoin-core@29.4\nbitcoin-core@30.3\nnutshell-mint@0.21.0\ncdk-mint@0.18.1\ncdk-cli-wallet@0.18.1",
                 RECIPES
                     .iter()
                     .map(|name| format!(

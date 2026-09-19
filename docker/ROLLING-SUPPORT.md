@@ -44,9 +44,11 @@ The added preparation recipes are Bitcoin Core 29.4/30.3 and Nutshell 0.21.0.
 Their checksums, source identities, and recipe digests
 are recorded beside the recipes. LND and CLN use upstream immutable images.
 Preparation recipes are intentionally separate from the installed support list.
-CDK retains its existing 0.18.0 mint and CLI wallet recipes.
+CDK adds versioned 0.18.1 mint and CLI wallet recipes. The 0.18.0 recipes
+and existing unversioned receipt interpretation remain unchanged.
 
-The release inventory reviewed on 2026-09-16, with the CDK support floor applied:
+The release inventory reviewed on 2026-09-16, with CDK refreshed on 2026-09-18
+and the CDK support floor applied:
 
 | Implementation | Release families to qualify/retain |
 | --- | --- |
@@ -54,7 +56,7 @@ The release inventory reviewed on 2026-09-16, with the CDK support floor applied
 | Core Lightning | 26.06.7, 26.04.1, 25.12.1 |
 | LND | 0.21.3-beta, 0.20.4-beta, 0.19.3-beta |
 | Nutshell mint and wallet | 0.21.0, 0.20.3 |
-| CDK mint presets and CLI wallet | 0.18.0; add a second family when 0.19 qualifies |
+| CDK mint presets and CLI wallet | 0.18.1; add a second family when 0.19 qualifies |
 
 The existing CLN 26.06.7 catalog pin also needs requalification: upstream
 [corrected its published images](https://github.com/ElementsProject/lightning/releases/tag/v26.06.7),
@@ -107,7 +109,17 @@ Record evidence for each claimed edge. Emulated tests are useful preparation,
 but do not establish native AMD64 qualification. Fresh-version support also does
 not establish an in-place database migration or downgrade path.
 
-Once qualified, add the exact image/provenance and contracts to the catalog,
+The catalog selects CDK 0.18.1 for all three mint presets and the CLI wallet.
+CDK 0.18.0 entries are deprecated and retained for existing locks. Nutshell
+0.21.0 is preferred for both mint and wallet, with 0.20.3 still supported.
+Both Nutshell releases share the configuration schema; the 0.21 mint selects
+its versioned action contract for native version checking and CLN `xpay`.
+The [verification record](../release/cashu-versions-20260918-verification.json)
+records exact artifacts and completed checks. Native AMD64 and the remaining
+managed-cell storage, authentication, and CDK backend gates still require
+qualification before release.
+
+When promoting subsequent versions, add the exact image/provenance and contracts to the catalog,
 make the newest validated family preferred, and retire the oldest in the same
 reviewed release change. Regenerate coverage, schemas and affected render
 fixtures, then run `just check` and the affected live acceptance gates. Keep

@@ -1,6 +1,8 @@
-// The historical registry name is retained for the existing immutable artifact.
-// All CDK mint presets use this daemon with LDK, BDK and PostgreSQL support.
-pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
+// Retained for exact 0.18.0 locks and archived catalog entries.
+const LEGACY_CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
+
+// Shared 0.18.1 daemon with LDK, BDK and PostgreSQL support.
+pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df";
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -439,7 +441,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            CDK_MINT_IMAGE,
+            LEGACY_CDK_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::PersistentState,
@@ -484,7 +486,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            CDK_MINT_IMAGE,
+            LEGACY_CDK_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -524,7 +526,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "0.18.0",
             ReleaseChannel::Stable,
-            CDK_MINT_IMAGE,
+            LEGACY_CDK_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -755,7 +757,58 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
         entry.build_provenance = Some(provenance);
     }
+    promote_component_releases(&mut entries, amd64);
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
+}
+
+/// Keep the previous exact entries available for saved locks while new cells
+/// select the current patch and the newest Nutshell release family.
+fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
+    let mut previous = Vec::new();
+    for entry in entries.iter_mut() {
+        let (version, image, encoded, lifecycle) = match entry.id.as_str() {
+            "cdk" | "cdk-ldk" | "cdk-bdk" => (
+                "0.18.1",
+                CDK_MINT_IMAGE,
+                include_str!("../../../docker/mint/cdk-0.18.1-provenance.json"),
+                SupportLifecycle::Deprecated,
+            ),
+            "cdk-cli-wallet" => {
+                let (image, provenance) = crate::wallet_builds::cdk_0181(amd64);
+                ("0.18.1", image, provenance, SupportLifecycle::Deprecated)
+            }
+            "nutshell" | "nutshell-wallet" => (
+                "0.21.0",
+                crate::wallet_builds::nutshell_021(amd64),
+                include_str!("../../../docker/mint/nutshell-0.21.0-provenance.json"),
+                SupportLifecycle::Supported,
+            ),
+            _ => continue,
+        };
+        let mut old = entry.clone();
+        old.support_lifecycle = lifecycle;
+        previous.push(old);
+        entry.version = version.into();
+        entry.description = entry.description.replace("0.18.0", version);
+        entry.image = image.into();
+        if entry.id == "nutshell" {
+            entry.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
+        }
+        if entry.kind == ComponentKind::Mint {
+            entry.support_matrix.compatible_wallet_adapters =
+                vec![version_support("nutshell-wallet", &["0.20.3", "0.21.0"])];
+        }
+        let provenance: BuildProvenance =
+            serde_json::from_str(encoded).expect("promoted release build provenance");
+        entry.source_digest = crate::digest_json(&(
+            &entry.source_digest,
+            version,
+            &entry.protocol_action_adapter_version,
+            &provenance,
+        ));
+        entry.build_provenance = Some(provenance);
+    }
+    entries.extend(previous);
 }
 
 fn implementation_support(
@@ -1739,10 +1792,10 @@ mod tests {
                 .iter()
                 .find(|entry| entry.implementation == implementation)
                 .unwrap();
-            assert_eq!(support.minimum_supported.as_deref(), Some("0.18.0"));
+            assert_eq!(support.minimum_supported.as_deref(), Some("0.18.1"));
             assert_eq!(
                 support.supported_versions,
-                BTreeSet::from(["0.18.0".into()])
+                BTreeSet::from(["0.18.1".into()])
             );
         }
     }
@@ -1867,7 +1920,7 @@ mod tests {
     #[test]
     fn management_clients_have_matching_build_provenance() {
         use sha2::{Digest, Sha256};
-        let recipe = include_bytes!("../../../docker/mint/Dockerfile.kube-cdk");
+        let recipe = include_bytes!("../../../docker/mint/Dockerfile.cdk-0.18.1");
         for id in ["cdk", "cdk-ldk", "cdk-bdk"] {
             let entry = default_catalog()
                 .entries
@@ -1882,7 +1935,7 @@ mod tests {
             assert!(entry.features.contains(&CatalogFeature::MintManagementRpc));
             assert_eq!(
                 provenance.commit_sha,
-                "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
+                "a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"
             );
         }
     }
@@ -1896,14 +1949,14 @@ mod tests {
             .find(|entry| entry.id == "cdk-cli-wallet")
             .expect("CDK wallet");
         let provenance = entry.build_provenance.as_ref().expect("release provenance");
-        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.kube-cdk");
+        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.cdk-0.18.1");
         assert_eq!(
             provenance.recipe_digest,
             format!("sha256:{:x}", Sha256::digest(recipe))
         );
         assert_eq!(
             provenance.commit_sha,
-            "d3dec24c784e8fec1fd65f853241c7a2261c7abd"
+            "a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"
         );
         assert_eq!(
             provenance.platform,
@@ -1968,7 +2021,7 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 15);
+        assert_eq!(catalog.entries.len(), 21);
         assert_eq!(catalog.implementations.len(), 14);
         let lnd = catalog
             .implementations
@@ -1984,6 +2037,10 @@ mod tests {
         assert!(catalog.implementations.iter().all(|support| {
             support.implementation == "cocod-wallet"
                 || support.implementation == "lnd"
+                || matches!(
+                    support.implementation.as_str(),
+                    "nutshell" | "nutshell-wallet"
+                )
                 || support.minimum_supported == support.preferred_version
                     && support.supported_versions.len() == 1
         }));
@@ -2078,5 +2135,70 @@ mod tests {
                 .expect_err("unavailable wallet version")
                 .contains("catalog_wallet_adapter_version_missing")
         );
+    }
+
+    #[test]
+    fn promoted_releases_keep_exact_historical_entries_and_current_defaults() {
+        for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+            let catalog = catalog_for_platform(platform);
+            for id in [
+                "cdk",
+                "cdk-ldk",
+                "cdk-bdk",
+                "cdk-cli-wallet",
+                "nutshell",
+                "nutshell-wallet",
+            ] {
+                let cdk = id.starts_with("cdk");
+                let old_version = if cdk { "0.18.0" } else { "0.20.3" };
+                let version = if cdk { "0.18.1" } else { "0.21.0" };
+                let support = catalog
+                    .implementations
+                    .iter()
+                    .find(|entry| entry.implementation == id)
+                    .unwrap();
+                assert_eq!(support.preferred_version.as_deref(), Some(version));
+                let old = catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.id == id && entry.version == old_version)
+                    .unwrap();
+                let current = catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.id == id && entry.version == version)
+                    .unwrap();
+                assert_eq!(
+                    old.support_lifecycle,
+                    if cdk {
+                        SupportLifecycle::Deprecated
+                    } else {
+                        SupportLifecycle::Supported
+                    }
+                );
+                assert_eq!(current.support_lifecycle, SupportLifecycle::Preferred);
+                assert_ne!(old.image, current.image);
+                assert_ne!(old.source_digest, current.source_digest);
+                assert_eq!(old.config_version, current.config_version);
+                assert_eq!(
+                    current.build_provenance.as_ref().unwrap().commit_sha,
+                    if cdk {
+                        "a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"
+                    } else {
+                        "a9749146c6bd7f9ab75375a050e9ba795cee301c"
+                    }
+                );
+                if id == "nutshell" {
+                    assert_eq!(
+                        current.protocol_action_adapter_version.as_deref(),
+                        Some("nutshell-mint/0.21/v1")
+                    );
+                    assert_eq!(
+                        old.protocol_action_adapter_version.as_deref(),
+                        Some("0.1.0-alpha.1")
+                    );
+                }
+            }
+        }
     }
 }

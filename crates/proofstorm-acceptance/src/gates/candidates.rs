@@ -434,7 +434,7 @@ fn build(context: &GateContext, client: &mut McpClient, implementation: &str) ->
     };
     let id = format!("acceptance-{implementation}");
     let source = if implementation == "nutshell-wallet" {
-        json!({"type":"tag","tag":"0.20.3"})
+        json!({"type":"tag","tag":"0.21.0"})
     } else {
         json!({"type":"commit","sha":sha})
     };

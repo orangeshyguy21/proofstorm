@@ -104,7 +104,7 @@
         "CDK_MINTD_WORK_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
       "mounts": [
         {
           "mount_path": "/config",
@@ -219,7 +219,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:7e36bd4a6e459e157e24565b6aa5147f076ea3349b47c4fb4dcf418b0399d252",
+    "rollout_digest": "sha256:6a8dae62304e619dc5e76499e9f0445a0e987731657001ead42d6e7b76bab7a2",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -232,7 +232,7 @@
       "ports": {
         "http": 3338
       },
-      "version": "0.18.0"
+      "version": "0.18.1"
     },
     "workload": {
       "desired_replicas": 1,
@@ -295,7 +295,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:7e36bd4a6e459e157e24565b6aa5147f076ea3349b47c4fb4dcf418b0399d252"
+                "proofstorm.dev/rollout-digest": "sha256:6a8dae62304e619dc5e76499e9f0445a0e987731657001ead42d6e7b76bab7a2"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -335,7 +335,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -400,7 +400,7 @@
                     "-ec",
                     "auth=$(printf 'proofstorm:%s' \"$(cat /mint-secrets/bitcoin-rpc-password)\" | base64); for attempt in $(seq 1 120); do response=$(wget -q -T 2 -O - --header \"Authorization: Basic $auth\" --header 'Content-Type: application/json' --post-data '{\"jsonrpc\":\"1.0\",\"id\":\"proofstorm-readiness\",\"method\":\"getblockchaininfo\",\"params\":[]}' http://chain:18443/ 2>/dev/null) || true; if printf '%s' \"$response\" | grep -q '\"error\":[[:space:]]*null'; then exit 0; fi; sleep 1; done; echo 'Bitcoin RPC dependency did not become ready before CDK wallet initialization' >&2; exit 1"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "wait-for-chain",
                   "securityContext": {
@@ -435,7 +435,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "securityContext": {

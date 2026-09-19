@@ -50,7 +50,7 @@ reviewed recipes; it does not change versions, catalog pins, or provenance.
 ```sh
 just catalog-image list
 scratch="$(mktemp -d)"
-just catalog-image build cdk-cli-wallet@0.18.0 linux/arm64 "$scratch/wallet"
+just catalog-image build cdk-cli-wallet@0.18.1 linux/arm64 "$scratch/wallet"
 # Inspect image.json and probe.stdout before authorizing a push:
 just catalog-image publish "$scratch/wallet" \
   --confirm-namespace ghcr.io/orangeshyguy21/proofstorm

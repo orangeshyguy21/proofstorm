@@ -26,6 +26,7 @@ mod status_search;
 pub use activity_search::ActivitySearchRequest;
 mod operation_read;
 pub use operation_read::OperationReadRequest;
+mod tool_schema;
 
 use proofstorm_app::runtime::missing_action_artifact;
 use proofstorm_app::runtime::runtime_action_resource;
@@ -1420,6 +1421,7 @@ impl ProofstormMcp {
         let mut tool_router = Self::tool_router();
         for route in tool_router.map.values_mut() {
             route.attr.title = proofstorm_view::tool_title(&route.attr.name).map(str::to_owned);
+            route.attr.input_schema = tool_schema::portable_input(&route.attr.input_schema);
         }
         for (tool, required) in tool_capabilities() {
             if !required
@@ -5589,7 +5591,7 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 15);
+        assert_eq!(catalog.entries.len(), 21);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
@@ -5658,9 +5660,11 @@ mod tests {
             support.implementation == "cocod-wallet"
                 || support.preferred_version.as_ref().is_some_and(|version| {
                     support.supported_versions.contains(version)
-                        && (support.implementation == "lnd"
-                            || support.minimum_supported == support.preferred_version
-                                && support.supported_versions.len() == 1)
+                        && (matches!(
+                            support.implementation.as_str(),
+                            "lnd" | "nutshell" | "nutshell-wallet"
+                        ) || support.minimum_supported == support.preferred_version
+                            && support.supported_versions.len() == 1)
                 })
         }));
     }
@@ -5716,7 +5720,7 @@ mod tests {
         page.items = items;
         let page: CatalogListResponse =
             serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
-        assert_eq!(page.items.len(), 15);
+        assert_eq!(page.items.len(), 17);
         assert!(page.next_cursor.is_none());
         assert!(read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
         assert!(page.items.iter().all(|entry| {
@@ -5727,6 +5731,9 @@ mod tests {
                         && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
                         && entry.version == "0.20.4-beta"
+                        && entry.support_lifecycle == SupportLifecycle::Supported
+                    || matches!(entry.id.as_str(), "nutshell" | "nutshell-wallet")
+                        && entry.version == "0.20.3"
                         && entry.support_lifecycle == SupportLifecycle::Supported)
         }));
         let summary = page
@@ -5823,7 +5830,7 @@ mod tests {
             .0;
         let filtered: CatalogListResponse =
             serde_json::from_value(serde_json::to_value(filtered).unwrap()).unwrap();
-        assert_eq!(filtered.items.len(), 1);
+        assert_eq!(filtered.items.len(), 2);
         assert_eq!(filtered.items[0].id, "nutshell");
         assert_eq!(filtered.items[0].allowed_control, [ControlClass::Target]);
         assert_eq!(filtered.items[0].recommended_control, ControlClass::Target);
@@ -6275,6 +6282,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn all_advertised_input_unions_are_portable_and_keep_candidate_constraints() {
+        let store = seeded_store();
+        proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+        let service = ProofstormMcp::new(store, "alpha", "designer").unwrap();
+        let tools = service.tool_router.list_all();
+        for tool in &tools {
+            let encoded = serde_json::to_string(&tool.input_schema).unwrap();
+            assert!(
+                !encoded.contains("\"oneOf\":"),
+                "{} has a union that needs a portable representation",
+                tool.name
+            );
+        }
+        let tool = tools
+            .into_iter()
+            .find(|tool| tool.name == "candidate_build")
+            .unwrap();
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        let source = &schema["properties"]["source"];
+        assert_eq!(source["anyOf"][1], serde_json::json!({"type":"null"}));
+        let reference = source["anyOf"][0]["$ref"].as_str().unwrap();
+        let variants = schema
+            .pointer(reference.strip_prefix('#').unwrap())
+            .unwrap();
+        let branches = variants["anyOf"].as_array().unwrap();
+        assert_eq!(branches.len(), 3);
+        for branch in branches {
+            assert_eq!(branch["additionalProperties"], false);
+            let expected = match branch["properties"]["type"]["const"].as_str().unwrap() {
+                "pull_request" => serde_json::json!(["type", "url"]),
+                "commit" => serde_json::json!(["type"]),
+                "tag" => serde_json::json!(["type", "tag"]),
+                other => panic!("unexpected source variant {other}"),
+            };
+            assert_eq!(branch["required"], expected);
+        }
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("source"))
+        );
     }
 
     #[test]

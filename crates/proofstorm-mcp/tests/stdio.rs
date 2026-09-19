@@ -153,7 +153,7 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
         let structured = catalog
             .pointer("/result/structuredContent")
             .expect("structured content");
-        assert_eq!(structured["matched_count"], 15);
+        assert_eq!(structured["matched_count"], 17);
         let items = expect::array(structured, "/items").expect("catalog items");
         assert!(!items.is_empty());
         for item in items {
@@ -168,7 +168,7 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
             break;
         }
     }
-    assert_eq!(identities.len(), 15);
+    assert_eq!(identities.len(), 17);
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn assert_private_transfer_schema(tool: &Value) {
     let transfer = schema
         .pointer(reference.strip_prefix('#').unwrap())
         .unwrap();
-    let branches = transfer["oneOf"]
+    let branches = transfer["anyOf"]
         .as_array()
         .expect("method-specific schema");
     assert_eq!(branches.len(), 5);

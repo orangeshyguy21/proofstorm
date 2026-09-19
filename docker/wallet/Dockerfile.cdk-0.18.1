@@ -1,0 +1,28 @@
+# CDK v0.18.1: a056e0f0f69e94f431b1aeb90d883f18c61ea4c6.
+# Upstream release binaries, verified against GitHub's published asset digests.
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS fetch
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+ARG TARGETARCH
+RUN set -eu; \
+    case "$TARGETARCH" in \
+        arm64) arch=aarch64; expected=20218ef3234c359ea01a4638ae5fd6c691e1958c3ef8b1db8d319402fd688e6e ;; \
+        amd64) arch=x86_64; expected=5ac45481fa2bea869e41bade353859466aaddbc520321a589719cc8d89e4f446 ;; \
+        *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl --fail --location --proto '=https' --retry 3 --max-time 120 \
+        "https://github.com/cashubtc/cdk/releases/download/v0.18.1/cdk-cli-0.18.1-$arch" -o /cdk-cli; \
+    printf '%s  /cdk-cli\n' "$expected" | sha256sum -c -; \
+    chmod 755 /cdk-cli
+
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=fetch /cdk-cli /usr/local/bin/cdk-cli
+LABEL org.opencontainers.image.source="https://github.com/cashubtc/cdk" \
+      org.opencontainers.image.revision="a056e0f0f69e94f431b1aeb90d883f18c61ea4c6" \
+      org.opencontainers.image.version="0.18.1"
+ENV HOME=/wallet
+USER 1000:1000
+RUN cdk-cli --version
+ENTRYPOINT ["/bin/sh", "-c", "umask 077; trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"]

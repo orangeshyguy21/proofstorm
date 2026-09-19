@@ -1,4 +1,4 @@
-//! CDK 0.18.0 + Core Lightning materialization, database-backed configuration,
+//! CDK 0.18.1 + Core Lightning materialization, database-backed configuration,
 //! native socket configuration, readiness, and verified teardown.
 //!
 //! Ported from `tests/kubernetes/cdk_cln_mcp_client.py`.
@@ -38,7 +38,7 @@ fn cell_document() -> Value {
                 "id": "mint",
                 "kind": "mint",
                 "implementation": "cdk",
-                "version": "0.18.0",
+                "version": "0.18.1",
                 "config_version": "cdk-mintd/0.18/v1",
                 "control": "target",
                 "config": {
@@ -81,7 +81,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let published = crate::cell::review(&mut client, &preview)?;
 
     let entry = cell::lock_entry(&published, "cdk")?;
-    expect::equals(entry, "/version", &Value::from("0.18.0"))?;
+    expect::equals(entry, "/version", &Value::from("0.18.1"))?;
     expect::equals(entry, "/image", &Value::from(IMAGE))?;
 
     crate::cell::apply(&mut client, &preview)?;
@@ -111,7 +111,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         context
             .kubectl
             .exec(namespace, "deployment/mint", &["cdk-mintd", "--version"])?;
-    if !version.contains("0.18.0") {
+    if !version.contains("0.18.1") {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
@@ -119,7 +119,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     cell::wait_closed(&mut client, INSTANCE)?;
 
     println!(
-        "CDK 0.18.0 + CLN MCP materialization, database-backed configuration, native socket configuration, readiness, and teardown passed"
+        "CDK 0.18.1 + CLN MCP materialization, database-backed configuration, native socket configuration, readiness, and teardown passed"
     );
     Ok(())
 }

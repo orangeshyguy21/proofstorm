@@ -1,0 +1,376 @@
+{
+  "format_version": 1,
+  "date": "2026-09-18",
+  "versions": {
+    "cdk": "0.18.1",
+    "nutshell": "0.21.0"
+  },
+  "publication": "verified",
+  "release_ready": false,
+  "verification": {
+    "arm64": {
+      "cdk_wallet_contract": true,
+      "nutshell_mint_wallet_contract": true,
+      "cdk_generated_config_and_restart_contract": true,
+      "payment_matrices": [
+        {
+          "summary": {
+            "platform": "linux/arm64",
+            "expected_cases": 1,
+            "completed_cases": 1,
+            "cases": [
+              {
+                "bitcoin": {
+                  "version": "31.1",
+                  "image": "proofstorm-build/bitcoin-core:31.1-arm64",
+                  "image_id": "sha256:dc4cb2547a3ba42118a744f75c64ae424db9d67754b4ec95bd2251fdfa134d1f"
+                },
+                "lightning": {
+                  "implementation": "lnd",
+                  "version": "0.21.3-beta",
+                  "image": "docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+                  "image_id": "sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c"
+                },
+                "platform": "linux/arm64",
+                "passed": true,
+                "exit_code": 0,
+                "last_stage": "complete",
+                "cleanup_verified": true
+              }
+            ],
+            "passed": true,
+            "scope": "Explicit Bitcoin/Lightning pairings and optional Nutshell wallet contracts; not complete product qualification"
+          },
+          "wallet_results": [
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "cdk-cli-wallet",
+                "version": "0.18.1",
+                "image": "proofstorm-build/cdk-cli-wallet:0.18.1",
+                "image_id": "sha256:d7c860c2523fcd885098d0dbccb12f5fbbe40e93cc2d2cdb19da28aa4ef83adf"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8498,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 3,
+              "restart_preserved_balances": true,
+              "restart_preserved_identity": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "cdk-cli-wallet",
+                "version": "0.18.1",
+                "image": "proofstorm-build/cdk-cli-wallet:0.18.1",
+                "image_id": "sha256:d7c860c2523fcd885098d0dbccb12f5fbbe40e93cc2d2cdb19da28aa4ef83adf"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8498,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 3,
+              "restart_preserved_balances": true,
+              "restart_preserved_identity": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              }
+            }
+          ]
+        },
+        {
+          "summary": {
+            "platform": "linux/arm64",
+            "expected_cases": 1,
+            "completed_cases": 1,
+            "cases": [
+              {
+                "bitcoin": {
+                  "version": "31.1",
+                  "image": "proofstorm-build/bitcoin-core:31.1-arm64",
+                  "image_id": "sha256:dc4cb2547a3ba42118a744f75c64ae424db9d67754b4ec95bd2251fdfa134d1f"
+                },
+                "lightning": {
+                  "implementation": "cln",
+                  "version": "26.06.7",
+                  "image": "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+                  "image_id": "sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd"
+                },
+                "platform": "linux/arm64",
+                "passed": true,
+                "exit_code": 0,
+                "last_stage": "complete",
+                "cleanup_verified": true
+              }
+            ],
+            "passed": true,
+            "scope": "Explicit Bitcoin/Lightning pairings and optional Nutshell wallet contracts; not complete product qualification"
+          },
+          "wallet_results": [
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.21.0",
+                "image": "proofstorm-build/nutshell-mint:0.21.0-arm64",
+                "image_id": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              }
+            },
+            {
+              "passed": true,
+              "wallet": {
+                "implementation": "nutshell-wallet",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              },
+              "minted_sat": 10000,
+              "invoice_settled_sat": 500,
+              "alice_balance_sat": 8499,
+              "bob_balance_sat": 999,
+              "input_fees_sat": 2,
+              "restart_preserved_balances": true,
+              "mint": {
+                "implementation": "nutshell",
+                "version": "0.20.3",
+                "image": "proofstorm-build/nutshell-mint:0.20.3-arm64",
+                "image_id": "sha256:e5fc04eff1956c261bed827fbb10eda77a4f39e80afb641ad8f2ac41eb4ed382"
+              }
+            }
+          ]
+        }
+      ],
+      "driver_image": "sha256:1cf13273b0887a1e9a9dc3a5f79cad89c81f4a0a782f936870e76ccf53184f28"
+    },
+    "amd64": {
+      "execution": "emulated_on_arm64",
+      "cdk_wallet_contract": true,
+      "mint_build": "passed",
+      "mint_version_probe": [
+        "cdk-mint-rpc 0.18.1",
+        "cdk-mintd 0.18.1"
+      ],
+      "cdk_generated_config_and_restart_contract": true,
+      "driver_image": "sha256:5534f6545db4f576e1abfc21580b1b2b53bbc3aed610e39adeca3eec3760c643"
+    },
+    "workspace": {
+      "command": "bash scripts/check.sh all",
+      "passed": true,
+      "format": true,
+      "shell": true,
+      "clippy": true,
+      "tests": {
+        "passed": 859,
+        "failed": 0,
+        "ignored": 4
+      }
+    },
+    "anonymous_catalog_images": [
+      {
+        "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:8abf5dc467aa2c7053a6a75db00aae822e07305a11b9166ad9a213e61404de09",
+        "platform": "linux/amd64",
+        "anonymous_verified": true
+      },
+      {
+        "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:e1a8b08345e387bfaac8d672059eede8d4c1dd8ea788a6bd687f9fe04138abf0",
+        "platform": "linux/arm64",
+        "anonymous_verified": true
+      },
+      {
+        "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+        "platform": "linux/amd64",
+        "anonymous_verified": true
+      },
+      {
+        "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+        "platform": "linux/arm64",
+        "anonymous_verified": true
+      },
+      {
+        "image": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint@sha256:902461e83918af77a7b82ba2b08ef1709989fc81394ed18191d4bd7e60cdd846",
+        "platform": "linux/amd64",
+        "anonymous_verified": true
+      },
+      {
+        "image": "ghcr.io/orangeshyguy21/proofstorm/nutshell-mint@sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda",
+        "platform": "linux/arm64",
+        "anonymous_verified": true
+      }
+    ]
+  },
+  "limitations": [
+    "Native Linux AMD64 qualification remains a CI requirement.",
+    "Managed-cell storage/authentication and CDK backend acceptance have not been rerun for these new artifacts.",
+    "No in-place migration or downgrade claim."
+  ],
+  "artifacts": {
+    "cdk_mint": {
+      "index": "sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+      "linux/arm64": "sha256:870acd5cab913bddc6088140715edb3a4b2863859ad2c00b3b2cb08ec59c0fc3",
+      "linux/amd64": "sha256:5a90e06352438efe8018681f73ab0423dc6995ff8c7bb33e9f2823da70ce9ecb",
+      "recipe": "docker/mint/Dockerfile.cdk-0.18.1",
+      "recipe_sha256": "e1cdfd80e4d27a9308380d9f55a68b108315baa3b178209bc379867f3b691815"
+    },
+    "cdk_cli_wallet": {
+      "index": "sha256:d7c860c2523fcd885098d0dbccb12f5fbbe40e93cc2d2cdb19da28aa4ef83adf",
+      "linux/arm64": "sha256:e1a8b08345e387bfaac8d672059eede8d4c1dd8ea788a6bd687f9fe04138abf0",
+      "linux/amd64": "sha256:8abf5dc467aa2c7053a6a75db00aae822e07305a11b9166ad9a213e61404de09",
+      "recipe": "docker/wallet/Dockerfile.cdk-0.18.1",
+      "recipe_sha256": "3f2e3f3d7431e7590d4a299251c208f69c199bf4eab3409860168617d48175ac"
+    },
+    "nutshell_mint_wallet": {
+      "linux/arm64": "sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda",
+      "linux/amd64": "sha256:902461e83918af77a7b82ba2b08ef1709989fc81394ed18191d4bd7e60cdd846",
+      "recipe": "docker/mint/Dockerfile.nutshell-0.21.0",
+      "recipe_sha256": "017e9c03c94f0f655907eb8986760275ad0857323c1fe44a87b275a2e89c4649"
+    }
+  }
+}

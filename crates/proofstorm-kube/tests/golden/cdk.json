@@ -120,7 +120,7 @@
         "CDK_MINTD_WORK_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
       "mounts": [
         {
           "mount_path": "/config",
@@ -244,7 +244,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:abef0641a05702b7893b49ce2f7abcec6ab50c570291cfa66b1a83720013b432",
+    "rollout_digest": "sha256:29663eb0d55ae5e918fd3d0a6ecba14c338933b63129636c683f23a974f86158",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -257,7 +257,7 @@
       "ports": {
         "http": 3338
       },
-      "version": "0.18.0"
+      "version": "0.18.1"
     },
     "workload": {
       "desired_replicas": 1,
@@ -320,7 +320,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:abef0641a05702b7893b49ce2f7abcec6ab50c570291cfa66b1a83720013b432"
+                "proofstorm.dev/rollout-digest": "sha256:29663eb0d55ae5e918fd3d0a6ecba14c338933b63129636c683f23a974f86158"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -360,7 +360,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -440,7 +440,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "securityContext": {

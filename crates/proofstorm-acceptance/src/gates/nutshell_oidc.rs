@@ -1,9 +1,9 @@
-//! Nutshell 0.20.3 + Keycloak 25.0.6: NUT-21 and NUT-22 positive and negative
+//! Nutshell 0.21.0 + Keycloak 25.0.6: NUT-21 and NUT-22 positive and negative
 //! limits, spent-token replay persistence, restart recovery, and teardown.
 //!
 //! Ported from `tests/kubernetes/nutshell_oidc_mcp_client.py`.
 //!
-//! **This gate is expected to fail against Nutshell 0.20.3.** The blind auth
+//! **This gate is expected to fail against Nutshell 0.21.0.** The blind auth
 //! token mint returns 400 because the mint's auth database is missing the
 //! `mint_quote` column on its `promises` table. That is an upstream defect,
 //! already filed, and must not be worked around here. The port is therefore
@@ -29,7 +29,7 @@ fn cell_document() -> Value {
             {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-nutshell-oidc"}},
             {"id": "identity-db", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"database_name": "keycloak", "storage_size": "2Gi"}},
             {"id": "identity", "kind": "identity_provider", "implementation": "keycloak", "version": "25.0.6", "config_version": "keycloak/25/v1", "control": "cell", "config": {"access_token_lifespan_seconds": 600}},
-            {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.20.3", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Authenticated Nutshell", "description": "Live NUT-21 and NUT-22 acceptance", "auth_rate_limit_per_minute": 2, "auth_max_blind_tokens": 3}}
+            {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.21.0", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Authenticated Nutshell", "description": "Live NUT-21 and NUT-22 acceptance", "auth_rate_limit_per_minute": 2, "auth_max_blind_tokens": 3}}
         ],
         "links": [
             {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -62,7 +62,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     let published = crate::cell::review(&mut client, &preview)?;
     for (catalog_id, version, config_version) in [
-        ("nutshell", "0.20.3", "nutshell-mint/0.20/v1"),
+        ("nutshell", "0.21.0", "nutshell-mint/0.20/v1"),
         ("keycloak", "25.0.6", "keycloak/25/v1"),
         ("postgresql", "17.11", "postgresql/17/v1"),
     ] {
@@ -260,7 +260,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
 
     println!(
-        "Nutshell 0.20.3 + Keycloak 25.0.6 passed NUT-21/NUT-22 positive and negative limits, replay persistence, restart recovery, and teardown"
+        "Nutshell 0.21.0 + Keycloak 25.0.6 passed NUT-21/NUT-22 positive and negative limits, replay persistence, restart recovery, and teardown"
     );
     Ok(())
 }

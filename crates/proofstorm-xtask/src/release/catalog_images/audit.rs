@@ -125,14 +125,14 @@ mod tests {
     fn cdk_audit_does_not_backfill_the_window_below_eighteen() {
         let mut releases: Vec<Release> = serde_json::from_value(json!([
             {"tag_name":"v0.17.7","draft":false,"prerelease":false},
-            {"tag_name":"v0.18.0","draft":false,"prerelease":false}
+            {"tag_name":"v0.18.1","draft":false,"prerelease":false}
         ]))
         .unwrap();
         for implementation in ["cdk", "cdk-ldk", "cdk-bdk", "cdk-cli-wallet"] {
             let result = proposal(implementation, &releases, default_catalog());
             assert_eq!(result["minimum_release"], "0.18.0");
             assert_eq!(result["family_limit"], 2);
-            assert_eq!(result["proposed_versions"], json!(["0.18.0"]));
+            assert_eq!(result["proposed_versions"], json!(["0.18.1"]));
             assert_eq!(result["qualify"], json!([]));
             assert_eq!(result["retire_after_qualification"], json!([]));
         }
@@ -142,7 +142,7 @@ mod tests {
             prerelease: false,
         });
         let result = proposal("cdk", &releases, default_catalog());
-        assert_eq!(result["proposed_versions"], json!(["0.19.0", "0.18.0"]));
+        assert_eq!(result["proposed_versions"], json!(["0.19.0", "0.18.1"]));
         assert_eq!(result["qualify"], json!(["0.19.0"]));
         assert_eq!(result["retire_after_qualification"], json!([]));
     }

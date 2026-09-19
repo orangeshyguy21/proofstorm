@@ -87,7 +87,7 @@ fn document(implementation: &str) -> Value {
             .find(|component| component["id"] == "mint")
             .unwrap();
         mint["implementation"] = json!("nutshell");
-        mint["version"] = json!("0.20.3");
+        mint["version"] = json!("0.21.0");
         mint["config_version"] = json!("nutshell-mint/0.20/v1");
     }
     spec

@@ -19,9 +19,9 @@ fn document() -> Value {
     ];
     for implementation in MINTS {
         let version = if *implementation == "nutshell" {
-            "0.20.3"
+            "0.21.0"
         } else {
-            "0.18.0"
+            "0.18.1"
         };
         let config_version = match *implementation {
             "cdk" => "cdk-mintd/0.18/v1",

@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:72787fcb2507905f005ec038a5121c41925dc4cfcc6faffee1d081d18c28d0c0",
+  "catalog_digest": "sha256:f635778de90e17dc816b4da9c1eccf405491d582ac4546b60b3fd0ce72abf256",
   "entries": [
     {
       "implementation": "bitcoin-core",
@@ -75,7 +75,7 @@
       "kind": "mint",
       "upstream_version": "0.18.0",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "deprecated",
       "config_version": "cdk-mintd/0.18/v1",
       "config_schema_digest": "sha256:92c3b69fd7d2b84b17fc3c9c5a200b9c18bae0cbe2f472ce32ae596e24aa3dae",
       "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
@@ -305,11 +305,246 @@
       ]
     },
     {
+      "implementation": "cdk",
+      "kind": "mint",
+      "upstream_version": "0.18.1",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "cdk-mintd/0.18/v1",
+      "config_schema_digest": "sha256:92c3b69fd7d2b84b17fc3c9c5a200b9c18bae0cbe2f472ce32ae596e24aa3dae",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+      "fields": {
+        "contact_email": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "contact_nostr_public_key": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "database_engine": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "database_path": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "description": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "description_long": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "enable_info_page": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "http_cache_tti_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "http_cache_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "icon_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "input_fee_ppk": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "lightning_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "lightning_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "lightning_backend_kind": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "listen_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_inputs": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_melt": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_mint": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_outputs": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "melt_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "min_melt": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "min_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "min_mint": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "min_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "mint_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "mnemonic": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "motd": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "name": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "public_url": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "tos_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "unit": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "use_keyset_v2": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "work_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "sqlite",
+          "postgres"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [
+          "cln",
+          "lnd"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cln",
+              "versions": [
+                "26.06.7"
+              ]
+            }
+          },
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "lnd",
+              "versions": [
+                "0.20.4-beta",
+                "0.21.3-beta"
+              ]
+            }
+          }
+        ],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": [
+          {
+            "implementation": "nutshell-wallet",
+            "versions": [
+              "0.20.3",
+              "0.21.0"
+            ]
+          }
+        ]
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "payment_backend",
+          "implementation": "lnd",
+          "versions": [
+            "0.20.4-beta",
+            "0.21.3-beta"
+          ]
+        },
+        {
+          "link_kind": "payment_backend",
+          "implementation": "cln",
+          "versions": [
+            "26.06.7"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
+          ]
+        }
+      ]
+    },
+    {
       "implementation": "cdk-bdk",
       "kind": "mint",
       "upstream_version": "0.18.0",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "deprecated",
       "config_version": "cdk-mintd-bdk/0.18/v1",
       "config_schema_digest": "sha256:aed34da9bfba6516c60a11354f1e42ecf46b92ea0b8e05e24389ce23fe8dfbba",
       "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
@@ -511,14 +746,272 @@
       ]
     },
     {
+      "implementation": "cdk-bdk",
+      "kind": "mint",
+      "upstream_version": "0.18.1",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "cdk-mintd-bdk/0.18/v1",
+      "config_schema_digest": "sha256:aed34da9bfba6516c60a11354f1e42ecf46b92ea0b8e05e24389ce23fe8dfbba",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+      "fields": {
+        "bdk_mnemonic": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "bdk_storage_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "chain_backend_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "confirmation_target": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "contact_email": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "contact_nostr_public_key": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "database_engine": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "description": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "description_long": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "enable_info_page": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "http_cache_tti_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "http_cache_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "icon_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "input_fee_ppk": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "listen_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_inputs": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_outputs": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "melt_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "min_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "min_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "mint_mnemonic": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "mint_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "motd": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "name": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "payment_methods": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "public_url": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "tos_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "unit": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "use_keyset_v2": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "work_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "sqlite",
+          "postgres"
+        ],
+        "payment_methods": [
+          "onchain"
+        ],
+        "payment_backends": [
+          "bdk"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "embedded_payment_bindings": [
+          {
+            "method": "onchain",
+            "unit": "sat",
+            "backend": "bdk"
+          }
+        ],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": [
+          {
+            "implementation": "nutshell-wallet",
+            "versions": [
+              "0.20.3",
+              "0.21.0"
+            ]
+          }
+        ]
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
+          ]
+        }
+      ]
+    },
+    {
       "implementation": "cdk-cli-wallet",
       "kind": "wallet",
       "upstream_version": "0.18.0",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "deprecated",
       "config_version": "cdk-cli-wallet/0.18/v1",
       "config_schema_digest": "sha256:6d88a6e4226ad8e2f1396b819e09879657ebef4a9f7b154015f1ddd0be3bed90",
       "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:613eab7ee578ad733ccd062830190a0905f3192dec1d976bfb72007382f59bff",
+      "fields": {
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "idle_process": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "storage_size": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "wallet_identity": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "wallet_seed": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume",
+          "sqlite"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
+    },
+    {
+      "implementation": "cdk-cli-wallet",
+      "kind": "wallet",
+      "upstream_version": "0.18.1",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "cdk-cli-wallet/0.18/v1",
+      "config_schema_digest": "sha256:6d88a6e4226ad8e2f1396b819e09879657ebef4a9f7b154015f1ddd0be3bed90",
+      "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:8abf5dc467aa2c7053a6a75db00aae822e07305a11b9166ad9a213e61404de09",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",
@@ -566,7 +1059,7 @@
       "kind": "mint",
       "upstream_version": "0.18.0",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "deprecated",
       "config_version": "cdk-mintd-ldk/0.18/v1",
       "config_schema_digest": "sha256:3ba4589673b0da6165027081ba43e70983b1a8da6a248114a63d3e0fa408515d",
       "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a",
@@ -760,6 +1253,227 @@
             "implementation": "nutshell-wallet",
             "versions": [
               "0.20.3"
+            ]
+          }
+        ]
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "cdk-ldk",
+      "kind": "mint",
+      "upstream_version": "0.18.1",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "cdk-mintd-ldk/0.18/v1",
+      "config_schema_digest": "sha256:3ba4589673b0da6165027081ba43e70983b1a8da6a248114a63d3e0fa408515d",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+      "fields": {
+        "chain_backend_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "contact_email": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "contact_nostr_public_key": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "database_engine": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "database_path": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "description": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "description_long": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "embedded_lightning_backend": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "enable_info_page": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "http_cache_tti_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "http_cache_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "icon_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "input_fee_ppk": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "ldk_listen_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "ldk_node_mnemonic": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "ldk_storage_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "listen_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_inputs": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_outputs": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "melt_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "min_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "min_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "mint_mnemonic": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "mint_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "motd": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "name": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "payment_methods": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "public_url": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "tos_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "unit": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "use_keyset_v2": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "work_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "sqlite",
+          "postgres"
+        ],
+        "payment_methods": [
+          "bolt11",
+          "bolt12"
+        ],
+        "payment_backends": [
+          "ldk-node"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "embedded_payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": "ldk-node"
+          },
+          {
+            "method": "bolt12",
+            "unit": "sat",
+            "backend": "ldk-node"
+          }
+        ],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": [
+          {
+            "implementation": "nutshell-wallet",
+            "versions": [
+              "0.20.3",
+              "0.21.0"
             ]
           }
         ]
@@ -1167,7 +1881,7 @@
       "kind": "mint",
       "upstream_version": "0.20.3",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "supported",
       "config_version": "nutshell-mint/0.20/v1",
       "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
       "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754",
@@ -1489,14 +2203,391 @@
       ]
     },
     {
+      "implementation": "nutshell",
+      "kind": "mint",
+      "upstream_version": "0.21.0",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "nutshell-mint/0.20/v1",
+      "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:902461e83918af77a7b82ba2b08ef1709989fc81394ed18191d4bd7e60cdd846",
+      "fields": {
+        "auth_max_blind_tokens": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "auth_rate_limit_per_minute": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "authentication": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "authentication_database": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "backend_kind": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "clnrest_enable_mpp": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "contact_email": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "contact_nostr_public_key": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "database": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "database_lock_timeout_ms": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "derivation_path": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "description": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "description_long": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "disable_melt": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "disable_mint": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "forwarded_allow_ips": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "global_rate_limit_per_minute": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "icon_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "input_fee_ppk": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "lightning_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "lightning_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "lightning_fee_percent": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "lightning_reserve_fee_min_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "listen_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "lnd_enable_mpp": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "management_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "management_rpc": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_balance_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_melt_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_mint_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_request_length": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_secret_length": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_witness_length": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "melt_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "mint_private_key": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "mint_quote_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "motd": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "name": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "oidc_client_id": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "oidc_discovery_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "public_url": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "quote_backend_check_rate_limit_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "rate_limit": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "rate_limit_proxy_trust": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "redis_cache": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "redis_cache_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "redis_cache_ttl_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "regular_tasks_interval_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "tor": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "tos_url": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "transaction_rate_limit_per_minute": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "unit": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "watchdog_balance_check_interval_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "watchdog_enabled": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "websocket_read_timeout_seconds": {
+          "classification": "agent_authorable",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "sqlite",
+          "postgres"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [
+          "cln",
+          "lnd"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cln",
+              "versions": [
+                "26.06.7"
+              ]
+            }
+          },
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "lnd",
+              "versions": [
+                "0.20.4-beta",
+                "0.21.3-beta"
+              ]
+            }
+          }
+        ],
+        "authentication": [
+          "unauthenticated",
+          "nut21_clear",
+          "nut22_blind"
+        ],
+        "compatible_wallet_adapters": [
+          {
+            "implementation": "nutshell-wallet",
+            "versions": [
+              "0.20.3",
+              "0.21.0"
+            ]
+          }
+        ]
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "payment_backend",
+          "implementation": "lnd",
+          "versions": [
+            "0.20.4-beta",
+            "0.21.3-beta"
+          ]
+        },
+        {
+          "link_kind": "payment_backend",
+          "implementation": "cln",
+          "versions": [
+            "26.06.7"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "redis",
+          "versions": [
+            "8.10.1"
+          ]
+        },
+        {
+          "link_kind": "authentication_backend",
+          "implementation": "keycloak",
+          "versions": [
+            "25.0.6"
+          ]
+        }
+      ]
+    },
+    {
       "implementation": "nutshell-wallet",
       "kind": "wallet",
       "upstream_version": "0.20.3",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "supported",
       "config_version": "nutshell-wallet/0.20/v1",
       "config_schema_digest": "sha256:c3c3c1cfd04bf63de992267beabe8d2b1927575da11d8508bbe865957115281f",
       "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754",
+      "fields": {
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "idle_process": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "storage_size": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "wallet_identity": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "wallet_seed": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [
+          "unauthenticated"
+        ],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
+    },
+    {
+      "implementation": "nutshell-wallet",
+      "kind": "wallet",
+      "upstream_version": "0.21.0",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "nutshell-wallet/0.20/v1",
+      "config_schema_digest": "sha256:c3c3c1cfd04bf63de992267beabe8d2b1927575da11d8508bbe865957115281f",
+      "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:902461e83918af77a7b82ba2b08ef1709989fc81394ed18191d4bd7e60cdd846",
       "fields": {
         "data_directory": {
           "classification": "runtime_policy",

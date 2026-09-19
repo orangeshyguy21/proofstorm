@@ -481,7 +481,7 @@ mod tests {
         );
         assert!(
             CandidateInput::Tag {
-                tag: "v0.18.0".into()
+                tag: "v0.18.1".into()
             }
             .normalized("cashubtc/cdk")
             .is_ok()
@@ -542,7 +542,7 @@ mod tests {
             workspace_id: "test".into(),
             principal_id: "agent".into(),
             implementation: "nutshell".into(),
-            base_version: "0.20.3".into(),
+            base_version: "0.21.0".into(),
             pull_request_url: "https://github.com/cashubtc/nutshell/pull/1095".into(),
             resource_name: "candidate-aabbccdd".into(),
             request_digest: "sha256:request".into(),
@@ -621,7 +621,7 @@ mod tests {
             .iter()
             .find(|support| support.implementation == "nutshell")
             .expect("Nutshell support");
-        assert_eq!(support.preferred_version.as_deref(), Some("0.20.3"));
+        assert_eq!(support.preferred_version.as_deref(), Some("0.21.0"));
         assert!(
             !support
                 .supported_versions
