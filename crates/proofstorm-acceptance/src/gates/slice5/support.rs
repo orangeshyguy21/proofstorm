@@ -1,5 +1,5 @@
 //! Failure-safe, incarnation-scoped cleanup for these disposable live gates.
-use std::{collections::BTreeSet, thread::sleep, time::Duration};
+use std::{thread::sleep, time::Duration};
 
 use anyhow::{Result, bail, ensure};
 use serde_json::Value;
@@ -69,44 +69,45 @@ fn owns_cell(cell: &Value, workspace: &str, instance: &str) -> bool {
 }
 
 /// This fallback does not depend on a healthy MCP child or its private database.
-/// Unique workspace identity fences cleanup, including partial materialization.
+/// The accepted canonical ID and incarnation fence cleanup, including a cell
+/// that fails before readiness. The outer runner reclaims unaccepted runtimes.
 pub(super) struct CellCleanup<'a> {
     context: &'a GateContext,
     workspace: String,
-    instance: &'static str,
-    keys: BTreeSet<String>,
+    identity: Option<(String, String)>,
     armed: bool,
 }
 
 impl<'a> CellCleanup<'a> {
-    pub(super) fn new(context: &'a GateContext, workspace: String, instance: &'static str) -> Self {
+    pub(super) fn new(context: &'a GateContext, workspace: String) -> Self {
         Self {
             context,
             workspace,
-            instance,
-            keys: BTreeSet::new(),
+            identity: None,
             armed: true,
         }
     }
 
-    pub(super) fn record(&mut self, key: &str) {
-        self.keys.insert(key.to_owned());
+    pub(super) fn record(&mut self, instance: &str, key: &str) {
+        self.identity = Some((instance.to_owned(), key.to_owned()));
     }
 
     pub(super) fn finish(&mut self) -> Result<()> {
+        let Some((instance, key)) = &self.identity else {
+            self.armed = false;
+            return Ok(());
+        };
         let kubectl = &self.context.kubectl;
         let cells = kubectl.get_json(&["get", "proofstormcells", "-n", CONTROL_NAMESPACE])?;
         for cell in expect::array(&cells, "/items")? {
-            if !owns_cell(cell, &self.workspace, self.instance) {
+            if !owns_cell(cell, &self.workspace, instance) {
                 continue;
             }
-            let key = expect::string(cell, "/spec/instanceKey")?;
             ensure!(
-                self.keys.is_empty() || self.keys.contains(key),
+                expect::string(cell, "/spec/instanceKey")? == key,
                 "refusing cleanup of a replacement incarnation in workspace {}",
                 self.workspace
             );
-            self.keys.insert(key.to_owned());
             let name = expect::string(cell, "/metadata/name")?;
             kubectl.run(&[
                 "delete",
@@ -123,8 +124,8 @@ impl<'a> CellCleanup<'a> {
             let cells = kubectl.get_json(&["get", "proofstormcells", "-n", CONTROL_NAMESPACE])?;
             let mut remains = expect::array(&cells, "/items")?
                 .iter()
-                .any(|cell| owns_cell(cell, &self.workspace, self.instance));
-            for key in &self.keys {
+                .any(|cell| owns_cell(cell, &self.workspace, instance));
+            {
                 let selector = format!("proofstorm.dev/instance={key}");
                 for args in [
                     vec!["get", "namespaces", "-l", &selector, "-o", "name"],
@@ -149,9 +150,8 @@ impl<'a> CellCleanup<'a> {
             sleep(Duration::from_secs(2));
         }
         bail!(
-            "cleanup was not verified for workspace {}; retained instance keys: {:?}",
+            "cleanup was not verified for workspace {}; retained instance key: {key}",
             self.workspace,
-            self.keys
         )
     }
 }

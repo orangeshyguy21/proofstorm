@@ -11,8 +11,6 @@ use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expec
 
 pub(super) const INSTANCE: &str = "slice5-instance";
 pub(super) const EXPERIMENT: &str = "slice5-experiment";
-/// `ch-` plus a 64-character digest.
-pub(super) const HANDLE_LENGTH: usize = 67;
 
 pub(super) fn components(scenario: Scenario) -> Vec<Value> {
     let mut components = vec![
@@ -24,7 +22,11 @@ pub(super) fn components(scenario: Scenario) -> Vec<Value> {
         json!({"id": "wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.21.0", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}),
         json!({"id": "receiver-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.21.0", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}),
     ];
-    if matches!(scenario, Scenario::Smoke) {
+    if matches!(scenario, Scenario::Channels) {
+        components.retain(|component| {
+            matches!(component["kind"].as_str(), Some("bitcoin" | "lightning"))
+        });
+    } else if matches!(scenario, Scenario::Smoke) {
         // The Nutshell wallet's authoritative fee reader understands Nutshell's
         // SQLite mint schema, not CDK's redb storage. Conservation needs real
         // fee evidence; CDK payment interoperability has its own wallet gate.
@@ -36,13 +38,17 @@ pub(super) fn components(scenario: Scenario) -> Vec<Value> {
     components
 }
 
-pub(super) fn links() -> Vec<Value> {
-    vec![
+pub(super) fn links(scenario: Scenario) -> Vec<Value> {
+    let mut links = vec![
         json!({"id": "mint-lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "network": "regtest"}),
         json!({"id": "payer-lnd-chain", "kind": "chain_backend", "from": "payer-lnd", "to": "chain", "network": "regtest"}),
         json!({"id": "attacker-cln-chain", "kind": "chain_backend", "from": "attacker-cln", "to": "chain", "network": "regtest"}),
         json!({"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "mint-lnd", "method": "bolt11", "unit": "sat"}),
-    ]
+    ];
+    if matches!(scenario, Scenario::Channels) {
+        links.retain(|link| link["kind"] == "chain_backend");
+    }
+    links
 }
 
 /// An empty draft the composer then fills one mutation at a time.
@@ -88,17 +94,6 @@ pub(super) fn submit_idempotent(
         bail!("{label} retry changed the accepted action identity: {accepted} {retried}");
     }
     Ok(accepted)
-}
-
-pub(super) fn assert_handle(content: &Value, label: &str) -> Result<String> {
-    let handle = content
-        .get("channel_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !handle.starts_with("ch-") || handle.len() != HANDLE_LENGTH {
-        bail!("{label} did not return an opaque channel handle: {content}");
-    }
-    Ok(handle.to_string())
 }
 
 pub(super) fn now_unix() -> u64 {
@@ -230,12 +225,7 @@ mod tests {
 
     #[test]
     fn conservation_fixture_uses_the_authoritative_fee_schema() {
-        for scenario in [
-            Scenario::Smoke,
-            Scenario::Recovery,
-            Scenario::Network,
-            Scenario::Channels,
-        ] {
+        for scenario in [Scenario::Smoke, Scenario::Recovery, Scenario::Network] {
             let components = components(scenario);
             let mint = components.iter().find(|c| c["id"] == "mint").unwrap();
             let implementation = if matches!(scenario, Scenario::Smoke) {
@@ -246,6 +236,25 @@ mod tests {
             assert_eq!(mint["implementation"], implementation);
             let wallet = components.iter().find(|c| c["id"] == "wallet").unwrap();
             assert_eq!(wallet["implementation"], "nutshell-wallet");
+        }
+    }
+
+    #[test]
+    fn channel_scenario_needs_only_bitcoin_and_lightning() {
+        let components = components(Scenario::Channels);
+        let ids: std::collections::BTreeSet<_> = components
+            .iter()
+            .map(|component| component["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            ["chain", "mint-lnd", "payer-lnd", "attacker-cln"]
+                .into_iter()
+                .collect()
+        );
+        for link in links(Scenario::Channels) {
+            assert!(ids.contains(link["from"].as_str().unwrap()));
+            assert!(ids.contains(link["to"].as_str().unwrap()));
         }
     }
 }

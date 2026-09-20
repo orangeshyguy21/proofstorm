@@ -1,6 +1,6 @@
 use super::*;
+use crate::cell::workspace_fixture;
 use proofstorm_core::workspace::evidence::CapturedFile;
-use proofstorm_store::{Store, Workspace};
 use std::sync::{Arc, Mutex};
 
 struct Cluster {
@@ -9,23 +9,13 @@ struct Cluster {
     unavailable: bool,
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "one self-contained store and Kubernetes fixture"
-)]
 fn fixture() -> (
     Cells,
     WorkspaceCaptureRequest,
     TaskCapture,
     Arc<Mutex<Cluster>>,
 ) {
-    let store = Store::memory().unwrap();
-    store
-        .put_workspace(&Workspace {
-            id: "local".into(),
-            name: "local".into(),
-        })
-        .unwrap();
+    let store = workspace_fixture::store();
     store.put_principal("actor").unwrap();
     for capability in [
         Capability::CellCreate,
@@ -41,40 +31,11 @@ fn fixture() -> (
     ] {
         store.grant("local", "actor", capability).unwrap();
     }
-    let spec: proofstorm_core::CellSpec =
-        serde_json::from_str(include_str!("../../../../examples/workspace/cell.json")).unwrap();
-    store
-        .create_draft("local", "actor", "draft", &spec, "draft")
-        .unwrap();
-    let revision = store
-        .publish("local", "actor", "draft", 1, "publish")
-        .unwrap();
-    let instance = store
-        .materialize(
-            "local",
-            "actor",
-            "instance",
-            &revision.digest,
-            "materialize",
-        )
-        .unwrap();
+    let (mut cell, pod) = workspace_fixture::materialize(&store);
     store
         .create_experiment("local", "actor", "run", "instance", "run")
         .unwrap();
-    let mut cell = ProofstormCell::new(
-        &instance.resource_name,
-        proofstorm_kube::ProofstormCellSpec {
-            workspace_id: "local".into(),
-            instance_id: instance.id,
-            instance_key: instance.instance_key.clone(),
-            revision_digest: revision.digest,
-            cell: spec,
-            lock: revision.lock,
-        },
-    );
     cell.metadata.namespace = Some("system".into());
-    cell.metadata.uid = Some("cell-uid".into());
-    let pod: Pod=serde_json::from_value(json!({"metadata":{"name":"scripts-pod","namespace":instance_namespace(&instance.instance_key),"uid":"pod-uid"},"status":{"phase":"Running"}})).unwrap();
     let cluster = Arc::new(Mutex::new(Cluster {
         cell,
         pod,

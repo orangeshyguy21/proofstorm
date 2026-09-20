@@ -37,11 +37,14 @@ Transport tests require local socket permission. Production image builds and
 fresh mixed-component acceptance must pass before release; earlier prober
 measurements do not validate this migration.
 
-Wallet observations, readiness, rune bootstrap, authentication, quote recovery,
-and acceptance helpers now use Rust or shell commands. Quote recovery follows
-the pinned Nutshell wallet's explicit recovery behavior, with atomic local
-updates and rejection of concurrent changes. It does not reconstruct lost change
-signatures; the pinned upstream wallet does not implement that recovery either.
+Wallet observations, readiness, rune bootstrap, authentication, and acceptance
+helpers use Rust or native commands. Explicit wallet claims and recovery belong
+to native execution: the driver no longer exposes `claim-receive`,
+`refresh-melt`, or `pay-and-claim`, and never repairs wallet reservations by
+writing its database. Quote commands only read component-local state. Wallet
+quote observations label their source explicitly; `observe-mint-melt` reads a
+Nutshell mint's own database to supply authoritative fees. Missing fees remain
+unknown. Invoice creation, payment, and claim use native wallet commands.
 
 Nutshell configuration checks corroborate public metadata, active keyset fees and
 advertised amount limits through HTTP. Non-public settings are projections of the

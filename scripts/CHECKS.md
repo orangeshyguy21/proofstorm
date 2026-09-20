@@ -80,7 +80,13 @@ drift is a failure, not something the runner repairs.
 | `agent-clients` | Opt-in installed OpenCode/Claude MCP discovery in private homes; prerequisites must already exist; no installs, models or trust bypass |
 | `cli-progress` | Actual setup/GUI commands through a PTY, prompt animated feedback, clear line, human summaries and clean explicit JSON |
 | `installation-isolation` | Two owned installations pull their own fixture image and reject the other's digest; no external registry upload |
+| `slice5` | Native wallet funding, self-swap, invoice, payment and claim; exact fee accounting from separate wallet and mint observations; deterministic receipts and teardown |
+| `quote-composition` | Native wallet and external Lightning payments to independent quotes, exact claim state, recipient balances and selected receipt privacy |
+| `failed-melt` | Unroutable native payment leaves mint and wallet quotes unpaid, funds unspent and recipient empty; exported observations match |
+| `cross-implementation-wallet` | Native Nutshell wallet interaction with CDK and Nutshell mints, exact Nutshell fees, bounded CDK accounting without an unsupported fee claim, and Redis restart behavior |
 | `cashu-double-spend` | Real CDK/Nutshell spent-proof replay/race and exact zero-fee 64-sat accounting |
+| `channel-lifecycle` | Native Bitcoin/LND/CLN funding, peer connectivity, exact channel outpoints, circular payment balances, cooperative/force-close transactions, retry identity and exported receipts |
+| `controller-recovery` | Supervised native execution survives controller restart without replay; lost/cancelled probes and component stop/start/restart remain covered |
 | Source-free installation | Separate Linux container / Mac sandbox checks below; does not establish runtime or public download readiness |
 | Browser/native app | Manual desktop session: default-browser reuse, folder picker/cancel, vendor buttons, project handoff and MCP status; record prompts and limitations |
 | Real model | Separately authorized session, actual tool-call response and cell read-back; never inferred from MCP discovery |

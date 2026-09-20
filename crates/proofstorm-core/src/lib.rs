@@ -13,9 +13,9 @@ mod evidence;
 mod experiment;
 mod instance;
 mod model;
-mod mutation;
 mod network;
 mod operation;
+mod patch;
 mod publication;
 mod quote;
 pub mod release_policy;
@@ -74,22 +74,19 @@ pub use model::{
     CellSpec, ComponentKind, ComponentSpec, ControlClass, DatabaseRole, DependencyBinding,
     LinkKind, LinkSpec, PaymentMethod, ValidateCellRequest,
 };
-pub use mutation::{DraftMutation, apply_draft_mutation};
 pub use network::{
     MAX_NETWORK_DELAY_MS, MAX_NETWORK_JITTER_MS, MAX_NETWORK_LOSS_BASIS_POINTS,
     NetworkFaultBackend, NetworkFaultBounds, NetworkFaultDirection, NetworkFaultFeature,
     network_policy_fault_backend,
 };
 pub use operation::{CellOperation, OperationArtifact, OperationKind, OperationPhase};
+pub use patch::{CellPatch, apply_cell_patch};
 pub use publication::{
     EFFECTIVE_CONFIG_DIGEST_VERSION, LOCK_API_VERSION, LockEntry, PublishedRevision,
     ROLLOUT_DIGEST_VERSION, ResolvedLock, digest_json, publication_digest, resolve_effective_cell,
     resolve_lock,
 };
-pub use quote::{
-    WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationInput,
-    WalletQuoteObservationRole, wallet_quote_observations_from_artifact,
-};
+pub use quote::{WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationRole};
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, validate_cell};
 pub mod native;

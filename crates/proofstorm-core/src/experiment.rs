@@ -78,9 +78,6 @@ impl PrivateTransferScope {
             request.pointer(pointer).and_then(serde_json::Value::as_str) == Some(expected)
         };
         match kind {
-            OperationKind::WalletBalance => {
-                same("/wallet", &self.component) && same("/mint", &self.mint)
-            }
             OperationKind::PrivateTransfer => {
                 same("/transfer/component", &self.component)
                     && same("/transfer/reference", &self.reference)

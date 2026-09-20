@@ -71,137 +71,95 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     // Liquidity is opened between the funder and the payer only. The island
     // node is funded by nobody and peers with nobody.
-    crate::driver::liquidity_bootstrap(
-        context,
+    crate::native::bootstrap(
         &mut client,
-        json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "request_id": "failed-melt-bootstrap", "chain": "chain",
-            "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
-            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000}),
+        INSTANCE,
+        EXPERIMENT,
+        "failed-melt-bootstrap",
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
-    let bootstrap = cell::wait_operation(&mut client, "failed-melt-bootstrap", 160)?;
-    if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
-        bail!("liquidity bootstrap artifact is invalid: {bootstrap}");
-    }
 
-    for (wallet, mint, operation) in [
-        ("payer-wallet", "payer-mint", "failed-melt-init-payer"),
-        (
+    let mut native = crate::native::Session::new(&mut client, INSTANCE, EXPERIMENT);
+    native.nutshell_initialize("payer-wallet", "payer-mint", "failed-melt-init-payer")?;
+    native.nutshell_initialize(
+        "recipient-wallet",
+        "recipient-mint",
+        "failed-melt-init-recipient",
+    )?;
+    anyhow::ensure!(
+        native.nutshell_fund(
+            "payer-wallet",
+            "payer-mint",
+            "mint-lnd",
+            "failed-melt-fund",
+            FUNDED_SAT
+        )? == FUNDED_SAT,
+        "payer wallet was not funded"
+    );
+
+    let before =
+        native.nutshell_balance("payer-wallet", "payer-mint", "failed-melt-balance-before")?;
+    let quote_id = native.nutshell_invoice(
+        "recipient-wallet",
+        "recipient-mint",
+        "failed-melt-invoice",
+        INVOICE_SAT,
+    )?;
+    let invoice = native.nutshell_invoice_projection(
+        "recipient-wallet",
+        "recipient-mint",
+        "failed-melt-invoice-read",
+        &quote_id,
+        INVOICE_SAT,
+    )?;
+    // A successful CLI exit is independent of economic settlement. This pinned
+    // CLI can return zero when Lightning could not route the payment.
+    let melt = native.nutshell_melt(
+        "payer-wallet",
+        "payer-mint",
+        "failed-melt-pay",
+        expect::string(&invoice, "/payment_request")?,
+        INVOICE_SAT,
+    )?;
+    let mint = native.nutshell_mint_melt(
+        "payer-wallet",
+        "payer-mint",
+        "failed-melt-mint-observe",
+        &melt,
+    )?;
+    let receive = native.nutshell_receive(
+        "recipient-wallet",
+        "recipient-mint",
+        "failed-melt-receive-observe",
+        &quote_id,
+    )?;
+    anyhow::ensure!(
+        melt["state"] == "UNPAID" && mint["state"] == "UNPAID" && receive["state"] == "UNPAID",
+        "unroutable payment incorrectly settled or promoted its receive quote"
+    );
+    anyhow::ensure!(
+        melt["input_proof_count"] == 0 && melt["input_fee_sat"] == 0,
+        "failed zero-fee melt consumed proofs"
+    );
+    let after =
+        native.nutshell_balance("payer-wallet", "payer-mint", "failed-melt-balance-after")?;
+    anyhow::ensure!(
+        before == FUNDED_SAT && after == FUNDED_SAT,
+        "failed zero-fee melt moved value: before={before} after={after}"
+    );
+    anyhow::ensure!(
+        native.nutshell_balance(
             "recipient-wallet",
             "recipient-mint",
-            "failed-melt-init-recipient",
-        ),
-    ] {
-        crate::driver::wallet_initialize(
-            context,
-            &mut client,
-            json!({
-                "name": INSTANCE, "run_id": EXPERIMENT,
-                "request_id": operation, "wallet": wallet, "mint": mint}),
-        )?;
-        let initialized = cell::wait_operation(&mut client, operation, 160)?;
-        if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
-            bail!("{wallet} initialization failed: {initialized}");
-        }
-    }
-
-    // The funder pays the payer mint's own invoice, so the payer wallet holds
-    // real ecash. A later failure therefore cannot be blamed on an empty
-    // wallet.
-    crate::driver::wallet_fund(
-        context,
-        &mut client,
-        json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "request_id": "failed-melt-fund", "wallet": "payer-wallet", "mint": "payer-mint",
-            "payer_lightning": "mint-lnd", "amount_sat": FUNDED_SAT}),
-    )?;
-    let funded = cell::wait_operation(&mut client, "failed-melt-fund", 160)?;
-    if expect::integer(cell::artifact_content(&funded)?, "/balance_sat")? != FUNDED_SAT {
-        bail!("payer wallet was not funded: {funded}");
-    }
-
-    client.call(
-        "wallet_balance",
-        json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "request_id": "failed-melt-balance-before", "wallet": "payer-wallet", "mint": "payer-mint"}),
-    )?;
-    let balance_before = cell::wait_operation(&mut client, "failed-melt-balance-before", 160)?;
-    let before = expect::integer(cell::artifact_content(&balance_before)?, "/balance_sat")?;
-
-    crate::driver::wallet_invoice(
-        context,
-        &mut client,
-        json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "request_id": "failed-melt-invoice",
-            "wallet": "recipient-wallet", "mint": "recipient-mint",
-            "amount_sat": INVOICE_SAT, "timeout_seconds": 300}),
-    )?;
-    let invoice = cell::wait_operation(&mut client, "failed-melt-invoice", 160)?;
-    let invoice_content = cell::artifact_content(&invoice)?;
-    let mint_quote_id = expect::string(invoice_content, "/mint_quote_id")?.to_string();
-    if expect::string(invoice_content, "/quote_observations/0/state")? != "UNPAID" {
-        bail!("receive quote did not begin unpaid: {invoice}");
-    }
-
-    // The melt cannot settle: the invoice was issued by a node with no
-    // channels. The operation still succeeds, because an authoritative "did
-    // not happen" is an observation, not an infrastructure failure.
-    crate::driver::wallet_pay(
-        context,
-        &mut client,
-        json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "request_id": "failed-melt-pay", "mint_quote_id": mint_quote_id,
-            "wallet": "payer-wallet", "mint": "payer-mint",
-            "recipient_wallet": "recipient-wallet", "recipient_mint": "recipient-mint"}),
-    )?;
-    let paid = cell::wait_operation(&mut client, "failed-melt-pay", 200)?;
-    if expect::string(&paid, "/phase")? != "succeeded" {
-        bail!("an unsettled melt must still be a completed observation: {paid}");
-    }
-    let content = cell::artifact_content(&paid)?.clone();
-
-    if content.get("phase").is_some() {
-        bail!("wallet-native observation was polluted with a Proofstorm phase: {content}");
-    }
-    if expect::string(&content, "/quote_observations/0/role")? != "payment_melt"
-        || expect::string(&content, "/quote_observations/0/direction")? != "pay"
-        || expect::string(&content, "/quote_observations/0/state")? != "UNPAID"
-        || expect::string(&content, "/quote_observations/1/role")? != "payment_receive"
-        || expect::string(&content, "/quote_observations/1/direction")? != "receive"
-        || expect::string(&content, "/quote_observations/1/state")? != "UNPAID"
-    {
-        bail!("failed melt did not preserve distinct native observations: {content}");
-    }
-
-    client.call(
-        "wallet_balance",
-        json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "request_id": "failed-melt-balance-after", "wallet": "payer-wallet", "mint": "payer-mint"}),
-    )?;
-    let balance_after = cell::wait_operation(&mut client, "failed-melt-balance-after", 160)?;
-    let after = expect::integer(cell::artifact_content(&balance_after)?, "/balance_sat")?;
-    if before != FUNDED_SAT || after != FUNDED_SAT {
-        bail!("a failed melt moved value: before={before} after={after} in {content}");
-    }
-
-    // The recipient's quote must never be promoted by a payment that did not
-    // happen. This is the specific corruption the gate exists to prevent.
-    let quote = crate::driver::quote_status(
-        context,
-        &mut client,
-        json!({"name": INSTANCE, "wallet": "recipient-wallet", "mint": "recipient-mint", "direction": "receive", "quote_id": mint_quote_id}),
-    )?;
-    if quote.get("phase").is_some()
-        || expect::string(&quote, "/last_observation/state")? != "UNPAID"
-    {
-        bail!("an unsettled melt promoted or reinterpreted the receive quote: {quote}");
-    }
+            "failed-melt-recipient-balance"
+        )? == 0,
+        "unpaid recipient holds value"
+    );
 
     let closed_experiment = client.call(
         "run_finish",
@@ -215,20 +173,28 @@ pub fn run(context: &GateContext) -> Result<()> {
             "run_id": EXPERIMENT,
             "include_oracle_artifacts": false,
 
-            "artifact_operation_ids": ["failed-melt-pay"]
+            "artifact_operation_ids": ["failed-melt-pay", "failed-melt-pay-observe", "failed-melt-mint-observe", "failed-melt-receive-observe"]
         }),
     )?;
     if !expect::string(&evidence, "/digest")?.starts_with("sha256:") {
         bail!("failed melt evidence was not exported: {evidence}");
     }
-    let exported = expect::array(&evidence, "/content/artifacts")?
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("evidence carries no pay artifact"))?
-        .clone();
-    if expect::string(&exported, "/artifact/content/quote_observations/0/state")? != "UNPAID"
-        || exported.pointer("/artifact/content/phase").is_some()
-    {
-        bail!("the exported evidence disagrees with the observation: {exported}");
+    for (id, observed) in [
+        ("failed-melt-pay-observe", &melt),
+        ("failed-melt-mint-observe", &mint),
+        ("failed-melt-receive-observe", &receive),
+    ] {
+        let exported = expect::array(&evidence, "/content/artifacts")?
+            .iter()
+            .find(|artifact| artifact["operation_id"] == id)
+            .ok_or_else(|| anyhow::anyhow!("evidence omitted {id}"))?;
+        let receipt = exported
+            .pointer("/artifact/content")
+            .ok_or_else(|| anyhow::anyhow!("evidence has no native receipt"))?;
+        anyhow::ensure!(
+            crate::native::json_content(receipt)? == *observed,
+            "exported observation differs from {id}"
+        );
     }
 
     client.call("cell_remove", json!({"name": INSTANCE}))?;

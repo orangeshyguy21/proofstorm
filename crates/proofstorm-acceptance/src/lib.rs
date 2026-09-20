@@ -35,7 +35,6 @@
 
 pub mod cell;
 pub mod client;
-mod conservation;
 mod driver;
 pub mod gate;
 pub mod gates;

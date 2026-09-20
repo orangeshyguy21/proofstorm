@@ -26,6 +26,7 @@ pub mod journal;
 pub mod lifecycle;
 pub mod observer;
 pub mod platform;
+pub mod query;
 pub mod release;
 pub mod runtime;
 pub mod self_update;

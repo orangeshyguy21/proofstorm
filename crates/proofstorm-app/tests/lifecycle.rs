@@ -1,3 +1,12 @@
+#[path = "lifecycle/action_submission.rs"]
+mod action_submission;
+
+#[path = "lifecycle/native_submission.rs"]
+mod native_submission;
+
+#[path = "lifecycle/plan_preparation.rs"]
+mod plan_preparation;
+
 use http::{Request, Response};
 use kube::client::Body;
 use proofstorm_app::{Runtime, cell::Cells};
@@ -25,6 +34,7 @@ struct Cluster {
     deletion_race: Option<DeletionRace>,
     delete_failure: Option<u16>,
     after_cell_delete: Option<ClusterHook>,
+    after_private_access: Option<Box<dyn FnOnce() + Send>>,
 }
 
 type ClusterHook = Box<dyn FnOnce(&mut Cluster) + Send>;
@@ -78,6 +88,9 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                         }
                         if value["metadata"].get("uid").is_none() { value["metadata"]["uid"]=json!(format!("uid-{}",value["metadata"]["name"].as_str().unwrap())); }
                         cluster.objects.insert(path,value.clone());
+                        if value["metadata"]["annotations"][proofstorm_core::private_io::PRIVATE_ACCESS_ANNOTATION].is_string() {
+                            if let Some(hook) = cluster.after_private_access.take() { hook(); }
+                        }
                         (200,value)
                     }
                 },
@@ -1265,6 +1278,13 @@ async fn workspace_lifecycle_and_fault_grants_check_capabilities_even_through_na
             .await
             .is_err()
     );
+    let explicit = native_submission::request(
+        &cells.resolve("demo").unwrap().instance_id,
+        "scripts",
+        native.clone(),
+        "explicit-denied",
+    );
+    assert!(cells.execute_native(explicit.clone()).await.is_err());
     store
         .grant("local", "developer", Capability::ComponentControl)
         .unwrap();
@@ -1280,6 +1300,7 @@ async fn workspace_lifecycle_and_fault_grants_check_capabilities_even_through_na
     store
         .grant("local", "developer", Capability::NetworkHeal)
         .unwrap();
+    let explicit_operation = cells.execute_native(explicit).await.unwrap();
     let operation = cells
         .exec("demo", "scripts", native, "allowed")
         .await
@@ -1297,6 +1318,19 @@ async fn workspace_lifecycle_and_fault_grants_check_capabilities_even_through_na
             .as_str()
             .unwrap()
             .starts_with("sha256:")
+    );
+    let explicit_action = cluster
+        .lock()
+        .unwrap()
+        .objects
+        .values()
+        .find(|value| value["spec"]["operationId"] == explicit_operation.id)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        explicit_action["metadata"]["annotations"]
+            [proofstorm_core::workspace::control::GRANT_ANNOTATION],
+        value["metadata"]["annotations"][proofstorm_core::workspace::control::GRANT_ANNOTATION],
     );
     let self_control: proofstorm_core::workspace::WorkspaceRequest = serde_json::from_value(json!({"kind":"task","request":{"action":"start","task_id":"self-stop","script":"true","control":{"lifecycle":["scripts"]}}})).unwrap();
     assert!(

@@ -1,5 +1,5 @@
 //! Passive catalog discovery, shared by MCP and HTTP. Search never scans configuration or logs.
-use crate::Error;
+use crate::{Error, query};
 use proofstorm_core::{CatalogEntry, CatalogResponse, ControlClass, digest_json};
 use proofstorm_view::{CatalogListRequest, CatalogPage};
 use serde_json::{Value, json};
@@ -93,15 +93,8 @@ fn list_scoped_with_limits(
     scope: &impl serde::Serialize,
 ) -> Result<CatalogPage, Error> {
     validate(query)?;
-    let pattern = regex::RegexBuilder::new(&if query.regex {
-        query.query.clone()
-    } else {
-        regex::escape(&query.query)
-    })
-    .case_insensitive(query.case_insensitive)
-    .size_limit(1 << 20)
-    .build()
-    .map_err(|e| Error::problem("catalog_query_invalid", e.to_string()))?;
+    let pattern = query::pattern(&query.query, query.regex, query.case_insensitive)
+        .map_err(|error| Error::problem("catalog_query_invalid", error.message))?;
     let catalog_digest = digest_json(catalog);
     let mut selectors = query.clone();
     selectors.cursor = None;
@@ -153,44 +146,31 @@ fn list_scoped_with_limits(
         } else if query.fields.is_empty() {
             value
         } else {
-            query
-                .fields
-                .iter()
-                .map(|path| {
-                    (
-                        path.clone(),
-                        value.pointer(path).cloned().unwrap_or(Value::Null),
-                    )
-                })
-                .collect::<serde_json::Map<_, _>>()
-                .into()
+            query::project(&value, &query.fields)
         };
-        result.items.push(selected);
-        result.next_cursor =
-            (index + 1 < entries.len()).then(|| format!("{identity}:{}", index + 1));
-        let structured_size = serde_json::to_vec(&result)
-            .map_err(|e| Error::failure(e.to_string(), None))?
-            .len();
-        if wire_size(&result)? > byte_limit || structured_size > structured_byte_limit {
-            result.items.pop();
+        if !query::push_bounded(
+            &mut result,
+            selected,
+            (index + 1 < entries.len()).then(|| format!("{identity}:{}", index + 1)),
+            |page| (&mut page.items, &mut page.next_cursor),
+            |page| {
+                let structured_size = serde_json::to_vec(page)?.len();
+                query::wire_size(page)
+                    .map(|size| size <= byte_limit && structured_size <= structured_byte_limit)
+            },
+        )
+        .map_err(|error| Error::failure(error.to_string(), None))?
+        {
             if result.items.is_empty() {
                 return Err(Error::problem(
                     "catalog_response_too_large",
                     "Select scan=true or smaller fields",
                 ));
             }
-            result.next_cursor = Some(format!("{identity}:{index}"));
             break;
         }
     }
     Ok(result)
-}
-
-fn wire_size(value: &impl serde::Serialize) -> Result<usize, Error> {
-    let value = serde_json::to_value(value).map_err(|e| Error::failure(e.to_string(), None))?;
-    serde_json::to_vec(&rmcp::model::CallToolResult::structured(value))
-        .map(|bytes| bytes.len())
-        .map_err(|e| Error::failure(e.to_string(), None))
 }
 
 fn cursor_error() -> Error {
@@ -201,25 +181,13 @@ fn cursor_error() -> Error {
 }
 
 fn validate(query: &CatalogListRequest) -> Result<(), Error> {
-    if query.query.len() > 4096
-        || query.fields.len() > 32
+    if query.query.len() > query::MAX_QUERY_BYTES
+        || query::validate_fields(&query.fields).is_err()
         || query.scan && !query.fields.is_empty()
         || query
             .cursor
             .as_ref()
             .is_some_and(|cursor| cursor.len() > 256)
-        || query.fields.iter().any(|p| {
-            if p.len() > 512 || !p.is_empty() && !p.starts_with('/') {
-                return true;
-            }
-            let mut chars = p.chars();
-            while let Some(c) = chars.next() {
-                if c == '~' && !matches!(chars.next(), Some('0' | '1')) {
-                    return true;
-                }
-            }
-            false
-        })
     {
         return Err(Error::problem(
             "catalog_query_invalid",
@@ -351,6 +319,49 @@ mod tests {
             &entry,
             &query(json!({"support_lifecycles":["preferred","supported"]}))
         ));
+    }
+
+    #[test]
+    fn byte_limited_pages_preserve_each_entry_and_the_rejected_items_continuation() {
+        let mut catalog = default_catalog().clone();
+        let template = catalog.entries[0].clone();
+        catalog.entries = (0..4)
+            .map(|index| {
+                let mut entry = template.clone();
+                entry.version = format!("preview-{index}");
+                entry.description = "雪\"\\\n".repeat(200);
+                entry
+            })
+            .collect();
+        let mut request = query(json!({"limit":1,"fields":["/version","/description"]}));
+        let single = list(&catalog, &request, "linux/arm64", 32 * 1024).unwrap();
+        let budget = query::wire_size(&single).unwrap();
+        request.limit = 50;
+        let mut versions = Vec::new();
+        loop {
+            let page = list(&catalog, &request, "linux/arm64", budget).unwrap();
+            assert_eq!(page.matched_count, 4);
+            assert_eq!(page.items.len(), 1);
+            assert!(query::wire_size(&page).unwrap() <= budget);
+            let version = page.items[0]["/version"].as_str().unwrap().to_owned();
+            assert!(!versions.contains(&version), "pagination must advance");
+            versions.push(version);
+            request.cursor = page.next_cursor;
+            if request.cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(
+            versions,
+            ["preview-0", "preview-1", "preview-2", "preview-3"]
+        );
+        assert_eq!(
+            list(&catalog, &request, "linux/arm64", 1)
+                .unwrap_err()
+                .details
+                .unwrap()["code"],
+            "catalog_response_too_large"
+        );
     }
 
     #[test]

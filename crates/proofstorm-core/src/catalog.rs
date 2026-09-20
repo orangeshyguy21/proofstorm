@@ -1407,16 +1407,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
         "lnd" => vec![runtime_endpoint(
             "component",
             "lightning",
-            &[
-                "channel_open",
-                "channel_policy_set",
-                "component_logs",
-                "liquidity_bootstrap",
-                "node_restart",
-                "peer_connect",
-                "reachability_oracle",
-                "wallet_fund",
-            ],
+            &["component_logs", "node_restart", "reachability_oracle"],
             &[
                 "live lncli uses --network=regtest --lnddir=/home/lnd/.lnd. Native addinvoice --amt=<sat> uses output mode lnd_invoice: validated payment_request/payment_hash plus amount_msat, currency, expires_at_unix; raw output stays private. Pay with payinvoice --force --json and json_fields status,value_sat; lookupinvoice --rhash <payment_hash> with json_fields state,settled. Require successful native exit and projection, verify intended amount/network/expiry before payment; do not grep invoice output.",
             ],
@@ -1424,32 +1415,13 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
         "cln" => vec![runtime_endpoint(
             "component",
             "lightning",
-            &[
-                "channel_open",
-                "channel_policy_set",
-                "component_logs",
-                "node_restart",
-                "peer_connect",
-                "reachability_oracle",
-            ],
-            &[
-                "liquidity_bootstrap and wallet_fund currently require an LND endpoint",
-                "live lightning-cli uses --network=regtest --lightning-dir=/home/cln/.lightning",
-            ],
+            &["component_logs", "node_restart", "reachability_oracle"],
+            &["live lightning-cli uses --network=regtest --lightning-dir=/home/cln/.lightning"],
         )],
         "cdk" | "nutshell" => vec![runtime_endpoint(
             "component",
             "mint",
-            &[
-                "component_logs",
-                "conservation_oracle",
-                "reachability_oracle",
-                "wallet_balance",
-                "wallet_fund",
-                "wallet_initialize",
-                "wallet_invoice",
-                "wallet_pay",
-            ],
+            &["component_logs", "reachability_oracle"],
             &[if implementation == "cdk" {
                 CDK_MANAGEMENT
             } else {
@@ -1460,19 +1432,8 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             runtime_endpoint(
                 "component",
                 "mint",
-                &[
-                    "component_logs",
-                    "conservation_oracle",
-                    "reachability_oracle",
-                    "wallet_balance",
-                    "wallet_initialize",
-                    "wallet_invoice",
-                    "wallet_pay",
-                ],
-                &[
-                    CDK_MANAGEMENT,
-                    "wallet_fund is unavailable because the installed embedded-LDK driver cannot provision an inbound Lightning route",
-                ],
+                &["component_logs", "reachability_oracle"],
+                &[CDK_MANAGEMENT],
             ),
             runtime_endpoint(
                 "ldk-node",
@@ -1495,14 +1456,14 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
         "cocod-wallet" => vec![runtime_endpoint(
             "component",
             "wallet",
-            &["wallet_balance"],
+            &[],
             &[
                 "Experimental commit pin; no default version. Native cocod CLI and authenticated loopback HTTP are the mutation surface.",
                 "COCOD_URL=http://127.0.0.1:62626 makes clients strictly client-only. Daemon runs in foreground under native exclusive state lease. Never start another daemon in a Job or forensics pod.",
                 "HOME=/wallet; private state /wallet/.cocod; credentials/current/client contains the administrative bearer. Initialization/recovery output includes mnemonic: use private execution output.",
                 "This pin's initialize CLI/API cannot select a mint. Initialize with a private passphrase (keeps session stopped), configure mintUrl in its native config.json while the protected session is stopped, restart the component, then explicitly start the protected session. Never use its public default mint in a cell.",
                 "Read catalog and cocod subcommand help first. Prefer direct private payment invocation and independent recipient settlement plus passive balances. No invented parser defaults; failure is not rollback.",
-                "wallet_balance is a read-only SQLite transaction over exact mint/sat proof state. balance_sat is unreserved ready proofs; reserved_sat is reserved ready proofs; inflight_sat is a distinct local category. The native /balance endpoint returns ready total, including reservations. Neither is a mint-side proof-state oracle.",
+                "For a passive observation, execute /opt/proofstorm/driver observe cocod-wallet through cell_exec with PROOFSTORM_DATABASE=/wallet/.cocod/coco.db, PROOFSTORM_WALLET=<component>, PROOFSTORM_MINT=<mint-component>, and PROOFSTORM_MINT_URL=<mint-url>. This reads exact mint/sat proof state in a read-only SQLite transaction. balance_sat is unreserved ready proofs; reserved_sat is reserved ready proofs; inflight_sat is a distinct local category. The native /balance endpoint returns ready total, including reservations. Neither is a mint-side proof-state oracle.",
                 "Health means process reachability, not initialization or running session. Protected sessions remain stopped across restart. NPC external traffic is blocked by the cell network policy; NPC is outside this checkpoint.",
                 "Observe native status directly with argv [cocod,status] and json_fields selecting seedAccess.state, seedAccess.requiresPassphrase, cocoSession.state. Fixed enums/booleans are validated; null seedAccess produces null leaves for an uninitialized wallet. Use argv [cocod,health] with json_fields field status. No raw status/error output or custom status parser is needed. API reference: /opt/coco/packages/cocod/docs/API.md; structured recovery response: private mnemonic field.",
                 "Use native cocod receive bolt11 <sat> with output mode bolt11. It validates the entire invoice-only response and exposes payment_request/payment_hash, amount_msat, currency, expires_at_unix; raw streams stay private. Check exit_code 0 and projection_succeeded, then intended amount/network/expiry before relaying payment_request as a separate native payer argument. Do not grep invoice output. This public invoice projection is not for spendable Cashu tokens.",
@@ -1511,24 +1472,15 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
         "cdk-cli-wallet" => vec![runtime_endpoint(
             "component",
             "wallet",
-            &["component_logs", "wallet_balance"],
+            &["component_logs"],
             &[
-                "Native entrypoint: cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive --help. Set --work-dir /wallet/cdk on EVERY native invocation. SQLite and sat are the installed observation contract. Native commands, including balance, may recover incomplete sagas; use wallet_balance for passive wallet-local observations. Initialize with the native balance command before observing an empty database. A failed melt is not a rollback: completed preparation swaps can charge input fees even when payment fails. Reconcile passive balances and quote/recipient state before a new attempt. Reuse the same operation ID and idempotency key to retrieve an existing execution, not a new CLI mutation. Use native mint/melt commands. In this pinned release, mint-pending checks pending proofs, not paid mint-quote issuance despite its help text. Resume a paid quote with mint <url> --quote-id <id>, then verify the passive balance; command success alone does not prove issuance. Typed wallet mutations, quote recovery and conservation are unavailable. Initial image is Linux arm64 only. Mint compatibility requires live evidence for each claimed combination.",
+                "Native entrypoint: cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive --help. Set --work-dir /wallet/cdk on EVERY native invocation. SQLite and sat are the installed observation contract. Native commands, including balance, may recover incomplete sagas; use cell_exec with /opt/proofstorm/driver observe cdk-cli-wallet for passive wallet-local observations. Set PROOFSTORM_DATABASE=/wallet/cdk/cdk-cli.sqlite, PROOFSTORM_WALLET=<component>, PROOFSTORM_MINT=<mint-component>, and PROOFSTORM_MINT_URL=<mint-url>. Initialize with the native balance command before observing an empty database. A failed melt is not a rollback: completed preparation swaps can charge input fees even when payment fails. Reconcile passive balances and quote/recipient state before a new attempt. Reuse the same operation ID and idempotency key to retrieve an existing execution, not a new CLI mutation. Use native mint/melt commands. In this pinned release, mint-pending checks pending proofs, not paid mint-quote issuance despite its help text. Resume a paid quote with mint <url> --quote-id <id>, then verify the passive balance; command success alone does not prove issuance. Typed wallet mutations, quote recovery and conservation are unavailable. Initial image is Linux arm64 only. Mint compatibility requires live evidence for each claimed combination.",
             ],
         )],
         "nutshell-wallet" => vec![runtime_endpoint(
             "component",
             "wallet",
-            &[
-                "component_logs",
-                "conservation_oracle",
-                "wallet_balance",
-                "wallet_fund",
-                "wallet_initialize",
-                "wallet_invoice",
-                "wallet_melt_quote_refresh",
-                "wallet_pay",
-            ],
+            &["component_logs"],
             &[
                 "Native Nutshell CLI entrypoint: export HOME=/wallet; cd /app; cashu -w wallet --help. Use the default internal name wallet (-w wallet) and set the mint URL explicitly on every command. Proofstorm component IDs such as alice and bob identify separate persistent volumes, not Nutshell wallet names. All native and typed operations use /wallet/.cashu/wallet/wallet.sqlite3. Named wallets are unsupported in this pinned release because receive and balance disagree about their database paths. Existing named-wallet state is not migrated automatically; recover it separately before replacing a validation cell. Use cashu -w wallet -h <mint-url> balance to read the native balance. Wallet-local fee_paid uses legacy accounting, not authoritative Lightning fees; inspect mint/backend evidence. Account separately for input fees, including preparatory swaps",
             ],
@@ -1967,7 +1919,7 @@ mod tests {
             }
         );
         let controls = &entry.runtime_endpoints[0].controls;
-        assert!(controls.contains("wallet_balance"));
+        assert!(!controls.contains("wallet_balance"));
         assert!(controls.contains("component_exec_live"));
         assert!(!controls.contains("wallet_fund"));
         assert!(!controls.contains("wallet_pay"));
@@ -2007,7 +1959,7 @@ mod tests {
         );
         assert_eq!(entry.support_lifecycle, SupportLifecycle::Experimental);
         let controls = &entry.runtime_endpoints[0].controls;
-        assert!(controls.contains("wallet_balance"));
+        assert!(!controls.contains("wallet_balance"));
         assert!(controls.contains("component_exec_live"));
         assert!(!controls.contains("wallet_initialize"));
         assert!(!controls.contains("wallet_fund"));

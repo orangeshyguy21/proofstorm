@@ -74,7 +74,7 @@ async fn run() -> Result<()> {
         }
         [command, mode] if command == "quote" => {
             let config = proofstorm_driver::quote::Config::environment();
-            proofstorm_driver::quote::run(mode, &config).await?
+            proofstorm_driver::quote::observe(mode, &config)?
         }
         [command, mode, arguments @ ..] if command == "coco" => {
             proofstorm_driver::coco::Coco::new(

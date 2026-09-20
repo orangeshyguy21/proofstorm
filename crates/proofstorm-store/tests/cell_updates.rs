@@ -1,46 +1,11 @@
-use proofstorm_core::{
-    Capability, CellSpec, CellUpdateTarget, OperationKind, OperationPhase, PublishedRevision,
-};
-use proofstorm_store::{Store, Workspace};
+mod support;
+
+use proofstorm_core::{Capability, CellUpdateTarget, OperationKind, OperationPhase};
+use proofstorm_store::Store;
 use serde_json::json;
 
-fn seed(store: &Store) {
-    store
-        .put_workspace(&Workspace {
-            id: "w".into(),
-            name: "w".into(),
-        })
-        .unwrap();
-    store.put_principal("agent").unwrap();
-    for cap in [
-        Capability::CellCreate,
-        Capability::CellRead,
-        Capability::CellEdit,
-        Capability::CellPublish,
-        Capability::CellMaterialize,
-        Capability::CellStatus,
-        Capability::CellClose,
-        Capability::CatalogRead,
-        Capability::ExperimentCreate,
-        Capability::ExperimentRead,
-        Capability::CellOperate,
-        Capability::ComponentExecLive,
-        Capability::ArtifactRead,
-    ] {
-        store.grant("w", "agent", cap).unwrap();
-    }
-}
-fn cell(ids: &[&str]) -> CellSpec {
-    serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"edit-test","components":ids.iter().map(|id|json!({"id":id,"kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}})).collect::<Vec<_>>(),"links":[]})).unwrap()
-}
-fn publish(store: &Store, id: &str, spec: &CellSpec) -> PublishedRevision {
-    store
-        .create_draft("w", "agent", id, spec, &format!("{id}-draft"))
-        .unwrap();
-    store
-        .publish("w", "agent", id, 1, &format!("{id}-publish"))
-        .unwrap()
-}
+use support::{cell, publish, seed};
+
 #[test]
 fn edits_preserve_identity_reject_stale_plans_and_never_replay_old_configuration() {
     let dir = tempfile::tempdir().unwrap();

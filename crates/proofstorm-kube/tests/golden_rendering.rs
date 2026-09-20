@@ -417,6 +417,7 @@ fn assert_component_security(rendered: &RenderedComponent) {
         );
         let pod = workload.pointer("/spec/template/spec").expect("Pod spec");
         assert_eq!(pod["automountServiceAccountToken"], json!(false));
+        assert_eq!(pod["enableServiceLinks"], json!(false));
         assert_eq!(pod["serviceAccountName"], json!("proofstorm-workload"));
         assert_eq!(pod["securityContext"]["runAsNonRoot"], json!(true));
         assert_eq!(

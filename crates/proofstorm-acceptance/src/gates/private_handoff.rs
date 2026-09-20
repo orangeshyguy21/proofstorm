@@ -13,7 +13,6 @@ const EXPERIMENT: &str = "cocod-wallet-experiment";
 const RECIPIENT_CAPABILITIES: &[&str] = &[
     "catalog.read",
     "component.exec_live",
-    "wallet.control",
     "experiment.read",
     "artifact.read",
     "action.cancel",
@@ -68,21 +67,21 @@ fn delegate(
     client: &mut McpClient,
     directory: &Path,
     principal: &str,
-    session: &str,
+    grant_id: &str,
     wallet: &str,
     reference: &str,
     receive: &Value,
 ) -> Result<()> {
     let value = client.call(
         "private_access_issue",
-        json!({"request_id":session,"name":INSTANCE,"recipient_principal_id":principal,
-        "recipient_grant_id":session,"component":wallet,"mint":"mint","reference":reference,
+        json!({"request_id":grant_id,"name":INSTANCE,"recipient_principal_id":principal,
+        "recipient_grant_id":grant_id,"component":wallet,"mint":"mint","reference":reference,
         "receive":receive}),
     )?;
     if value["principal_id"] != principal || value["scope"]["reference"] != reference {
-        bail!("recipient session binding differs");
+        bail!("recipient grant binding differs");
     }
-    save(directory, session, &value)
+    save(directory, grant_id, &value)
 }
 
 #[allow(
@@ -107,7 +106,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
     for (
         tag,
         principal,
-        session,
+        grant_id,
         source,
         destination,
         amount,
@@ -185,7 +184,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             parent,
             directory,
             principal,
-            session,
+            grant_id,
             destination,
             &reference,
             &json!({"argv":receive,"timeout_seconds":60,"input":input}),
@@ -196,10 +195,10 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             directory,
             &id("sender-balance-denied"),
             "access_denied",
-            "wallet_balance",
+            "cell_exec",
             scoped(
                 &id("sender-balance-denied"),
-                json!({"wallet":source,"mint":"mint"}),
+                crate::native::wallet_request("cocod-wallet", source, "mint")?,
             ),
         )?;
         refused(
@@ -217,11 +216,9 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             parent,
             directory,
             &id("bind"),
-            json!({"transferMethod":"handoff","component":source,"reference":reference,"recipientGrantId":session}),
+            json!({"transferMethod":"handoff","component":source,"reference":reference,"recipientGrantId":grant_id}),
         )?;
-        if handed["recipient"]["principal"] != principal
-            || handed["recipient"]["session"] != session
-        {
+        if handed["recipient"] != json!({"principal":principal,"authority":grant_id}) {
             bail!("custody recipient binding differs");
         }
         let mut substituted = receive.clone();
@@ -239,7 +236,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
             "private_payload":{"kind":"consume","reference":reference,"input":input}}),
             ),
         )?;
-        let read = recipient.call("private_access_read", json!({"grant_id":session}))?;
+        let read = recipient.call("private_access_read", json!({"grant_id":grant_id}))?;
         save(directory, &id("recipient-scope"), &read)?;
         let delivered = child_operation(
             recipient,
@@ -269,27 +266,32 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         {
             bail!("delegated native receive contract failed");
         }
-        let balance = child_operation(
-            recipient,
+        let implementation = if destination == "wallet-b" {
+            "cdk-cli-wallet"
+        } else {
+            "cocod-wallet"
+        };
+        let balance = crate::native::json_content(&operation(
+            parent,
             directory,
+            "cell_exec",
             &id("balance"),
-            "wallet_balance",
-            json!({"wallet":destination,"mint":"mint"}),
-        )?;
+            crate::native::wallet_request(implementation, destination, "mint")?,
+        )?)?;
         if balance["balance_sat"] != expected {
             bail!("delegated {amount} sat receipt did not reach expected balance");
         }
-        let released = parent.call("private_access_revoke", json!({"grant_id":session}))?;
+        let released = parent.call("private_access_revoke", json!({"grant_id":grant_id}))?;
         save(directory, &id("revoke"), &released)?;
         refused(
             recipient,
             directory,
-            &id("revoked-balance-denied"),
+            &id("revoked-status-denied"),
             "access_denied",
-            "wallet_balance",
+            "private_transfer",
             scoped(
-                &id("revoked-balance-denied"),
-                json!({"wallet":destination,"mint":"mint"}),
+                &id("revoked-status-denied"),
+                json!({"transfer":{"transferMethod":"status","component":destination,"reference":reference}}),
             ),
         )?;
         transfer(
@@ -308,20 +310,20 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
         json!({"argv":["cdk-cli","--work-dir","/wallet/cdk","--unit","sat","--non-interactive","check-pending"]}),
         0,
     )?;
-    let final_cdk = operation(
+    let final_cdk = crate::native::json_content(&operation(
         parent,
         directory,
-        "wallet_balance",
+        "cell_exec",
         "handoff-cdk-final",
-        json!({"wallet":"wallet-b","mint":"mint"}),
-    )?;
-    let final_coco = operation(
+        crate::native::wallet_request("cdk-cli-wallet", "wallet-b", "mint")?,
+    )?)?;
+    let final_coco = crate::native::json_content(&operation(
         parent,
         directory,
-        "wallet_balance",
+        "cell_exec",
         "handoff-coco-final",
-        json!({"wallet":"wallet-a","mint":"mint"}),
-    )?;
+        crate::native::wallet_request("cocod-wallet", "wallet-a", "mint")?,
+    )?)?;
     if final_cdk["balance_sat"] != 500
         || final_coco["balance_sat"] != 4500
         || final_cdk["pending_sat"] != 0
@@ -335,7 +337,7 @@ pub fn exercise(context: &GateContext, parent: &mut McpClient, directory: &Path)
     save(
         directory,
         "handoff-summary",
-        &json!({"principals":["experiment-agent","recipient-cdk","recipient-coco"],"directions":[200,100],"final_balances":[4500,500],"transport":"infrastructure_relay","scope":"one transfer and wallet per recipient session"}),
+        &json!({"principals":["experiment-agent","recipient-cdk","recipient-coco"],"directions":[200,100],"final_balances":[4500,500],"transport":"infrastructure_relay","scope":"one transfer and wallet per recipient grant"}),
     )
 }
 

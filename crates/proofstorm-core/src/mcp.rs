@@ -130,7 +130,6 @@ pub const TOOLS: &[PublicTool] = &[
         false,
         [ExperimentRead, ArtifactRead]
     ),
-    tool!("wallet_balance", true, [WalletControl]),
 ];
 
 #[must_use]

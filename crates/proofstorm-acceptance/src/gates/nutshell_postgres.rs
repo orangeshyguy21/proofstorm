@@ -8,7 +8,7 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
+use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect, postgres};
 
 const INSTANCE: &str = "nutshell-postgres-instance";
 const MARKER: &str = "nutshell-persistent";
@@ -30,15 +30,6 @@ fn cell_document() -> Value {
         ],
         "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
     })
-}
-
-fn psql(context: &GateContext, namespace: &str, statement: &str) -> Result<String> {
-    let script = format!(
-        "PGPASSWORD=\"$POSTGRES_PASSWORD\" psql -At -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -c \"{statement}\""
-    );
-    context
-        .kubectl
-        .exec(namespace, "statefulset/database", &["sh", "-c", &script])
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
@@ -140,22 +131,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("live Nutshell PostgreSQL settings differ: {settings}");
     }
 
-    let seed = format!(
-        "PGPASSWORD=\"$POSTGRES_PASSWORD\" psql -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" \
-         -c \"CREATE TABLE IF NOT EXISTS proofstorm_acceptance (id integer primary key, marker text not null);\" \
-         -c \"INSERT INTO proofstorm_acceptance VALUES (1, '{MARKER}') ON CONFLICT (id) DO UPDATE SET marker = EXCLUDED.marker;\""
-    );
-    context
-        .kubectl
-        .exec(namespace, "statefulset/database", &["sh", "-c", &seed])?;
-
-    let tables: u64 = psql(
-        context,
-        namespace,
-        "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';",
-    )?
-    .trim()
-    .parse()?;
+    postgres::seed_sentinel(true, &context.kubectl, namespace, MARKER)?;
+    let tables = postgres::schema_table_count(&context.kubectl, namespace)?;
     if tables < 2 {
         bail!("Nutshell did not initialize its PostgreSQL schema: {tables} tables");
     }
@@ -183,23 +160,11 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("controller restart rotated the Nutshell private key");
     }
 
-    context
-        .kubectl
-        .rollout_restart(namespace, "statefulset/database")?;
+    postgres::restart_database(true, &context.kubectl, namespace)?;
     context
         .kubectl
         .rollout_restart(namespace, "deployment/mint")?;
-    let persisted = psql(
-        context,
-        namespace,
-        "SELECT marker FROM proofstorm_acceptance WHERE id = 1;",
-    )?;
-    if persisted.trim() != MARKER {
-        bail!(
-            "PostgreSQL state did not survive restart: {:?}",
-            persisted.trim()
-        );
-    }
+    postgres::verify_sentinel(true, &context.kubectl, namespace, MARKER)?;
 
     cell::wait_phase(&mut client, INSTANCE, "ready", 80, Duration::from_secs(3))?;
 

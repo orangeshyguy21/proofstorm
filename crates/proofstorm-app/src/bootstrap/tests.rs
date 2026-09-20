@@ -1,6 +1,44 @@
 use super::*;
 use std::fs;
 
+#[test]
+fn deployment_refuses_retired_actions_before_replacing_runtime_schemas() {
+    let mut resources = json!({"items":[{"metadata":{"name":"old-action"},"spec":{
+        "cellName":"cell", "workspaceId":"workspace", "instanceId":"instance",
+        "instanceKey":"key", "experimentId":"run", "sessionId":"session",
+        "principalId":"actor", "sequence":1, "operationId":"operation",
+        "requestDigest":"digest", "capability":"component.exec_live", "acceptedAtUnix":0,
+        "action":{"kind":"component_exec_live","parameters":{"component":"chain","script":"true","timeoutSeconds":10}}
+    }}]});
+    assert!(
+        validate_existing_specs::<proofstorm_kube::ProofstormCellActionSpec>(&resources).is_ok()
+    );
+    for kind in [
+        "channel_open",
+        "wallet_balance",
+        "wallet_initialize",
+        "wallet_fund",
+        "wallet_round_trip",
+        "wallet_quote_claim",
+        "wallet_melt_quote_refresh",
+        "wallet_invoice",
+        "wallet_pay",
+        "conservation_oracle",
+    ] {
+        resources["items"][0]["spec"]["action"] = json!({"kind":kind,"parameters":{}});
+        let error =
+            validate_existing_specs::<proofstorm_kube::ProofstormCellActionSpec>(&resources)
+                .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("old-action") && message.contains("before upgrading"));
+        assert!(message.contains(&format!("unknown variant `{kind}`")));
+    }
+    assert!(
+        validate_existing_specs::<proofstorm_kube::ProofstormCellActionSpec>(&json!({"items":[]}))
+            .is_ok()
+    );
+}
+
 fn sample_lock() -> proofstorm_core::ResolvedLock {
     let spec = serde_json::from_str::<proofstorm_core::CellSpec>(include_str!(
         "../../../../examples/developer-cell.json"

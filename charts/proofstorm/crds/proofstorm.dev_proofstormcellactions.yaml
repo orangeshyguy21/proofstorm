@@ -83,25 +83,8 @@ spec:
                     - component_start
                     - component_stop
                     - component_restart
-                    - bootstrap_liquidity
-                    - peer_connect
-                    - peer_disconnect
-                    - channel_open
-                    - channel_policy_set
-                    - channel_close
-                    - channel_force_close
-                    - channel_rebalance
                     - network_partition
                     - network_heal
-                    - wallet_initialize
-                    - wallet_balance
-                    - wallet_fund
-                    - wallet_invoice
-                    - wallet_pay
-                    - wallet_quote_claim
-                    - wallet_melt_quote_refresh
-                    - wallet_round_trip
-                    - conservation_oracle
                     - reachability_oracle
                     - component_forensics
                     - component_exec_live
@@ -113,11 +96,6 @@ spec:
                     type: string
                   parameters:
                     properties:
-                      amountSat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
                       argv:
                         items:
                           type: string
@@ -128,84 +106,24 @@ spec:
                         minimum: 0.0
                         nullable: true
                         type: integer
-                      baseFeeMsat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
-                      baselineOperationId:
-                        nullable: true
-                        type: string
-                      chain:
-                        nullable: true
-                        type: string
-                      channelId:
-                        nullable: true
-                        type: string
-                      channelSat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
                       component:
                         nullable: true
                         type: string
                       destinationComponent:
                         nullable: true
                         type: string
-                      expectedSat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
-                      feeRatePpm:
-                        format: uint32
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
                       fromComponent:
                         nullable: true
                         type: string
-                      fromLightning:
-                        nullable: true
-                        type: string
-                      fundingSat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
                       identityProvider:
                         nullable: true
                         type: string
-                      incomingChannelId:
-                        nullable: true
-                        type: string
-                      lightning:
-                        nullable: true
-                        type: string
-                      maxFeeSat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
                       maximumBytes:
                         format: uint32
                         minimum: 0.0
                         nullable: true
                         type: integer
-                      meltQuoteId:
-                        nullable: true
-                        type: string
                       mint:
-                        nullable: true
-                        type: string
-                      mintLightning:
-                        nullable: true
-                        type: string
-                      mintQuoteId:
-                        nullable: true
-                        type: string
-                      outgoingChannelId:
                         nullable: true
                         type: string
                       output:
@@ -228,9 +146,6 @@ spec:
                             type: string
                         type: object
                       partitionOperationId:
-                        nullable: true
-                        type: string
-                      payerLightning:
                         nullable: true
                         type: string
                       privatePayload:
@@ -270,21 +185,7 @@ spec:
                         - kind
                         - reference
                         type: object
-                      pushSat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
-                      quoteId:
-                        nullable: true
-                        type: string
                       recipientGrantId:
-                        nullable: true
-                        type: string
-                      recipientMint:
-                        nullable: true
-                        type: string
-                      recipientWallet:
                         nullable: true
                         type: string
                       reference:
@@ -318,14 +219,6 @@ spec:
                       toComponent:
                         nullable: true
                         type: string
-                      toLightning:
-                        nullable: true
-                        type: string
-                      toleranceSat:
-                        format: uint64
-                        minimum: 0.0
-                        nullable: true
-                        type: integer
                       transferMethod:
                         enum:
                         - prepare
@@ -334,12 +227,6 @@ spec:
                         - deliver
                         - release
                         - null
-                        nullable: true
-                        type: string
-                      treatmentOperationId:
-                        nullable: true
-                        type: string
-                      wallet:
                         nullable: true
                         type: string
                     type: object

@@ -94,7 +94,7 @@ fn recipient_access(cell: &ProofstormCell, id: &str) -> Result<PrivateAccessGran
     Ok(grant.clone())
 }
 
-/// Validate every new delegated action, including typed observations, before dispatch.
+/// Validate every new delegated action, before dispatch.
 pub fn validate_delegated_action(
     action: &ProofstormCellAction,
     cell: &ProofstormCell,
@@ -112,10 +112,6 @@ pub fn validate_delegated_action(
     }
     let scope = &current.scope;
     let (kind, request) = match &action.spec.action {
-        CellAction::WalletBalance(r) if action.spec.capability == Capability::WalletControl => (
-            OperationKind::WalletBalance,
-            serde_json::json!({"wallet":r.wallet,"mint":r.mint}),
-        ),
         CellAction::PrivateTransfer(r)
             if action.spec.capability == Capability::ComponentExecLive =>
         {

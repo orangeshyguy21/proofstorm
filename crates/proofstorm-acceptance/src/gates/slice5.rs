@@ -39,7 +39,7 @@ impl Scenario {
 pub fn run(context: &GateContext, scenario: Scenario) -> Result<()> {
     support::preflight(context)?;
     let workspace = format!("{}-{}", scenario.name(), context.run_id);
-    let mut cleanup = support::CellCleanup::new(context, workspace.clone(), INSTANCE);
+    let mut cleanup = support::CellCleanup::new(context, workspace.clone());
     // Stop the MCP child before fallback cleanup, also on panic unwinding,
     // so it cannot admit work while its cell is being reclaimed.
     let mut client = context.default_session(&workspace, "experiment-agent")?;
@@ -79,23 +79,25 @@ fn exercise(
     println!("{}: exercising scenario", scenario.name());
     let ns = &state.namespace;
     let key = &state.instance_key;
+    let mut native_operations = Vec::new();
     match scenario {
         Scenario::Smoke => {
-            bootstrap::bootstrap(context, client, ns, key, false)?;
-            smoke::run(context, client, ns, key)?;
+            native_operations = bootstrap::bootstrap(context, client, ns, key, false)?.1;
+            native_operations.extend(smoke::run(client)?);
         }
         Scenario::Recovery => {
-            bootstrap::bootstrap(context, client, ns, key, true)?;
+            native_operations = bootstrap::bootstrap(context, client, ns, key, true)?.1;
             recovery::run(context, client, ns, key)?;
             lifecycle::run(context, client, ns)?;
         }
         Scenario::Network => network::run(context, client, ns)?,
         Scenario::Channels => {
-            let channel = bootstrap::bootstrap(context, client, ns, key, false)?;
-            channels::run(context, client, &channel)?;
+            let (point, operations) = bootstrap::bootstrap(context, client, ns, key, false)?;
+            native_operations = operations;
+            native_operations.extend(channels::run(client, &point)?);
         }
     }
-    evidence::verify(context, client, &state, scenario)?;
+    evidence::verify(context, client, &state, scenario, &native_operations)?;
     // Test the current close contract after exporting evidence. A fresh active
     // session cannot lease the cell, but a stale incarnation must still refuse.
     client.call(
@@ -108,9 +110,13 @@ fn exercise(
         "stale_incarnation",
     )?;
     let still_open = crate::cell::status(client, INSTANCE)?;
+    // Protocol observations may refresh after a restart. A refused close must
+    // preserve the incarnation and never begin teardown, regardless of readiness.
     ensure!(
-        still_open["instance_key"] == state.instance_key && still_open["phase"] == "ready",
-        "stale close changed the cell"
+        still_open["instance_key"] == state.instance_key
+            && !["closing", "closed", "cleanup_blocked"]
+                .contains(&crate::json::string(&still_open, "/phase")?),
+        "stale close changed the cell: {still_open}"
     );
     client.call(
         "cell_remove",

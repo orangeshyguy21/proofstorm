@@ -39,7 +39,7 @@ pub(super) fn compose(
     // Atomic stable-ID patch/retry coverage lives in the canonical surface gate and MCP tests.
     let mut document = empty_cell();
     document["components"] = json!(components(scenario));
-    document["links"] = json!(links());
+    document["links"] = json!(links(scenario));
     let preview = client.call(
         "cell_plan",
         json!({"name":INSTANCE,"request_id":"preview-slice5","cell":document}),
@@ -58,12 +58,15 @@ pub(super) fn compose(
         }
     }
 
-    cell::apply(client, &preview)?;
+    let accepted = cell::apply(client, &preview)?;
+    cleanup.record(
+        expect::string(&accepted, "/cell/instance_id")?,
+        expect::string(&accepted, "/instance_key")?,
+    );
     let status = cell::wait_phase(client, INSTANCE, "ready", 180, Duration::from_secs(3))?;
     let instance_key = expect::string(&status, "/instance_key")?.to_string();
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
     let revision_digest = expect::string(&status, "/revision_digest")?.to_string();
-    cleanup.record(&instance_key);
     let lock_digest = expect::string(&status, "/lock_digest")?.to_string();
 
     let component_status = client.call(
@@ -76,17 +79,12 @@ pub(super) fn compose(
         .map(|component| expect::string(component, "/id"))
         .collect::<Result<_>>()?;
     ready.sort_unstable();
-    if ready
-        != [
-            "attacker-cln",
-            "chain",
-            "mint",
-            "mint-lnd",
-            "payer-lnd",
-            "receiver-wallet",
-            "wallet",
-        ]
-    {
+    let mut wanted = expect::array(&document, "/components")?
+        .iter()
+        .map(|component| expect::string(component, "/id"))
+        .collect::<Result<Vec<_>>>()?;
+    wanted.sort_unstable();
+    if ready != wanted {
         bail!("cell topology is not ready: {component_status}");
     }
 
@@ -122,10 +120,12 @@ pub(super) fn conformance(
         "-n",
         CONTROL_NAMESPACE,
     ])?;
+    let status = cell::status(client, INSTANCE)?;
+    let instance_id = expect::string(&status, "/instance_id")?;
     let cell_resource = expect::array(&cells, "/items")?
         .iter()
         .find(|item| {
-            item.pointer("/spec/instanceId").and_then(Value::as_str) == Some(INSTANCE)
+            item.pointer("/spec/instanceId").and_then(Value::as_str) == Some(instance_id)
                 && item.pointer("/spec/workspaceId").and_then(Value::as_str) == Some(workspace)
         })
         .ok_or_else(|| anyhow::anyhow!("no cell resource for {INSTANCE}"))?;
@@ -146,19 +146,19 @@ pub(super) fn conformance(
         "spec": {
             "cellName": cell_name,
             "workspaceId": workspace,
-            "instanceId": INSTANCE,
+            "instanceId": instance_id,
             "instanceKey": instance_key,
             "experimentId": "controller-conformance",
             "sessionId": "controller-conformance",
             "principalId": "cluster-operator",
             "sequence": 1,
-            "operationId": "invalid-peer-connect",
+            "operationId": "invalid-native-command",
             "requestDigest": "sha256:controller-conformance",
-            "capability": "peer.connect",
+            "capability": "component.exec_live",
             "acceptedAtUnix": now_unix(),
             "action": {
-                "kind": "peer_connect",
-                "parameters": {"fromLightning": "mint-lnd", "toLightning": "mint-lnd"}
+                "kind": "component_exec_live",
+                "parameters": {"component": "missing-component", "script": "true", "timeoutSeconds": 10}
             }
         }
     });
@@ -182,14 +182,17 @@ pub(super) fn conformance(
         sleep(Duration::from_secs(1));
     }
     if !failed_closed {
-        bail!("invalid typed action did not fail closed: {invalid_status}");
+        bail!("invalid native action did not fail closed: {invalid_status}");
     }
-    if invalid_status
-        .pointer("/error/code")
-        .and_then(Value::as_str)
-        != Some("invalid_action")
-    {
-        bail!("invalid typed action has the wrong terminal error: {invalid_status}");
+    for (field, expected) in [
+        ("code", "action_prerequisite_unsatisfied"),
+        ("component", "missing-component"),
+        ("operation", "native_exec"),
+        ("prerequisite", "accepted_identity"),
+    ] {
+        if invalid_status["error"][field] != expected {
+            bail!("invalid native action has the wrong terminal error: {invalid_status}");
+        }
     }
     let leftover = kubectl.run(&[
         "get",
@@ -202,7 +205,7 @@ pub(super) fn conformance(
         "name",
     ])?;
     if !leftover.is_empty() {
-        bail!("invalid typed action created a runtime Job");
+        bail!("invalid native action created a runtime Job");
     }
     kubectl.run(&[
         "delete",

@@ -1,6 +1,6 @@
 //! Deliberately prevent the lost Job from starting: test replay fencing, not a race.
 use super::{common::scoped, support::ControllerPause};
-use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
+use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect, native};
 use anyhow::{Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
@@ -50,8 +50,12 @@ pub(super) fn run(
         sleep(Duration::from_secs(1));
     }
     ensure!(accounted, "recovery quota did not become active");
-    let lost = client.call("network_probe", request("lost-probe"))?;
-    let resource = expect::string(&lost, "/resource_name")?;
+    client.call("network_probe", request("lost-probe"))?;
+    let recorded = client.call(
+        "operation_read",
+        json!({"operation_id":"lost-probe","pointer":"/resource_name"}),
+    )?;
+    let resource = expect::string(&recorded, "/value")?;
     let mut fenced = false;
     for _ in 0..60 {
         let action = kubectl.get_json(&[
@@ -129,24 +133,32 @@ pub(super) fn run(
 
     let pause = ControllerPause::stop(kubectl)?;
     let accepted = client.call("network_probe", request("cancelled-probe"))?;
-    let cancel = json!({"request_id":"cancelled-probe"});
+    let cancel = json!({"operation_id":"cancelled-probe","request_id":"cancel-probe"});
     let first = client.call("operation_cancel", cancel.clone())?;
     let retry = client.call("operation_cancel", cancel)?;
+    // network_probe returns the full record; cancellation returns a compact
+    // receipt. Compare their shared identity before checking compact retries.
     ensure!(
-        first["resource_name"] == accepted["resource_name"]
-            && retry["resource_name"] == accepted["resource_name"]
-            && retry["sequence"] == accepted["sequence"],
-        "cancellation retry changed identity"
+        first["operation_id"] == accepted["id"]
+            && first["run_id"] == accepted["experiment_id"]
+            && first["kind"] == accepted["kind"]
+            && first["sequence"] == accepted["sequence"],
+        "cancellation changed the admitted probe identity"
     );
+    native::validate_retry(&first, &retry)?;
     pause.resume()?;
     let cancelled = cell::wait_operation_phase(client, "cancelled-probe", "cancelled", 120)?;
     ensure!(
         cell::artifact_content(&cancelled)?["code"] == "action_cancelled",
         "wrong cancellation error: {cancelled}"
     );
+    let recorded = client.call(
+        "operation_read",
+        json!({"operation_id":"cancelled-probe","pointer":"/resource_name"}),
+    )?;
     let selector = format!(
         "proofstorm.dev/action={}",
-        expect::string(&accepted, "/resource_name")?
+        expect::string(&recorded, "/value")?
     );
     ensure!(
         kubectl

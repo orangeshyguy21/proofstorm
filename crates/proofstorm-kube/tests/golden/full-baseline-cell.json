@@ -446,20 +446,6 @@
           ]
         },
         {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
           "operation": "authentication",
           "prerequisites": [
             "dependencies",
@@ -618,20 +604,6 @@
           "operation": "network_heal",
           "prerequisites": [
             "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
           ]
         },
         {
@@ -802,20 +774,6 @@
           "operation": "network_heal",
           "prerequisites": [
             "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
           ]
         },
         {
@@ -1005,20 +963,6 @@
           "operation": "network_heal",
           "prerequisites": [
             "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
           ]
         },
         {
@@ -1217,20 +1161,6 @@
           "operation": "network_heal",
           "prerequisites": [
             "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
           ]
         },
         {
@@ -1486,20 +1416,6 @@
           ]
         },
         {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
           "operation": "authentication",
           "prerequisites": [
             "dependencies",
@@ -1659,20 +1575,6 @@
           "operation": "network_heal",
           "prerequisites": [
             "fault_identity"
-          ]
-        },
-        {
-          "operation": "peer_channel_mutation",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
-          ]
-        },
-        {
-          "operation": "wallet_payment",
-          "prerequisites": [
-            "dependencies",
-            "protocol"
           ]
         },
         {

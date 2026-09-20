@@ -247,8 +247,18 @@ pub fn assert_retired_wallet_routes(client: &mut McpClient) -> Result<()> {
     let tools = client.request("tools/list", json!({}))?;
     for tool in expect::array(&tools, "/tools")? {
         anyhow::ensure!(
-            !["wallet_initialize", "wallet_fund", "wallet_pay"]
-                .contains(&expect::string(tool, "/name")?),
+            ![
+                "wallet_balance",
+                "wallet_initialize",
+                "wallet_fund",
+                "wallet_round_trip",
+                "wallet_quote_claim",
+                "wallet_melt_quote_refresh",
+                "wallet_pay",
+                "wallet_invoice",
+                "conservation_oracle",
+            ]
+            .contains(&expect::string(tool, "/name")?),
             "retired wallet route advertised"
         );
     }

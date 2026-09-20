@@ -14,7 +14,6 @@ fn seed(store: &Store) {
             Capability::CellOperate,
             Capability::CellClose,
             Capability::ComponentExecLive,
-            Capability::WalletControl,
             Capability::ArtifactRead,
             Capability::ExperimentRead,
             Capability::ExperimentCreate,
@@ -202,10 +201,10 @@ fn submit(store: &Store, actor: &str, session: &str, id: &str) -> CellOperation 
             "experiment",
             session,
             id,
-            OperationKind::WalletBalance,
-            &json!({"wallet":"wallet-b","mint":"mint"}),
+            OperationKind::PrivateTransfer,
+            &json!({"transfer":{"transferMethod":"status","component":"wallet-b","reference":"payload-one"}}),
             id,
-            Capability::WalletControl,
+            Capability::ComponentExecLive,
         )
         .unwrap()
 }
@@ -350,8 +349,24 @@ fn private_permissions_survive_session_finish_but_explicit_revocation_still_work
     store
         .finish_session("workspace", "sender", &session.id, "finish")
         .unwrap();
-    let accepted = submit(&store, "receiver", "", "received-balance");
+    let accepted = submit(&store, "receiver", "", "received-status");
     assert!(store.operation_access_scope(&accepted).unwrap().is_some());
+    store
+        .revoke("workspace", "receiver", Capability::ArtifactRead)
+        .unwrap();
+    assert_eq!(
+        store
+            .operation_for_submission("workspace", "receiver", &accepted.id)
+            .unwrap(),
+        accepted
+    );
+    assert!(matches!(
+        store.operation_for_submission("workspace", "sender", &accepted.id),
+        Err(StoreError::OperationOwnerMismatch { .. })
+    ));
+    store
+        .grant("workspace", "receiver", Capability::ArtifactRead)
+        .unwrap();
     assert!(
         store
             .create_operation(
@@ -371,6 +386,10 @@ fn private_permissions_survive_session_finish_but_explicit_revocation_still_work
     store
         .revoke_private_access("workspace", "sender", "access-one")
         .unwrap();
+    assert!(matches!(
+        store.operation_for_submission("workspace", "receiver", &accepted.id),
+        Err(StoreError::AccessDenied { .. })
+    ));
     assert!(
         store
             .create_operation(
@@ -380,16 +399,16 @@ fn private_permissions_survive_session_finish_but_explicit_revocation_still_work
                 "experiment",
                 "",
                 "after-revoke",
-                OperationKind::WalletBalance,
-                &json!({"wallet":"wallet-b","mint":"mint"}),
+                OperationKind::PrivateTransfer,
+                &json!({"transfer":{"transferMethod":"status","component":"wallet-b","reference":"payload-one"}}),
                 "after-revoke",
-                Capability::WalletControl
+                Capability::ComponentExecLive
             )
             .is_err()
     );
     assert_eq!(
         store
-            .operation("workspace", "receiver", "received-balance")
+            .operation("workspace", "receiver", "received-status")
             .unwrap()
             .phase,
         OperationPhase::Pending
@@ -404,10 +423,10 @@ fn implicit_submit(store: &Store, actor: &str, id: &str) -> Result<CellOperation
         "",
         "",
         id,
-        OperationKind::WalletBalance,
-        &json!({"wallet":"wallet-b","mint":"mint","experiment_id":""}),
+        OperationKind::PrivateTransfer,
+        &json!({"transfer":{"transferMethod":"status","component":"wallet-b","reference":"payload-one"},"experiment_id":""}),
         id,
-        Capability::WalletControl,
+        Capability::ComponentExecLive,
     )
 }
 
@@ -517,10 +536,10 @@ fn denied_calls_do_not_create_runs_and_closed_defaults_roll_forward_explicitly()
         &op.experiment_id,
         "",
         "explicit-closed-run",
-        OperationKind::WalletBalance,
-        &json!({"wallet":"wallet-b","mint":"mint"}),
+        OperationKind::PrivateTransfer,
+        &json!({"transfer":{"transferMethod":"status","component":"wallet-b","reference":"payload-one"}}),
         "explicit-closed-run",
-        Capability::WalletControl,
+        Capability::ComponentExecLive,
     );
     assert!(
         sealed
@@ -539,10 +558,10 @@ fn denied_calls_do_not_create_runs_and_closed_defaults_roll_forward_explicitly()
         "missing-run",
         "",
         "wrong-run",
-        OperationKind::WalletBalance,
-        &json!({"wallet":"wallet-b","mint":"mint"}),
+        OperationKind::PrivateTransfer,
+        &json!({"transfer":{"transferMethod":"status","component":"wallet-b","reference":"payload-one"}}),
         "wrong-run",
-        Capability::WalletControl,
+        Capability::ComponentExecLive,
     );
     assert!(wrong.is_err());
 }

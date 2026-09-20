@@ -397,13 +397,13 @@ pub fn exercise(
 }
 
 fn cdk_balance(client: &mut McpClient, directory: &Path, id: &str, expected: u64) -> Result<()> {
-    let receipt = operation(
+    let receipt = crate::native::json_content(&operation(
         client,
         directory,
-        "wallet_balance",
+        "cell_exec",
         id,
-        json!({"wallet":"wallet-b","mint":"mint"}),
-    )?;
+        crate::native::wallet_request("cdk-cli-wallet", "wallet-b", "mint")?,
+    )?)?;
     if receipt["balance_sat"] != expected
         || receipt["reserved_sat"] != 0
         || receipt["pending_sat"] != 0

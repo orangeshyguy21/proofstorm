@@ -20,9 +20,24 @@ mod close;
 mod components;
 pub use components::ComponentControlRequest;
 mod capture;
+mod component_reference;
 mod create;
+mod diagnostics;
 mod edit;
+mod planning;
+pub use planning::{PreparedPlan, prepare_plan};
+mod submission;
+pub use diagnostics::{ComponentExecRequest, ComponentLogsRequest};
+mod private_transfer;
+pub use private_transfer::{PrivateTransferInput, PrivateTransferRequest};
+mod network;
+pub use network::{NetworkHealRequest, NetworkPartitionRequest, NetworkProbeRequest};
+#[cfg(test)]
+mod action_tests;
 mod execute;
+#[cfg(test)]
+mod workspace_fixture;
+pub use execute::NativeExecutionRequest;
 mod upload;
 pub use capture::{WorkspaceCaptureReceipt, WorkspaceCaptureRequest};
 pub use upload::WorkspaceUploadRequest;

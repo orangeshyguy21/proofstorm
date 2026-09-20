@@ -359,15 +359,7 @@ fn project_cell(mut value: Value, fields: &[String]) -> Value {
         }
         return value;
     }
-    let selected: serde_json::Map<_, _> = fields
-        .iter()
-        .map(|field| {
-            (
-                field.clone(),
-                value.pointer(field).cloned().unwrap_or(Value::Null),
-            )
-        })
-        .collect();
+    let selected = crate::query::project(&value, fields);
     let mut continuations = serde_json::Map::new();
     for section in ["components", "links", "sessions", "activity"] {
         if let Some(cursor) = value.get(section).and_then(|page| page.get("next_cursor")) {
