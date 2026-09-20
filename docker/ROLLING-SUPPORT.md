@@ -15,8 +15,8 @@ both enforce this floor.
 
 The installed Rust catalog remains the authority for supported images. A recipe,
 successful build, or upstream release alone does not add official support.
-Experimental Cocod snapshots and infrastructure helpers do not participate in
-the rolling window.
+Experimental Cocod, LDK Server, and payment processor snapshots and infrastructure
+helpers do not participate in the rolling window.
 
 ## Discover and prepare releases
 
@@ -95,6 +95,15 @@ publish images. See [the compatibility runner](../tests/component-compat/README.
 for local invocation and the boundaries of this evidence. PostgreSQL, Redis,
 OIDC, CDK 0.18 mint/backend checks, and managed-cell acceptance remain separate
 qualification requirements.
+
+The workflow also builds `ldk-server@0.1.0-50fe752` and
+`cdk-ldk-server-processor@0.1.0-fe468ca` in separate jobs for each native
+architecture. Their offline probes verify the node and CLI versions, or the
+processor executable and pinned source revision. These jobs retain build logs,
+image receipts, image inspection, and probe output, including on failure.
+The `ldk-server-processor` live gate separately checks gRPC readiness, payments,
+quote recovery, and restart persistence; the image jobs do not establish those
+integration behaviors.
 
 Nutshell 0.21 uses the `nutshell-mint/0.21/v1` action contract. The renderer derives
 the expected native version from that locked contract, including for candidates

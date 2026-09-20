@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/lightningdevkit/ldk-server",
+  "commit_sha": "50fe7523be3529d86bfee0dfc35df9a52aca7310",
+  "artifact_url": "https://codeload.github.com/lightningdevkit/ldk-server/tar.gz/50fe7523be3529d86bfee0dfc35df9a52aca7310",
+  "artifact_sha256": "adf77aa5631ea11b358492e11be1d948b052a25c6ced7080a06f63a566fe8789",
+  "platform": "linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "recipe_digest": "sha256:821cc4ca6c547cbfcb7f5d9424a4c4895282a5b9d0e8137ad4d38b3a3c36ffe5",
+  "package_path": "ldk-server",
+  "dependency_lock_digest": "sha256:01fcd77edcebff71327cfa975b0bc21824343e98444bc8cea8cbc706f10948e1",
+  "build_image": "docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e",
+  "transformations": [
+    "Build the pinned upstream source with its own frozen Cargo.lock; no application source patches.",
+    "Disable release LTO; retain the native CLI alongside the server."
+  ]
+}

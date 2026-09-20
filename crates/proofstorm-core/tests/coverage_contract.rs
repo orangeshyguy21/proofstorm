@@ -59,7 +59,10 @@ fn only_platform_specific_component_builds_differ_between_catalogs() {
     assert_eq!(arm.entries.len(), amd.entries.len());
     for (arm_entry, amd_entry) in arm.entries.iter().zip(&amd.entries) {
         assert_eq!(arm_entry.id, amd_entry.id);
-        if matches!(arm_entry.id.as_str(), "cdk-cli-wallet" | "cocod-wallet") {
+        if matches!(
+            arm_entry.id.as_str(),
+            "cdk-cli-wallet" | "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+        ) {
             assert_ne!(arm_entry.image, amd_entry.image);
             assert_ne!(arm_entry.source_digest, amd_entry.source_digest);
             assert_eq!(

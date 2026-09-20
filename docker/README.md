@@ -12,6 +12,7 @@ The `upstream/<registry>/<repository>` path records their original source.
 | LND 0.21.3-beta (preferred), 0.20.4-beta | docker.io/lightninglabs/lnd |
 | Core Lightning | docker.io/elementsproject/lightningd |
 | CDK and Nutshell | docker.io/cashubtc images, with the existing management-client wrappers |
+| LDK Server and CDK LDK Server processor | Pinned upstream source builds; see [payment processor packaging](payment/README.md) |
 | Keycloak | quay.io/keycloak/keycloak |
 | PostgreSQL, Redis, BusyBox | Docker Official Images under docker.io/library |
 | Cocod | Frozen source and dependency lock in its wallet provenance record |
@@ -58,8 +59,8 @@ just catalog-image publish "$scratch/wallet" \
 
 Select `linux/amd64` or `linux/arm64` explicitly. Buildx must support that platform
 and the host must be able to execute its native probes (directly or by emulation).
-Available recipes: `bitcoin-core`, `cdk-mint`, `nutshell-mint`, `cdk-cli-wallet`, and
-`cocod-wallet`. The `cdk-mint` image serves all
+Available recipes: `bitcoin-core`, `cdk-mint`, `nutshell-mint`, `cdk-cli-wallet`,
+`cocod-wallet`, `ldk-server`, and `cdk-ldk-server-processor`. The `cdk-mint` image serves all
 three CDK mint presets; backend and storage configuration choose what runs.
 Historical standard-image receipts remain readable. Controller builds remain in the existing
 [`release-controller-*` flow](../scripts/RELEASING.md).

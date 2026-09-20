@@ -19,7 +19,9 @@ on:
       - 'tests/component-compat/**'
       - 'crates/proofstorm-kube/tests/golden/**'
       - 'crates/proofstorm-kube/src/adapter.rs'
+      - 'crates/proofstorm-kube/src/processor_adapter.rs'
       - 'crates/proofstorm-core/src/backend.rs'
+      - 'crates/proofstorm-core/src/processor_*.rs'
 
 permissions:
   contents: read
@@ -29,6 +31,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-payment-components:
+    name: Payment component (${{ matrix.selection }}, ${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        selection:
+          - ldk-server@0.1.0-50fe752
+          - cdk-ldk-server-processor@0.1.0-fe468ca
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            machine: x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      ARCH: ${{ matrix.arch }}
+      NATIVE_MACHINE: ${{ matrix.machine }}
+      SELECTION: ${{ matrix.selection }}
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check native platform and build tools
+        run: |
+          test "$(uname -s)/$(uname -m)" = "Linux/$NATIVE_MACHINE"
+          rustup show active-toolchain
+          docker info
+          docker buildx version
+      - name: Build reviewed payment component and run its offline probe
+        run: |
+          set -o pipefail
+          # Protocol readiness and payment behavior are covered by the separate
+          # ldk-server-processor live acceptance gate.
+          bash scripts/catalog-image.sh build "$SELECTION" "linux/$ARCH" \
+            "$RUNNER_TEMP/payment-component" \
+            2>&1 | tee "$RUNNER_TEMP/payment-component-build.log"
+      - name: Save native payment component evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: payment-component-${{ matrix.selection }}-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          # Explicit files only: keep source snapshots and build caches out.
+          path: |
+            ${{ runner.temp }}/payment-component-build.log
+            ${{ runner.temp }}/payment-component/image.json
+            ${{ runner.temp }}/payment-component/inspect.json
+            ${{ runner.temp }}/payment-component/probe.stdout
+          if-no-files-found: warn
+          retention-days: 14
+
   native-components:
     name: Native components (${{ matrix.arch }})
     strategy:

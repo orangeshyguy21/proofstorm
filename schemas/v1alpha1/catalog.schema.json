@@ -612,6 +612,7 @@
       "enum": [
         "bitcoin",
         "lightning",
+        "payment_processor",
         "mint",
         "database",
         "identity_provider",

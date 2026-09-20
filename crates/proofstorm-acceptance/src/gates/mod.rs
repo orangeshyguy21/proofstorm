@@ -21,6 +21,7 @@ pub mod dynamic_cell;
 pub mod failed_melt;
 pub mod gui;
 pub mod isolation;
+pub mod ldk_server;
 pub mod mint_management;
 pub mod native_exec;
 pub mod nutshell_cln;
@@ -77,6 +78,7 @@ pub const NAMES: &[&str] = &[
     "cdk-postgres",
     "cross-cell-scheduler",
     "cdk-ldk",
+    "ldk-server-processor",
     "cdk-ldk-postgres",
     "cdk-bdk-stress",
     "cdk-bdk-postgres",
@@ -131,6 +133,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "cdk-postgres" => cdk_postgres::run(context),
         "cross-cell-scheduler" => cross_cell_scheduler::run(context),
         "cdk-ldk" => cdk_ldk::run(context, crate::postgres::enabled()),
+        "ldk-server-processor" => ldk_server::run(context),
         "cdk-ldk-postgres" => cdk_ldk::run(context, true),
         "cdk-bdk-stress" => cdk_bdk_stress::run(context, crate::postgres::enabled()),
         "cdk-bdk-postgres" => cdk_bdk_stress::run(context, true),

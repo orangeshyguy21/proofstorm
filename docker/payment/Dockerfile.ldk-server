@@ -1,0 +1,18 @@
+# LDK Server and its native CLI from the revision used by the CDK processor.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler clang cmake && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/lightningdevkit/ldk-server/tar.gz/50fe7523be3529d86bfee0dfc35df9a52aca7310 -o /tmp/source.tar.gz \
+    && echo 'adf77aa5631ea11b358492e11be1d948b052a25c6ced7080a06f63a566fe8789  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,target=/src/target,sharing=locked \
+    cargo build --locked --release --jobs 2 -p ldk-server -p ldk-server-cli \
+    && cp target/release/ldk-server target/release/ldk-server-cli /usr/local/bin/
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/ldk-server /usr/local/bin/ldk-server-cli /usr/local/bin/
+ENV HOME=/data
+USER 1000:1000
+CMD ["ldk-server", "/config/config.toml"]

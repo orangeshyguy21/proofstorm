@@ -194,6 +194,7 @@
       "enum": [
         "bitcoin",
         "lightning",
+        "payment_processor",
         "mint",
         "database",
         "identity_provider",
@@ -360,6 +361,38 @@
             },
             "implementation": {
               "const": "cln",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/LndConfig"
+            },
+            "implementation": {
+              "const": "ldk-server",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/LdkServerProcessorConfig"
+            },
+            "implementation": {
+              "const": "cdk-ldk-server-processor",
               "type": "string"
             }
           },
@@ -660,6 +693,31 @@
       },
       "required": [
         "access_token_lifespan_seconds"
+      ],
+      "type": "object"
+    },
+    "LdkServerProcessorConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "fee_reserve_min_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fee_reserve_percent": {
+          "format": "double",
+          "type": "number"
+        },
+        "max_payment_scan_pages": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "fee_reserve_min_sat",
+        "fee_reserve_percent",
+        "max_payment_scan_pages"
       ],
       "type": "object"
     },

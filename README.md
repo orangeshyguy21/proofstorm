@@ -80,9 +80,11 @@ compatibility details.
 | Bitcoin Core | `bitcoin-core` | Regtest chain, RPC, persistent state |
 | LND | `lnd` | Lightning, BOLT11 |
 | Core Lightning | `cln` | Lightning, BOLT11 |
-| CDK mint | `cdk` | LND / CLN; SQLite / PostgreSQL |
+| LDK Server | `ldk-server` | Experimental standalone Lightning node and native CLI |
+| CDK mint | `cdk` | LND / CLN / gRPC processor; SQLite / PostgreSQL |
 | CDK + LDK mint | `cdk-ldk` | Embedded Lightning; BOLT11 / BOLT12 |
 | CDK + BDK mint | `cdk-bdk` | On-chain payments; Bitcoin regtest |
+| CDK LDK Server processor | `cdk-ldk-server-processor` | Experimental gRPC BOLT11 / BOLT12 backend for CDK |
 | Nutshell mint | `nutshell` | LND / CLN; optional NUT-21 / NUT-22 auth |
 | Nutshell wallet | `nutshell-wallet` | Persistent Cashu wallet |
 | CDK CLI wallet | `cdk-cli-wallet` | Cashu wallet CLI |
@@ -91,6 +93,7 @@ compatibility details.
 | Redis | `redis` | Ephemeral cache |
 | Keycloak | `keycloak` | Test OIDC provider |
 | Workspace | `workspace` | Custom scripts, files and services |
+
 
 ## Updates
 

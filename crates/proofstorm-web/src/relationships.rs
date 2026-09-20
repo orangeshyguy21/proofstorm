@@ -2,7 +2,7 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 use proofstorm_core::{ComponentKind, LinkKind};
 use proofstorm_view::{CellUsage, EnvironmentCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EdgeKind {
@@ -57,6 +57,7 @@ pub fn edges(cell: &EnvironmentCell, usage: Option<&CellUsage>, now: i64) -> Vec
             .map_or_else(|| owner.to_owned(), |n| n.id.clone())
     };
     let resource_parents = crate::canvas_model::resource_parents(cell);
+    let mut payment_pairs = BTreeSet::new();
     let mut result = cell
         .links
         .items
@@ -73,8 +74,15 @@ pub fn edges(cell: &EnvironmentCell, usage: Option<&CellUsage>, now: i64) -> Vec
                         | (Some(ComponentKind::Mint), Some(ComponentKind::Wallet))
                 )
         })
+        // Method and unit bindings share one connection between these services.
+        // Keep observed channels separate: each one represents its own channel.
+        .filter(|l| l.kind != LinkKind::PaymentBackend || payment_pairs.insert((&l.from, &l.to)))
         .map(|l| Edge {
-            id: format!("declared:{}", l.id),
+            id: if l.kind == LinkKind::PaymentBackend {
+                format!("declared:payment:{}:{}", l.from, l.to)
+            } else {
+                format!("declared:{}", l.id)
+            },
             from: if l.kind == LinkKind::ChainBackend {
                 backend_endpoint(&l.from)
             } else {

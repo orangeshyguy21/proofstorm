@@ -61,6 +61,18 @@ fn added_version_recipes_match_their_provenance_and_native_versions() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (name, version, provenance, output) in [
         (
+            "ldk-server",
+            "0.1.0-50fe752",
+            "docker/payment/ldk-server-provenance.json",
+            "ldk-server 0.1.0\nldk-server-cli 0.1.0\n",
+        ),
+        (
+            "cdk-ldk-server-processor",
+            "0.1.0-fe468ca",
+            "docker/payment/cdk-ldk-server-provenance.json",
+            "fe468cad486157683eddbc0df4ff87ba71b6c0a3\n",
+        ),
+        (
             "cdk-mint",
             "0.18.1",
             "docker/mint/cdk-0.18.1-provenance.json",
@@ -103,7 +115,10 @@ fn added_version_recipes_match_their_provenance_and_native_versions() {
             "{name}@{version}"
         );
         assert!(valid_probe_version(name, version, output));
-        assert!(!valid_probe(name, output));
+        assert_eq!(
+            valid_probe(name, output),
+            legacy_version(name).unwrap() == version
+        );
     }
 }
 

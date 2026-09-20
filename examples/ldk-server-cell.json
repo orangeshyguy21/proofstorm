@@ -1,0 +1,147 @@
+{
+  "api_version": "proofstorm/v1alpha1",
+  "name": "ldk-server-cell",
+  "components": [
+    {
+      "id": "chain",
+      "kind": "bitcoin",
+      "implementation": "bitcoin-core",
+      "version": "31.1",
+      "config_version": "bitcoin-core/31/v1",
+      "control": "cell",
+      "config": {}
+    },
+    {
+      "id": "ldk",
+      "kind": "lightning",
+      "implementation": "ldk-server",
+      "version": "0.1.0-50fe752",
+      "config_version": "ldk-server/0.1/v1",
+      "control": "cell",
+      "config": {}
+    },
+    {
+      "id": "payer",
+      "kind": "lightning",
+      "implementation": "ldk-server",
+      "version": "0.1.0-50fe752",
+      "config_version": "ldk-server/0.1/v1",
+      "control": "cell",
+      "config": {}
+    },
+    {
+      "id": "processor",
+      "kind": "payment_processor",
+      "implementation": "cdk-ldk-server-processor",
+      "version": "0.1.0-fe468ca",
+      "config_version": "cdk-ldk-server-processor/0.1/v1",
+      "control": "target",
+      "config": {}
+    },
+    {
+      "id": "mint",
+      "kind": "mint",
+      "implementation": "cdk",
+      "version": "0.18.1",
+      "config_version": "cdk-mintd/0.18/v1",
+      "control": "target",
+      "config": {
+        "input_fee_ppk": 0
+      }
+    },
+    {
+      "id": "wallet",
+      "kind": "wallet",
+      "implementation": "cdk-cli-wallet",
+      "version": "0.18.1",
+      "config_version": "cdk-cli-wallet/0.18/v1",
+      "control": "cell",
+      "config": {}
+    }
+  ],
+  "links": [
+    {
+      "id": "ldk-chain",
+      "kind": "chain_backend",
+      "from": "ldk",
+      "to": "chain",
+      "binding": {
+        "type": "chain",
+        "network": "regtest"
+      }
+    },
+    {
+      "id": "payer-chain",
+      "kind": "chain_backend",
+      "from": "payer",
+      "to": "chain",
+      "binding": {
+        "type": "chain",
+        "network": "regtest"
+      }
+    },
+    {
+      "id": "mint-bolt11",
+      "kind": "payment_backend",
+      "from": "mint",
+      "to": "processor",
+      "binding": {
+        "type": "payment",
+        "method": "bolt11",
+        "unit": "sat"
+      }
+    },
+    {
+      "id": "mint-bolt12",
+      "kind": "payment_backend",
+      "from": "mint",
+      "to": "processor",
+      "binding": {
+        "type": "payment",
+        "method": "bolt12",
+        "unit": "sat"
+      }
+    },
+    {
+      "id": "processor-bolt11",
+      "kind": "payment_backend",
+      "from": "processor",
+      "to": "ldk",
+      "binding": {
+        "type": "payment",
+        "method": "bolt11",
+        "unit": "sat"
+      }
+    },
+    {
+      "id": "processor-bolt12",
+      "kind": "payment_backend",
+      "from": "processor",
+      "to": "ldk",
+      "binding": {
+        "type": "payment",
+        "method": "bolt12",
+        "unit": "sat"
+      }
+    },
+    {
+      "id": "ldk-payer",
+      "kind": "lightning_peer",
+      "from": "ldk",
+      "to": "payer"
+    }
+  ],
+  "policy": {
+    "allow": [
+      "component.exec_live",
+      "component.control",
+      "network.partition",
+      "network.heal"
+    ],
+    "limits": {
+      "max_components": 8,
+      "max_links": 16,
+      "max_config_bytes": 16384
+    }
+  }
+}

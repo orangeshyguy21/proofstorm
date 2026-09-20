@@ -188,7 +188,7 @@ pub fn ensure_positions(nodes: &[CanvasNode], positions: &mut Positions) {
         }
         let column = match node.kind {
             ComponentKind::Bitcoin | ComponentKind::IdentityProvider | ComponentKind::Database => 0,
-            ComponentKind::Lightning | ComponentKind::Proxy => 1,
+            ComponentKind::Lightning | ComponentKind::PaymentProcessor | ComponentKind::Proxy => 1,
             ComponentKind::Mint | ComponentKind::Oracle => 2,
             ComponentKind::Wallet | ComponentKind::Attacker => 3,
         };
@@ -283,6 +283,11 @@ pub fn appearance(kind: ComponentKind) -> (&'static str, &'static str, &'static 
             "M4 7 12 3 20 7 12 11Z M4 7v10l8 4 8-4V7 M12 11v10",
         ),
         ComponentKind::Lightning => ("lightning", "Lightning", "m13 2-9 12h7l-1 8 10-12h-7Z"),
+        ComponentKind::PaymentProcessor => (
+            "processor",
+            "Payment processor",
+            "M3 5h18v14H3Z M7 9h10 M7 15h10 M12 9v6",
+        ),
         ComponentKind::Mint => (
             "mint",
             "Mint",

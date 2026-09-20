@@ -33,11 +33,12 @@ pub use backend::{
     ConfigFieldContract, ConfigRule, ConfigSettingClass, ConfigValueKind,
     CredentialObservationContract, EffectiveComponentConfig, ExecutionContextContract,
     ExecutionMountContract, ExecutionMountTemplateContract, ExecutionStorageSource,
-    ExecutionStorageTemplateSource, KeycloakConfig, LinkedStateObservationContract, LndConfig,
-    NutshellMintConfig, OperationAdmissionContract, OperationClass, PostgresConfig,
-    ProtocolProbeContract, ProtocolProbePlan, ReadinessPrerequisite, RedisConfig,
-    StorageObservationContract, StorageRequirementTemplate, TargetDescriptorContract,
-    WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig, default_backend_registry,
+    ExecutionStorageTemplateSource, KeycloakConfig, LdkServerProcessorConfig,
+    LinkedStateObservationContract, LndConfig, NutshellMintConfig, OperationAdmissionContract,
+    OperationClass, PostgresConfig, ProtocolProbeContract, ProtocolProbePlan,
+    ReadinessPrerequisite, RedisConfig, StorageObservationContract, StorageRequirementTemplate,
+    TargetDescriptorContract, WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig,
+    default_backend_registry,
 };
 pub use candidate::{
     CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateDiagnostics,

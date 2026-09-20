@@ -121,6 +121,8 @@ fn controller_snapshot_excludes_host_source_and_local_state() {
         "Cargo.toml",
         "Cargo.lock",
         "Dockerfile.proofstormd",
+        "docker/payment/ldk-server-provenance.json",
+        "docker/payment/cdk-ldk-server-provenance.json",
         "crates/proofstormd/Cargo.toml",
         "crates/proofstormd/src/main.rs",
         "crates/proofstorm-web/Cargo.toml",
@@ -139,6 +141,16 @@ fn controller_snapshot_excludes_host_source_and_local_state() {
     assert!(!first_dir.join(".env").exists());
     assert!(!first_dir.join(".proofstorm-dev").exists());
     assert!(!first_dir.join(".cargo").exists());
+    assert!(
+        first_dir
+            .join("docker/payment/ldk-server-provenance.json")
+            .is_file()
+    );
+    assert!(
+        first_dir
+            .join("docker/payment/cdk-ldk-server-provenance.json")
+            .is_file()
+    );
     assert_eq!(
         fs::read_to_string(first_dir.join("crates/proofstorm-web/src/lib.rs")).unwrap(),
         "// Unbuilt workspace member.\n"
