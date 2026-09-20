@@ -9,7 +9,7 @@ mkdir -p "$fixture/tests/fixtures" "$fixture/release" "$fixture/crates/proofstor
 cp "$root/tests/cdk18-config-contract.sh" "$fixture/tests/"
 cp -R "$root/tests/fixtures/cdk-mint-secrets" "$fixture/tests/fixtures/"
 cp "$root/release/ghcr.json" "$fixture/release/"
-for name in cdk cdk-cln-cell cdk-bdk cdk-postgres-cell cdk-ldk; do
+for name in cdk cdk-cln-cell cdk-bdk cdk-postgres-cell cdk-ldk cdk-grpc-processor; do
   cp "$root/crates/proofstorm-kube/tests/golden/$name.json" "$fixture/crates/proofstorm-kube/tests/golden/"
 done
 export CONFIG_TRACE="$scratch/trace"
@@ -25,8 +25,8 @@ SH
 chmod +x "$scratch/bin/docker"
 export PATH="$scratch/bin:$PATH"
 bash "$fixture/tests/cdk18-config-contract.sh" > "$scratch/output"
-[[ $(grep -c '^CALL$' "$CONFIG_TRACE") == 6 ]]
-[[ $(grep -c '<ghcr.io/orangeshyguy21/proofstorm/cdk' "$CONFIG_TRACE") == 6 ]]
+[[ $(grep -c '^CALL$' "$CONFIG_TRACE") == 7 ]]
+[[ $(grep -c '<ghcr.io/orangeshyguy21/proofstorm/cdk' "$CONFIG_TRACE") == 7 ]]
 if grep -q 'localhost:5111\|mintd.regtest.toml\|docker/mint/mintd.toml' "$CONFIG_TRACE"; then
   echo 'CDK check still depends on a retired fixture' >&2; exit 1
 fi

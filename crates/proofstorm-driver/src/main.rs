@@ -31,6 +31,13 @@ async fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
         [command] if command == "install" => return install(),
+        #[cfg(unix)]
+        [command] if command == "exec-ldk-processor" => {
+            return proofstorm_driver::processor::exec_ldk_processor();
+        }
+        [command, address, tls] if command == "processor-settings" => serde_json::to_value(
+            proofstorm_driver::processor::settings(address, Path::new(tls)).await?,
+        )?,
         [command] if command == "--self-check" => {
             json!({"driver_version":proofstorm_driver::VERSION})
         }

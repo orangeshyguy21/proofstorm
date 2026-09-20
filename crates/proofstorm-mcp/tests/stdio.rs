@@ -153,7 +153,7 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
         let structured = catalog
             .pointer("/result/structuredContent")
             .expect("structured content");
-        assert_eq!(structured["matched_count"], 17);
+        assert_eq!(structured["matched_count"], 19);
         let items = expect::array(structured, "/items").expect("catalog items");
         assert!(!items.is_empty());
         for item in items {
@@ -168,7 +168,7 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
             break;
         }
     }
-    assert_eq!(identities.len(), 17);
+    assert_eq!(identities.len(), 19);
 }
 
 #[test]

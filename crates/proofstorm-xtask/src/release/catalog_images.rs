@@ -21,6 +21,8 @@ const RECIPES: &[&str] = &[
     "nutshell-mint",
     "cdk-cli-wallet",
     "cocod-wallet",
+    "ldk-server",
+    "cdk-ldk-server-processor",
 ];
 
 fn recipe(name: &str) -> Result<&'static str> {
@@ -32,6 +34,8 @@ fn recipe(name: &str) -> Result<&'static str> {
         "nutshell-mint" | "nutshell-mint-management" => "docker/mint/Dockerfile.kube-nutshell",
         "cdk-cli-wallet" => "docker/wallet/Dockerfile.kube-cdk",
         "cocod-wallet" => "docker/wallet/Dockerfile.kube-cocod",
+        "ldk-server" => "docker/payment/Dockerfile.ldk-server",
+        "cdk-ldk-server-processor" => "docker/payment/Dockerfile.cdk-ldk-server",
         _ => bail!("unknown catalog image; controller builds use release-controller-build"),
     })
 }
@@ -46,6 +50,8 @@ fn legacy_version(name: &str) -> Result<&'static str> {
         }
         "nutshell-mint" | "nutshell-mint-management" => "0.20.3",
         "cocod-wallet" => "0.0.17-dev.44e5101c",
+        "ldk-server" => "0.1.0-50fe752",
+        "cdk-ldk-server-processor" => "0.1.0-fe468ca",
         _ => bail!("unknown catalog image version"),
     })
 }
@@ -88,6 +94,12 @@ fn probe(name: &str) -> Result<&'static str> {
         }
         "cdk-cli-wallet" => "cdk-cli --version",
         "cocod-wallet" => "cocod --version",
+        "ldk-server" => "ldk-server --version && ldk-server-cli --version",
+        // Upstream has no version-only command. Verify the executable and pinned
+        // build identity offline; the live gate separately exercises GetSettings.
+        "cdk-ldk-server-processor" => {
+            "test -x /usr/local/bin/cdk-payment-processor-ldk-server && cat /usr/local/share/processor-revision"
+        }
         _ => bail!("unknown catalog probe"),
     })
 }
@@ -434,7 +446,11 @@ fn inspect(work: &Path) -> Result<String> {
     );
     if matches!(
         receipt.repository.as_str(),
-        "bitcoin-core" | "cdk-cli-wallet" | "cocod-wallet"
+        "bitcoin-core"
+            | "cdk-cli-wallet"
+            | "cocod-wallet"
+            | "ldk-server"
+            | "cdk-ldk-server-processor"
     ) {
         ensure!(
             image["Config"]["User"] == "1000:1000",
@@ -458,6 +474,8 @@ fn valid_probe_version(repository: &str, version: &str, output: &str) -> bool {
         }),
         "cdk-cli-wallet" => output.trim() == format!("cdk-cli {version}"),
         "cocod-wallet" => output.trim() == "0.0.17",
+        "ldk-server" => output.trim() == "ldk-server 0.1.0\nldk-server-cli 0.1.0",
+        "cdk-ldk-server-processor" => output.trim() == "fe468cad486157683eddbc0df4ff87ba71b6c0a3",
         "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
             lines

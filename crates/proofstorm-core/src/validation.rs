@@ -7,6 +7,9 @@ use crate::{
     API_VERSION, CellSpec, ComponentKind, DependencyBinding, LinkKind, LinkSpec, PaymentMethod,
 };
 
+#[path = "processor_validation.rs"]
+mod processor;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ValidationIssue {
@@ -63,6 +66,7 @@ pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
 
     validate_links(cell, &ids, &kinds, &mut issues);
     validate_authentication_topology(cell, &mut issues);
+    processor::validate_topology(cell, &mut issues);
 
     ValidationReport::from_issues(issues)
 }
@@ -188,16 +192,27 @@ fn validate_links(
                         && to == ComponentKind::Bitcoin
                 }
                 LinkKind::PaymentBackend => {
-                    from == ComponentKind::Mint
+                    matches!(from, ComponentKind::Mint | ComponentKind::PaymentProcessor)
                         && match &link.binding {
                             Some(DependencyBinding::Payment {
                                 method: PaymentMethod::Onchain,
                                 ..
-                            }) => to == ComponentKind::Bitcoin,
+                            }) => matches!(
+                                to,
+                                ComponentKind::Bitcoin | ComponentKind::PaymentProcessor
+                            ),
                             Some(DependencyBinding::Payment { .. }) => {
-                                to == ComponentKind::Lightning
+                                matches!(
+                                    to,
+                                    ComponentKind::Lightning | ComponentKind::PaymentProcessor
+                                )
                             }
-                            _ => matches!(to, ComponentKind::Lightning | ComponentKind::Bitcoin),
+                            _ => matches!(
+                                to,
+                                ComponentKind::Lightning
+                                    | ComponentKind::Bitcoin
+                                    | ComponentKind::PaymentProcessor
+                            ),
                         }
                 }
                 LinkKind::DatabaseBackend => {

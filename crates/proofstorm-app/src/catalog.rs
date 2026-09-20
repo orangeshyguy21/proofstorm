@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn family_kind_origin_and_exact_filters_intersect() {
         let family = page(json!({"query":"CDK"}));
-        assert_eq!(family.matched_count, 4);
+        assert_eq!(family.matched_count, 5);
         assert_eq!(
             page(json!({"query":"cdk","kinds":["mint"]})).matched_count,
             3

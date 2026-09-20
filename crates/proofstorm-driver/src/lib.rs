@@ -14,6 +14,8 @@ pub mod management;
 #[cfg(feature = "runtime")]
 pub mod nutshell;
 #[cfg(feature = "runtime")]
+pub mod processor;
+#[cfg(feature = "runtime")]
 pub mod quote;
 #[cfg(feature = "observation")]
 pub mod wallet;

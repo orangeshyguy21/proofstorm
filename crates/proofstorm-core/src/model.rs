@@ -130,6 +130,7 @@ pub enum Capability {
 pub enum ComponentKind {
     Bitcoin,
     Lightning,
+    PaymentProcessor,
     Mint,
     Database,
     IdentityProvider,

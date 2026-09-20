@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:992b8484096c5f26d69e03f9152a198aa5ca62428507e8c146e62b06990c5309",
+  "catalog_digest": "sha256:d167659276b9f3b087bdf96d302f1f66d339beceb31e62412f27a2c1601b0859",
   "entries": [
     {
       "implementation": "bitcoin-core",
@@ -469,9 +469,11 @@
           "postgres"
         ],
         "payment_methods": [
-          "bolt11"
+          "bolt11",
+          "bolt12"
         ],
         "payment_backends": [
+          "cdk-ldk-server-processor",
           "cln",
           "lnd"
         ],
@@ -479,6 +481,16 @@
           "sat"
         ],
         "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cdk-ldk-server-processor",
+              "versions": [
+                "0.1.0-fe468ca"
+              ]
+            }
+          },
           {
             "method": "bolt11",
             "unit": "sat",
@@ -497,6 +509,16 @@
               "versions": [
                 "0.20.4-beta",
                 "0.21.3-beta"
+              ]
+            }
+          },
+          {
+            "method": "bolt12",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cdk-ldk-server-processor",
+              "versions": [
+                "0.1.0-fe468ca"
               ]
             }
           }
@@ -535,6 +557,13 @@
           "implementation": "postgresql",
           "versions": [
             "17.11"
+          ]
+        },
+        {
+          "link_kind": "payment_backend",
+          "implementation": "cdk-ldk-server-processor",
+          "versions": [
+            "0.1.0-fe468ca"
           ]
         }
       ]
@@ -1496,6 +1525,90 @@
       ]
     },
     {
+      "implementation": "cdk-ldk-server-processor",
+      "kind": "payment_processor",
+      "upstream_version": "0.1.0-fe468ca",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "cdk-ldk-server-processor/0.1/v1",
+      "config_schema_digest": "sha256:efcaa8d707f50197d3a6078bbbd59f57b3ac647c0b55be09061d1b53348aa87c",
+      "image": "proofstorm-registry.localhost:5000/cdk-ldk-server-processor@sha256:1fcd8620a90f221432e960e29c46e5c11380ed661ff215d8acdad62ab42976c3",
+      "fields": {
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "fee_reserve_min_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "fee_reserve_percent": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "max_payment_scan_pages": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "ephemeral"
+        ],
+        "payment_methods": [
+          "bolt11",
+          "bolt12"
+        ],
+        "payment_backends": [
+          "ldk-server"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "ldk-server",
+              "versions": [
+                "0.1.0-50fe752"
+              ]
+            }
+          },
+          {
+            "method": "bolt12",
+            "unit": "sat",
+            "backend": {
+              "implementation": "ldk-server",
+              "versions": [
+                "0.1.0-50fe752"
+              ]
+            }
+          }
+        ],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "payment_backend",
+          "implementation": "ldk-server",
+          "versions": [
+            "0.1.0-50fe752"
+          ]
+        }
+      ]
+    },
+    {
       "implementation": "cln",
       "kind": "lightning",
       "upstream_version": "26.06.7",
@@ -1696,6 +1809,60 @@
           "implementation": "postgresql",
           "versions": [
             "17.11"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "ldk-server",
+      "kind": "lightning",
+      "upstream_version": "0.1.0-50fe752",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "ldk-server/0.1/v1",
+      "config_schema_digest": "sha256:dfe3e4915d22b479bb96f12a9f19d27e5905941aef231fc0be4e5058e2be5d43",
+      "image": "proofstorm-registry.localhost:5000/ldk-server@sha256:1a21ea3bdd9a73ce04e3e8159ebcd66fcfec25a649b71798d1f9bb3c454d94a3",
+      "fields": {
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11",
+          "bolt12"
+        ],
+        "payment_backends": [],
+        "units": [
+          "msat",
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
           ]
         }
       ]

@@ -49,6 +49,7 @@ spec:
                           enum:
                           - bitcoin
                           - lightning
+                          - payment_processor
                           - mint
                           - database
                           - identity_provider
@@ -613,6 +614,7 @@ spec:
                       enum:
                       - bitcoin
                       - lightning
+                      - payment_processor
                       - mint
                       - database
                       - identity_provider

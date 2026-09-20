@@ -6,6 +6,10 @@ use serde_json::{Value, json};
 
 use crate::{ComponentKind, ComponentSpec, LinkSpec, LockEntry};
 
+#[path = "processor_backend.rs"]
+mod processor;
+pub use processor::LdkServerProcessorConfig;
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -501,6 +505,10 @@ pub enum EffectiveComponentConfig {
     Lnd(LndConfig),
     #[serde(rename = "cln")]
     Cln(ClnConfig),
+    #[serde(rename = "ldk-server")]
+    LdkServer(LndConfig),
+    #[serde(rename = "cdk-ldk-server-processor")]
+    LdkServerProcessor(LdkServerProcessorConfig),
     #[serde(rename = "cdk")]
     Cdk(CdkMintConfig),
     #[serde(rename = "cdk-ldk")]
@@ -934,6 +942,10 @@ impl EffectiveComponentConfig {
             "cln" => Ok(Self::Cln(ClnConfig {
                 alias: string("alias")?,
             })),
+            "ldk-server" => Ok(Self::LdkServer(LndConfig {
+                alias: string("alias")?,
+            })),
+            "cdk-ldk-server-processor" => processor::effective_config(component),
             "cdk" => Ok(Self::Cdk(cdk()?)),
             "cdk-ldk" => Ok(Self::CdkLdk(cdk()?)),
             "cdk-bdk" => Ok(Self::CdkBdk(cdk()?)),
@@ -1371,6 +1383,19 @@ fn resolve_execution_mounts(
     let mut resolved = Vec::new();
     let mut alternative_groups = BTreeMap::<&str, usize>::new();
     for mount in &backend.execution_mounts {
+        // A network processor supplies its own transport credentials. Native
+        // LND/CLN data mounts are only applicable to direct node bindings.
+        if backend.id == "cdk"
+            && matches!(&mount.requirement, ExecutionMountRequirement::AtLeastOne { group } if group == "payment-backend")
+            && relevant_links.iter().any(|link| {
+                link.kind == crate::LinkKind::PaymentBackend
+                    && linked_targets
+                        .get(&link.id)
+                        .is_some_and(|target| target.kind == ComponentKind::PaymentProcessor)
+            })
+        {
+            continue;
+        }
         if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
             alternative_groups.entry(group).or_default();
         }
@@ -1626,7 +1651,7 @@ fn validate_backend_config_contract(contract: &ComponentBackendContract) -> Resu
     reason = "backend support contracts deliberately declare native configuration fields inline"
 )]
 fn default_backend_contracts() -> Vec<ComponentBackendContract> {
-    vec![
+    let mut contracts = vec![
         contract(
             "bitcoin-core",
             ComponentKind::Bitcoin,
@@ -1866,7 +1891,9 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
                 ComponentConditionType::ExperimentControllable,
             ]),
         ),
-    ]
+    ];
+    contracts.extend(processor::contracts());
+    contracts
 }
 
 fn workspace_config_fields() -> BTreeMap<String, ConfigFieldContract> {
@@ -3468,6 +3495,8 @@ mod tests {
             config_version: match implementation {
                 "bitcoin-core" => "bitcoin-core/31/v1",
                 "lnd" => "lnd/0.20/v1",
+                "ldk-server" => "ldk-server/0.1/v1",
+                "cdk-ldk-server-processor" => "cdk-ldk-server-processor/0.1/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",
                 "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",

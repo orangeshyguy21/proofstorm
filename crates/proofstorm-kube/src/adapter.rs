@@ -44,6 +44,13 @@ use crate::images::PROBE_IMAGE as PROBER_IMAGE;
 
 type ComponentRenderer = fn(&ComponentPlanContract) -> Result<RenderedComponent, AdapterError>;
 
+#[path = "processor_adapter.rs"]
+mod processor;
+pub use processor::{
+    render_node as render_ldk_server_component,
+    render_processor as render_ldk_server_processor_component,
+};
+
 static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> =
     LazyLock::new(|| {
         BTreeMap::from([
@@ -55,6 +62,8 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("cln", render_cln_component),
             ("keycloak", render_keycloak_component),
             ("lnd", render_lnd_component),
+            ("ldk-server", processor::render_node),
+            ("cdk-ldk-server-processor", processor::render_processor),
             ("nutshell", render_nutshell_mint_component),
             ("nutshell-wallet", render_wallet_component),
             ("cdk-cli-wallet", render_cdk_wallet_component),
@@ -1921,6 +1930,9 @@ pub fn render_cdk_component(
             "metadata": plan_pod_metadata(plan, &labels), "spec": pod_spec
         }}
     }))?);
+    if processor::grpc_target(plan)?.is_some() {
+        install_component_driver(&mut rendered)?;
+    }
     Ok(rendered)
 }
 
@@ -2017,7 +2029,19 @@ fn cdk_runtime_resources(
         json!({"name": "data", "persistentVolumeClaim": {"claimName": data_name}}),
     ];
     let mut ports = vec![json!({"name": "http", "containerPort": http_port})];
-    let native_config = if plan.backend_id == "cdk-ldk" {
+    let grpc_target = processor::grpc_target(plan)?;
+    let native_config = if let Some(target) = grpc_target {
+        volume_mounts.push(processor::tls_mount(
+            "payment-processor",
+            "/payment-processor/tls",
+        ));
+        volumes.push(processor::tls_volume(
+            "payment-processor",
+            &target.component_id,
+            "client",
+        ));
+        processor::mint_config(plan, config, http_port, target, database_config)?
+    } else if plan.backend_id == "cdk-ldk" {
         let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
         let chain_rpc = target_port(chain, "rpc")?;
         let p2p_port = plan
@@ -2094,6 +2118,9 @@ fn cdk_runtime_resources(
         )?
     };
     let mut init_containers = Vec::new();
+    if let Some(target) = grpc_target {
+        init_containers.push(processor::wait_for_processor(plan, target)?);
+    }
     if matches!(plan.backend_id.as_str(), "cdk-ldk" | "cdk-bdk") {
         let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
         let chain_rpc = target_port(chain, "rpc")?;
@@ -3434,6 +3461,15 @@ pub fn component_ports(component: &ComponentSpec) -> BTreeMap<String, u16> {
             .map_or_else(BTreeMap::new, |port| {
                 BTreeMap::from([("http".into(), port)])
             });
+    }
+    if matches!(
+        component.implementation.as_str(),
+        "ldk-server" | "cdk-ldk-server-processor"
+    ) {
+        return default_backend_registry()
+            .require(&component.implementation)
+            .map(|backend| backend.service_ports.clone())
+            .unwrap_or_default();
     }
     match component.kind {
         ComponentKind::Bitcoin => BTreeMap::from([

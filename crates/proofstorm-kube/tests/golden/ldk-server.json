@@ -1,0 +1,444 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "ldk-server",
+    "component_id": "ldk",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "image_pull_failed",
+        "image_pull_backoff",
+        "invalid_image_name",
+        "container_config_error",
+        "container_crash_loop",
+        "container_start_error",
+        "container_exited",
+        "pod_unschedulable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "config": {
+        "alias": "ldk"
+      },
+      "implementation": "ldk-server"
+    },
+    "execution_context": {
+      "component_id": "ldk",
+      "environment": {
+        "HOME": "/data"
+      },
+      "image": "proofstorm-registry.localhost:5000/ldk-server@sha256:15e5a5ea093a320ecb8ffdf74ecd39ab5c92dc65b2371d47bc3e1c920c2b22cc",
+      "mounts": [
+        {
+          "mount_path": "/data",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "stateful_data"
+          }
+        },
+        {
+          "mount_path": "/config",
+          "name": "config",
+          "read_only": true,
+          "source": {
+            "source": "component_config"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/ldk-server-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "lightning",
+    "linked_targets": {
+      "ldk-chain": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
+        "ports": {
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
+        },
+        "version": "31.1"
+      },
+      "ldk-payer": {
+        "backend_id": "ldk-server",
+        "component_id": "payer",
+        "kind": "lightning",
+        "ports": {
+          "p2p": 9735,
+          "rpc": 3536
+        },
+        "version": "0.1.0-50fe752"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 3536
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "chain"
+        },
+        "from": "ldk",
+        "id": "ldk-chain",
+        "kind": "chain_backend",
+        "to": "chain"
+      },
+      {
+        "from": "ldk",
+        "id": "ldk-payer",
+        "kind": "lightning_peer",
+        "to": "payer"
+      }
+    ],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:658724334507d67d6165620417e23087ff4f9840186844282ec1fdd274763eca",
+    "storage": [
+      {
+        "claim_name": "data-ldk-0"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "ldk-server",
+      "component_id": "ldk",
+      "kind": "lightning",
+      "ports": {
+        "p2p": 9735,
+        "rpc": 3536
+      },
+      "version": "0.1.0-50fe752"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "stateful_set",
+      "name": "ldk"
+    }
+  },
+  "resources": {
+    "configMaps": [
+      {
+        "apiVersion": "v1",
+        "data": {
+          "config.toml": "[node]\nnetwork = \"regtest\"\nalias = \"ldk\"\nlistening_addresses = [\"0.0.0.0:9735\"]\nannouncement_addresses = [\"ldk:9735\"]\ngrpc_service_address = \"0.0.0.0:3536\"\n\n[storage.disk]\ndir_path = \"/data\"\n\n[tls]\nhosts = [\"ldk\"]\n\n[bitcoind]\nrpc_address = \"chain:18443\"\nrpc_user = \"proofstorm\"\nrpc_password = \"proofstorm-regtest-only\"\n"
+        },
+        "kind": "ConfigMap",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ldk",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "ldk"
+          },
+          "name": "ldk-config",
+          "namespace": "proofstorm-i-golden-b2"
+        }
+      }
+    ],
+    "deployments": [],
+    "persistentVolumeClaims": [],
+    "secrets": [],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ldk",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "ldk"
+          },
+          "name": "ldk",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "p2p",
+              "port": 9735,
+              "targetPort": 9735
+            },
+            {
+              "name": "rpc",
+              "port": 3536,
+              "targetPort": 3536
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ldk",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "ldk"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "ldk-server",
+            "proofstorm.dev/execution-state-contract": "proofstorm/ldk-server-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ldk",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "ldk"
+          },
+          "name": "ldk",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "ldk",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "ldk"
+            }
+          },
+          "serviceName": "ldk",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:658724334507d67d6165620417e23087ff4f9840186844282ec1fdd274763eca"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "ldk",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "ldk"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [
+                    "/config/config.toml"
+                  ],
+                  "command": [
+                    "ldk-server"
+                  ],
+                  "env": [
+                    {
+                      "name": "HOME",
+                      "value": "/data"
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/ldk-server@sha256:15e5a5ea093a320ecb8ffdf74ecd39ab5c92dc65b2371d47bc3e1c920c2b22cc",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "ldk-server-cli",
+                        "--config",
+                        "/config/config.toml",
+                        "--base-url",
+                        "127.0.0.1:3536",
+                        "get-node-info"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/config",
+                      "name": "config",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "configMap": {
+                    "name": "ldk-config"
+                  },
+                  "name": "config"
+                }
+              ]
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "ldk",
+                  "proofstorm.dev/instance": "i-golden-b2",
+                  "proofstorm.dev/network-identity": "ldk"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

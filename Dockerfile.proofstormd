@@ -8,6 +8,7 @@ COPY crates ./crates
 COPY docker/wallet/*-provenance.json ./docker/wallet/
 COPY docker/mint/*-provenance.json ./docker/mint/
 COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
+COPY docker/payment/*-provenance.json ./docker/payment/
 RUN --mount=type=cache,id=proofstorm-native-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=proofstorm-native-target-${TARGETARCH},target=/src/target,sharing=locked \
     cargo build --locked --release -p proofstorm-exec -p proofstorm-driver && \
@@ -34,6 +35,7 @@ COPY crates ./crates
 COPY docker/wallet/*-provenance.json ./docker/wallet/
 COPY docker/mint/*-provenance.json ./docker/mint/
 COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
+COPY docker/payment/*-provenance.json ./docker/payment/
 RUN --mount=type=cache,id=proofstorm-controller-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=proofstorm-controller-target-${TARGETARCH},target=/src/target,sharing=locked \
     PROOFSTORM_CONTROLLER_SOURCE_SHA256=$PROOFSTORM_CONTROLLER_SOURCE_SHA256 cargo build --locked --release -p proofstormd -p proofstorm-prober --features proofstorm-prober/runtime && \

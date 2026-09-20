@@ -18,6 +18,9 @@ use crate::{
     PaymentMethod, default_backend_registry,
 };
 
+#[path = "processor_catalog.rs"]
+mod processor;
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -758,6 +761,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         entry.build_provenance = Some(provenance);
     }
     promote_component_releases(&mut entries, amd64);
+    processor::extend(&mut entries, amd64, backends, adapter_version);
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
 }
 
@@ -1390,6 +1394,9 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
     const OBSERVE: &[&str] = &["component_logs", "reachability_oracle"];
     const CDK_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info; use --help for native commands. Client certificates are mounted in /management-client/tls; never copy their contents into arguments or public output. Invoke through component_exec_live, not forensics. Durable RPC changes survive ordinary restarts; a changed authored cell configuration is applied on the next rollout. Mint quote payment override is disabled by the upstream server policy. CLI success is not proof of the intended state: verify the result independently. Management images support Linux amd64 and arm64.";
     const NUTSHELL_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info; use --help for native commands. Invoke through component_exec_live, not forensics. Never copy credentials into arguments or public output. Nutshell 0.20.3 can print RPC errors while exiting zero: verify state independently. Metadata/settings mutations can be process-local and reset from authored configuration on restart; persistent keyset/quote changes follow upstream database semantics. Management images support Linux amd64 and arm64.";
+    if let Some(endpoints) = processor::endpoints(implementation) {
+        return endpoints;
+    }
     let mut endpoints = match implementation {
         "bitcoin-core" => vec![runtime_endpoint(
             "component",
@@ -1973,8 +1980,8 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 21);
-        assert_eq!(catalog.implementations.len(), 14);
+        assert_eq!(catalog.entries.len(), 23);
+        assert_eq!(catalog.implementations.len(), 16);
         let lnd = catalog
             .implementations
             .iter()
@@ -1987,8 +1994,10 @@ mod tests {
             BTreeSet::from(["0.20.4-beta".into(), "0.21.3-beta".into()])
         );
         assert!(catalog.implementations.iter().all(|support| {
-            support.implementation == "cocod-wallet"
-                || support.implementation == "lnd"
+            matches!(
+                support.implementation.as_str(),
+                "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+            ) || support.implementation == "lnd"
                 || matches!(
                     support.implementation.as_str(),
                     "nutshell" | "nutshell-wallet"
@@ -2024,7 +2033,7 @@ mod tests {
         let mut unsupported_claim = catalog.entries.clone();
         unsupported_claim
             .iter_mut()
-            .find(|entry| entry.id == "cdk")
+            .find(|entry| entry.id == "cdk" && entry.version == "0.18.0")
             .expect("CDK entry")
             .support_matrix
             .payment_methods
@@ -2038,7 +2047,7 @@ mod tests {
         let mut false_cross_product = catalog.entries.clone();
         let cdk = false_cross_product
             .iter_mut()
-            .find(|entry| entry.id == "cdk")
+            .find(|entry| entry.id == "cdk" && entry.version == "0.18.0")
             .expect("CDK entry");
         cdk.features.insert(CatalogFeature::Bolt12);
         cdk.support_matrix

@@ -78,6 +78,7 @@ const fn component_kind_name(kind: ComponentKind) -> &'static str {
     match kind {
         ComponentKind::Bitcoin => "bitcoin",
         ComponentKind::Lightning => "lightning",
+        ComponentKind::PaymentProcessor => "payment_processor",
         ComponentKind::Mint => "mint",
         ComponentKind::Database => "database",
         ComponentKind::IdentityProvider => "identity_provider",

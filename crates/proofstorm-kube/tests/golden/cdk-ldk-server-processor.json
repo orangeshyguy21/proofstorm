@@ -1,0 +1,591 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "credentials_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "cdk-ldk-server-processor",
+    "component_id": "processor",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "credentials_ready": [
+        "not_observed",
+        "credentials_projected",
+        "credentials_missing"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "image_pull_failed",
+        "image_pull_backoff",
+        "invalid_image_name",
+        "container_config_error",
+        "container_crash_loop",
+        "container_start_error",
+        "container_exited",
+        "pod_unschedulable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [
+      {
+        "claim_name": "data-ldk-0",
+        "identity": "ldk-server:processor-bolt11:ldk:data-ldk-0",
+        "mount_name": "ldk-server",
+        "mount_path": "/ldk-server",
+        "read_only": true,
+        "source_component_id": "ldk",
+        "source_state_contract": "proofstorm/ldk-server-state/v1"
+      }
+    ],
+    "effective_config": {
+      "config": {
+        "fee_reserve_min_sat": 2,
+        "fee_reserve_percent": 0.01,
+        "max_payment_scan_pages": 32
+      },
+      "implementation": "cdk-ldk-server-processor"
+    },
+    "execution_context": {
+      "component_id": "processor",
+      "environment": {},
+      "image": "proofstorm-registry.localhost:5000/cdk-ldk-server-processor@sha256:ee21cdf4056d6f228d17f2e6739f98f11f84f94812762d1b8d6e7d873fc9451e",
+      "mounts": [
+        {
+          "mount_path": "/ldk-server",
+          "name": "ldk-server",
+          "read_only": true,
+          "source": {
+            "link_id": "processor-bolt11",
+            "source": "linked_stateful_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/cdk-ldk-server-processor-state/v1"
+    },
+    "instance_key": "i-golden-b2",
+    "kind": "payment_processor",
+    "linked_targets": {
+      "processor-bolt11": {
+        "backend_id": "ldk-server",
+        "component_id": "ldk",
+        "kind": "lightning",
+        "ports": {
+          "p2p": 9735,
+          "rpc": 3536
+        },
+        "version": "0.1.0-50fe752"
+      },
+      "processor-bolt12": {
+        "backend_id": "ldk-server",
+        "component_id": "ldk",
+        "kind": "lightning",
+        "ports": {
+          "p2p": 9735,
+          "rpc": 3536
+        },
+        "version": "0.1.0-50fe752"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 50051
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "method": "bolt11",
+          "type": "payment",
+          "unit": "sat"
+        },
+        "from": "processor",
+        "id": "processor-bolt11",
+        "kind": "payment_backend",
+        "to": "ldk"
+      },
+      {
+        "binding": {
+          "method": "bolt12",
+          "type": "payment",
+          "unit": "sat"
+        },
+        "from": "processor",
+        "id": "processor-bolt12",
+        "kind": "payment_backend",
+        "to": "ldk"
+      }
+    ],
+    "revision_digest": "sha256:b2-golden-revision",
+    "rollout_digest": "sha256:4f0ce0f78b2fbbb5de301f9d8de95855e07103e05f98afa9b74dfeea0f4bd890",
+    "storage": [],
+    "target_descriptor": {
+      "backend_id": "cdk-ldk-server-processor",
+      "component_id": "processor",
+      "kind": "payment_processor",
+      "ports": {
+        "grpc": 50051
+      },
+      "version": "0.1.0-fe468ca"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "deployment",
+      "name": "processor"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "cdk-ldk-server-processor",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-ldk-server-processor-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "processor"
+          },
+          "name": "processor",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "processor",
+              "proofstorm.dev/instance": "i-golden-b2",
+              "proofstorm.dev/network-identity": "processor"
+            }
+          },
+          "strategy": {
+            "type": "Recreate"
+          },
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:4f0ce0f78b2fbbb5de301f9d8de95855e07103e05f98afa9b74dfeea0f4bd890"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "processor",
+                "proofstorm.dev/instance": "i-golden-b2",
+                "proofstorm.dev/network-identity": "processor"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-golden-b2"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "exec-ldk-processor"
+                  ],
+                  "env": [
+                    {
+                      "name": "ALLOW_INSECURE",
+                      "value": "false"
+                    },
+                    {
+                      "name": "LDK_ADDRESS",
+                      "value": "ldk:3536"
+                    },
+                    {
+                      "name": "LDK_FEE_RESERVE_MIN_SAT",
+                      "value": "2"
+                    },
+                    {
+                      "name": "LDK_FEE_RESERVE_PERCENT",
+                      "value": "0.01"
+                    },
+                    {
+                      "name": "LDK_MAX_PAYMENT_SCAN_PAGES",
+                      "value": "32"
+                    },
+                    {
+                      "name": "LDK_PAYMENT_METHODS",
+                      "value": "bolt11,bolt12"
+                    },
+                    {
+                      "name": "LDK_TLS_CERT_PATH",
+                      "value": "/ldk-server/tls.crt"
+                    },
+                    {
+                      "name": "SERVER_ADDRESS",
+                      "value": "0.0.0.0"
+                    },
+                    {
+                      "name": "SERVER_PORT",
+                      "value": "50051"
+                    },
+                    {
+                      "name": "TLS_CERT_PATH",
+                      "value": "/processor-server/tls/server.pem"
+                    },
+                    {
+                      "name": "TLS_CLIENT_CA_PATH",
+                      "value": "/processor-server/tls/ca.pem"
+                    },
+                    {
+                      "name": "TLS_ENABLE",
+                      "value": "true"
+                    },
+                    {
+                      "name": "TLS_KEY_PATH",
+                      "value": "/processor-server/tls/server.key"
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/cdk-ldk-server-processor@sha256:ee21cdf4056d6f228d17f2e6739f98f11f84f94812762d1b8d6e7d873fc9451e",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 50051,
+                      "name": "grpc"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "/opt/proofstorm/driver",
+                        "processor-settings",
+                        "https://127.0.0.1:50051",
+                        "/processor-client/tls"
+                      ]
+                    },
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/ldk-server",
+                      "name": "ldk-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/processor-server/tls",
+                      "name": "processor-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/processor-client/tls",
+                      "name": "processor-client",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "for attempt in $(seq 1 120); do if test -s /ldk-server/regtest/api_key && test -s /ldk-server/tls.crt && /opt/proofstorm/driver tcp ldk 3536; then exit 0; fi; sleep 1; done; echo 'LDK Server dependency did not become ready' >&2; exit 1"
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/cdk-ldk-server-processor@sha256:ee21cdf4056d6f228d17f2e6739f98f11f84f94812762d1b8d6e7d873fc9451e",
+                  "name": "wait-for-ldk-server",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/ldk-server",
+                      "name": "ldk-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "ldk-server",
+                  "persistentVolumeClaim": {
+                    "claimName": "data-ldk-0"
+                  }
+                },
+                {
+                  "name": "processor-server",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "server.pem",
+                        "path": "server.pem"
+                      },
+                      {
+                        "key": "server.key",
+                        "path": "server.key"
+                      }
+                    ],
+                    "secretName": "processor-payment-tls"
+                  }
+                },
+                {
+                  "name": "processor-client",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "client.pem",
+                        "path": "client.pem"
+                      },
+                      {
+                        "key": "client.key",
+                        "path": "client.key"
+                      }
+                    ],
+                    "secretName": "processor-payment-tls"
+                  }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "persistentVolumeClaims": [],
+    "secrets": [
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "processor"
+          },
+          "name": "processor-payment-tls",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "payment-processor-tls",
+          "PROOFSTORM_TLS_SERVER_NAME": "processor"
+        },
+        "type": "Opaque"
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "processor"
+          },
+          "name": "processor",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "grpc",
+              "port": 50051,
+              "targetPort": 50051
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-golden-b2",
+            "proofstorm.dev/network-identity": "processor"
+          }
+        }
+      }
+    ],
+    "statefulSets": []
+  }
+}

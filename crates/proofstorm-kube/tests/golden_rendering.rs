@@ -138,6 +138,14 @@ fn authentication_link(from: &str, to: &str) -> LinkSpec {
 )]
 fn backend_cell(backend_id: &str) -> (CellSpec, &'static str) {
     match backend_id {
+        "ldk-server" | "cdk-ldk-server-processor" => (
+            serde_json::from_str(include_str!("../../../examples/ldk-server-cell.json")).unwrap(),
+            if backend_id == "ldk-server" {
+                "ldk"
+            } else {
+                "processor"
+            },
+        ),
         "bitcoin-core" => (
             cell(
                 "golden-bitcoin",
@@ -361,6 +369,8 @@ fn render_backend_with_catalog(backend_id: &str, catalog: &CatalogResponse) -> V
         "bitcoin-core" => render_bitcoin_component(plan),
         "lnd" => render_lnd_component(plan),
         "cln" => render_cln_component(plan),
+        "ldk-server" => proofstorm_kube::render_ldk_server_component(plan),
+        "cdk-ldk-server-processor" => proofstorm_kube::render_ldk_server_processor_component(plan),
         "cdk" | "cdk-ldk" | "cdk-bdk" => render_cdk_component(plan),
         "nutshell" => render_nutshell_mint_component(plan),
         "nutshell-wallet" => render_wallet_component(plan),
@@ -1215,6 +1225,78 @@ fn assert_golden(name: &str, actual: &Value) {
 }
 
 #[test]
+fn grpc_mint_uses_the_selected_processor_and_only_its_client_identity() {
+    let (spec, _) = backend_cell("ldk-server");
+    for (id, service, port) in [("ldk", "rpc", 3536), ("processor", "grpc", 50051)] {
+        let component = spec
+            .components
+            .iter()
+            .find(|component| component.id == id)
+            .unwrap();
+        assert_eq!(proofstorm_kube::component_ports(component)[service], port);
+    }
+    let lock = resolve_lock(&spec, default_catalog()).unwrap();
+    let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+    let mint = plans
+        .iter()
+        .find(|plan| plan.component_id == "mint")
+        .unwrap();
+    assert!(
+        mint.execution_context
+            .mounts
+            .iter()
+            .all(|mount| mount.name != "lnd" && mount.name != "cln")
+    );
+    let rendered = render_cdk_component(mint).unwrap();
+    assert_component_security(&rendered);
+    let snapshot = component_snapshot(mint, &rendered);
+    let config = &rendered.config_maps[0].data.as_ref().unwrap()["config.toml"];
+    for required in [
+        "backend = \"grpcprocessor\"",
+        "address = \"processor\"",
+        "allow_insecure = false",
+        "supported_units = [\"sat\"]",
+    ] {
+        assert!(config.contains(required), "missing {required}");
+    }
+    assert!(!config.contains("[lnd]") && !config.contains("[cln]"));
+    let pod = &snapshot["resources"]["deployments"][0]["spec"]["template"]["spec"];
+    let volume = pod["volumes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|volume| volume["name"] == "payment-processor")
+        .unwrap();
+    assert_eq!(volume["secret"]["secretName"], "processor-payment-tls");
+    let keys: Vec<_> = volume["secret"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["ca.pem", "client.pem", "client.key"]);
+    let initializers = pod["initContainers"].as_array().unwrap();
+    assert!(initializers[0]["name"].as_str().unwrap().contains("driver"));
+    assert!(
+        initializers
+            .iter()
+            .any(|init| init["name"] == "wait-for-payment-processor")
+    );
+    assert_golden("cdk-grpc-processor", &snapshot);
+
+    // A forged compiled plan cannot silently point the two advertised methods
+    // at different services, even if it bypasses authored-cell validation.
+    let mut invalid = mint.clone();
+    invalid
+        .relevant_links
+        .iter_mut()
+        .find(|link| link.id == "mint-bolt12")
+        .unwrap()
+        .to = "payer".into();
+    assert!(render_cdk_component(&invalid).is_err());
+}
+
+#[test]
 fn every_registered_backend_matches_its_golden_contract() {
     // Keep shared snapshot updates sequential when UPDATE_GOLDENS is enabled.
     assert_backend_goldens(CatalogPlatform::LinuxArm64);
@@ -1228,9 +1310,11 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
         "cdk-bdk",
         "cdk-cli-wallet",
         "cdk-ldk",
+        "cdk-ldk-server-processor",
         "cln",
         "cocod-wallet",
         "keycloak",
+        "ldk-server",
         "lnd",
         "nutshell",
         "nutshell-wallet",
@@ -1249,7 +1333,12 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
         let golden_name = match (platform, backend_id) {
             (
                 CatalogPlatform::LinuxAmd64,
-                "cdk-cli-wallet" | "cocod-wallet" | "nutshell" | "nutshell-wallet",
+                "cdk-cli-wallet"
+                | "cocod-wallet"
+                | "nutshell"
+                | "nutshell-wallet"
+                | "ldk-server"
+                | "cdk-ldk-server-processor",
             ) => {
                 format!("linux-amd64/{backend_id}")
             }

@@ -3142,18 +3142,18 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 21);
+        assert_eq!(catalog.entries.len(), 23);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 14);
+        assert_eq!(catalog.implementations.len(), 16);
         assert_support_defaults(catalog);
         let cdk = catalog
             .entries
             .iter()
-            .find(|entry| entry.id == "cdk")
+            .find(|entry| entry.id == "cdk" && entry.version == "0.18.1")
             .expect("CDK support contract");
         assert_eq!(cdk.config_version, "cdk-mintd/0.18/v1");
         assert_eq!(
@@ -3166,16 +3166,27 @@ mod tests {
         );
         assert_eq!(
             cdk.support_matrix.payment_methods,
-            [proofstorm_core::PaymentMethod::Bolt11].into()
+            [
+                proofstorm_core::PaymentMethod::Bolt11,
+                proofstorm_core::PaymentMethod::Bolt12,
+            ]
+            .into()
         );
         assert_eq!(
             cdk.support_matrix.payment_backends,
-            ["cln".into(), "lnd".into()].into()
+            [
+                "cln".into(),
+                "lnd".into(),
+                "cdk-ldk-server-processor".into()
+            ]
+            .into()
         );
         assert!(cdk.support_matrix.units.contains("sat"));
-        assert_eq!(cdk.support_matrix.payment_bindings.len(), 2);
+        assert_eq!(cdk.support_matrix.payment_bindings.len(), 4);
         assert!(cdk.support_matrix.payment_bindings.iter().all(|binding| {
-            binding.method == proofstorm_core::PaymentMethod::Bolt11 && binding.unit == "sat"
+            binding.unit == "sat"
+                && (binding.method == proofstorm_core::PaymentMethod::Bolt11
+                    || binding.backend.implementation == "cdk-ldk-server-processor")
         }));
         assert_eq!(
             cdk.support_matrix.compatible_wallet_adapters[0].implementation,
@@ -3208,15 +3219,17 @@ mod tests {
 
     fn assert_support_defaults(catalog: &proofstorm_core::CatalogResponse) {
         assert!(catalog.implementations.iter().all(|support| {
-            support.implementation == "cocod-wallet"
-                || support.preferred_version.as_ref().is_some_and(|version| {
-                    support.supported_versions.contains(version)
-                        && (matches!(
-                            support.implementation.as_str(),
-                            "lnd" | "nutshell" | "nutshell-wallet"
-                        ) || support.minimum_supported == support.preferred_version
-                            && support.supported_versions.len() == 1)
-                })
+            matches!(
+                support.implementation.as_str(),
+                "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+            ) || support.preferred_version.as_ref().is_some_and(|version| {
+                support.supported_versions.contains(version)
+                    && (matches!(
+                        support.implementation.as_str(),
+                        "lnd" | "nutshell" | "nutshell-wallet"
+                    ) || support.minimum_supported == support.preferred_version
+                        && support.supported_versions.len() == 1)
+            })
         }));
     }
 
@@ -3271,15 +3284,17 @@ mod tests {
         page.items = items;
         let page: CatalogListResponse =
             serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
-        assert_eq!(page.items.len(), 17);
+        assert_eq!(page.items.len(), 19);
         assert!(page.next_cursor.is_none());
         assert!(read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
         assert!(page.items.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && (entry.support_lifecycle == SupportLifecycle::Preferred
-                    || entry.id == "cocod-wallet"
-                        && entry.support_lifecycle == SupportLifecycle::Experimental
+                    || matches!(
+                        entry.id.as_str(),
+                        "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+                    ) && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
                         && entry.version == "0.20.4-beta"
                         && entry.support_lifecycle == SupportLifecycle::Supported

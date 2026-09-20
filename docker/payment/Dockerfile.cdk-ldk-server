@@ -1,0 +1,18 @@
+# Independent upstream Cargo project, with its own frozen dependency lock.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler clang cmake && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/cashubtc/cdk-payment-processors/tar.gz/fe468cad486157683eddbc0df4ff87ba71b6c0a3 -o /tmp/source.tar.gz \
+    && echo '236d4caa1c1e1643ba8b9f40c7af4c478f1afddf09be86520317a5951e4073e9  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,target=/src/crates/ldk-server/target,sharing=locked \
+    cargo build --locked --release --jobs 1 --manifest-path crates/ldk-server/Cargo.toml \
+    && cp crates/ldk-server/target/release/cdk-payment-processor-ldk-server /usr/local/bin/
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/cdk-payment-processor-ldk-server /usr/local/bin/
+RUN printf '%s\n' 'fe468cad486157683eddbc0df4ff87ba71b6c0a3' > /usr/local/share/processor-revision
+USER 1000:1000
+CMD ["cdk-payment-processor-ldk-server"]

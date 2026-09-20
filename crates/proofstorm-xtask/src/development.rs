@@ -216,7 +216,7 @@ fn selected(name: &str) -> bool {
         && (RUNTIME.contains(&parts[1]) || (parts.len() == 3 && parts[2] == "Cargo.toml")))
         || (parts.len() == 3
             && parts[0] == "docker"
-            && ["wallet", "mint", "bitcoin"].contains(&parts[1])
+            && ["wallet", "mint", "bitcoin", "payment"].contains(&parts[1])
             && parts[2].ends_with("-provenance.json"))
 }
 
