@@ -1,16 +1,12 @@
-//! Private Nutshell quote correlation and explicit settlement/recovery.
+//! Passive Nutshell wallet and mint quote observations.
 //! Observation paths never start a wallet or mutate its database.
-mod native;
-mod refresh;
 #[cfg(test)]
 mod tests;
-use native::{Native, WalletCli};
 use rusqlite::{Connection, ErrorCode, OpenFlags, ToSql, types::ValueRef};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Read,
     path::{Path, PathBuf},
     thread::sleep,
     time::{Duration, Instant},
@@ -82,9 +78,9 @@ impl Config {
         }
         Ok(value)
     }
-    fn wallet(&self, home: Option<&str>, name: Option<&str>) -> Result<Wallet> {
-        let home = home.map_or_else(|| self.get("HOME"), Ok)?;
-        let name = name.map_or_else(|| self.get("PROOFSTORM_WALLET"), Ok)?;
+    fn wallet(&self) -> Result<Wallet> {
+        let home = self.get("HOME")?;
+        let name = self.get("PROOFSTORM_WALLET")?;
         // Preserve the logical component identity in receipts, independently of the native name.
         if !valid_id(name) {
             return Err(fail("wallet_name_invalid"));
@@ -312,7 +308,6 @@ impl Receive {
 }
 #[derive(Clone, PartialEq)]
 struct Melt {
-    path: PathBuf,
     id: String,
     state: String,
     amount: u64,
@@ -320,9 +315,8 @@ struct Melt {
     fee: Option<u64>,
 }
 impl Melt {
-    fn parse(path: PathBuf, row: &Row) -> Result<Self> {
+    fn parse(row: &Row) -> Result<Self> {
         Ok(Self {
-            path,
             id: text(&row[0])?.into(),
             state: text(&row[1])?.into(),
             amount: amount(&row[2])?,
@@ -334,31 +328,22 @@ impl Melt {
             },
         })
     }
-    fn by_id(wallet: &Wallet, id: &str) -> Result<Self> {
-        let (path, row) = wallet.one(
-            "SELECT quote,state,amount,fee_reserve,fee_paid FROM bolt11_melt_quotes WHERE quote=?1",
-            &[&id],
-            "melt_quote_missing",
-        )?;
-        Self::parse(path, &row)
-    }
     fn correlate(wallet: &Wallet, invoice: &str, before: &BTreeSet<String>) -> Result<Self> {
         wallet.select("SELECT quote,state,amount,fee_reserve,fee_paid FROM bolt11_melt_quotes WHERE lower(request)=lower(?1) ORDER BY created_time DESC",&[&invoice],"melt_quote_missing",|rows| {
             if rows.busy { return Ok(None); }
             let mut found = None;
-            for (path,row) in &rows.values {
+            for (_,row) in &rows.values {
                 if !before.contains(text(&row[0])?) {
                     if found.is_some() { return Err(fail("melt_quote_ambiguous")); }
-                    found=Some(Self::parse(path.clone(),row)?);
+                    found=Some(Self::parse(row)?);
                 }
             }
             Ok(found)
         })
     }
-    fn authoritative(mut self, config: &Config) -> Result<Self> {
-        let Some(directory) = config.optional("PROOFSTORM_MINT_DB_DIR") else {
-            return Ok(self);
-        };
+    fn from_mint(config: &Config) -> Result<Self> {
+        let id = config.id("PROOFSTORM_MELT_QUOTE_ID")?;
+        let directory = config.get("PROOFSTORM_MINT_DB_DIR")?;
         let mut pending = vec![PathBuf::from(directory)];
         let mut paths = Vec::new();
         while let Some(path) = pending.pop() {
@@ -373,8 +358,7 @@ impl Melt {
             }
         }
         if paths.is_empty() {
-            self.fee = None;
-            return Ok(self);
+            return Err(fail("mint_database_missing"));
         }
         paths.sort();
         let database = Wallet {
@@ -384,11 +368,11 @@ impl Melt {
         };
         let (_, row) = database.one(
             "SELECT quote,state,amount,fee_reserve,fee_paid FROM melt_quotes WHERE quote=?1",
-            &[&self.id],
+            &[&id],
             "mint_melt_quote_missing",
         )?;
-        let observed = Self::parse(self.path, &row)?;
-        if observed.id != self.id {
+        let observed = Self::parse(&row)?;
+        if observed.id != id {
             return Err(fail("mint_melt_quote_identity_mismatch"));
         }
         Ok(observed)
@@ -398,33 +382,6 @@ impl Melt {
     }
 }
 
-fn invoice_id(config: &Config) -> Result<String> {
-    let mut bytes = Vec::new();
-    fs::File::open(config.get("PROOFSTORM_INVOICE_OUTPUT_PATH")?)?
-        .take(65_537)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > 65_536 {
-        return Err(fail("mint_quote_id_not_observed"));
-    }
-    let decoded = String::from_utf8_lossy(&bytes);
-    let mut ids = BTreeSet::new();
-    for rest in decoded.split("--id").skip(1) {
-        if !rest.starts_with(char::is_whitespace) {
-            continue;
-        }
-        if let Some(value) = rest.split_whitespace().next() {
-            if valid_id(value) {
-                ids.insert(value.to_owned());
-            }
-        }
-    }
-    if ids.len() != 1 {
-        return Err(fail("mint_quote_id_not_observed"));
-    }
-    ids.into_iter()
-        .next()
-        .ok_or_else(|| fail("mint_quote_id_not_observed"))
-}
 fn before_ids(config: &Config) -> Result<BTreeSet<String>> {
     let values: Vec<String> = serde_json::from_str(
         config
@@ -451,70 +408,56 @@ pub fn private_invoice(home: &str, wallet: &str, mint: &str, id: &str) -> Result
             ("PROOFSTORM_WALLET".into(), wallet.into()),
         ]),
     };
-    Ok(Receive::read(&config.wallet(None, None)?, id, Some(mint))?.request)
+    Ok(Receive::read(&config.wallet()?, id, Some(mint))?.request)
 }
 
 /// Observe a quote using only private local state.
 /// # Errors
 /// Rejects missing, busy, incompatible, ambiguous or out-of-scope records.
 pub fn observe(mode: &str, config: &Config) -> Result<Value> {
-    let wallet = config.wallet(None, None)?;
-    match mode {
-        "observe-invoice" => {
-            let quote = Receive::read(
-                &wallet,
-                &invoice_id(config)?,
-                config.optional("PROOFSTORM_EXPECTED_MINT_URL"),
-            )?;
-            if !quote.state.eq_ignore_ascii_case("UNPAID") {
-                return Err(fail("mint_quote_initial_state_unexpected"));
-            }
-            Ok(
-                json!({"mint_quote_id":quote.id,"quote_observations":[quote.artifact("invoice_receive",config.get("PROOFSTORM_WALLET")?,config.get("PROOFSTORM_MINT")?)]}),
-            )
-        }
-        "observe-receive" => {
-            let quote = Receive::read(
-                &wallet,
-                config.id("PROOFSTORM_MINT_QUOTE_ID")?,
-                config.optional("PROOFSTORM_EXPECTED_MINT_URL"),
-            )?;
-            Ok(quote.artifact(
-                config.get("PROOFSTORM_OBSERVATION_ROLE")?,
-                config.get("PROOFSTORM_WALLET")?,
-                config.get("PROOFSTORM_MINT")?,
-            ))
-        }
-        "observe-melt" => Ok(Melt::correlate(
-            &wallet,
-            config.get("PROOFSTORM_INVOICE")?,
-            &before_ids(config)?,
-        )?
-        .authoritative(config)?
-        .artifact(
+    // Dispatch before any wallet access. Mint reads need no wallet database,
+    // and retired mutation modes must fail without touching either component.
+    if mode == "observe-mint-melt" {
+        let mut value = Melt::from_mint(config)?.artifact(
             config.get("PROOFSTORM_WALLET")?,
             config.get("PROOFSTORM_MINT")?,
-        )),
-        _ => Err(fail("quote_driver_mode_invalid")),
+        );
+        value["source"] = json!("mint");
+        return Ok(value);
     }
-}
-
-fn melt_ids(wallet: &Wallet) -> Result<BTreeSet<String>> {
-    wallet.select(
-        "SELECT quote FROM bolt11_melt_quotes",
-        &[],
-        "wallet_schema_mismatch",
-        |rows| {
-            if rows.busy {
-                return Ok(None);
-            }
-            rows.values
-                .iter()
-                .map(|(_, row)| Ok(text(&row[0])?.to_owned()))
-                .collect::<Result<_>>()
-                .map(Some)
-        },
-    )
+    if !matches!(mode, "observe-receive" | "observe-melt") {
+        return Err(fail("quote_driver_mode_invalid"));
+    }
+    let wallet = config.wallet()?;
+    if mode == "observe-receive" {
+        let quote = Receive::read(
+            &wallet,
+            config.id("PROOFSTORM_MINT_QUOTE_ID")?,
+            config.optional("PROOFSTORM_EXPECTED_MINT_URL"),
+        )?;
+        return Ok(quote.artifact(
+            config.get("PROOFSTORM_OBSERVATION_ROLE")?,
+            config.get("PROOFSTORM_WALLET")?,
+            config.get("PROOFSTORM_MINT")?,
+        ));
+    }
+    let melt = Melt::correlate(
+        &wallet,
+        config.get("PROOFSTORM_INVOICE")?,
+        &before_ids(config)?,
+    )?;
+    let mut value = melt.artifact(
+        config.get("PROOFSTORM_WALLET")?,
+        config.get("PROOFSTORM_MINT")?,
+    );
+    // Wallet-local fee fields are not authoritative mint evidence.
+    value["source"] = json!("wallet");
+    if matches!(melt.state.as_str(), "PAID" | "UNPAID") {
+        let (fee, count) = input_fee(&wallet, &melt, config.get("PROOFSTORM_EXPECTED_MINT_URL")?)?;
+        value["input_fee_sat"] = json!(fee);
+        value["input_proof_count"] = json!(count);
+    }
+    Ok(value)
 }
 
 fn input_fee(wallet: &Wallet, quote: &Melt, mint: &str) -> Result<(u64, u64)> {
@@ -536,142 +479,4 @@ fn input_fee(wallet: &Wallet, quote: &Melt, mint: &str) -> Result<(u64, u64)> {
         }
         Ok(None)
     })
-}
-
-async fn balance(cli: &impl WalletCli, home: &str, wallet: &str, mint: &str) -> Result<u64> {
-    let output = cli
-        .run(home, wallet, mint, &["balance"], Duration::from_secs(30))
-        .await?;
-    if output.code != 0 || output.truncated {
-        return Err(fail("wallet_balance_unavailable"));
-    }
-    let decoded = String::from_utf8_lossy(&output.stdout);
-    decoded
-        .split("Balance:")
-        .skip(1)
-        .filter_map(|part| {
-            let raw: String = part
-                .trim_start()
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect();
-            raw.parse().ok()
-        })
-        .last()
-        .ok_or_else(|| fail("wallet_balance_unavailable"))
-}
-
-async fn claim(config: &Config, cli: &impl WalletCli) -> Result<Value> {
-    let wallet = config.wallet(None, None)?;
-    let id = config.id("PROOFSTORM_MINT_QUOTE_ID")?;
-    let mut quote = Receive::read(&wallet, id, config.optional("PROOFSTORM_EXPECTED_MINT_URL"))?;
-    let already_issued = quote.state == "ISSUED";
-    let code = if already_issued {
-        0
-    } else {
-        let output = cli
-            .run(
-                config.get("HOME")?,
-                config.get("PROOFSTORM_WALLET")?,
-                config.get("PROOFSTORM_EXPECTED_MINT_URL")?,
-                &["invoice", &quote.amount.to_string(), "--id", id],
-                config.seconds("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", 30.0, 1.0, 120.0)?,
-            )
-            .await?;
-        quote = Receive::read(&wallet, id, config.optional("PROOFSTORM_EXPECTED_MINT_URL"))?;
-        output.code
-    };
-    let mut artifact = json!({"mint_quote_id":id,"claim_exit_code":code,"already_issued":already_issued,
-        "quote_observations":[quote.artifact("claim_receive",config.get("PROOFSTORM_WALLET")?,config.get("PROOFSTORM_MINT")?)]});
-    if !matches!(
-        quote.state.to_ascii_uppercase().as_str(),
-        "UNPAID" | "PAID" | "ISSUED"
-    ) {
-        artifact["code"] = json!("unsupported_wallet_quote_state");
-    }
-    Ok(artifact)
-}
-
-async fn pay(config: &Config, cli: &impl WalletCli) -> Result<Value> {
-    let payer_home = config.get("HOME")?;
-    let payer_name = config.get("PROOFSTORM_WALLET")?;
-    let payer_mint = config.get("PROOFSTORM_MINT")?;
-    let payer_url = config.get("PROOFSTORM_EXPECTED_MINT_URL")?;
-    let home = config.get("PROOFSTORM_RECIPIENT_HOME")?;
-    let name = config.get("PROOFSTORM_RECIPIENT_WALLET")?;
-    let mint = config.get("PROOFSTORM_RECIPIENT_MINT")?;
-    let url = config.get("PROOFSTORM_RECIPIENT_MINT_URL")?;
-    let id = config.id("PROOFSTORM_MINT_QUOTE_ID")?;
-    let recipient = config.wallet(Some(home), Some(name))?;
-    let receive = Receive::read(&recipient, id, Some(url))?;
-    if !receive.state.eq_ignore_ascii_case("UNPAID") {
-        let code = if matches!(
-            receive.state.to_ascii_uppercase().as_str(),
-            "PAID" | "ISSUED"
-        ) {
-            "mint_quote_not_payable"
-        } else {
-            "unsupported_wallet_quote_state"
-        };
-        return Ok(
-            json!({"code":code,"mint_quote_id":id,"quote_observations":[receive.artifact("payment_receive",name,mint)]}),
-        );
-    }
-    let payer = config.wallet(None, None)?;
-    let before = melt_ids(&payer)?;
-    let paid = cli
-        .run(
-            payer_home,
-            payer_name,
-            payer_url,
-            &["pay", &receive.request],
-            config.seconds("PROOFSTORM_PAY_TIMEOUT_SECONDS", 120.0, 1.0, 180.0)?,
-        )
-        .await?;
-    let melt = Melt::correlate(&payer, &receive.request, &before)?.authoritative(config)?;
-    let (input_fee_sat, input_proof_count) = input_fee(&payer, &melt, payer_url)?;
-    let claim_code = if melt.state.eq_ignore_ascii_case("PAID") {
-        Some(
-            cli.run(
-                home,
-                name,
-                url,
-                &["invoice", &receive.amount.to_string(), "--id", id],
-                config.seconds("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", 30.0, 1.0, 120.0)?,
-            )
-            .await?
-            .code,
-        )
-    } else {
-        None
-    };
-    let receive = Receive::read(&recipient, id, Some(url))?;
-    let mut artifact = json!({"mint_quote_id":id,"melt_quote_id":melt.id,"pay_exit_code":paid.code,"claim_exit_code":claim_code,
-        "payer_balance_sat":balance(cli,payer_home,payer_name,payer_url).await?,"recipient_balance_sat":balance(cli,home,name,url).await?,
-        "input_fee_sat":input_fee_sat,"input_proof_count":input_proof_count,
-        "quote_observations":[melt.artifact(payer_name,payer_mint),receive.artifact("payment_receive",name,mint)]});
-    if melt.state.eq_ignore_ascii_case("PAID") && !receive.state.eq_ignore_ascii_case("ISSUED") {
-        artifact["code"] = json!("payment_paid_claim_unverified");
-    } else if !matches!(
-        melt.state.to_ascii_uppercase().as_str(),
-        "UNPAID" | "PENDING" | "PAID"
-    ) || !matches!(
-        receive.state.to_ascii_uppercase().as_str(),
-        "UNPAID" | "PAID" | "ISSUED"
-    ) {
-        artifact["code"] = json!("unsupported_wallet_quote_state");
-    }
-    Ok(artifact)
-}
-
-/// Run an explicitly requested wallet action; no private invoice appears in its result.
-/// # Errors
-/// Returns fixed failure reasons without raw CLI/RPC output or private database values.
-pub async fn run(mode: &str, config: &Config) -> Result<Value> {
-    match mode {
-        "claim-receive" => claim(config, &Native).await,
-        "pay-and-claim" => pay(config, &Native).await,
-        "refresh-melt" => refresh::run(config).await,
-        _ => observe(mode, config),
-    }
 }

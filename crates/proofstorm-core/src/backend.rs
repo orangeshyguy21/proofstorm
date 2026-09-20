@@ -96,7 +96,9 @@ pub enum OperationClass {
     Restart,
     NativeExec,
     NetworkHeal,
+    // Retained for decoding historical plan artifacts; no current action uses it.
     PeerChannelMutation,
+    // Retained for historical plans; native execution owns wallet interaction.
     WalletPayment,
     Authentication,
 }
@@ -3444,14 +3446,6 @@ fn default_operation_admission() -> Vec<OperationAdmissionContract> {
         admission(
             Operation::NetworkHeal,
             BTreeSet::from([Requirement::FaultIdentity]),
-        ),
-        admission(
-            Operation::PeerChannelMutation,
-            BTreeSet::from([Requirement::Dependencies, Requirement::Protocol]),
-        ),
-        admission(
-            Operation::WalletPayment,
-            BTreeSet::from([Requirement::Dependencies, Requirement::Protocol]),
         ),
         admission(
             Operation::Authentication,

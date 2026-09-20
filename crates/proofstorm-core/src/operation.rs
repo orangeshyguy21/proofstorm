@@ -11,6 +11,8 @@ pub enum OperationKind {
     ComponentStart,
     ComponentStop,
     ComponentRestart,
+    // Legacy workflow kinds remain readable in immutable journals. Executable
+    // actions use ComponentExecLive for all peer/channel interactions.
     BootstrapLiquidity,
     PeerConnect,
     PeerDisconnect,
@@ -23,14 +25,22 @@ pub enum OperationKind {
     NetworkDelay,
     NetworkLoss,
     NetworkHeal,
+    // Historical only; initialization and funding now use ComponentExecLive.
     WalletInitialize,
+    // Historical only; wallet observations now use ComponentExecLive.
     WalletBalance,
+    // Historical only.
     WalletFund,
+    // Historical journal kinds; executable wallet workflows have been retired.
     WalletInvoice,
     WalletPay,
+    // Historical journal entries only; claims now use native execution.
     WalletQuoteClaim,
+    // Historical journal entries only; recovery now uses native execution.
     WalletMeltQuoteRefresh,
+    // Historical only; minting and self-swap are separate native executions.
     WalletRoundTrip,
+    // Historical wallet accounting receipt.
     ConservationOracle,
     ReachabilityOracle,
     ComponentForensics,

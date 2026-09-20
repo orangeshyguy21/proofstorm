@@ -102,28 +102,16 @@ fn operation(client: &mut McpClient, tool: &str, id: &str, mut fields: Value) ->
     let result = cell::wait_operation(client, id, 40)?;
     Ok(cell::artifact_content(&result)?.clone())
 }
-fn driver_operation(
-    context: &GateContext,
-    client: &mut McpClient,
-    submit: fn(&GateContext, &mut McpClient, Value) -> Result<Value>,
-    id: &str,
-    mut fields: Value,
-) -> Result<Value> {
-    fields.as_object_mut().unwrap().extend(
-        json!({"name":INSTANCE,"run_id":RUN,"request_id":id})
-            .as_object()
-            .unwrap()
-            .clone(),
-    );
-    submit(context, client, fields)?;
-    Ok(cell::artifact_content(&cell::wait_operation(client, id, 120)?)?.clone())
-}
+
 fn balance(client: &mut McpClient, id: &str) -> Result<i64> {
-    let result = operation(
-        client,
-        "wallet_balance",
-        id,
-        json!({"wallet":"wallet","mint":"mint"}),
+    let result = crate::native::nutshell_balance(
+        &operation(
+            client,
+            "cell_exec",
+            id,
+            crate::native::wallet_request("nutshell-wallet", "wallet", "mint")?,
+        )?,
+        "mint",
     )?;
     Ok(result["balance_sat"].as_i64().unwrap_or(-1))
 }
@@ -194,27 +182,21 @@ fn exercise(
         "run_start",
         json!({"request_id":"5358","name":INSTANCE,"run_id":RUN}),
     )?;
-    driver_operation(
-        context,
+    crate::native::bootstrap(
         client,
-        crate::driver::liquidity_bootstrap,
+        INSTANCE,
+        RUN,
         "bootstrap",
-        json!({"chain":"chain","mint_lightning":"mint-lnd","payer_lightning":"payer-lnd","funding_sat":50_000_000,"channel_sat":10_000_000,"push_sat":5_000_000}),
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
-    driver_operation(
-        context,
-        client,
-        crate::driver::wallet_initialize,
-        "wallet-init",
-        json!({"wallet":"wallet","mint":"mint"}),
-    )?;
-    driver_operation(
-        context,
-        client,
-        crate::driver::wallet_fund,
-        "wallet-fund",
-        json!({"wallet":"wallet","mint":"mint","payer_lightning":"payer-lnd","amount_sat":1000}),
-    )?;
+    let mut native = crate::native::Session::new(client, INSTANCE, RUN);
+    native.nutshell_initialize("wallet", "mint", "wallet-init")?;
+    native.nutshell_fund("wallet", "mint", "payer-lnd", "wallet-fund", 1000)?;
     ensure!(
         balance(client, "balance-before")? == 1000,
         "wallet was not funded"

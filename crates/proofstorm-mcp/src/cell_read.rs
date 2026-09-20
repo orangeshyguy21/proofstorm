@@ -164,7 +164,7 @@ fn read_value(
     value: &Value,
     request: &CellReadRequest,
 ) -> Result<CallToolResult, ErrorData> {
-    crate::activity_search::validate_pointer(&request.pointer)?;
+    crate::read_query::validate_pointer(&request.pointer)?;
     if !(1..=4000).contains(&request.limit) {
         return Err(coded_invalid_request(
             "cell_read_limit",

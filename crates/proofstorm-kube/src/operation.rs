@@ -10,204 +10,12 @@ use thiserror::Error;
 
 use crate::{
     AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
-    AuthenticationReplayAction, BootstrapLiquidityAction, CellAction, ChannelCloseAction,
-    ChannelOpenAction, ChannelPolicySetAction, ChannelRebalanceAction, ComponentForensicsAction,
-    ConservationOracleAction, PeerConnectAction, PeerDisconnectAction, ProofstormCell,
-    ProofstormCellAction, ReachabilityOracleAction, WalletBalanceAction, WalletFundAction,
-    WalletInitializeAction, WalletInvoiceAction, WalletMeltQuoteRefreshAction, WalletPayAction,
-    WalletQuoteClaimAction, WalletRoundTripAction, component_ports, instance_namespace,
+    AuthenticationReplayAction, CellAction, ComponentForensicsAction, ProofstormCell,
+    ProofstormCellAction, ReachabilityOracleAction, component_ports, instance_namespace,
+    pod::{container_security, instance_affinity, pod_security},
 };
 
 use crate::images::PROBE_IMAGE as REACHABILITY_PROBE_IMAGE;
-
-pub struct BootstrapJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub chain: &'a str,
-    pub mint_lightning: &'a str,
-    pub payer_lightning: &'a str,
-    pub bitcoin_image: &'a str,
-    pub lnd_image: &'a str,
-    pub funding_sat: u64,
-    pub channel_sat: u64,
-    pub push_sat: u64,
-}
-
-pub struct WalletRoundTripJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub payer_lightning: &'a str,
-    pub wallet_image: &'a str,
-    pub lnd_image: &'a str,
-    pub amount_sat: u64,
-    pub tolerance_sat: u64,
-}
-
-pub struct ConservationOracleJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub wallet_image: &'a str,
-    pub baseline_operation_id: &'a str,
-    pub treatment_operation_id: &'a str,
-    pub expected_sat: u64,
-    pub tolerance_sat: u64,
-}
-
-pub struct PeerConnectJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub from_lightning: &'a str,
-    pub to_lightning: &'a str,
-    pub from_adapter: LightningAdapter,
-    pub from_image: &'a str,
-    pub to_adapter: LightningAdapter,
-    pub to_image: &'a str,
-}
-
-pub struct PeerDisconnectJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub from_lightning: &'a str,
-    pub to_lightning: &'a str,
-    pub from_adapter: LightningAdapter,
-    pub from_image: &'a str,
-    pub to_adapter: LightningAdapter,
-    pub to_image: &'a str,
-}
-
-pub struct ChannelOpenJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub chain: &'a str,
-    pub from_lightning: &'a str,
-    pub to_lightning: &'a str,
-    pub bitcoin_image: &'a str,
-    pub from_adapter: LightningAdapter,
-    pub from_image: &'a str,
-    pub to_adapter: LightningAdapter,
-    pub to_image: &'a str,
-    pub channel_sat: u64,
-    pub push_sat: u64,
-}
-
-pub struct ChannelPolicySetJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub from_lightning: &'a str,
-    pub to_lightning: &'a str,
-    pub from_adapter: LightningAdapter,
-    pub from_image: &'a str,
-    pub to_adapter: LightningAdapter,
-    pub to_image: &'a str,
-    pub base_fee_msat: u64,
-    pub fee_rate_ppm: u32,
-}
-
-pub struct ChannelCloseJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub chain: &'a str,
-    pub from_lightning: &'a str,
-    pub to_lightning: &'a str,
-    pub channel_id: &'a str,
-    pub bitcoin_image: &'a str,
-    pub from_adapter: LightningAdapter,
-    pub from_image: &'a str,
-    pub to_adapter: LightningAdapter,
-    pub to_image: &'a str,
-    pub force: bool,
-}
-
-pub struct ChannelRebalanceJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub lightning: &'a str,
-    pub lightning_image: &'a str,
-    pub outgoing_channel_id: &'a str,
-    pub incoming_channel_id: &'a str,
-    pub amount_sat: u64,
-    pub max_fee_sat: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LightningAdapter {
-    Lnd,
-    Cln,
-}
-
-impl LightningAdapter {
-    fn from_implementation(implementation: &str) -> Option<Self> {
-        match implementation {
-            "lnd" => Some(Self::Lnd),
-            "cln" => Some(Self::Cln),
-            _ => None,
-        }
-    }
-}
-
-pub struct WalletJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub wallet_image: &'a str,
-}
-
-pub struct WalletFundJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub payer_lightning: &'a str,
-    pub wallet_image: &'a str,
-    pub lightning_image: &'a str,
-    pub amount_sat: u64,
-}
-
-pub struct WalletInvoiceJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub wallet_image: &'a str,
-    pub amount_sat: u64,
-    pub timeout_seconds: u32,
-}
-
-pub struct WalletPayJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub recipient_wallet: &'a str,
-    pub recipient_mint: &'a str,
-    pub mint_quote_id: &'a str,
-    pub wallet_image: &'a str,
-}
-
-pub struct WalletQuoteClaimJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub mint_quote_id: &'a str,
-    pub wallet_image: &'a str,
-    pub timeout_seconds: u32,
-}
-
-pub struct WalletMeltQuoteRefreshJobSpec<'a> {
-    pub resource_name: &'a str,
-    pub instance_key: &'a str,
-    pub wallet: &'a str,
-    pub mint: &'a str,
-    pub melt_quote_id: &'a str,
-    pub wallet_image: &'a str,
-    pub timeout_seconds: u32,
-}
 
 pub struct AuthenticationConformanceJobSpec<'a> {
     pub resource_name: &'a str,
@@ -544,36 +352,6 @@ fn action_participants(action: &CellAction) -> Vec<(&str, OperationClass)> {
         CellAction::NodeRestart(request) | CellAction::ComponentRestart(request) => {
             vec![(&request.component, Operation::Restart)]
         }
-        CellAction::BootstrapLiquidity(request) => vec![
-            (&request.chain, Operation::PeerChannelMutation),
-            (&request.mint_lightning, Operation::PeerChannelMutation),
-            (&request.payer_lightning, Operation::PeerChannelMutation),
-        ],
-        CellAction::PeerConnect(request) => vec![
-            (&request.from_lightning, Operation::PeerChannelMutation),
-            (&request.to_lightning, Operation::PeerChannelMutation),
-        ],
-        CellAction::PeerDisconnect(request) => vec![
-            (&request.from_lightning, Operation::PeerChannelMutation),
-            (&request.to_lightning, Operation::PeerChannelMutation),
-        ],
-        CellAction::ChannelOpen(request) => vec![
-            (&request.chain, Operation::PeerChannelMutation),
-            (&request.from_lightning, Operation::PeerChannelMutation),
-            (&request.to_lightning, Operation::PeerChannelMutation),
-        ],
-        CellAction::ChannelPolicySet(request) => vec![
-            (&request.from_lightning, Operation::PeerChannelMutation),
-            (&request.to_lightning, Operation::PeerChannelMutation),
-        ],
-        CellAction::ChannelClose(request) | CellAction::ChannelForceClose(request) => vec![
-            (&request.chain, Operation::PeerChannelMutation),
-            (&request.from_lightning, Operation::PeerChannelMutation),
-            (&request.to_lightning, Operation::PeerChannelMutation),
-        ],
-        CellAction::ChannelRebalance(request) => {
-            vec![(&request.lightning, Operation::PeerChannelMutation)]
-        }
         CellAction::NetworkPartition(request) => vec![
             (&request.from_component, Operation::Inspect),
             (&request.to_component, Operation::Inspect),
@@ -582,46 +360,6 @@ fn action_participants(action: &CellAction) -> Vec<(&str, OperationClass)> {
         // prerequisite. For a log that is deliberate: an unready,
         // crash-looping, or stopped component is when its log matters most.
         CellAction::NetworkHeal(_) | CellAction::ComponentLogs(_) => Vec::new(),
-        CellAction::WalletInitialize(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-        ],
-        CellAction::WalletBalance(request) => vec![
-            (&request.wallet, Operation::Inspect),
-            (&request.mint, Operation::Inspect),
-        ],
-        CellAction::WalletFund(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-            (&request.payer_lightning, Operation::WalletPayment),
-        ],
-        CellAction::WalletInvoice(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-        ],
-        CellAction::WalletPay(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-            (&request.recipient_wallet, Operation::WalletPayment),
-            (&request.recipient_mint, Operation::WalletPayment),
-        ],
-        CellAction::WalletQuoteClaim(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-        ],
-        CellAction::WalletMeltQuoteRefresh(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-        ],
-        CellAction::WalletRoundTrip(request) => vec![
-            (&request.wallet, Operation::WalletPayment),
-            (&request.mint, Operation::WalletPayment),
-            (&request.payer_lightning, Operation::WalletPayment),
-        ],
-        CellAction::ConservationOracle(request) => vec![
-            (&request.wallet, Operation::Inspect),
-            (&request.mint, Operation::Inspect),
-        ],
         CellAction::ReachabilityOracle(request) => {
             vec![(&request.from_component, Operation::NativeExec)]
         }
@@ -657,24 +395,8 @@ pub const fn action_result_container(action: &CellAction) -> &'static str {
         | CellAction::ComponentStop(_)
         | CellAction::ComponentRestart(_)
         | CellAction::NetworkPartition(_)
-        | CellAction::NetworkHeal(_)
-        | CellAction::BootstrapLiquidity(_)
-        | CellAction::PeerConnect(_)
-        | CellAction::PeerDisconnect(_)
-        | CellAction::ChannelOpen(_)
-        | CellAction::ChannelPolicySet(_)
-        | CellAction::ChannelClose(_)
-        | CellAction::ChannelForceClose(_)
-        | CellAction::ChannelRebalance(_) => "result",
-        CellAction::WalletInitialize(_)
-        | CellAction::WalletBalance(_)
-        | CellAction::WalletFund(_)
-        | CellAction::WalletInvoice(_)
-        | CellAction::WalletPay(_)
-        | CellAction::WalletQuoteClaim(_)
-        | CellAction::WalletMeltQuoteRefresh(_)
-        | CellAction::WalletRoundTrip(_) => "wallet",
-        CellAction::ConservationOracle(_) | CellAction::ReachabilityOracle(_) => "oracle",
+        | CellAction::NetworkHeal(_) => "result",
+        CellAction::ReachabilityOracle(_) => "oracle",
         CellAction::ComponentForensics(_) => "forensics",
         CellAction::AuthenticationConformance(_)
         | CellAction::AuthenticationProtectedSpend(_)
@@ -712,39 +434,6 @@ pub fn render_cell_action_job(
                 "direct controller actions do not render Jobs",
             ));
         }
-        CellAction::BootstrapLiquidity(request) => render_bootstrap_action(action, cell, request)?,
-        CellAction::PeerConnect(request) => render_peer_connect_action(action, cell, request)?,
-        CellAction::PeerDisconnect(request) => {
-            render_peer_disconnect_action(action, cell, request)?
-        }
-        CellAction::ChannelOpen(request) => render_channel_open_action(action, cell, request)?,
-        CellAction::ChannelPolicySet(request) => {
-            render_channel_policy_set_action(action, cell, request)?
-        }
-        CellAction::ChannelClose(request) => {
-            render_channel_close_action(action, cell, request, false)?
-        }
-        CellAction::ChannelForceClose(request) => {
-            render_channel_close_action(action, cell, request, true)?
-        }
-        CellAction::ChannelRebalance(request) => {
-            render_channel_rebalance_action(action, cell, request)?
-        }
-        CellAction::WalletInitialize(request) => {
-            render_wallet_initialize_action(action, cell, request)?
-        }
-        CellAction::WalletBalance(request) => render_wallet_balance_action(action, cell, request)?,
-        CellAction::WalletFund(request) => render_wallet_fund_action(action, cell, request)?,
-        CellAction::WalletInvoice(request) => render_wallet_invoice_action(action, cell, request)?,
-        CellAction::WalletPay(request) => render_wallet_pay_action(action, cell, request)?,
-        CellAction::WalletQuoteClaim(request) => {
-            render_wallet_quote_claim_action(action, cell, request)?
-        }
-        CellAction::WalletMeltQuoteRefresh(request) => {
-            render_wallet_melt_quote_refresh_action(action, cell, request)?
-        }
-        CellAction::WalletRoundTrip(request) => render_wallet_action(action, cell, request)?,
-        CellAction::ConservationOracle(request) => render_oracle_action(action, cell, request)?,
         CellAction::ReachabilityOracle(request) => {
             render_reachability_oracle_action(action, cell, request)?
         }
@@ -934,7 +623,7 @@ fn render_native_exec_action(
         "serviceAccountName": "proofstorm-workload",
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
-        "securityContext": pod_security(),
+        "securityContext": pod_security(1000),
         "affinity": instance_affinity(&action.spec.instance_key),
         "containers": [exec_container],
         "volumes": context.volumes,
@@ -1159,587 +848,6 @@ fn native_exec_target_environment(
     environment
 }
 
-/// Render an idempotent controller-owned cleanup Job for private action state.
-///
-/// Most actions have no persistent private intermediary. Wallet invoices do:
-/// their payment request must be removed from the wallet volume before a
-/// cancellation can be reported as complete.
-///
-/// # Errors
-///
-/// Returns an error when the original action is invalid for its immutable cell
-/// or the fixed cleanup resource contract cannot be rendered.
-pub fn render_cell_action_cleanup_job(
-    _action: &ProofstormCellAction,
-    _cell: &ProofstormCell,
-) -> Result<Option<Job>, ActionRenderError> {
-    Ok(None)
-}
-
-fn render_peer_connect_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &PeerConnectAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::PeerConnect {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
-    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
-    render_peer_connect_job(&PeerConnectJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        from_lightning: &request.from_lightning,
-        to_lightning: &request.to_lightning,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_peer_disconnect_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &PeerDisconnectAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::PeerDisconnect {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
-    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
-    render_peer_disconnect_job(&PeerDisconnectJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        from_lightning: &request.from_lightning,
-        to_lightning: &request.to_lightning,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_channel_open_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &ChannelOpenAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::ChannelOpen {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
-    validate_channel_bounds(request.channel_sat, request.push_sat)?;
-    let bitcoin_image =
-        locked_component_image(cell, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
-    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
-    render_channel_open_job(&ChannelOpenJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        chain: &request.chain,
-        from_lightning: &request.from_lightning,
-        to_lightning: &request.to_lightning,
-        bitcoin_image,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-        channel_sat: request.channel_sat,
-        push_sat: request.push_sat,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_channel_policy_set_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &ChannelPolicySetAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::ChannelOpen {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
-    if request.base_fee_msat > 100_000_000 {
-        return Err(ActionRenderError::Bounds(
-            "base_fee_msat must be in 0..=100000000",
-        ));
-    }
-    if request.fee_rate_ppm > 1_000_000 {
-        return Err(ActionRenderError::Bounds(
-            "fee_rate_ppm must be in 0..=1000000",
-        ));
-    }
-    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
-    render_channel_policy_set_job(&ChannelPolicySetJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        from_lightning: &request.from_lightning,
-        to_lightning: &request.to_lightning,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-        base_fee_msat: request.base_fee_msat,
-        fee_rate_ppm: request.fee_rate_ppm,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_channel_close_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &ChannelCloseAction,
-    force: bool,
-) -> Result<Job, ActionRenderError> {
-    let expected = if force {
-        Capability::ChannelForceClose
-    } else {
-        Capability::ChannelClose
-    };
-    if action.spec.capability != expected {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_lightning_pair(&request.from_lightning, &request.to_lightning)?;
-    validate_channel_id(&request.channel_id)?;
-    let bitcoin_image =
-        locked_component_image(cell, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
-    let (from_adapter, from_image) = locked_lightning(cell, &request.from_lightning)?;
-    let (to_adapter, to_image) = locked_lightning(cell, &request.to_lightning)?;
-    render_channel_close_job(&ChannelCloseJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        chain: &request.chain,
-        from_lightning: &request.from_lightning,
-        to_lightning: &request.to_lightning,
-        channel_id: &request.channel_id,
-        bitcoin_image,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-        force,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_channel_rebalance_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &ChannelRebalanceAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::ChannelRebalance {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_channel_id(&request.outgoing_channel_id)?;
-    validate_channel_id(&request.incoming_channel_id)?;
-    validate_rebalance_bounds(request)?;
-    let (adapter, lightning_image) = locked_lightning(cell, &request.lightning)?;
-    if adapter != LightningAdapter::Lnd {
-        return Err(ActionRenderError::UnsupportedAdapter {
-            component: request.lightning.clone(),
-            adapter: "cln".into(),
-        });
-    }
-    render_channel_rebalance_job(&ChannelRebalanceJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        lightning: &request.lightning,
-        lightning_image,
-        outgoing_channel_id: &request.outgoing_channel_id,
-        incoming_channel_id: &request.incoming_channel_id,
-        amount_sat: request.amount_sat,
-        max_fee_sat: request.max_fee_sat,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_bootstrap_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &BootstrapLiquidityAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletFund {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_bootstrap_action(request)?;
-    let bitcoin_image =
-        locked_component_image(cell, &request.chain, ComponentKind::Bitcoin, "bitcoin-core")?;
-    let mint_lnd_image = locked_component_image(
-        cell,
-        &request.mint_lightning,
-        ComponentKind::Lightning,
-        "lnd",
-    )?;
-    let payer_lnd_image = locked_component_image(
-        cell,
-        &request.payer_lightning,
-        ComponentKind::Lightning,
-        "lnd",
-    )?;
-    if mint_lnd_image != payer_lnd_image {
-        return Err(ActionRenderError::Bounds(
-            "Lightning components must resolve to the same pinned image",
-        ));
-    }
-    render_bootstrap_job(&BootstrapJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        chain: &request.chain,
-        mint_lightning: &request.mint_lightning,
-        payer_lightning: &request.payer_lightning,
-        bitcoin_image,
-        lnd_image: mint_lnd_image,
-        funding_sat: request.funding_sat,
-        channel_sat: request.channel_sat,
-        push_sat: request.push_sat,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_wallet_initialize_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletInitializeAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletCreate {
-        return Err(ActionRenderError::Capability);
-    }
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    render_wallet_initialize_job(&WalletJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        wallet_image,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_wallet_balance_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletBalanceAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletControl {
-        return Err(ActionRenderError::Capability);
-    }
-    let (implementation, wallet_image) =
-        locked_component(cell, &request.wallet, ComponentKind::Wallet)?;
-    let locked_version = cell
-        .spec
-        .lock
-        .entries
-        .iter()
-        .find(|entry| entry.component_id == request.wallet)
-        .and_then(|entry| entry.protocol_action_adapter_version.as_deref());
-    let adapter = WALLET_OBSERVATION_ADAPTERS
-        .iter()
-        .find(|adapter| {
-            adapter.implementation == implementation && Some(adapter.version) == locked_version
-        })
-        .ok_or_else(|| ActionRenderError::UnsupportedAdapter {
-            component: request.wallet.clone(),
-            adapter: implementation.into(),
-        })?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    (adapter.balance)(&WalletJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        wallet_image,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-/// Narrow protocol-action boundary: observations are independently locked from
-/// workload configuration. Mutation drivers remain Nutshell-only in this slice.
-struct WalletObservationAdapter {
-    implementation: &'static str,
-    version: &'static str,
-    balance: fn(&WalletJobSpec<'_>) -> Result<Job, serde_json::Error>,
-}
-
-const WALLET_OBSERVATION_ADAPTERS: &[WalletObservationAdapter] = &[
-    WalletObservationAdapter {
-        implementation: "cocod-wallet",
-        version: "cocod/44e5101c/observations/v1",
-        balance: render_cocod_wallet_balance_job,
-    },
-    WalletObservationAdapter {
-        implementation: "nutshell-wallet",
-        version: "0.1.0-alpha.1",
-        balance: render_wallet_balance_job,
-    },
-    WalletObservationAdapter {
-        implementation: "cdk-cli-wallet",
-        version: "cdk-cli/0.18/observations/v1",
-        balance: render_cdk_wallet_balance_job,
-    },
-];
-
-fn render_cdk_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let script = "exec /opt/proofstorm/driver observe cdk-cli-wallet > /dev/termination-log";
-    let mint_url = format!("http://{}:3338", spec.mint);
-    // SQLite needs writable WAL coordination files even for mode=ro. The
-    // locked reader uses query_only and a read transaction; it never starts CDK.
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload",
-        "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(spec.instance_key),
-        "containers": [container_with_env("wallet", spec.wallet_image, script,
-            &[mount("wallet", "/wallet", false)], vec![
-                ("PROOFSTORM_DATABASE", "/wallet/cdk/cdk-cli.sqlite"),
-                ("PROOFSTORM_WALLET", spec.wallet), ("PROOFSTORM_MINT", spec.mint),
-                ("PROOFSTORM_MINT_URL", mint_url.as_str()),
-            ])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{}-data", spec.wallet)}}]
-    });
-    job(
-        spec.resource_name,
-        &instance_namespace(spec.instance_key),
-        spec.instance_key,
-        "wallet-balance",
-        30,
-        &pod,
-    )
-}
-
-fn render_cocod_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let script = "exec /opt/proofstorm/driver observe cocod-wallet > /dev/termination-log";
-    let mint_url = format!("http://{}:3338", spec.mint);
-    // SQLite needs writable WAL coordination files even for mode=ro. The
-    // locked reader uses query_only and a read transaction; it never starts cocod or its SDK.
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload",
-        "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(spec.instance_key),
-        "containers": [container_with_env("wallet", spec.wallet_image, script,
-            &[mount("wallet", "/wallet", false)], vec![
-                ("PROOFSTORM_DATABASE", "/wallet/.cocod/coco.db"),
-                ("PROOFSTORM_WALLET", spec.wallet), ("PROOFSTORM_MINT", spec.mint),
-                ("PROOFSTORM_MINT_URL", mint_url.as_str()),
-            ])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{}-data", spec.wallet)}}]
-    });
-    job(
-        spec.resource_name,
-        &instance_namespace(spec.instance_key),
-        spec.instance_key,
-        "wallet-balance",
-        30,
-        &pod,
-    )
-}
-
-fn render_wallet_fund_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletFundAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletFund {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_wallet_amount(request.amount_sat)?;
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    let lightning_image = locked_component_image(
-        cell,
-        &request.payer_lightning,
-        ComponentKind::Lightning,
-        "lnd",
-    )?;
-    render_wallet_fund_job(&WalletFundJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        payer_lightning: &request.payer_lightning,
-        wallet_image,
-        lightning_image,
-        amount_sat: request.amount_sat,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_wallet_invoice_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletInvoiceAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletFund {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_wallet_amount(request.amount_sat)?;
-    if !(30..=600).contains(&request.timeout_seconds) {
-        return Err(ActionRenderError::Bounds(
-            "timeout_seconds must be in 30..=600",
-        ));
-    }
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    render_wallet_invoice_job(&WalletInvoiceJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        wallet_image,
-        amount_sat: request.amount_sat,
-        timeout_seconds: request.timeout_seconds,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_wallet_pay_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletPayAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletControl {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_quote_id(&request.mint_quote_id)?;
-    if request.wallet == request.recipient_wallet {
-        return Err(ActionRenderError::Bounds(
-            "payer and recipient wallets must differ",
-        ));
-    }
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    nutshell_wallet_image(cell, &request.recipient_wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    locked_component(cell, &request.recipient_mint, ComponentKind::Mint)?;
-    render_wallet_pay_job(&WalletPayJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        recipient_wallet: &request.recipient_wallet,
-        recipient_mint: &request.recipient_mint,
-        mint_quote_id: &request.mint_quote_id,
-        wallet_image,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_wallet_quote_claim_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletQuoteClaimAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletControl {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_quote_id(&request.mint_quote_id)?;
-    if !(1..=120).contains(&request.timeout_seconds) {
-        return Err(ActionRenderError::Bounds(
-            "timeout_seconds must be in 1..=120",
-        ));
-    }
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    render_wallet_quote_claim_job(&WalletQuoteClaimJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        mint_quote_id: &request.mint_quote_id,
-        wallet_image,
-        timeout_seconds: request.timeout_seconds,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_wallet_melt_quote_refresh_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletMeltQuoteRefreshAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletControl {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_quote_id(&request.melt_quote_id)?;
-    if !(1..=120).contains(&request.timeout_seconds) {
-        return Err(ActionRenderError::Bounds(
-            "timeout_seconds must be in 1..=120",
-        ));
-    }
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    render_wallet_melt_quote_refresh_job(&WalletMeltQuoteRefreshJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        melt_quote_id: &request.melt_quote_id,
-        wallet_image,
-        timeout_seconds: request.timeout_seconds,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_wallet_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &WalletRoundTripAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::WalletControl {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_wallet_round_trip_action(request)?;
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    let lnd_image = locked_component_image(
-        cell,
-        &request.payer_lightning,
-        ComponentKind::Lightning,
-        "lnd",
-    )?;
-    render_wallet_round_trip_job(&WalletRoundTripJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        payer_lightning: &request.payer_lightning,
-        wallet_image,
-        lnd_image,
-        amount_sat: request.amount_sat,
-        tolerance_sat: request.tolerance_sat,
-    })
-    .map_err(ActionRenderError::from)
-}
-
-fn render_oracle_action(
-    action: &ProofstormCellAction,
-    cell: &ProofstormCell,
-    request: &ConservationOracleAction,
-) -> Result<Job, ActionRenderError> {
-    if action.spec.capability != Capability::OracleRun {
-        return Err(ActionRenderError::Capability);
-    }
-    validate_conservation_oracle_action(request)?;
-    let wallet_image = nutshell_wallet_image(cell, &request.wallet)?;
-    locked_component(cell, &request.mint, ComponentKind::Mint)?;
-    render_conservation_oracle_job(&ConservationOracleJobSpec {
-        resource_name: &action.name_any(),
-        instance_key: &action.spec.instance_key,
-        wallet: &request.wallet,
-        mint: &request.mint,
-        wallet_image,
-        baseline_operation_id: &request.baseline_operation_id,
-        treatment_operation_id: &request.treatment_operation_id,
-        expected_sat: request.expected_sat,
-        tolerance_sat: request.tolerance_sat,
-    })
-    .map_err(ActionRenderError::from)
-}
-
 fn render_reachability_oracle_action(
     action: &ProofstormCellAction,
     cell: &ProofstormCell,
@@ -1781,7 +889,7 @@ fn render_reachability_oracle_action(
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(&action.spec.instance_key),
+        "securityContext": pod_security(1000), "affinity": instance_affinity(&action.spec.instance_key),
         "containers": [container("oracle", REACHABILITY_PROBE_IMAGE, &script, &[])]
     });
     let mut rendered = job(
@@ -1807,20 +915,6 @@ fn render_reachability_oracle_action(
         request.from_component.clone(),
     );
     Ok(rendered)
-}
-
-fn nutshell_wallet_image<'a>(
-    cell: &'a ProofstormCell,
-    wallet: &str,
-) -> Result<&'a str, ActionRenderError> {
-    let (adapter, image) = locked_component(cell, wallet, ComponentKind::Wallet)?;
-    if adapter != "nutshell-wallet" {
-        return Err(ActionRenderError::UnsupportedAdapter {
-            component: wallet.to_owned(),
-            adapter: adapter.to_owned(),
-        });
-    }
-    Ok(image)
 }
 
 fn validate_action_identity(
@@ -1849,142 +943,6 @@ fn validate_action_identity(
     Ok(())
 }
 
-fn validate_bootstrap_action(request: &BootstrapLiquidityAction) -> Result<(), ActionRenderError> {
-    if !(1..=1_000_000_000).contains(&request.funding_sat) {
-        return Err(ActionRenderError::Bounds(
-            "funding_sat must be in 1..=1,000,000,000",
-        ));
-    }
-    if !(20_000..=100_000_000).contains(&request.channel_sat) {
-        return Err(ActionRenderError::Bounds(
-            "channel_sat must be in 20,000..=100,000,000",
-        ));
-    }
-    if request.channel_sat > request.funding_sat {
-        return Err(ActionRenderError::Bounds(
-            "channel_sat cannot exceed funding_sat",
-        ));
-    }
-    if request.push_sat > request.channel_sat / 2 {
-        return Err(ActionRenderError::Bounds(
-            "push_sat cannot exceed half of channel_sat",
-        ));
-    }
-    if request.mint_lightning == request.payer_lightning {
-        return Err(ActionRenderError::Bounds(
-            "mint and payer Lightning components must differ",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_lightning_pair(from: &str, to: &str) -> Result<(), ActionRenderError> {
-    if from == to {
-        return Err(ActionRenderError::Bounds(
-            "from and to Lightning components must differ",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_channel_bounds(channel_sat: u64, push_sat: u64) -> Result<(), ActionRenderError> {
-    if !(20_000..=100_000_000).contains(&channel_sat) {
-        return Err(ActionRenderError::Bounds(
-            "channel_sat must be in 20,000..=100,000,000",
-        ));
-    }
-    if push_sat > channel_sat / 2 {
-        return Err(ActionRenderError::Bounds(
-            "push_sat cannot exceed half of channel_sat",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_channel_id(channel_id: &str) -> Result<(), ActionRenderError> {
-    let digest = channel_id.strip_prefix("ch-").unwrap_or_default();
-    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(ActionRenderError::Bounds(
-            "channel_id must be an opaque ch- prefixed SHA-256 handle",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_rebalance_bounds(request: &ChannelRebalanceAction) -> Result<(), ActionRenderError> {
-    if request.outgoing_channel_id == request.incoming_channel_id {
-        return Err(ActionRenderError::Bounds(
-            "outgoing and incoming channel handles must differ",
-        ));
-    }
-    if !(1..=10_000_000).contains(&request.amount_sat) {
-        return Err(ActionRenderError::Bounds(
-            "amount_sat must be in 1..=10,000,000",
-        ));
-    }
-    if request.max_fee_sat > request.amount_sat || request.max_fee_sat > 100_000 {
-        return Err(ActionRenderError::Bounds(
-            "max_fee_sat cannot exceed amount_sat or 100,000",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_wallet_round_trip_action(
-    request: &WalletRoundTripAction,
-) -> Result<(), ActionRenderError> {
-    validate_wallet_amount(request.amount_sat)?;
-    if request.tolerance_sat > request.amount_sat || request.tolerance_sat > 10_000 {
-        return Err(ActionRenderError::Bounds(
-            "tolerance_sat cannot exceed amount_sat or 10,000",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_wallet_amount(amount_sat: u64) -> Result<(), ActionRenderError> {
-    if !(1..=500_000).contains(&amount_sat) {
-        return Err(ActionRenderError::Bounds(
-            "amount_sat must be in 1..=500,000",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_quote_id(value: &str) -> Result<(), ActionRenderError> {
-    let bytes = value.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > 63
-        || bytes[0] == b'-'
-        || bytes[bytes.len() - 1] == b'-'
-        || value.contains("--")
-        || !bytes
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-    {
-        return Err(ActionRenderError::Bounds(
-            "quote_id must be a lowercase kebab-case identifier of 1..=63 bytes",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_conservation_oracle_action(
-    request: &ConservationOracleAction,
-) -> Result<(), ActionRenderError> {
-    if request.expected_sat > 100_000_000 {
-        return Err(ActionRenderError::Bounds(
-            "expected_sat cannot exceed 100,000,000",
-        ));
-    }
-    if request.tolerance_sat > 10_000 {
-        return Err(ActionRenderError::Bounds(
-            "tolerance_sat cannot exceed 10,000",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_reachability_oracle_action(
     request: &ReachabilityOracleAction,
 ) -> Result<(), ActionRenderError> {
@@ -2002,46 +960,6 @@ fn validate_reachability_oracle_action(
         return Err(ActionRenderError::Bounds("attempts must be in 1..=5"));
     }
     Ok(())
-}
-
-fn locked_component<'a>(
-    cell: &'a ProofstormCell,
-    id: &str,
-    kind: ComponentKind,
-) -> Result<(&'a str, &'a str), ActionRenderError> {
-    let component = cell
-        .spec
-        .cell
-        .components
-        .iter()
-        .find(|component| component.id == id && component.kind == kind)
-        .ok_or_else(|| ActionRenderError::Component {
-            component: id.to_owned(),
-            implementation: "installed",
-            kind,
-        })?;
-    let lock = cell
-        .spec
-        .lock
-        .entries
-        .iter()
-        .find(|entry| entry.component_id == id && entry.catalog_id == component.implementation)
-        .ok_or_else(|| ActionRenderError::MissingLock(id.to_owned()))?;
-    Ok((&component.implementation, &lock.image))
-}
-
-fn locked_lightning<'a>(
-    cell: &'a ProofstormCell,
-    id: &str,
-) -> Result<(LightningAdapter, &'a str), ActionRenderError> {
-    let (implementation, image) = locked_component(cell, id, ComponentKind::Lightning)?;
-    let adapter = LightningAdapter::from_implementation(implementation).ok_or_else(|| {
-        ActionRenderError::UnsupportedAdapter {
-            component: id.to_owned(),
-            adapter: implementation.to_owned(),
-        }
-    })?;
-    Ok((adapter, image))
 }
 
 fn locked_component_image<'a>(
@@ -2086,729 +1004,6 @@ fn mark_controller_owned(job: &mut Job, action_name: &str) {
         );
         labels.insert("proofstorm.dev/action".to_owned(), action_name.to_owned());
     }
-}
-
-/// Render the bounded chain funding and Lightning channel bootstrap job.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_bootstrap_job(spec: &BootstrapJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let BootstrapJobSpec {
-        resource_name,
-        instance_key,
-        chain,
-        mint_lightning,
-        payer_lightning,
-        bitcoin_image,
-        lnd_image,
-        funding_sat,
-        channel_sat,
-        push_sat,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let bcli = format!(
-        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
-    );
-    let chain_init = format!(
-        "set -eu; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; {bcli} createwallet default >/dev/null 2>&1 || true; addr=$({bcli} -rpcwallet=default getnewaddress); {bcli} -rpcwallet=default generatetoaddress 101 \"$addr\" >/dev/null; printf '%s' \"$addr\" >/shared/miner-address"
-    );
-    let address = |node: &str, path: &str, output: &str| {
-        format!(
-            "set -eu; until lncli --lnddir={path} --network=regtest --rpcserver={node}:10009 getinfo >/dev/null 2>&1; do sleep 1; done; lncli --lnddir={path} --network=regtest --rpcserver={node}:10009 newaddress p2wkh | grep -o '\"address\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4 >{output}; test -s {output}"
-        )
-    };
-    let fund = format!(
-        "set -eu; a=$(cat /shared/mint-address); b=$(cat /shared/payer-address); {bcli} -rpcwallet=default sendtoaddress \"$a\" {} >/dev/null; {bcli} -rpcwallet=default sendtoaddress \"$b\" {} >/dev/null; {bcli} -rpcwallet=default generatetoaddress 6 \"$(cat /shared/miner-address)\" >/dev/null",
-        sats_to_btc(funding_sat),
-        sats_to_btc(funding_sat)
-    );
-    let channel = format!(
-        "set -eu; mint='lncli --lnddir=/mint-lnd --network=regtest --rpcserver={mint_lightning}:10009'; payer='lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009'; pk=$($mint getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); test -n \"$pk\"; $payer connect \"$pk@{mint_lightning}:9735\" >/dev/null 2>&1 || true; $payer listchannels --peer \"$pk\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4 >/shared/channels-before || true; $payer openchannel --node_key=\"$pk\" --local_amt={channel_sat} --push_amt={push_sat} >/dev/null; printf '%s' \"$pk\" >/shared/peer-pubkey"
-    );
-    let confirm = format!(
-        "set -eu; {bcli} -rpcwallet=default generatetoaddress 6 \"$(cat /shared/miner-address)\" >/dev/null"
-    );
-    let channel_verify = format!(
-        "set -eu; payer='lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009'; pk=$(cat /shared/peer-pubkey); point=''; until test -n \"$point\"; do for candidate in $($payer listchannels --peer \"$pk\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); do if ! grep -Fxq \"$candidate\" /shared/channels-before; then point=$candidate; break; fi; done; test -n \"$point\" || sleep 1; done; printf '%s' \"$point\" >/shared/channel-point"
-    );
-    let result = format!(
-        "set -eu; point=$(cat /shared/channel-point); digest=$(printf '%s' \"$point\" | sha256sum | cut -d' ' -f1); printf '%s' '{{\"funding_sat\":{funding_sat},\"channel_sat\":{channel_sat},\"push_sat\":{push_sat},\"channel_id\":\"ch-'\"$digest\"'\",\"ready\":true}}' >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [
-            container("chain-init", bitcoin_image, &chain_init, &[mount("shared", "/shared", false)]),
-            container("mint-address", lnd_image, &address(mint_lightning, "/mint-lnd", "/shared/mint-address"), &[mount("shared", "/shared", false), mount("mint-lnd", "/mint-lnd", true)]),
-            container("payer-address", lnd_image, &address(payer_lightning, "/payer-lnd", "/shared/payer-address"), &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)]),
-            container("chain-fund", bitcoin_image, &fund, &[mount("shared", "/shared", false)]),
-            container("channel-open", lnd_image, &channel, &[mount("shared", "/shared", false), mount("mint-lnd", "/mint-lnd", true), mount("payer-lnd", "/payer-lnd", true)]),
-            container("channel-confirm", bitcoin_image, &confirm, &[mount("shared", "/shared", false)]),
-            container("channel-verify", lnd_image, &channel_verify, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
-        ],
-        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[mount("shared", "/shared", true)])],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "mint-lnd", "persistentVolumeClaim": {"claimName": format!("data-{mint_lightning}-0")}},
-            {"name": "payer-lnd", "persistentVolumeClaim": {"claimName": format!("data-{payer_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "bootstrap",
-        300,
-        &pod,
-    )
-}
-
-fn lightning_cli(adapter: LightningAdapter, mount: &str, component: &str) -> String {
-    match adapter {
-        LightningAdapter::Lnd => {
-            format!("lncli --lnddir={mount} --network=regtest --rpcserver={component}:10009")
-        }
-        LightningAdapter::Cln => {
-            format!("lightning-cli --lightning-dir={mount} --network=regtest")
-        }
-    }
-}
-
-fn lightning_identity_script(
-    adapter: LightningAdapter,
-    mount: &str,
-    component: &str,
-    output: &str,
-) -> String {
-    let cli = lightning_cli(adapter, mount, component);
-    let extract = match adapter {
-        LightningAdapter::Lnd => {
-            "$cli getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4"
-        }
-        LightningAdapter::Cln => "$cli getinfo | jq -r '.id'",
-    };
-    format!(
-        "set -eu; cli='{cli}'; until $cli getinfo >/dev/null 2>&1; do sleep 1; done; pk=$({extract}); test -n \"$pk\"; test \"$pk\" != null; printf '%s' \"$pk\" >{output}"
-    )
-}
-
-fn peer_connected_test(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
-    match adapter {
-        LightningAdapter::Lnd => format!("{cli} listpeers | grep -q \"{peer}\""),
-        LightningAdapter::Cln => {
-            format!("{cli} listpeers \"{peer}\" | grep -Eq '\"connected\":[[:space:]]*true'")
-        }
-    }
-}
-
-fn peer_connect_command(adapter: LightningAdapter, cli: &str, peer: &str, host: &str) -> String {
-    match adapter {
-        LightningAdapter::Lnd => {
-            format!("{cli} connect \"{peer}@{host}:9735\" >/shared/peer-connect.log 2>&1 || true")
-        }
-        LightningAdapter::Cln => {
-            format!(
-                "{cli} connect \"{peer}\" \"{host}\" 9735 >/shared/peer-connect.log 2>&1 || true"
-            )
-        }
-    }
-}
-
-fn peer_disconnect_command(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
-    match adapter {
-        LightningAdapter::Lnd => {
-            format!("{cli} disconnect \"{peer}\" >/dev/null 2>&1 || true")
-        }
-        LightningAdapter::Cln => {
-            format!("{cli} disconnect \"{peer}\" true >/dev/null 2>&1 || true")
-        }
-    }
-}
-
-fn channel_points_command(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
-    match adapter {
-        LightningAdapter::Lnd => format!(
-            "{cli} listchannels --peer \"{peer}\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4"
-        ),
-        LightningAdapter::Cln => format!(
-            "{cli} listpeerchannels \"{peer}\" | jq -r '.channels[] | select(.funding_txid != null) | \"\\(.funding_txid):\\(.funding_outnum)\"'"
-        ),
-    }
-}
-
-fn active_channel_points_command(adapter: LightningAdapter, cli: &str, peer: &str) -> String {
-    match adapter {
-        LightningAdapter::Lnd => channel_points_command(adapter, cli, peer),
-        LightningAdapter::Cln => format!(
-            "{cli} listpeerchannels \"{peer}\" | jq -r '.channels[] | select(.state == \"CHANNELD_NORMAL\") | \"\\(.funding_txid):\\(.funding_outnum)\"'"
-        ),
-    }
-}
-
-/// Render a bounded logical Lightning peer-connect job for the installed adapter.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_peer_connect_job(spec: &PeerConnectJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let PeerConnectJobSpec {
-        resource_name,
-        instance_key,
-        from_lightning,
-        to_lightning,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let identity = lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
-    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
-    let connect = peer_connect_command(from_adapter, "$from", "$pk", to_lightning);
-    let connected = peer_connected_test(from_adapter, "$from", "$pk");
-    let script = format!(
-        "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); for attempt in $(seq 1 60); do if {connected}; then break; fi; {connect}; sleep 1; done; if ! {connected}; then echo 'peer connection did not become ready after 60 attempts' >&2; tail -c 2048 /shared/peer-connect.log >&2 2>/dev/null || true; exit 1; fi; printf '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"connected\":true}}' >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [container("to-identity", to_image, &identity, &[
-            mount("shared", "/shared", false), mount("to", "/to", true)
-        ])],
-        "containers": [container("result", from_image, &script, &[
-            mount("shared", "/shared", false), mount("from", "/from", true)
-        ])],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
-            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "peer-connect",
-        90,
-        &pod,
-    )
-}
-
-/// Render a bounded logical Lightning peer-disconnect job.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_peer_disconnect_job(
-    spec: &PeerDisconnectJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let PeerDisconnectJobSpec {
-        resource_name,
-        instance_key,
-        from_lightning,
-        to_lightning,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    if from_adapter == LightningAdapter::Lnd && to_adapter == LightningAdapter::Lnd {
-        let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
-        let to_cli = lightning_cli(to_adapter, "/to", to_lightning);
-        let script = format!(
-            "set -eu; from='{from_cli}'; to='{to_cli}'; until $from getinfo >/dev/null 2>&1 && $to getinfo >/dev/null 2>&1; do sleep 1; done; from_pk=$($from getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); to_pk=$($to getinfo | grep -o '\"identity_pubkey\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); $from disconnect \"$to_pk\" >/dev/null 2>&1 || true; $to disconnect \"$from_pk\" >/dev/null 2>&1 || true; sleep 2; if $from listpeers | grep -q \"$to_pk\" || $to listpeers | grep -q \"$from_pk\"; then exit 1; fi; printf '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"disconnected\":true}}' >/dev/termination-log"
-        );
-        let pod = json!({
-            "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-            "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-            "containers": [container("result", from_image, &script, &[
-                mount("from", "/from", true), mount("to", "/to", true)
-            ])],
-            "volumes": [
-                {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
-                {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
-            ]
-        });
-        return job(
-            resource_name,
-            &namespace,
-            instance_key,
-            "peer-disconnect",
-            90,
-            &pod,
-        );
-    }
-    let from_identity =
-        lightning_identity_script(from_adapter, "/from", from_lightning, "/shared/from-pubkey");
-    let to_identity =
-        lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
-    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
-    let to_cli = lightning_cli(to_adapter, "/to", to_lightning);
-    let from_disconnect = peer_disconnect_command(from_adapter, "$cli", "$pk");
-    let to_disconnect = peer_disconnect_command(to_adapter, "$cli", "$pk");
-    let from_connected = peer_connected_test(from_adapter, "$cli", "$pk");
-    let to_connected = peer_connected_test(to_adapter, "$cli", "$pk");
-    let from_disconnect_script =
-        format!("set -eu; cli='{from_cli}'; pk=$(cat /shared/to-pubkey); {from_disconnect}");
-    let to_disconnect_script =
-        format!("set -eu; cli='{to_cli}'; pk=$(cat /shared/from-pubkey); {to_disconnect}");
-    let from_verify = format!(
-        "set -eu; cli='{from_cli}'; pk=$(cat /shared/to-pubkey); sleep 2; if {from_connected}; then exit 1; fi"
-    );
-    let result = format!(
-        "set -eu; cli='{to_cli}'; pk=$(cat /shared/from-pubkey); if {to_connected}; then exit 1; fi; printf '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"disconnected\":true}}' >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [
-            container("from-identity", from_image, &from_identity, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
-            container("to-identity", to_image, &to_identity, &[mount("shared", "/shared", false), mount("to", "/to", true)]),
-            container("from-disconnect", from_image, &from_disconnect_script, &[mount("shared", "/shared", true), mount("from", "/from", true)]),
-            container("to-disconnect", to_image, &to_disconnect_script, &[mount("shared", "/shared", true), mount("to", "/to", true)]),
-            container("from-verify", from_image, &from_verify, &[mount("shared", "/shared", true), mount("from", "/from", true)])
-        ],
-        "containers": [container("result", to_image, &result, &[
-            mount("shared", "/shared", true), mount("to", "/to", true)
-        ])],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
-            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "peer-disconnect",
-        90,
-        &pod,
-    )
-}
-
-/// Render a bounded Lightning channel-open and confirmation job.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_channel_open_job(spec: &ChannelOpenJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let ChannelOpenJobSpec {
-        resource_name,
-        instance_key,
-        chain,
-        from_lightning,
-        to_lightning,
-        bitcoin_image,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-        channel_sat,
-        push_sat,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let to_identity =
-        lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
-    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
-    let points = channel_points_command(from_adapter, "$from", "$pk");
-    let active_points = active_channel_points_command(from_adapter, "$from", "$pk");
-    let connected = peer_connected_test(from_adapter, "$from", "$pk");
-    let connect = peer_connect_command(from_adapter, "$from", "$pk", to_lightning);
-    let open_command = match from_adapter {
-        LightningAdapter::Lnd => format!(
-            "if ! $from openchannel --node_key=\"$pk\" --local_amt={channel_sat} --push_amt={push_sat} >/shared/channel-open.log 2>&1; then cat /shared/channel-open.log >&2; exit 1; fi"
-        ),
-        LightningAdapter::Cln => format!(
-            "if ! $from fundchannel -k \"id=$pk\" \"amount={channel_sat}sat\" \"announce=true\" \"push_msat={push_sat}msat\" >/shared/open.json 2>/shared/channel-open.log; then cat /shared/channel-open.log >&2; exit 1; fi; txid=$(jq -r '.txid' /shared/open.json); outnum=$(jq -r '.outnum' /shared/open.json); test -n \"$txid\"; test \"$txid\" != null; printf '%s:%s' \"$txid\" \"$outnum\" >/shared/channel-point"
-        ),
-    };
-    let open = format!(
-        "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); for attempt in $(seq 1 60); do if {connected}; then break; fi; {connect}; sleep 1; done; if ! {connected}; then echo 'channel endpoint peer connection did not become ready after 60 attempts' >&2; tail -c 2048 /shared/peer-connect.log >&2 2>/dev/null || true; exit 1; fi; {points} >/shared/channels-before || true; {open_command}; printf '%s' \"$pk\" >/shared/peer-pubkey"
-    );
-    let bcli = format!(
-        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
-    );
-    let confirm = format!(
-        "set -eu; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; addr=$({bcli} -rpcwallet=default getnewaddress); {bcli} -rpcwallet=default generatetoaddress 6 \"$addr\" >/dev/null"
-    );
-    let verify = format!(
-        "set -eu; from='{from_cli}'; pk=$(cat /shared/peer-pubkey); expected=$(cat /shared/channel-point 2>/dev/null || true); point=''; until test -n \"$point\"; do for candidate in $({active_points}); do if test -n \"$expected\"; then test \"$candidate\" = \"$expected\" && point=$candidate && break; elif ! grep -Fxq \"$candidate\" /shared/channels-before; then point=$candidate; break; fi; done; test -n \"$point\" || sleep 1; done; printf '%s' \"$point\" >/shared/channel-point"
-    );
-    let result = format!(
-        "set -eu; point=$(cat /shared/channel-point); digest=$(printf '%s' \"$point\" | sha256sum | cut -d' ' -f1); printf '%s' '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"channel_id\":\"ch-'\"$digest\"'\",\"channel_sat\":{channel_sat},\"push_sat\":{push_sat},\"active\":true}}' >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [
-            container("to-identity", to_image, &to_identity, &[mount("shared", "/shared", false), mount("to", "/to", true)]),
-            container("channel-open", from_image, &open, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
-            container("channel-confirm", bitcoin_image, &confirm, &[]),
-            container("channel-verify", from_image, &verify, &[mount("shared", "/shared", false), mount("from", "/from", true)])
-        ],
-        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[mount("shared", "/shared", true)])],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
-            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "channel-open",
-        180,
-        &pod,
-    )
-}
-
-/// Render a bounded, adapter-specific outgoing channel-policy update.
-///
-/// The caller supplies only logical endpoint identities and numeric policy;
-/// native channel identifiers and credentials remain inside the Job.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_channel_policy_set_job(
-    spec: &ChannelPolicySetJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let ChannelPolicySetJobSpec {
-        resource_name,
-        instance_key,
-        from_lightning,
-        to_lightning,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-        base_fee_msat,
-        fee_rate_ppm,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let to_identity =
-        lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
-    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
-    let update = match from_adapter {
-        LightningAdapter::Lnd => format!(
-            r#"points=$($from listchannels --peer "$pk" | grep -o '"channel_point":[[:space:]]*"[^"]*"' | cut -d'"' -f4)
-count=0
-for point in $points; do
-  if ! $from updatechanpolicy --base_fee_msat={base_fee_msat} --fee_rate_ppm={fee_rate_ppm} --time_lock_delta=40 --chan_point="$point" >/shared/policy-update.log 2>&1; then
-    cat /shared/policy-update.log >&2
-    exit 1
-  fi
-  count=$((count + 1))
-done
-test "$count" -gt 0"#
-        ),
-        LightningAdapter::Cln => format!(
-            r#"if ! $from setchannel "id=$pk" "feebase={base_fee_msat}" "feeppm={fee_rate_ppm}" >/shared/policy-update.log 2>&1; then
-  cat /shared/policy-update.log >&2
-  exit 1
-fi"#
-        ),
-    };
-    let result = format!(
-        r#"set -eu
-from='{from_cli}'
-until $from getinfo >/dev/null 2>&1; do sleep 1; done
-pk=$(cat /shared/to-pubkey)
-{update}
-printf '%s' '{{"from":"{from_lightning}","to":"{to_lightning}","base_fee_msat":{base_fee_msat},"fee_rate_ppm":{fee_rate_ppm},"updated":true}}' >/dev/termination-log"#
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [
-            container("to-identity", to_image, &to_identity, &[mount("shared", "/shared", false), mount("to", "/to", true)])
-        ],
-        "containers": [
-            container("result", from_image, &result, &[mount("shared", "/shared", false), mount("from", "/from", true)])
-        ],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
-            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "channel-policy-set",
-        90,
-        &pod,
-    )
-}
-
-/// Render a bounded circular LND payment between two opaque channel handles.
-///
-/// Payment material and native channel identifiers remain in the Job's
-/// ephemeral volume; the terminal artifact contains only logical identities,
-/// opaque handles, amounts, and observed balance deltas.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_channel_rebalance_job(
-    spec: &ChannelRebalanceJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let ChannelRebalanceJobSpec {
-        resource_name,
-        instance_key,
-        lightning,
-        lightning_image,
-        outgoing_channel_id,
-        incoming_channel_id,
-        amount_sat,
-        max_fee_sat,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let cli = lightning_cli(LightningAdapter::Lnd, "/lightning", lightning);
-    let script = format!(
-        r#"set -eu
-node='{cli}'
-until $node getinfo >/dev/null 2>&1; do sleep 1; done
-snapshot() {{
-  $node listchannels --active_only --skip_peer_alias_lookup | awk '
-    function val(line) {{ sub(/^[^:]*:[[:space:]]*/, "", line); gsub(/[",[:space:]]/, "", line); return line }}
-    /"active":/ {{ active=val($0) }}
-    /"remote_pubkey":/ {{ peer=val($0) }}
-    /"channel_point":/ {{ point=val($0) }}
-    /"scid":/ {{ chan=val($0) }}
-    /"local_balance":/ {{ local=val($0) }}
-    /"remote_balance":/ {{ remote=val($0); print point "|" chan "|" peer "|" local "|" remote "|" active }}'
-}}
-rounds=0
-while :; do
-  snapshot >/shared/before
-  out_chan=''; out_peer=''; out_before=''; in_chan=''; in_peer=''; in_before=''; in_remote=''
-  while IFS='|' read -r point chan peer local remote active; do
-    test "$active" = true || continue
-    digest=$(printf '%s' "$point" | sha256sum | cut -d' ' -f1)
-    if test "ch-$digest" = '{outgoing_channel_id}'; then out_chan=$chan; out_peer=$peer; out_before=$local; fi
-    if test "ch-$digest" = '{incoming_channel_id}'; then in_chan=$chan; in_peer=$peer; in_before=$local; in_remote=$remote; fi
-  done </shared/before
-  if test -n "$out_chan" && test -n "$in_chan" && test "$out_chan" != "$in_chan" && test "$out_peer" != "$in_peer"; then break; fi
-  rounds=$((rounds + 1)); test "$rounds" -lt 30; sleep 1
-done
-test "$out_before" -ge $(({amount_sat} + {max_fee_sat})); test "$in_remote" -ge {amount_sat}
-invoice=$($node addinvoice --memo=proofstorm-rebalance --amt={amount_sat} --private --expiry=120 | grep -o '"payment_request":[[:space:]]*"[^"]*"' | cut -d'"' -f4)
-test -n "$invoice"
-attempts=0
-until $node sendpayment --pay_req="$invoice" --outgoing_chan_id="$out_chan" --last_hop="$in_peer" --fee_limit={max_fee_sat} --timeout=10s --max_parts=1 --allow_self_payment --force --json >/shared/payment.json 2>&1 && grep -Eq '"status":[[:space:]]*"SUCCEEDED"' /shared/payment.json; do
-  attempts=$((attempts + 1)); test "$attempts" -lt 45; sleep 2
-done
-snapshot >/shared/after
-out_after=''; in_after=''
-while IFS='|' read -r point chan peer local remote active; do
-  if test "$chan" = "$out_chan"; then out_after=$local; fi
-  if test "$chan" = "$in_chan"; then in_after=$local; fi
-done </shared/after
-test -n "$out_after"; test -n "$in_after"
-out_delta=$((out_before - out_after)); in_delta=$((in_after - in_before)); fee_sat=$((out_delta - {amount_sat}))
-test "$out_delta" -ge {amount_sat}; test "$in_delta" -ge {amount_sat}; test "$fee_sat" -ge 0; test "$fee_sat" -le {max_fee_sat}
-printf '{{"lightning":"{lightning}","outgoing_channel_id":"{outgoing_channel_id}","incoming_channel_id":"{incoming_channel_id}","amount_sat":{amount_sat},"fee_sat":%s,"outgoing_local_before_sat":%s,"outgoing_local_after_sat":%s,"incoming_local_before_sat":%s,"incoming_local_after_sat":%s,"rebalanced":true}}' "$fee_sat" "$out_before" "$out_after" "$in_before" "$in_after" >/dev/termination-log
-"#
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container("result", lightning_image, &script, &[
-            mount("shared", "/shared", false), mount("lightning", "/lightning", true)
-        ])],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "lightning", "persistentVolumeClaim": {"claimName": format!("data-{lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "channel-rebalance",
-        120,
-        &pod,
-    )
-}
-
-fn render_cln_channel_close_job(
-    spec: &ChannelCloseJobSpec<'_>,
-    namespace: &str,
-    to_identity: &str,
-    from_cli: &str,
-) -> Result<Job, serde_json::Error> {
-    let ChannelCloseJobSpec {
-        resource_name,
-        instance_key,
-        chain,
-        from_lightning,
-        to_lightning,
-        channel_id,
-        bitcoin_image,
-        from_image,
-        to_image,
-        force,
-        ..
-    } = *spec;
-    let unilateral_timeout = u8::from(force);
-    let close = format!(
-        "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); $from listpeerchannels \"$pk\" | jq -r '.channels[] | select(.funding_txid != null) | \"\\(.funding_txid):\\(.funding_outnum) \\(.channel_id)\"' >/shared/channels; point=''; native=''; while read -r candidate candidate_native; do digest=$(printf '%s' \"$candidate\" | sha256sum | cut -d' ' -f1); if [ \"ch-$digest\" = \"{channel_id}\" ]; then point=$candidate; native=$candidate_native; break; fi; done </shared/channels; test -n \"$point\"; test -n \"$native\"; printf '%s' \"$point\" >/shared/channel-point; printf '%s' \"$native\" >/shared/native-channel-id; touch /shared/close-started; $from close \"$native\" {unilateral_timeout} >/shared/close.json; touch /shared/close-done"
-    );
-    let bcli = format!(
-        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
-    );
-    let confirm = format!(
-        "set -eu; until test -f /shared/close-started; do sleep 1; done; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; addr=$({bcli} -rpcwallet=default getnewaddress); rounds=0; until test -f /shared/close-done; do {bcli} -rpcwallet=default generatetoaddress 1 \"$addr\" >/dev/null; rounds=$((rounds + 1)); test \"$rounds\" -lt 60; sleep 1; done; {bcli} -rpcwallet=default generatetoaddress 6 \"$addr\" >/dev/null; touch /shared/mined"
-    );
-    let states = if force {
-        "AWAITING_UNILATERAL|FUNDING_SPEND_SEEN|ONCHAIN"
-    } else {
-        "CLOSINGD_COMPLETE|FUNDING_SPEND_SEEN|ONCHAIN"
-    };
-    let result = format!(
-        "set -eu; until test -f /shared/mined; do sleep 1; done; from='{from_cli}'; native=$(cat /shared/native-channel-id); rounds=0; while :; do state=$($from listpeerchannels | jq -r --arg id \"$native\" '.channels[] | select(.channel_id == $id) | .state'); if printf '%s' \"$state\" | grep -q CHANNELD_NORMAL; then exit 1; fi; if test -n \"$state\" && printf '%s' \"$state\" | grep -Eq '{states}'; then break; fi; if test -z \"$state\" && $from listclosedchannels | grep -q \"$native\"; then break; fi; rounds=$((rounds + 1)); test \"$rounds\" -lt 30; sleep 1; done; printf '%s' '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"channel_id\":\"{channel_id}\",\"closed\":true,\"confirmed\":true,\"force\":{force},\"pending_resolution\":{force}}}' >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [container("to-identity", to_image, to_identity, &[
-            mount("shared", "/shared", false), mount("to", "/to", true)
-        ])],
-        "containers": [
-            container("channel-close", from_image, &close, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
-            container("channel-confirm", bitcoin_image, &confirm, &[mount("shared", "/shared", false)]),
-            container("result", from_image, &result, &[mount("shared", "/shared", true), mount("from", "/from", true)])
-        ],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
-            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        namespace,
-        instance_key,
-        if force {
-            "channel-force-close"
-        } else {
-            "channel-close"
-        },
-        180,
-        &pod,
-    )
-}
-
-/// Render a bounded cooperative or force channel-close and confirmation job.
-///
-/// The public channel handle is matched against hashes of active LND channel
-/// points inside the credential-bearing Job. Raw implementation identifiers do
-/// not cross the controller boundary.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_channel_close_job(spec: &ChannelCloseJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let ChannelCloseJobSpec {
-        resource_name,
-        instance_key,
-        chain,
-        from_lightning,
-        to_lightning,
-        channel_id,
-        bitcoin_image,
-        from_adapter,
-        from_image,
-        to_adapter,
-        to_image,
-        force,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let to_identity =
-        lightning_identity_script(to_adapter, "/to", to_lightning, "/shared/to-pubkey");
-    let from_cli = lightning_cli(from_adapter, "/from", from_lightning);
-    if from_adapter == LightningAdapter::Cln {
-        return render_cln_channel_close_job(spec, &namespace, &to_identity, &from_cli);
-    }
-    let close = match from_adapter {
-        LightningAdapter::Lnd => {
-            let force_flag = if force { " --force" } else { "" };
-            format!(
-                "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); point=''; for candidate in $($from listchannels --peer \"$pk\" | grep -o '\"channel_point\":[[:space:]]*\"[^\"]*\"' | cut -d'\"' -f4); do digest=$(printf '%s' \"$candidate\" | sha256sum | cut -d' ' -f1); if [ \"ch-$digest\" = \"{channel_id}\" ]; then point=$candidate; break; fi; done; test -n \"$point\"; printf '%s' \"$point\" >/shared/channel-point; txid=${{point%:*}}; index=${{point##*:}}; $from closechannel{force_flag} --funding_txid=\"$txid\" --output_index=\"$index\" >/shared/close.json"
-            )
-        }
-        LightningAdapter::Cln => {
-            let unilateral_timeout = u8::from(force);
-            format!(
-                "set -eu; from='{from_cli}'; until $from getinfo >/dev/null 2>&1; do sleep 1; done; pk=$(cat /shared/to-pubkey); $from listpeerchannels \"$pk\" | jq -r '.channels[] | select(.funding_txid != null) | \"\\(.funding_txid):\\(.funding_outnum) \\(.channel_id)\"' >/shared/channels; point=''; native=''; while read -r candidate candidate_native; do digest=$(printf '%s' \"$candidate\" | sha256sum | cut -d' ' -f1); if [ \"ch-$digest\" = \"{channel_id}\" ]; then point=$candidate; native=$candidate_native; break; fi; done </shared/channels; test -n \"$point\"; test -n \"$native\"; printf '%s' \"$point\" >/shared/channel-point; printf '%s' \"$native\" >/shared/native-channel-id; $from close \"$native\" {unilateral_timeout} >/shared/close.json"
-            )
-        }
-    };
-    let bcli = format!(
-        "bitcoin-cli -regtest -rpcconnect={chain} -rpcport=18443 -rpcuser=proofstorm -rpcpassword=proofstorm-regtest-only"
-    );
-    let confirm = format!(
-        "set -eu; until {bcli} getblockchaininfo >/dev/null 2>&1; do sleep 1; done; addr=$({bcli} -rpcwallet=default getnewaddress); {bcli} -rpcwallet=default generatetoaddress 6 \"$addr\" >/dev/null"
-    );
-    let verify = match from_adapter {
-        LightningAdapter::Lnd => {
-            let terminal_check = if force {
-                "$from pendingchannels | grep -q \"$point\""
-            } else {
-                "$from closedchannels | grep -q \"$point\""
-            };
-            format!(
-                "set -eu; from='{from_cli}'; point=$(cat /shared/channel-point); if $from listchannels | grep -q \"$point\"; then exit 1; fi; {terminal_check}"
-            )
-        }
-        LightningAdapter::Cln => {
-            let states = if force {
-                "AWAITING_UNILATERAL|FUNDING_SPEND_SEEN|ONCHAIN"
-            } else {
-                "CLOSINGD_COMPLETE|FUNDING_SPEND_SEEN|ONCHAIN"
-            };
-            format!(
-                "set -eu; from='{from_cli}'; native=$(cat /shared/native-channel-id); until state=$($from listpeerchannels | jq -r --arg id \"$native\" '.channels[] | select(.channel_id == $id) | .state'); do sleep 1; done; if printf '%s' \"$state\" | grep -q CHANNELD_NORMAL; then exit 1; fi; if test -n \"$state\"; then printf '%s' \"$state\" | grep -Eq '{states}'; else $from listclosedchannels | grep -q \"$native\"; fi"
-            )
-        }
-    };
-    let result = format!(
-        "printf '%s' '{{\"from\":\"{from_lightning}\",\"to\":\"{to_lightning}\",\"channel_id\":\"{channel_id}\",\"closed\":true,\"confirmed\":true,\"force\":{force},\"pending_resolution\":{force}}}' >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [
-            container("to-identity", to_image, &to_identity, &[mount("shared", "/shared", false), mount("to", "/to", true)]),
-            container("channel-close", from_image, &close, &[mount("shared", "/shared", false), mount("from", "/from", true)]),
-            container("channel-confirm", bitcoin_image, &confirm, &[]),
-            container("channel-verify", from_image, &verify, &[mount("shared", "/shared", true), mount("from", "/from", true)])
-        ],
-        "containers": [container("result", REACHABILITY_PROBE_IMAGE, &result, &[])],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "from", "persistentVolumeClaim": {"claimName": format!("data-{from_lightning}-0")}},
-            {"name": "to", "persistentVolumeClaim": {"claimName": format!("data-{to_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        if force {
-            "channel-force-close"
-        } else {
-            "channel-close"
-        },
-        180,
-        &pod,
-    )
 }
 
 /// Run the fixed secret-bearing authentication baseline in the locked mint image.
@@ -2873,7 +1068,7 @@ pub fn render_authentication_conformance_job(
         "serviceAccountName": "proofstorm-workload",
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
-        "securityContext": pod_security(),
+        "securityContext": pod_security(1000),
         "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
@@ -2932,7 +1127,7 @@ pub fn render_authentication_protected_spend_job(
         "serviceAccountName": "proofstorm-workload",
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
-        "securityContext": pod_security(),
+        "securityContext": pod_security(1000),
         "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
@@ -3001,7 +1196,7 @@ pub fn render_authentication_replay_job(
         "serviceAccountName": "proofstorm-workload",
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
-        "securityContext": pod_security(),
+        "securityContext": pod_security(1000),
         "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
@@ -3034,392 +1229,6 @@ fn authentication_identity_environment(identity_provider: &str) -> Vec<Value> {
     ]
 }
 
-/// Initialize a persistent logical wallet through its locked adapter.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_wallet_initialize_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let WalletJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        wallet_image,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let script = format!(
-        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"initialized\":true,\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet")])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-initialize",
-        90,
-        &pod,
-    )
-}
-
-/// Read a sanitized balance from a disposable snapshot of a logical wallet.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_wallet_balance_job(spec: &WalletJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let WalletJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        wallet_image,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let script = format!(
-        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\"; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [container("snapshot", wallet_image, "set -eu; cp -R /source/. /wallet/", &[mount("source", "/source", true), mount("wallet", "/wallet", false)])],
-        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet")])],
-        "volumes": [
-            {"name": "source", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
-            {"name": "wallet", "emptyDir": {}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-balance",
-        90,
-        &pod,
-    )
-}
-
-/// Fund a persistent wallet with a bounded mint quote paid by a logical node.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_wallet_fund_job(spec: &WalletFundJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let WalletFundJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        payer_lightning,
-        wallet_image,
-        lightning_image,
-        amount_sat,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let completion_script = format!(
-        "balance=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$balance\" || fail balance balance_unavailable; printf '{{\"wallet\":\"{wallet}\",\"mint\":\"{mint}\",\"funded_sat\":{amount_sat},\"balance_sat\":%s}}' \"$balance\" >/dev/termination-log; touch /shared/done"
-    );
-    let wallet_script = wallet_receive_script(mint, amount_sat, &completion_script);
-    let payer_script = wallet_payer_script(payer_lightning);
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [
-            container_with_env("wallet", wallet_image, &wallet_script, &[mount("shared", "/shared", false), mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")]),
-            container("payer", lightning_image, &payer_script, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
-        ],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
-            {"name": "payer-lnd", "persistentVolumeClaim": {"claimName": format!("data-{payer_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-fund",
-        180,
-        &pod,
-    )
-}
-
-/// Create a receive quote and expose only its adapter-native id and sanitized
-/// initial observation.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_wallet_invoice_job(
-    spec: &WalletInvoiceJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let WalletInvoiceJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        wallet_image,
-        amount_sat,
-        timeout_seconds,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let deadline_seconds = timeout_seconds.saturating_add(30);
-    let script = format!(
-        "set -eu; umask 077; cd /app; output=$(mktemp /tmp/proofstorm-invoice.XXXXXX); cleanup() {{ rm -f \"$output\"; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; cashu() {{ HOME=/wallet command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; cashu invoice {amount_sat} --no-check >\"$output\" 2>&1; PROOFSTORM_INVOICE_OUTPUT_PATH=\"$output\" /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PROOFSTORM_QUOTE_DRIVER_MODE", "observe-invoice"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338"))])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-invoice",
-        i64::from(deadline_seconds),
-        &pod,
-    )
-}
-
-/// Pay a private receive quote from a distinct persistent wallet.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_wallet_pay_job(spec: &WalletPayJobSpec<'_>) -> Result<Job, serde_json::Error> {
-    let WalletPayJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        recipient_wallet,
-        recipient_mint,
-        mint_quote_id,
-        wallet_image,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let script = "set -eu; cd /app; /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log";
-    // SQLite opens the database itself with mode=ro, but WAL readers still
-    // need the mount writable so SQLite can maintain its -shm lock file.
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false), mount("recipient", "/recipient", false), mount("payer-mint", "/payer-mint", false)], vec![
-            ("HOME", "/wallet"),
-            ("PROOFSTORM_QUOTE_DRIVER_MODE", "pay-and-claim"),
-            ("PROOFSTORM_WALLET", wallet),
-            ("PROOFSTORM_MINT", mint),
-            ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")),
-            ("PROOFSTORM_MINT_DB_DIR", "/payer-mint"),
-            ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id),
-            ("PROOFSTORM_RECIPIENT_HOME", "/recipient"),
-            ("PROOFSTORM_RECIPIENT_WALLET", recipient_wallet),
-            ("PROOFSTORM_RECIPIENT_MINT", recipient_mint),
-            ("PROOFSTORM_RECIPIENT_MINT_URL", &format!("http://{recipient_mint}:3338")),
-        ])],
-        "volumes": [
-            {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
-            {"name": "recipient", "persistentVolumeClaim": {"claimName": format!("{recipient_wallet}-data")}},
-            {"name": "payer-mint", "persistentVolumeClaim": {"claimName": format!("{mint}-data")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-pay",
-        180,
-        &pod,
-    )
-}
-
-/// Claim an exact recipient-side mint quote without attempting payment.
-pub fn render_wallet_quote_claim_job(
-    spec: &WalletQuoteClaimJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let WalletQuoteClaimJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        mint_quote_id,
-        wallet_image,
-        timeout_seconds,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let script = "set -eu; cd /app; /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log";
-    let timeout = timeout_seconds.to_string();
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PROOFSTORM_QUOTE_DRIVER_MODE", "claim-receive"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MINT_QUOTE_ID", mint_quote_id), ("PROOFSTORM_CLAIM_TIMEOUT_SECONDS", timeout.as_str())])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-quote-claim",
-        i64::from(timeout_seconds.saturating_add(30)),
-        &pod,
-    )
-}
-
-/// Refresh an exact payer-side melt quote and prove reservation release.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes Job contract cannot be decoded.
-pub fn render_wallet_melt_quote_refresh_job(
-    spec: &WalletMeltQuoteRefreshJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let WalletMeltQuoteRefreshJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        melt_quote_id,
-        wallet_image,
-        timeout_seconds,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let script = "set -eu; cd /app; /opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\" >/dev/termination-log";
-    let timeout = timeout_seconds.to_string();
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [container_with_env("wallet", wallet_image, script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PROOFSTORM_QUOTE_DRIVER_MODE", "refresh-melt"), ("PROOFSTORM_WALLET", wallet), ("PROOFSTORM_MINT", mint), ("PROOFSTORM_EXPECTED_MINT_URL", &format!("http://{mint}:3338")), ("PROOFSTORM_MELT_QUOTE_ID", melt_quote_id), ("PROOFSTORM_DB_TIMEOUT_SECONDS", timeout.as_str())])],
-        "volumes": [{"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}}]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-melt-quote-refresh",
-        i64::from(timeout_seconds.saturating_add(30)),
-        &pod,
-    )
-}
-
-/// Render a disposable wallet mint-and-self-swap job with an out-of-band payer.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_wallet_round_trip_job(
-    spec: &WalletRoundTripJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let WalletRoundTripJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        payer_lightning,
-        wallet_image,
-        lnd_image,
-        amount_sat,
-        tolerance_sat,
-    } = *spec;
-    let namespace = instance_namespace(instance_key);
-    let completion_script = format!(
-        "before=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$before\" || fail balance balance_unavailable; cashu selfpay >/shared/swap.log 2>&1 || fail selfpay selfpay_failed; after=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$after\" || fail balance balance_unavailable_after_selfpay; test \"$after\" -le \"$before\" || fail conservation balance_increased; test $((before-after)) -le {tolerance_sat} || fail conservation tolerance_exceeded; printf '{{\"minted_sat\":%s,\"balance_before_swap_sat\":%s,\"balance_after_swap_sat\":%s,\"inflation\":false}}' '{amount_sat}' \"$before\" \"$after\" >/dev/termination-log; touch /shared/done"
-    );
-    let wallet_script = wallet_receive_script(mint, amount_sat, &completion_script);
-    let payer_script = wallet_payer_script(payer_lightning);
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "containers": [
-            container_with_env("wallet", wallet_image, &wallet_script, &[mount("shared", "/shared", false), mount("wallet", "/wallet", false)], vec![("HOME", "/wallet"), ("PYTHONUNBUFFERED", "1")]),
-            container("payer", lnd_image, &payer_script, &[mount("shared", "/shared", false), mount("payer-lnd", "/payer-lnd", true)])
-        ],
-        "volumes": [
-            {"name": "shared", "emptyDir": {}},
-            {"name": "wallet", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
-            {"name": "payer-lnd", "persistentVolumeClaim": {"claimName": format!("data-{payer_lightning}-0")}}
-        ]
-    });
-    job(
-        resource_name,
-        &namespace,
-        instance_key,
-        "wallet-round-trip",
-        240,
-        &pod,
-    )
-}
-
-fn wallet_receive_script(mint: &str, amount_sat: u64, completion_script: &str) -> String {
-    format!(
-        concat!(
-            "set -eu; cd /app; pid=; watchdog_pid=; ",
-            "cleanup() {{ if test -n \"$watchdog_pid\"; then kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; fi; if test -n \"$pid\"; then kill \"$pid\" 2>/dev/null || true; wait \"$pid\" 2>/dev/null || true; fi; }}; ",
-            "trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; ",
-            "fail() {{ stage=\"$1\"; reason=\"$2\"; printf '{{\"code\":\"wallet_orchestration_failed\",\"stage\":\"%s\",\"reason\":\"%s\"}}' \"$stage\" \"$reason\" >/dev/termination-log; printf '%s:%s\\n' \"$stage\" \"$reason\" >/shared/wallet.failed; exit 1; }}; ",
-            "classify_log() {{ log=\"$1\"; last=$(tail -n 1 \"$log\"); if printf '%s' \"$last\" | grep -Eqi 'quote.*(not found|unknown)'; then printf quote_not_found; elif printf '%s' \"$last\" | grep -Eqi 'quote.*not paid|not paid.*quote'; then printf quote_not_paid; elif printf '%s' \"$last\" | grep -Eqi 'already.*issued|quote.*issued'; then printf quote_already_issued; elif printf '%s' \"$last\" | grep -Eqi 'database.*locked|locked.*database'; then printf wallet_database_locked; elif printf '%s' \"$last\" | grep -Eqi 'invalid.*signature|signature.*invalid'; then printf invalid_quote_signature; elif printf '%s' \"$last\" | grep -Eqi 'blind'; then printf invalid_blinded_output; elif printf '%s' \"$last\" | grep -Eqi 'proof'; then printf proof_error; elif printf '%s' \"$last\" | grep -Eqi 'keyset'; then printf keyset_error; elif printf '%s' \"$last\" | grep -Eqi 'amount|unit'; then printf amount_or_unit_error; elif printf '%s' \"$last\" | grep -Eqi 'connect|connection|timed out|timeout'; then printf mint_connection_failed; else printf command_failed; fi; }}; ",
-            "run_bounded() {{ duration=\"$1\"; marker=\"$2\"; shift 2; rm -f \"$marker\"; \"$@\" & pid=$!; (sleep \"$duration\"; if kill -0 \"$pid\" 2>/dev/null; then touch \"$marker\"; kill \"$pid\" 2>/dev/null || true; sleep 2; kill -9 \"$pid\" 2>/dev/null || true; fi) & watchdog_pid=$!; if wait \"$pid\"; then command_rc=0; else command_rc=$?; fi; pid=; kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; watchdog_pid=; return \"$command_rc\"; }}; ",
-            "cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; ",
-            "if run_bounded 30 /shared/invoice-request.timed-out cashu invoice {amount_sat} --no-check >/shared/invoice.log 2>&1; then :; else test ! -f /shared/invoice-request.timed-out || fail invoice invoice_request_timeout; invoice_reason=$(classify_log /shared/invoice.log); fail invoice \"$invoice_reason\"; fi; ",
-            "quote_id=$(sed -n 's/.*--id \\([^[:space:]]*\\).*/\\1/p' /shared/invoice.log | tail -1); test -n \"$quote_id\" || fail invoice quote_id_not_observed; ",
-            "elapsed=0; until test -f /shared/paid; do test ! -f /shared/payer.failed || fail payment payer_failed; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 105 || fail payment payment_wait_timeout; sleep 1; done; ",
-            "if run_bounded 35 /shared/invoice-settlement.timed-out cashu invoice {amount_sat} --id \"$quote_id\" >/shared/settlement.log 2>&1; then :; else test ! -f /shared/invoice-settlement.timed-out || fail settlement invoice_settlement_timeout; settlement_reason=$(classify_log /shared/settlement.log); fail settlement \"$settlement_reason\"; fi; ",
-            "{completion_script}"
-        ),
-        mint = mint,
-        amount_sat = amount_sat,
-        completion_script = completion_script
-    )
-}
-
-fn wallet_payer_script(payer_lightning: &str) -> String {
-    format!(
-        "set -eu; pay_pid=; watchdog_pid=; cleanup() {{ if test -n \"$watchdog_pid\"; then kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; fi; if test -n \"$pay_pid\"; then kill \"$pay_pid\" 2>/dev/null || true; wait \"$pay_pid\" 2>/dev/null || true; fi; }}; trap cleanup EXIT; trap 'cleanup; exit 143' HUP INT TERM; fail() {{ stage=\"$1\"; reason=\"$2\"; printf '{{\"code\":\"wallet_orchestration_failed\",\"stage\":\"%s\",\"reason\":\"%s\"}}' \"$stage\" \"$reason\" >/dev/termination-log; printf '%s:%s\\n' \"$stage\" \"$reason\" >/shared/payer.failed; exit 1; }}; elapsed=0; while :; do if invoice=$(grep -Eo 'ln(bcrt|bc|tb|tbs)[0-9a-z]+' /shared/invoice.log 2>/dev/null | head -1) && test -n \"$invoice\"; then break; fi; test ! -f /shared/wallet.failed || fail invoice wallet_failed; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 75 || fail invoice invoice_not_observed; sleep 1; done; lncli --lnddir=/payer-lnd --network=regtest --rpcserver={payer_lightning}:10009 payinvoice --force \"$invoice\" >/tmp/payment.log 2>&1 & pay_pid=$!; (sleep 60; if kill -0 \"$pay_pid\" 2>/dev/null; then touch /shared/payment.timed-out; kill \"$pay_pid\" 2>/dev/null || true; sleep 2; kill -9 \"$pay_pid\" 2>/dev/null || true; fi) & watchdog_pid=$!; set +e; wait \"$pay_pid\"; pay_rc=$?; set -e; pay_pid=; kill \"$watchdog_pid\" 2>/dev/null || true; wait \"$watchdog_pid\" 2>/dev/null || true; watchdog_pid=; test ! -f /shared/payment.timed-out || fail payment payment_timeout; test \"$pay_rc\" -eq 0 || fail payment payment_failed; touch /shared/paid; elapsed=0; until test -f /shared/done; do test ! -f /shared/wallet.failed || fail settlement wallet_failed_after_payment; elapsed=$((elapsed+1)); test \"$elapsed\" -lt 35 || fail settlement wallet_completion_timeout; sleep 1; done"
-    )
-}
-
-/// Render a read-only-wallet conservation oracle job.
-///
-/// # Errors
-///
-/// Returns an error only if the fixed Kubernetes resource contract is invalid.
-pub fn render_conservation_oracle_job(
-    spec: &ConservationOracleJobSpec<'_>,
-) -> Result<Job, serde_json::Error> {
-    let ConservationOracleJobSpec {
-        resource_name,
-        instance_key,
-        wallet,
-        mint,
-        wallet_image,
-        baseline_operation_id,
-        treatment_operation_id,
-        expected_sat,
-        tolerance_sat,
-    } = spec;
-    let namespace = instance_namespace(instance_key);
-    let script = format!(
-        "set -eu; cd /app; cashu() {{ command cashu -h http://{mint}:3338 -u sat -w wallet -t -y \"$@\"; }}; actual=$(cashu balance | grep -o 'Balance: *[0-9][0-9]*' | grep -o '[0-9][0-9]*' | tail -1); test -n \"$actual\"; delta=$((actual-{expected_sat})); test \"$delta\" -ge 0 || delta=$((-delta)); conserved=false; test \"$delta\" -le {tolerance_sat} && conserved=true; printf '{{\"baseline_operation_id\":\"{baseline_operation_id}\",\"treatment_operation_id\":\"{treatment_operation_id}\",\"expected_sat\":{expected_sat},\"actual_sat\":%s,\"tolerance_sat\":{tolerance_sat},\"conserved\":%s}}' \"$actual\" \"$conserved\" >/dev/termination-log"
-    );
-    let pod = json!({
-        "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(instance_key),
-        "initContainers": [container("snapshot", wallet_image, "set -eu; cp -R /source/. /wallet/", &[mount("source", "/source", true), mount("wallet", "/wallet", false)])],
-        "containers": [container_with_env("oracle", wallet_image, &script, &[mount("wallet", "/wallet", false)], vec![("HOME", "/wallet")])],
-        "volumes": [
-            {"name": "source", "persistentVolumeClaim": {"claimName": format!("{wallet}-data")}},
-            {"name": "wallet", "emptyDir": {}}
-        ]
-    });
-    job(resource_name, &namespace, instance_key, "oracle", 120, &pod)
-}
-
 fn job(
     name: &str,
     namespace: &str,
@@ -3448,10 +1257,6 @@ fn job(
     }))
 }
 
-fn sats_to_btc(sats: u64) -> String {
-    format!("{}.{:08}", sats / 100_000_000, sats % 100_000_000)
-}
-
 fn metadata(name: &str, namespace: &str, instance_key: &str, operation: &str) -> Value {
     json!({"name": name, "namespace": namespace, "labels": labels(instance_key, operation)})
 }
@@ -3459,18 +1264,6 @@ fn metadata(name: &str, namespace: &str, instance_key: &str, operation: &str) ->
 fn labels(instance_key: &str, operation: &str) -> Value {
     json!({"proofstorm.dev/instance": instance_key, "proofstorm.dev/operation": operation,
         "app.kubernetes.io/managed-by": "proofstorm-mcp"})
-}
-
-fn pod_security() -> Value {
-    json!({"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
-        "seccompProfile": {"type": "RuntimeDefault"}})
-}
-
-fn instance_affinity(instance_key: &str) -> Value {
-    json!({"podAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [{
-        "labelSelector": {"matchLabels": {"proofstorm.dev/instance": instance_key}},
-        "topologyKey": "kubernetes.io/hostname"
-    }]}})
 }
 
 fn mount(name: &str, path: &str, read_only: bool) -> Value {
@@ -3501,7 +1294,7 @@ where
         "command": ["/bin/sh", "-c", script], "volumeMounts": mounts,
         "env": environment.into_iter().map(|(name, value)| json!({"name": name.as_ref(), "value": value.as_ref()})).collect::<Vec<_>>(),
         "terminationMessagePolicy": "FallbackToLogsOnError",
-        "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}})
+        "securityContext": container_security()})
 }
 
 fn resource(value: Value) -> Result<Job, serde_json::Error> {
@@ -3511,8 +1304,6 @@ fn resource(value: Value) -> Result<Job, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    #[cfg(unix)]
-    use std::process::Command;
 
     use proofstorm_core::{
         API_VERSION, CellPolicy, CellSpec, ComponentCondition, ComponentSpec, ComponentStatus,
@@ -3521,18 +1312,7 @@ mod tests {
 
     use super::*;
 
-    #[cfg(unix)]
-    fn assert_shell_syntax(script: &str) {
-        assert!(
-            Command::new("/bin/sh")
-                .args(["-n", "-c", script])
-                .status()
-                .expect("shell syntax check")
-                .success()
-        );
-    }
-
-    fn typed_bootstrap() -> (ProofstormCell, ProofstormCellAction) {
+    fn action_fixture() -> (ProofstormCell, ProofstormCellAction) {
         let component = |id: &str, kind: ComponentKind, implementation: &str| ComponentSpec {
             id: id.into(),
             kind,
@@ -3602,17 +1382,16 @@ mod tests {
                 session_id: "session".into(),
                 principal_id: "principal".into(),
                 sequence: 1,
-                operation_id: "bootstrap".into(),
+                operation_id: "probe".into(),
                 request_digest: "sha256:request".into(),
-                capability: Capability::WalletFund,
+                capability: Capability::OracleRun,
                 accepted_at_unix: 1,
-                action: CellAction::BootstrapLiquidity(BootstrapLiquidityAction {
-                    chain: "chain".into(),
-                    mint_lightning: "mint-lnd".into(),
-                    payer_lightning: "payer-lnd".into(),
-                    funding_sat: 100_000_000,
-                    channel_sat: 10_000_000,
-                    push_sat: 5_000_000,
+                action: CellAction::ReachabilityOracle(ReachabilityOracleAction {
+                    from_component: "wallet".into(),
+                    to_component: "mint".into(),
+                    service: "http".into(),
+                    timeout_seconds: 3,
+                    attempts: 1,
                 }),
             },
         );
@@ -3714,7 +1493,7 @@ mod tests {
 
     #[test]
     fn closing_cells_refuse_new_work_even_when_components_are_ready() {
-        let (mut cell, action) = typed_bootstrap();
+        let (mut cell, action) = action_fixture();
         ready_admission_status(&mut cell);
         for phase in [crate::CellPhase::Closing, crate::CellPhase::CleanupBlocked] {
             cell.status.as_mut().expect("status").phase = phase;
@@ -3734,7 +1513,7 @@ mod tests {
 
     #[test]
     fn admission_uses_operation_prerequisites_instead_of_cell_ready() {
-        let (mut cell, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = action_fixture();
 
         action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
@@ -3782,37 +1561,38 @@ mod tests {
 
     #[test]
     fn admission_allows_stopped_recovery_and_rejects_unhealthy_mutation() {
-        let (mut cell, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = action_fixture();
         ready_admission_status(&mut cell);
         set_condition(
             &mut cell,
-            "mint-lnd",
+            "mint",
             ComponentConditionType::WorkloadReady,
             ComponentConditionState::False,
             ComponentConditionReason::IntentionallyStopped,
         );
         set_condition(
             &mut cell,
-            "mint-lnd",
+            "mint",
             ComponentConditionType::ProtocolReady,
             ComponentConditionState::False,
             ComponentConditionReason::IntentionallyStopped,
         );
 
         action.spec.action = CellAction::NodeRestart(crate::ComponentControlAction {
-            component: "mint-lnd".into(),
+            component: "mint".into(),
         });
         assert!(evaluate_action_admission(&action, &cell).is_ok());
 
-        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-        });
+        action.spec.action =
+            CellAction::AuthenticationConformance(AuthenticationConformanceAction {
+                mint: "mint".into(),
+                identity_provider: "wallet".into(),
+            });
         assert_eq!(
             evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
-                component: "mint-lnd".into(),
-                operation: OperationClass::PeerChannelMutation,
+                component: "mint".into(),
+                operation: OperationClass::Authentication,
                 prerequisite: ReadinessPrerequisite::Protocol,
                 condition: Some(ComponentConditionType::ProtocolReady),
                 state: Some(ComponentConditionState::False),
@@ -3823,7 +1603,7 @@ mod tests {
 
     #[test]
     fn workload_identity_rejects_stale_status_but_network_control_does_not() {
-        let (mut cell, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = action_fixture();
         ready_admission_status(&mut cell);
         cell.status
             .as_mut()
@@ -3854,7 +1634,7 @@ mod tests {
 
     #[test]
     fn read_only_wallet_inspection_survives_mint_protocol_failure() {
-        let (mut cell, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = action_fixture();
         ready_admission_status(&mut cell);
         set_condition(
             &mut cell,
@@ -3864,23 +1644,26 @@ mod tests {
             ComponentConditionReason::ProtocolProbeFailed,
         );
 
-        action.spec.action = CellAction::WalletBalance(crate::WalletBalanceAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
+        action.spec.action = CellAction::ComponentExecLive(crate::ComponentExecLiveAction {
+            component: "wallet".into(),
+            script: "cashu -w wallet balance".into(),
+            argv: vec![],
+            timeout_seconds: 30,
+            output: proofstorm_core::native::NativeOutput::default(),
+            private_payload: None,
         });
         assert!(evaluate_action_admission(&action, &cell).is_ok());
 
-        action.spec.action = CellAction::WalletFund(crate::WalletFundAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-            payer_lightning: "payer-lnd".into(),
-            amount_sat: 100,
-        });
+        action.spec.action =
+            CellAction::AuthenticationConformance(AuthenticationConformanceAction {
+                mint: "mint".into(),
+                identity_provider: "wallet".into(),
+            });
         assert_eq!(
             evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
                 component: "mint".into(),
-                operation: OperationClass::WalletPayment,
+                operation: OperationClass::Authentication,
                 prerequisite: ReadinessPrerequisite::Protocol,
                 condition: Some(ComponentConditionType::ProtocolReady),
                 state: Some(ComponentConditionState::False),
@@ -3891,7 +1674,7 @@ mod tests {
 
     #[test]
     fn stale_cell_revision_fences_runtime_admission_only() {
-        let (mut cell, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = action_fixture();
         ready_admission_status(&mut cell);
         cell.status
             .as_mut()
@@ -3925,7 +1708,7 @@ mod tests {
 
     #[test]
     fn expired_observation_fences_protocol_admission_without_blocking_recovery() {
-        let (mut cell, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = action_fixture();
         ready_admission_status(&mut cell);
         for component in &mut cell.status.as_mut().expect("status").components {
             component
@@ -3935,10 +1718,11 @@ mod tests {
                 .expires_at_unix = 1;
         }
 
-        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-        });
+        action.spec.action =
+            CellAction::AuthenticationConformance(AuthenticationConformanceAction {
+                mint: "mint".into(),
+                identity_provider: "wallet".into(),
+            });
         assert!(matches!(
             evaluate_action_admission(&action, &cell),
             Err(ActionAdmissionError::PrerequisiteUnsatisfied {
@@ -3959,40 +1743,6 @@ mod tests {
             timeout_seconds: 30,
         });
         assert!(evaluate_action_admission(&action, &cell).is_ok());
-    }
-
-    #[test]
-    fn typed_job_containers_fall_back_to_logs_for_their_diagnostic() {
-        let job = render_bootstrap_job(&BootstrapJobSpec {
-            resource_name: "op-boot",
-            instance_key: "i0123456789012345678",
-            chain: "chain",
-            mint_lightning: "mint-lnd",
-            payer_lightning: "payer-lnd",
-            bitcoin_image: "bitcoin",
-            lnd_image: "lnd",
-            funding_sat: 100_000_000,
-            channel_sat: 10_000_000,
-            push_sat: 5_000_000,
-        })
-        .expect("job");
-        let pod = job.spec.expect("spec").template.spec.expect("pod");
-        let containers = pod
-            .init_containers
-            .iter()
-            .flatten()
-            .chain(pod.containers.iter());
-        let mut observed = 0;
-        for container in containers {
-            observed += 1;
-            assert_eq!(
-                container.termination_message_policy.as_deref(),
-                Some("FallbackToLogsOnError"),
-                "container {} must surface its native error on failure",
-                container.name
-            );
-        }
-        assert!(observed > 1, "the bootstrap renders staged containers");
     }
 
     #[test]
@@ -4089,143 +1839,46 @@ mod tests {
     }
 
     #[test]
-    fn wallet_pay_job_uses_exact_private_quote_and_claim_driver() {
-        let job = render_wallet_pay_job(&WalletPayJobSpec {
-            resource_name: "op-pay",
-            instance_key: "i0123456789012345678",
-            wallet: "wallet-b",
-            mint: "mint",
-            recipient_wallet: "wallet-a",
-            recipient_mint: "mint",
-            mint_quote_id: "quote-1",
-            wallet_image: "nutshell",
-        })
-        .expect("pay job");
-        let pod = job.spec.expect("spec").template.spec.expect("pod");
-        let container = &pod.containers[0];
-        let script = container
-            .command
-            .as_ref()
-            .expect("command")
-            .last()
-            .expect("script");
-        assert!(
-            !script.contains("\"phase\":\"paid\""),
-            "the pay script must not assert settlement itself"
-        );
-        assert!(script.contains("/opt/proofstorm/driver quote \"$PROOFSTORM_QUOTE_DRIVER_MODE\""));
-        #[cfg(unix)]
-        assert_shell_syntax(script);
-        let env = container.env.as_ref().expect("env");
-        assert!(
-            !env.iter()
-                .any(|variable| variable.name == "PROOFSTORM_QUOTE_DRIVER")
-        );
-        assert!(
-            pod.init_containers
-                .as_ref()
-                .expect("native driver installer")
-                .iter()
-                .any(|container| container.name == "proofstorm-driver")
-        );
-        for (name, value) in [
-            ("PROOFSTORM_MINT_QUOTE_ID", "quote-1"),
-            ("PROOFSTORM_WALLET", "wallet-b"),
-            ("PROOFSTORM_RECIPIENT_WALLET", "wallet-a"),
-            ("PROOFSTORM_RECIPIENT_MINT", "mint"),
-            ("PROOFSTORM_QUOTE_DRIVER_MODE", "pay-and-claim"),
-            ("PROOFSTORM_MINT_DB_DIR", "/payer-mint"),
-        ] {
-            assert_eq!(
-                env.iter()
-                    .find(|variable| variable.name == name)
-                    .and_then(|variable| variable.value.as_deref()),
-                Some(value),
-                "{name}"
-            );
-        }
-        let mint_mount = container
-            .volume_mounts
-            .as_ref()
-            .expect("volume mounts")
-            .iter()
-            .find(|mount| mount.name == "payer-mint")
-            .expect("payer mint database mount");
-        assert_eq!(mint_mount.mount_path, "/payer-mint");
-        assert_eq!(mint_mount.read_only, Some(false));
-    }
-
-    #[test]
-    fn wallet_melt_refresh_is_exact_bounded_and_uses_the_wallet_identity() {
-        let job = render_wallet_melt_quote_refresh_job(&WalletMeltQuoteRefreshJobSpec {
-            resource_name: "op-refresh",
-            instance_key: "i0123456789012345678",
-            wallet: "payer-wallet",
-            mint: "payer-mint",
-            melt_quote_id: "melt-opaque-1",
-            wallet_image: "nutshell-wallet",
-            timeout_seconds: 45,
-        })
-        .expect("refresh job");
+    fn bounded_jobs_preserve_deadlines_security_and_instance_placement() {
+        let (cell, action) = action_fixture();
+        let job = render_cell_action_job(&action, &cell).expect("probe job");
         let spec = job.spec.expect("job spec");
-        assert_eq!(spec.active_deadline_seconds, Some(75));
-        let pod = spec.template.spec.expect("pod spec");
+        assert!(
+            spec.active_deadline_seconds
+                .is_some_and(|seconds| seconds > 0 && seconds <= 120)
+        );
+        let pod = spec.template.spec.expect("pod");
         assert_eq!(pod.automount_service_account_token, Some(false));
-        let container = &pod.containers[0];
-        let env = container.env.as_ref().expect("environment");
-        for (name, value) in [
-            ("HOME", "/wallet"),
-            ("PROOFSTORM_QUOTE_DRIVER_MODE", "refresh-melt"),
-            ("PROOFSTORM_WALLET", "payer-wallet"),
-            ("PROOFSTORM_MINT", "payer-mint"),
-            ("PROOFSTORM_EXPECTED_MINT_URL", "http://payer-mint:3338"),
-            ("PROOFSTORM_MELT_QUOTE_ID", "melt-opaque-1"),
-        ] {
+        assert_eq!(pod.enable_service_links, Some(false));
+        assert_eq!(
+            pod.service_account_name.as_deref(),
+            Some("proofstorm-workload")
+        );
+        assert_eq!(
+            serde_json::to_value(&pod.security_context).unwrap(),
+            json!({
+                "runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
+                "seccompProfile": {"type": "RuntimeDefault"}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&pod.affinity).unwrap(),
+            json!({"podAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [{
+                "labelSelector": {"matchLabels": {"proofstorm.dev/instance": action.spec.instance_key}},
+                "topologyKey": "kubernetes.io/hostname"
+            }]}})
+        );
+        for container in &pod.containers {
             assert_eq!(
-                env.iter()
-                    .find(|variable| variable.name == name)
-                    .and_then(|variable| variable.value.as_deref()),
-                Some(value),
-                "{name}"
+                serde_json::to_value(&container.security_context).unwrap(),
+                json!({"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}})
             );
         }
-        assert_eq!(
-            pod.volumes
-                .as_ref()
-                .and_then(|volumes| volumes[0].persistent_volume_claim.as_ref())
-                .map(|claim| claim.claim_name.as_str()),
-            Some("payer-wallet-data")
-        );
-    }
-
-    #[test]
-    fn bounded_jobs_have_deadlines_and_no_service_account_tokens() {
-        let job = render_bootstrap_job(&BootstrapJobSpec {
-            resource_name: "op-123",
-            instance_key: "i0123456789012345678",
-            chain: "chain",
-            mint_lightning: "mint-lnd",
-            payer_lightning: "payer-lnd",
-            bitcoin_image: "bitcoin",
-            lnd_image: "lnd",
-            funding_sat: 100_000_000,
-            channel_sat: 10_000_000,
-            push_sat: 5_000_000,
-        })
-        .expect("job");
-        assert_eq!(
-            job.spec
-                .as_ref()
-                .and_then(|spec| spec.active_deadline_seconds),
-            Some(300)
-        );
-        let pod = &job.spec.expect("spec").template.spec.expect("pod");
-        assert_eq!(pod.automount_service_account_token, Some(false));
     }
 
     #[test]
     fn native_exec_uses_locked_component_image_data_and_uninterpolated_script() {
-        let (cell, mut action) = typed_bootstrap();
+        let (cell, mut action) = action_fixture();
         let locked_bitcoin = cell
             .spec
             .lock
@@ -4289,7 +1942,7 @@ mod tests {
 
     #[test]
     fn native_exec_can_target_a_distinct_bitcoin_component() {
-        let (cell, mut action) = typed_bootstrap();
+        let (cell, mut action) = action_fixture();
         action.spec.capability = Capability::ComponentForensics;
         action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "chain".into(),
@@ -4346,7 +1999,7 @@ mod tests {
 
     #[test]
     fn native_exec_mounts_are_compiled_from_the_executor_plan() {
-        let (cell, mut action) = typed_bootstrap();
+        let (cell, mut action) = action_fixture();
         action.spec.capability = Capability::ComponentForensics;
         action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
             component: "mint".into(),
@@ -4412,777 +2065,11 @@ mod tests {
     }
 
     #[test]
-    fn typed_peer_and_channel_actions_are_bounded_and_adapter_locked() {
-        let (cell, mut action) = typed_bootstrap();
-        let locked_lnd = cell
-            .spec
-            .lock
-            .entries
-            .iter()
-            .find(|entry| entry.component_id == "mint-lnd")
-            .expect("lnd lock")
-            .image
-            .clone();
-
-        action.spec.capability = Capability::PeerConnect;
-        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-        });
-        let peer = render_cell_action_job(&action, &cell).expect("peer job");
-        assert_eq!(
-            peer.spec
-                .as_ref()
-                .and_then(|spec| spec.active_deadline_seconds),
-            Some(90)
-        );
-        assert_eq!(
-            peer.spec
-                .expect("peer spec")
-                .template
-                .spec
-                .expect("pod")
-                .containers[0]
-                .image
-                .as_deref(),
-            Some(locked_lnd.as_str())
-        );
-
-        action.spec.capability = Capability::ChannelOpen;
-        action.spec.action = CellAction::ChannelOpen(ChannelOpenAction {
-            chain: "chain".into(),
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-            channel_sat: 2_000_000,
-            push_sat: 0,
-        });
-        let channel = render_cell_action_job(&action, &cell).expect("channel job");
-        assert_eq!(
-            channel
-                .spec
-                .as_ref()
-                .and_then(|spec| spec.active_deadline_seconds),
-            Some(180)
-        );
-        let channel_open = channel
-            .spec
-            .as_ref()
-            .and_then(|spec| spec.template.spec.as_ref())
-            .and_then(|pod| pod.init_containers.as_ref())
-            .and_then(|containers| containers.get(1))
-            .and_then(|container| container.command.as_ref())
-            .and_then(|command| command.get(2))
-            .expect("channel open script");
-        assert!(channel_open.contains("for attempt in $(seq 1 60)"));
-        assert!(channel_open.contains("connect \"$pk@payer-lnd:9735\""));
-        assert!(channel_open.contains("channel endpoint peer connection did not become ready"));
-        assert!(channel_open.contains("/shared/channel-open.log"));
-
-        action.spec.action = CellAction::ChannelPolicySet(ChannelPolicySetAction {
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-            base_fee_msat: 100_000,
-            fee_rate_ppm: 250,
-        });
-        let policy = render_cell_action_job(&action, &cell).expect("channel policy job");
-        assert_eq!(
-            policy
-                .spec
-                .as_ref()
-                .and_then(|spec| spec.active_deadline_seconds),
-            Some(90)
-        );
-        let policy_script = policy
-            .spec
-            .as_ref()
-            .and_then(|spec| spec.template.spec.as_ref())
-            .and_then(|pod| pod.containers.first())
-            .and_then(|container| container.command.as_ref())
-            .and_then(|command| command.get(2))
-            .expect("policy script");
-        assert!(policy_script.contains("updatechanpolicy"));
-        assert!(policy_script.contains("--base_fee_msat=100000"));
-        assert!(policy_script.contains("--fee_rate_ppm=250"));
-        assert!(policy_script.contains("--chan_point=\"$point\""));
-
-        action.spec.action = CellAction::ChannelOpen(ChannelOpenAction {
-            chain: "chain".into(),
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-            channel_sat: 2_000_000,
-            push_sat: 2_000_000,
-        });
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::Bounds(_))
-        ));
-    }
-
-    #[test]
-    fn typed_peer_and_channel_teardown_uses_opaque_handles() {
-        let (cell, mut action) = typed_bootstrap();
-        action.spec.capability = Capability::PeerDisconnect;
-        action.spec.action = CellAction::PeerDisconnect(PeerDisconnectAction {
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-        });
-        let disconnect = render_cell_action_job(&action, &cell).expect("peer disconnect job");
-        let disconnect_pod = disconnect
-            .spec
-            .expect("disconnect spec")
-            .template
-            .spec
-            .expect("disconnect pod");
-        assert!(disconnect_pod.init_containers.is_none());
-        let disconnect_script = disconnect_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("disconnect command")[2]
-            .as_str();
-        assert!(disconnect_script.contains("$from disconnect \"$to_pk\""));
-        assert!(disconnect_script.contains("$to disconnect \"$from_pk\""));
-        assert!(!disconnect_script.contains("disconnectpeer"));
-
-        let channel_id = format!("ch-{}", "a".repeat(64));
-        action.spec.capability = Capability::ChannelClose;
-        action.spec.action = CellAction::ChannelClose(ChannelCloseAction {
-            chain: "chain".into(),
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-            channel_id: channel_id.clone(),
-        });
-        let close = render_cell_action_job(&action, &cell).expect("channel close job");
-        let close_script = close
-            .spec
-            .expect("close spec")
-            .template
-            .spec
-            .expect("close pod")
-            .init_containers
-            .expect("close init containers")[1]
-            .command
-            .as_ref()
-            .expect("close command")[2]
-            .clone();
-        assert!(close_script.contains("closechannel"));
-        assert!(!close_script.contains("closechannel --force"));
-
-        action.spec.capability = Capability::ChannelForceClose;
-        action.spec.action = CellAction::ChannelForceClose(ChannelCloseAction {
-            chain: "chain".into(),
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-            channel_id,
-        });
-        let force_close = render_cell_action_job(&action, &cell).expect("force close job");
-        let force_script = force_close
-            .spec
-            .expect("force close spec")
-            .template
-            .spec
-            .expect("force close pod")
-            .init_containers
-            .expect("force init containers")[1]
-            .command
-            .as_ref()
-            .expect("force close command")[2]
-            .clone();
-        assert!(force_script.contains("closechannel --force"));
-
-        let CellAction::ChannelForceClose(request) = &mut action.spec.action else {
-            panic!("force close action");
-        };
-        request.channel_id = "raw-channel-point".into();
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::Bounds(_))
-        ));
-    }
-
-    #[test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one adapter-parity test keeps peer, open, policy, and close scripts comparable"
-    )]
-    fn cln_and_lnd_peer_channel_jobs_use_endpoint_specific_adapters() {
-        let (cell, mut action) = typed_bootstrap();
-        action.spec.capability = Capability::PeerConnect;
-        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
-            from_lightning: "attacker-cln".into(),
-            to_lightning: "mint-lnd".into(),
-        });
-        let peer = render_cell_action_job(&action, &cell).expect("CLN to LND peer job");
-        let peer_pod = peer
-            .spec
-            .expect("peer spec")
-            .template
-            .spec
-            .expect("peer pod");
-        let identity = &peer_pod.init_containers.expect("identity init")[0];
-        assert!(
-            identity
-                .image
-                .as_deref()
-                .is_some_and(|image| image.contains("lightninglabs/lnd"))
-        );
-        let connect = peer_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("connect command")[2]
-            .as_str();
-        assert!(connect.contains("lightning-cli --lightning-dir=/from"));
-        assert!(connect.contains("connect \"$pk\" \"mint-lnd\" 9735"));
-
-        action.spec.capability = Capability::ChannelOpen;
-        action.spec.action = CellAction::ChannelOpen(ChannelOpenAction {
-            chain: "chain".into(),
-            from_lightning: "attacker-cln".into(),
-            to_lightning: "mint-lnd".into(),
-            channel_sat: 1_000_000,
-            push_sat: 0,
-        });
-        let channel = render_cell_action_job(&action, &cell).expect("CLN channel job");
-        let channel_pod = channel
-            .spec
-            .expect("channel spec")
-            .template
-            .spec
-            .expect("channel pod");
-        let init = channel_pod.init_containers.expect("channel init");
-        let open = init[1].command.as_ref().expect("open command")[2].as_str();
-        assert!(open.contains("fundchannel -k"));
-        assert!(open.contains("jq -r '.txid'"));
-        assert!(open.contains("connect \"$pk\" \"mint-lnd\" 9735"));
-        assert!(open.contains("for attempt in $(seq 1 60)"));
-        assert_ne!(init[0].image, init[1].image);
-
-        action.spec.action = CellAction::ChannelPolicySet(ChannelPolicySetAction {
-            from_lightning: "attacker-cln".into(),
-            to_lightning: "mint-lnd".into(),
-            base_fee_msat: 25_000,
-            fee_rate_ppm: 500,
-        });
-        let policy = render_cell_action_job(&action, &cell).expect("CLN policy job");
-        let policy_pod = policy
-            .spec
-            .expect("policy spec")
-            .template
-            .spec
-            .expect("policy pod");
-        let policy_script = policy_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("policy command")[2]
-            .as_str();
-        assert!(policy_script.contains("setchannel \"id=$pk\""));
-        assert!(policy_script.contains("feebase=25000"));
-        assert!(policy_script.contains("feeppm=500"));
-
-        action.spec.capability = Capability::ChannelClose;
-        action.spec.action = CellAction::ChannelClose(ChannelCloseAction {
-            chain: "chain".into(),
-            from_lightning: "attacker-cln".into(),
-            to_lightning: "mint-lnd".into(),
-            channel_id: format!("ch-{}", "a".repeat(64)),
-        });
-        let close = render_cell_action_job(&action, &cell).expect("CLN close job");
-        let close_pod = close
-            .spec
-            .expect("close spec")
-            .template
-            .spec
-            .expect("close pod");
-        assert_eq!(
-            close_pod
-                .init_containers
-                .as_ref()
-                .expect("identity init")
-                .len(),
-            1
-        );
-        assert_eq!(close_pod.containers.len(), 3);
-        let close_script = close_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("close command")[2]
-            .as_str();
-        let confirm_script = close_pod.containers[1]
-            .command
-            .as_ref()
-            .expect("confirm command")[2]
-            .as_str();
-        let result_script = close_pod.containers[2]
-            .command
-            .as_ref()
-            .expect("result command")[2]
-            .as_str();
-        assert!(close_script.contains("touch /shared/close-started"));
-        assert!(close_script.contains("touch /shared/close-done"));
-        assert!(confirm_script.contains("until test -f /shared/close-done"));
-        assert!(result_script.contains("until test -f /shared/mined"));
-        assert!(result_script.contains("test \"$rounds\" -lt 30"));
-        assert!(result_script.contains("FUNDING_SPEND_SEEN|ONCHAIN"));
-    }
-
-    #[test]
-    fn typed_rebalance_uses_opaque_handles_and_rejects_unsupported_adapters() {
-        let (cell, mut action) = typed_bootstrap();
-        let outgoing = format!("ch-{}", "a".repeat(64));
-        let incoming = format!("ch-{}", "b".repeat(64));
-        action.spec.capability = Capability::ChannelRebalance;
-        action.spec.action = CellAction::ChannelRebalance(ChannelRebalanceAction {
-            lightning: "mint-lnd".into(),
-            outgoing_channel_id: outgoing.clone(),
-            incoming_channel_id: incoming.clone(),
-            amount_sat: 100_000,
-            max_fee_sat: 100,
-        });
-        let rebalance = render_cell_action_job(&action, &cell).expect("rebalance job");
-        let spec = rebalance.spec.expect("job spec");
-        assert_eq!(spec.active_deadline_seconds, Some(120));
-        let pod = spec.template.spec.expect("rebalance pod");
-        assert!(pod.init_containers.is_none());
-        assert_eq!(pod.containers.len(), 1);
-        let script = pod.containers[0]
-            .command
-            .as_ref()
-            .expect("rebalance command")[2]
-            .as_str();
-        assert!(script.contains("--allow_self_payment"));
-        assert!(script.contains("--max_parts=1"));
-        assert!(script.contains("--last_hop=\"$in_peer\""));
-        assert!(script.contains("attempts=$((attempts + 1))"));
-        assert!(script.contains("test \"$attempts\" -lt 45"));
-        assert!(script.contains("rounds=$((rounds + 1))"));
-        assert!(script.contains("test \"$rounds\" -lt 30"));
-        assert!(script.contains("--timeout=10s"));
-        assert!(script.contains("/\"scid\":/"));
-        assert!(!script.contains("/\"chan_id\":/"));
-        assert!(script.contains("cut -d'\"' -f4"));
-        assert!(!script.contains("cut -d'\\\"'"));
-        assert!(script.contains("'\"status\":[[:space:]]*\"SUCCEEDED\"'"));
-        assert!(script.contains(&outgoing));
-        assert!(script.contains(&incoming));
-        assert!(script.contains("outgoing_local_before_sat"));
-        assert!(!script.contains("payment_request\":\""));
-
-        if let CellAction::ChannelRebalance(request) = &mut action.spec.action {
-            request.incoming_channel_id.clone_from(&outgoing);
-        } else {
-            panic!("rebalance action");
-        }
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::Bounds(_))
-        ));
-        if let CellAction::ChannelRebalance(request) = &mut action.spec.action {
-            request.incoming_channel_id = incoming;
-            request.lightning = "attacker-cln".into();
-        }
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::UnsupportedAdapter { .. })
-        ));
-    }
-
-    #[test]
-    fn nutshell_default_name_is_independent_of_component_storage_and_receipts() {
-        for wallet in ["alice", "bob"] {
-            let spec = WalletJobSpec {
-                resource_name: "op-wallet",
-                instance_key: "i0123456789012345678",
-                wallet,
-                mint: "mint",
-                wallet_image: "nutshell",
-            };
-            let jobs = [
-                render_wallet_initialize_job(&spec).unwrap(),
-                render_wallet_balance_job(&spec).unwrap(),
-                render_wallet_invoice_job(&WalletInvoiceJobSpec {
-                    resource_name: spec.resource_name,
-                    instance_key: spec.instance_key,
-                    wallet,
-                    mint: spec.mint,
-                    wallet_image: spec.wallet_image,
-                    amount_sat: 100,
-                    timeout_seconds: 30,
-                })
-                .unwrap(),
-                render_conservation_oracle_job(&ConservationOracleJobSpec {
-                    resource_name: spec.resource_name,
-                    instance_key: spec.instance_key,
-                    wallet,
-                    mint: spec.mint,
-                    wallet_image: spec.wallet_image,
-                    baseline_operation_id: "baseline",
-                    treatment_operation_id: "treatment",
-                    expected_sat: 100,
-                    tolerance_sat: 0,
-                })
-                .unwrap(),
-            ];
-            for job in jobs {
-                let pod = job.spec.unwrap().template.spec.unwrap();
-                let script = pod.containers[0].command.as_ref().unwrap().last().unwrap();
-                assert!(script.contains("-w wallet -t -y"));
-                assert!(!script.contains(&format!("-w {wallet} ")));
-                assert!(pod.volumes.unwrap().iter().any(|volume| {
-                    volume
-                        .persistent_volume_claim
-                        .as_ref()
-                        .is_some_and(|claim| claim.claim_name == format!("{wallet}-data"))
-                }));
-                if let Some(identity) = pod.containers[0]
-                    .env
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .find(|variable| variable.name == "PROOFSTORM_WALLET")
-                {
-                    assert_eq!(identity.value.as_deref(), Some(wallet));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn wallet_initialize_and_balance_use_the_locked_adapter_and_snapshot_reads() {
-        let (cell, mut action) = typed_bootstrap();
-        let wallet_image = cell
-            .spec
-            .lock
-            .entries
-            .iter()
-            .find(|entry| entry.component_id == "wallet")
-            .expect("wallet lock")
-            .image
-            .clone();
-        action.spec.capability = Capability::WalletCreate;
-        action.spec.action = CellAction::WalletInitialize(WalletInitializeAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-        });
-        let initialize = render_cell_action_job(&action, &cell).expect("initialize job");
-        assert_eq!(
-            initialize
-                .spec
-                .expect("spec")
-                .template
-                .spec
-                .expect("pod")
-                .containers[0]
-                .image
-                .as_deref(),
-            Some(wallet_image.as_str())
-        );
-
-        action.spec.capability = Capability::WalletControl;
-        action.spec.action = CellAction::WalletBalance(WalletBalanceAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-        });
-        let balance = render_cell_action_job(&action, &cell).expect("balance job");
-        let snapshot = &balance
-            .spec
-            .expect("spec")
-            .template
-            .spec
-            .expect("pod")
-            .init_containers
-            .expect("snapshot")[0];
-        assert_eq!(snapshot.name, "snapshot");
-        assert_eq!(
-            snapshot.volume_mounts.as_ref().expect("mounts")[0].read_only,
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn cdk_observation_is_version_locked_and_never_starts_the_wallet() {
-        let (mut cell, mut action) = typed_bootstrap();
-        let wallet = cell
-            .spec
-            .cell
-            .components
-            .iter_mut()
-            .find(|component| component.id == "wallet")
-            .expect("wallet");
-        wallet.implementation = "cdk-cli-wallet".into();
-        wallet.config_version = "cdk-cli-wallet/0.18/v1".into();
-        wallet.version = Some("0.18.1".into());
-        cell.spec.lock = resolve_lock(&cell.spec.cell, default_catalog()).expect("CDK lock");
-        action.spec.capability = Capability::WalletControl;
-        action.spec.action = CellAction::WalletBalance(WalletBalanceAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-        });
-        let job = render_cell_action_job(&action, &cell).expect("passive observation");
-        let spec = job.spec.expect("job");
-        assert_eq!(spec.active_deadline_seconds, Some(30));
-        let pod = spec.template.spec.expect("pod");
-        let initializers = pod
-            .init_containers
-            .as_ref()
-            .expect("native driver installer");
-        assert_eq!(initializers.len(), 1);
-        assert_eq!(initializers[0].name, "proofstorm-driver");
-        assert_eq!(
-            initializers[0].command.as_ref().expect("installer command"),
-            &["/usr/local/lib/proofstorm-driver", "install"]
-        );
-        assert_eq!(initializers[0].volume_mounts.as_ref().unwrap().len(), 1);
-        assert_eq!(
-            initializers[0].volume_mounts.as_ref().unwrap()[0].name,
-            "proofstorm-driver"
-        );
-        assert_eq!(
-            pod.containers[0].volume_mounts.as_ref().expect("mount")[0].read_only,
-            Some(false)
-        );
-        let script = pod.containers[0]
-            .command
-            .as_ref()
-            .expect("command")
-            .last()
-            .expect("script");
-        assert_eq!(
-            script,
-            "exec /opt/proofstorm/driver observe cdk-cli-wallet > /dev/termination-log"
-        );
-        cell.spec
-            .lock
-            .entries
-            .iter_mut()
-            .find(|entry| entry.component_id == "wallet")
-            .expect("wallet lock")
-            .protocol_action_adapter_version = Some("uninstalled-version".into());
-        assert!(render_cell_action_job(&action, &cell).is_err());
-        action.spec.capability = Capability::WalletCreate;
-        action.spec.action = CellAction::WalletInitialize(WalletInitializeAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-        });
-        assert!(render_cell_action_job(&action, &cell).is_err());
-    }
-
-    #[test]
-    fn wallet_fund_is_bounded_and_uses_locked_wallet_and_payer_adapters() {
-        let (cell, mut action) = typed_bootstrap();
-        action.spec.capability = Capability::WalletFund;
-        action.spec.action = CellAction::WalletFund(WalletFundAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-            payer_lightning: "payer-lnd".into(),
-            amount_sat: 1_000,
-        });
-        let funded = render_cell_action_job(&action, &cell).expect("fund job");
-        let funded_spec = funded.spec.expect("spec");
-        assert_eq!(funded_spec.active_deadline_seconds, Some(180));
-        let pod = funded_spec.template.spec.expect("pod");
-        assert_eq!(pod.containers[0].name, "wallet");
-        assert_eq!(pod.containers[1].name, "payer");
-        let wallet_script = pod.containers[0]
-            .command
-            .as_ref()
-            .expect("wallet command")
-            .last()
-            .expect("wallet script");
-        assert!(wallet_script.contains("invoice 1000 --no-check"));
-        assert!(wallet_script.contains("--id \"$quote_id\""));
-        assert!(wallet_script.contains("quote_id_not_observed"));
-        assert!(wallet_script.contains("quote_not_paid"));
-        assert!(wallet_script.contains("/shared/payer.failed"));
-        assert!(wallet_script.contains("payment_wait_timeout"));
-        assert!(wallet_script.contains("invoice_settlement_timeout"));
-        assert!(wallet_script.contains("wallet_orchestration_failed"));
-        #[cfg(unix)]
-        assert_shell_syntax(wallet_script);
-        let payer_script = pod.containers[1]
-            .command
-            .as_ref()
-            .expect("payer command")
-            .last()
-            .expect("payer script");
-        assert!(payer_script.contains("/shared/wallet.failed"));
-        assert!(payer_script.contains("invoice_not_observed"));
-        assert!(payer_script.contains("payment_timeout"));
-        assert!(payer_script.contains("wallet_completion_timeout"));
-        assert!(payer_script.contains("ln(bcrt|bc|tb|tbs)"));
-        #[cfg(unix)]
-        assert_shell_syntax(payer_script);
-        let CellAction::WalletFund(request) = &mut action.spec.action else {
-            panic!("fund action");
-        };
-        request.amount_sat = 500_001;
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::Bounds(_))
-        ));
-    }
-
-    #[test]
-    fn wallet_invoice_and_pay_keep_payment_material_in_private_volumes() {
-        let (cell, mut invoice_action) = typed_bootstrap();
-        invoice_action.spec.capability = Capability::WalletFund;
-        invoice_action.spec.action = CellAction::WalletInvoice(WalletInvoiceAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-            amount_sat: 100,
-            timeout_seconds: 300,
-        });
-        let invoice = render_cell_action_job(&invoice_action, &cell).expect("invoice job");
-        let invoice_spec = invoice.spec.expect("invoice spec");
-        assert_eq!(invoice_spec.active_deadline_seconds, Some(330));
-        let invoice_pod = invoice_spec.template.spec.expect("invoice pod");
-        let invoice_script = invoice_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("invoice command")
-            .last()
-            .expect("invoice script");
-        assert!(invoice_script.contains("mktemp /tmp/proofstorm-invoice"));
-        assert!(invoice_script.contains("cashu invoice 100 --no-check"));
-        assert!(invoice_script.contains("trap cleanup EXIT"));
-        assert!(!invoice_script.contains("lnbcrt1"));
-        assert!(
-            render_cell_action_cleanup_job(&invoice_action, &cell)
-                .expect("cleanup render")
-                .is_none()
-        );
-
-        let mut pay_cell = cell;
-        let mut receiver = pay_cell
-            .spec
-            .cell
-            .components
-            .iter()
-            .find(|component| component.id == "wallet")
-            .expect("wallet")
-            .clone();
-        receiver.id = "receiver-wallet".into();
-        pay_cell.spec.cell.components.push(receiver);
-        let mut receiver_lock = pay_cell
-            .spec
-            .lock
-            .entries
-            .iter()
-            .find(|entry| entry.component_id == "wallet")
-            .expect("wallet lock")
-            .clone();
-        receiver_lock.component_id = "receiver-wallet".into();
-        pay_cell.spec.lock.entries.push(receiver_lock);
-        let mut pay_action = invoice_action;
-        pay_action.spec.capability = Capability::WalletControl;
-        pay_action.spec.action = CellAction::WalletPay(WalletPayAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-            recipient_wallet: "receiver-wallet".into(),
-            recipient_mint: "mint".into(),
-            mint_quote_id: "quote-one".into(),
-        });
-        let pay = render_cell_action_job(&pay_action, &pay_cell).expect("pay job");
-        let pod = pay.spec.expect("pay spec").template.spec.expect("pay pod");
-        let recipient_mount = pod.containers[0]
-            .volume_mounts
-            .as_ref()
-            .expect("mounts")
-            .iter()
-            .find(|mount| mount.name == "recipient")
-            .expect("recipient mount");
-        assert_eq!(recipient_mount.read_only, Some(false));
-
-        let CellAction::WalletPay(request) = &mut pay_action.spec.action else {
-            panic!("pay action");
-        };
-        request.recipient_wallet = "wallet".into();
-        assert!(matches!(
-            render_cell_action_job(&pay_action, &pay_cell),
-            Err(ActionRenderError::Bounds(_))
-        ));
-    }
-
-    #[test]
-    fn oracle_snapshots_the_wallet_and_round_trip_has_a_fixed_deadline() {
-        let oracle = render_conservation_oracle_job(&ConservationOracleJobSpec {
-            resource_name: "op-oracle",
-            instance_key: "i0123456789012345678",
-            wallet: "wallet",
-            mint: "mint",
-            wallet_image: "wallet-image",
-            baseline_operation_id: "balance-before",
-            treatment_operation_id: "treatment",
-            expected_sat: 100,
-            tolerance_sat: 2,
-        })
-        .expect("oracle");
-        let oracle_pod = oracle.spec.expect("spec").template.spec.expect("pod");
-        assert_eq!(
-            oracle_pod.init_containers.expect("snapshot")[0].name,
-            "snapshot"
-        );
-        assert_eq!(oracle_pod.containers[0].name, "oracle");
-        let oracle_command = oracle_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("oracle command");
-        assert!(
-            oracle_command
-                .iter()
-                .any(|part| part.contains("\"conserved\":%s"))
-        );
-        assert!(
-            oracle_command
-                .iter()
-                .all(|part| !part.contains("test \"$conserved\" = true")),
-            "a negative conservation finding is evidence, not a failed Job"
-        );
-
-        let round_trip = render_wallet_round_trip_job(&WalletRoundTripJobSpec {
-            resource_name: "op-wallet",
-            instance_key: "i0123456789012345678",
-            wallet: "wallet",
-            mint: "mint",
-            payer_lightning: "payer-lnd",
-            wallet_image: "wallet",
-            lnd_image: "lnd",
-            amount_sat: 100,
-            tolerance_sat: 2,
-        })
-        .expect("round trip");
-        assert_eq!(
-            round_trip
-                .spec
-                .as_ref()
-                .and_then(|spec| spec.active_deadline_seconds),
-            Some(240)
-        );
-        let round_trip_pod = round_trip
-            .spec
-            .expect("round trip spec")
-            .template
-            .spec
-            .expect("round trip pod");
-        let wallet_script = round_trip_pod.containers[0]
-            .command
-            .as_ref()
-            .expect("wallet command")
-            .last()
-            .expect("wallet script");
-        assert!(wallet_script.contains("/shared/payer.failed"));
-        assert!(wallet_script.contains("selfpay_failed"));
-        let payer_script = round_trip_pod.containers[1]
-            .command
-            .as_ref()
-            .expect("payer command")
-            .last()
-            .expect("payer script");
-        assert!(payer_script.contains("/shared/wallet.failed"));
-        assert!(payer_script.contains("payment_timeout"));
-    }
-
-    #[test]
-    fn typed_bootstrap_is_identity_checked_and_controller_owned() {
-        let (cell, mut action) = typed_bootstrap();
+    fn action_is_identity_checked_and_controller_owned() {
+        let (cell, mut action) = action_fixture();
+        let mut document = serde_json::to_value(&action.spec).expect("serialize action");
+        document["action"]["parameters"]["command"] = json!("unexpected field");
+        assert!(serde_json::from_value::<crate::ProofstormCellActionSpec>(document).is_err());
         let job = render_cell_action_job(&action, &cell).expect("typed job");
         assert_eq!(job.metadata.name.as_deref(), Some("action-123"));
         assert_eq!(
@@ -5201,25 +2088,8 @@ mod tests {
     }
 
     #[test]
-    fn typed_bootstrap_refuses_out_of_bounds_and_unknown_fields() {
-        let (cell, mut action) = typed_bootstrap();
-        let CellAction::BootstrapLiquidity(request) = &mut action.spec.action else {
-            panic!("expected bootstrap action");
-        };
-        request.push_sat = request.channel_sat;
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::Bounds(_))
-        ));
-
-        let mut document = serde_json::to_value(&action.spec).expect("serialize action");
-        document["action"]["parameters"]["command"] = json!("arbitrary shell");
-        assert!(serde_json::from_value::<crate::ProofstormCellActionSpec>(document).is_err());
-    }
-
-    #[test]
     fn node_lifecycle_is_typed_and_never_renders_a_privileged_job() {
-        let (cell, mut action) = typed_bootstrap();
+        let (cell, mut action) = action_fixture();
         action.spec.capability = Capability::NodeControl;
         action.spec.action = CellAction::NodeRestart(crate::ComponentControlAction {
             component: "chain".into(),
@@ -5235,102 +2105,8 @@ mod tests {
     }
 
     #[test]
-    fn typed_wallet_round_trip_uses_the_locked_wallet_adapter_image() {
-        let (mut cell, mut action) = typed_bootstrap();
-        let locked_image = "registry.example/nutshell@sha256:locked-wallet-image";
-        cell.spec
-            .lock
-            .entries
-            .iter_mut()
-            .find(|entry| entry.component_id == "wallet")
-            .expect("wallet lock entry")
-            .image = locked_image.into();
-        action.spec.capability = Capability::WalletControl;
-        action.spec.action = CellAction::WalletRoundTrip(WalletRoundTripAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-            payer_lightning: "payer-lnd".into(),
-            amount_sat: 1_000,
-            tolerance_sat: 100,
-        });
-
-        let job = render_cell_action_job(&action, &cell).expect("typed wallet job");
-        let pod = job.spec.expect("job spec").template.spec.expect("pod spec");
-        let wallet = pod
-            .containers
-            .iter()
-            .find(|container| container.name == "wallet")
-            .expect("wallet result container");
-        assert_eq!(wallet.image.as_deref(), Some(locked_image));
-        assert_eq!(action_result_container(&action.spec.action), "wallet");
-    }
-
-    #[test]
-    fn typed_conservation_oracle_snapshots_with_the_locked_wallet_image() {
-        let (mut cell, mut action) = typed_bootstrap();
-        let locked_image = "registry.example/nutshell@sha256:locked-oracle-image";
-        cell.spec
-            .lock
-            .entries
-            .iter_mut()
-            .find(|entry| entry.component_id == "wallet")
-            .expect("wallet lock entry")
-            .image = locked_image.into();
-        action.spec.capability = Capability::OracleRun;
-        action.spec.action = CellAction::ConservationOracle(ConservationOracleAction {
-            wallet: "wallet".into(),
-            mint: "mint".into(),
-            baseline_operation_id: "balance-before".into(),
-            treatment_operation_id: "payment-under-test".into(),
-            expected_sat: 997,
-            tolerance_sat: 0,
-        });
-
-        let job = render_cell_action_job(&action, &cell).expect("typed oracle job");
-        let pod = job.spec.expect("job spec").template.spec.expect("pod spec");
-        let snapshot = pod.init_containers.expect("snapshot container");
-        assert_eq!(snapshot[0].image.as_deref(), Some(locked_image));
-        assert_eq!(pod.containers[0].image.as_deref(), Some(locked_image));
-        assert_eq!(action_result_container(&action.spec.action), "oracle");
-        let command = pod.containers[0].command.as_ref().expect("oracle command");
-        assert!(command.iter().any(|part| part.contains("balance-before")));
-        assert!(
-            command
-                .iter()
-                .any(|part| part.contains("payment-under-test"))
-        );
-
-        action.spec.capability = Capability::WalletControl;
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::Capability)
-        ));
-
-        action.spec.capability = Capability::OracleRun;
-        cell.spec
-            .cell
-            .components
-            .iter_mut()
-            .find(|component| component.id == "wallet")
-            .expect("wallet component")
-            .implementation = "cocod-wallet".into();
-        cell.spec
-            .lock
-            .entries
-            .iter_mut()
-            .find(|entry| entry.component_id == "wallet")
-            .expect("wallet lock entry")
-            .catalog_id = "cocod-wallet".into();
-        assert!(matches!(
-            render_cell_action_job(&action, &cell),
-            Err(ActionRenderError::UnsupportedAdapter { adapter, .. })
-                if adapter == "cocod-wallet"
-        ));
-    }
-
-    #[test]
     fn reachability_oracle_uses_source_firewall_identity_and_advertised_service() {
-        let (cell, mut action) = typed_bootstrap();
+        let (cell, mut action) = action_fixture();
         action.spec.capability = Capability::OracleRun;
         action.spec.action = CellAction::ReachabilityOracle(ReachabilityOracleAction {
             from_component: "wallet".into(),
@@ -5373,7 +2149,7 @@ mod tests {
 
     #[test]
     fn reachability_oracle_refuses_unknown_services_and_unbounded_probes() {
-        let (cell, mut action) = typed_bootstrap();
+        let (cell, mut action) = action_fixture();
         action.spec.capability = Capability::OracleRun;
         action.spec.action = CellAction::ReachabilityOracle(ReachabilityOracleAction {
             from_component: "wallet".into(),
@@ -5399,7 +2175,7 @@ mod tests {
     }
     #[test]
     fn expired_chain_evidence_invalidates_dependent_actions_at_the_boundary() {
-        let (mut cell, mut action) = typed_bootstrap();
+        let (mut cell, mut action) = action_fixture();
         for lightning in ["mint-lnd", "payer-lnd"] {
             cell.spec.cell.links.push(proofstorm_core::LinkSpec {
                 id: format!("{lightning}-chain"),
@@ -5413,10 +2189,11 @@ mod tests {
         }
         cell.spec.lock = resolve_lock(&cell.spec.cell, default_catalog()).unwrap();
         ready_admission_status(&mut cell);
-        action.spec.action = CellAction::PeerConnect(PeerConnectAction {
-            from_lightning: "mint-lnd".into(),
-            to_lightning: "payer-lnd".into(),
-        });
+        action.spec.action =
+            CellAction::AuthenticationConformance(AuthenticationConformanceAction {
+                mint: "mint".into(),
+                identity_provider: "wallet".into(),
+            });
         let chain = cell
             .status
             .as_mut()

@@ -164,10 +164,12 @@ mint_case() (
       node "$prefix-south" pay "$invoice" > "$wallet_directory/funding.json"
       jq -e '.status=="complete"' "$wallet_directory/funding.json" >/dev/null
     fi
+    cli alice invoice 10000 --id "$quote" > "$wallet_directory/claim-native.log" 2>&1
     run exec --env HOME=/wallet/alice --env CASHU_DIR=/wallet/alice/.cashu --env PROOFSTORM_WALLET=alice --env PROOFSTORM_MINT=mint \
+      --env PROOFSTORM_OBSERVATION_ROLE=claim_receive \
       --env "PROOFSTORM_EXPECTED_MINT_URL=http://$name:3338" --env "PROOFSTORM_MINT_QUOTE_ID=$quote" "$wallet_name" \
-      /opt/proofstorm/driver quote claim-receive > "$wallet_directory/claim.json"
-    jq -e '.claim_exit_code==0 and (.quote_observations|any(.state=="ISSUED" and .amount_sat==10000 and .wallet_id=="alice"))' "$wallet_directory/claim.json" >/dev/null
+      /opt/proofstorm/driver quote observe-receive > "$wallet_directory/claim.json"
+    jq -e '.state=="ISSUED" and .amount_sat==10000 and .wallet_id=="alice"' "$wallet_directory/claim.json" >/dev/null
     [[ $(balance alice) == 10000 && $(balance bob) == 0 ]]
     stage="wallet-$wallet_index-transfer"
     cli alice send 1000 > "$wallet_directory/send.log" 2>&1

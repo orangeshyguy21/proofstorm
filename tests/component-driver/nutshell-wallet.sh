@@ -51,14 +51,15 @@ stage=alice-funding
 cli alice invoice 1000 --no-check >"$scratch/invoice.log" 2>&1
 quote_id=$(sed -n 's/.*--id \([^[:space:]]*\).*/\1/p' "$scratch/invoice.log")
 [[ -n "$quote_id" && "$quote_id" != *$'\n'* ]]
-# The typed claim must invoke the native default wallet while its receipt keeps
-# the component ID. This also exercises the driver's real quote lookup path.
+# Claim with the installed CLI, then inspect the native database without mutation.
+cli alice invoice 1000 --id "$quote_id" >"$scratch/claim-native.log" 2>&1
 HOME="$scratch/alice" PROOFSTORM_WALLET=alice PROOFSTORM_MINT=mint \
     PROOFSTORM_EXPECTED_MINT_URL=http://127.0.0.1:3338 PROOFSTORM_MINT_QUOTE_ID="$quote_id" \
-    timeout -k 2 35 /opt/proofstorm/driver quote claim-receive >"$scratch/claim.log" 2>&1
+    PROOFSTORM_OBSERVATION_ROLE=claim_receive \
+    timeout -k 2 35 /opt/proofstorm/driver quote observe-receive >"$scratch/claim.log" 2>&1
 grep -q '"wallet_id":"alice"' "$scratch/claim.log"
 grep -q '"state":"ISSUED"' "$scratch/claim.log"
-grep -q '"claim_exit_code":0' "$scratch/claim.log"
+grep -q '"amount_sat":1000' "$scratch/claim.log"
 [[ $(balance alice) == 1000 ]]
 stage=bob-isolation
 [[ $(balance bob) == 0 ]]

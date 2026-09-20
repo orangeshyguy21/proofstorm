@@ -33,24 +33,6 @@ fn cell_document() -> Value {
     })
 }
 
-fn common(operation: &str) -> Value {
-    json!({
-        "name": INSTANCE,
-        "run_id": EXPERIMENT,
-
-        "request_id": operation
-    })
-}
-
-fn with(mut base: Value, extra: Value) -> Value {
-    if let (Some(target), Value::Object(source)) = (base.as_object_mut(), extra) {
-        for (key, value) in source {
-            target.insert(key, value);
-        }
-    }
-    base
-}
-
 pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.default_session("nutshell-cln-live", "experiment-agent")?;
 
@@ -191,158 +173,75 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"request_id":"8067","run_id": EXPERIMENT, "name": INSTANCE}),
     )?;
 
-    crate::driver::liquidity_bootstrap(
-        context,
+    crate::native::bootstrap(
         &mut client,
-        with(
-            common("nutshell-cln-bootstrap"),
-            json!({"chain": "chain", "mint_lightning": "seed-lnd", "payer_lightning": "payer-lnd", "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 1_000_000}),
+        INSTANCE,
+        EXPERIMENT,
+        "nutshell-cln-bootstrap",
+        "chain",
+        "seed-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        1_000_000,
+    )?;
+    let mut native = crate::native::Session::new(&mut client, INSTANCE, EXPERIMENT);
+    let identity = native.json(
+        "mint-cln",
+        "nutshell-cln-identity",
+        "lightning-cli --lightning-dir=/home/cln/.lightning --network=regtest getinfo",
+    )?;
+    let pubkey = expect::string(&identity, "/id")?;
+    native.execute(
+        "payer-lnd",
+        "nutshell-cln-peer",
+        &format!(
+            "{} connect {}",
+            crate::native::LND,
+            crate::native::quote(&format!("{pubkey}@mint-cln:9735"))
         ),
     )?;
-    let bootstrap = cell::wait_succeeded(&mut client, "nutshell-cln-bootstrap")?;
-    if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
-        bail!("LND bootstrap failed: {bootstrap}");
-    }
-    // Workload restart and bootstrap can invalidate the aggregate dependency
-    // observation. Wait for the current cell before admitting the next mutation.
-    cell::wait_ready(&mut client, INSTANCE)?;
-
-    crate::driver::peer_connect(
-        context,
-        &mut client,
-        with(
-            common("nutshell-cln-peer"),
-            json!({"from_lightning": "payer-lnd", "to_lightning": "mint-cln"}),
+    let opened = native.json(
+        "payer-lnd",
+        "nutshell-cln-open",
+        &format!(
+            "{} openchannel --node_key={} --local_amt=4000000 --push_amt=1000000",
+            crate::native::LND,
+            crate::native::quote(pubkey)
         ),
     )?;
-    let peer = cell::wait_succeeded(&mut client, "nutshell-cln-peer")?;
-    if !expect::boolean(cell::artifact_content(&peer)?, "/connected")? {
-        bail!("LND-to-CLN peer connection failed: {peer}");
-    }
-
-    crate::driver::channel_open(
-        context,
-        &mut client,
-        with(
-            common("nutshell-cln-channel"),
-            json!({"chain": "chain", "from_lightning": "payer-lnd", "to_lightning": "mint-cln", "channel_sat": 4_000_000, "push_sat": 1_000_000}),
-        ),
+    native.mine("chain", "nutshell-cln-confirm", 6)?;
+    native.poll(
+        "payer-lnd",
+        "nutshell-cln-active",
+        &format!("{} listchannels", crate::native::LND),
+        |channels| crate::native::active_channel_point(&opened, channels),
     )?;
-    let channel = cell::wait_succeeded(&mut client, "nutshell-cln-channel")?;
-    if !expect::boolean(cell::artifact_content(&channel)?, "/active")? {
-        bail!("LND-to-CLN channel failed: {channel}");
-    }
 
-    let wallet = json!({"wallet": "wallet", "mint": "mint"});
-
-    crate::driver::wallet_initialize(
-        context,
-        &mut client,
-        with(
-            with(common("nutshell-cln-initialize"), wallet.clone()),
-            json!({}),
-        ),
-    )?;
-    let initialized = cell::wait_succeeded(&mut client, "nutshell-cln-initialize")?;
-    if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
-        bail!("Nutshell CLN wallet initialization failed: {initialized}");
-    }
-
-    client.call(
-        "wallet_balance",
-        with(
-            with(common("nutshell-cln-balance"), wallet.clone()),
-            json!({}),
-        ),
-    )?;
-    let balance = cell::wait_succeeded(&mut client, "nutshell-cln-balance")?;
-    if expect::integer(cell::artifact_content(&balance)?, "/balance_sat")? != 0 {
-        bail!("Nutshell CLN wallet did not start empty: {balance}");
-    }
-
-    crate::driver::wallet_fund(
-        context,
-        &mut client,
-        with(
-            with(common("nutshell-cln-fund"), wallet.clone()),
-            json!({"payer_lightning": "payer-lnd", "amount_sat": 1000}),
-        ),
-    )?;
-    let funded = cell::wait_succeeded(&mut client, "nutshell-cln-fund")?;
-    let fund_content = cell::artifact_content(&funded)?;
-    if expect::integer(fund_content, "/funded_sat")? != 1000
-        || expect::integer(fund_content, "/balance_sat")? != 1000
-    {
-        bail!("Nutshell CLN wallet funding failed: {funded}");
-    }
-
-    client.call(
-        "wallet_balance",
-        with(
-            with(
-                common("nutshell-cln-balance-before-round-trip"),
-                wallet.clone(),
-            ),
-            json!({}),
-        ),
-    )?;
-    let baseline = cell::wait_succeeded(&mut client, "nutshell-cln-balance-before-round-trip")?;
-    if expect::integer(cell::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
-        bail!("Nutshell CLN wallet baseline is invalid: {baseline}");
-    }
-
-    crate::driver::wallet_round_trip(
-        context,
-        &mut client,
-        with(
-            with(common("nutshell-cln-round-trip"), wallet.clone()),
-            json!({"payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100}),
-        ),
-    )?;
-    let round_trip = cell::wait_succeeded(&mut client, "nutshell-cln-round-trip")?;
-    let round_content = cell::artifact_content(&round_trip)?;
-    if expect::boolean(round_content, "/inflation")?
-        || expect::integer(round_content, "/minted_sat")? != 1000
-    {
-        bail!("Nutshell CLN wallet round trip failed: {round_trip}");
-    }
-
-    // Round trip mints external value before selfpay. It is intentionally not
-    // an admissible wallet_pay treatment for the conservation oracle.
-    let rejected = crate::conservation::check(
-        context,
-        &mut client,
-        with(
-            with(common("nutshell-cln-conservation"), wallet.clone()),
-            json!({
-                "baseline_operation_id": "nutshell-cln-balance-before-round-trip",
-                "treatment_operation_id": "nutshell-cln-round-trip"}),
-        ),
-    )
-    .expect_err("a round trip must not be accepted as a payment treatment");
+    let mut native = crate::native::Session::new(&mut client, INSTANCE, EXPERIMENT);
+    native.nutshell_initialize("wallet", "mint", "nutshell-cln-initialize")?;
     anyhow::ensure!(
-        rejected
-            .to_string()
-            .starts_with("conservation_treatment_invalid:"),
-        "unexpected conservation refusal: {rejected}"
+        native.nutshell_balance("wallet", "mint", "nutshell-cln-balance")? == 0,
+        "Nutshell CLN wallet did not start empty"
     );
-    client.call(
-        "wallet_balance",
-        with(
-            with(common("nutshell-cln-balance-after-round-trip"), wallet),
-            json!({}),
-        ),
+    let funded = native.nutshell_fund("wallet", "mint", "payer-lnd", "nutshell-cln-fund", 1000)?;
+    anyhow::ensure!(funded == 1000, "Nutshell CLN funding balance differs");
+    let before = native.nutshell_fund(
+        "wallet",
+        "mint",
+        "payer-lnd",
+        "nutshell-cln-round-trip-fund",
+        1000,
     )?;
-    let after = cell::wait_succeeded(&mut client, "nutshell-cln-balance-after-round-trip")?;
-    let balance_after = expect::integer(cell::artifact_content(&after)?, "/balance_sat")?;
-    let funded_balance = expect::integer(cell::artifact_content(&baseline)?, "/balance_sat")?
-        + expect::integer(round_content, "/minted_sat")?;
-    if expect::integer(round_content, "/balance_before_swap_sat")? != funded_balance
-        || expect::integer(round_content, "/balance_after_swap_sat")? != balance_after
-        || !(funded_balance - 100..=funded_balance).contains(&balance_after)
-    {
-        bail!("Nutshell CLN round-trip balance accounting failed: {after}");
-    }
+    anyhow::ensure!(
+        before == 2000,
+        "Nutshell CLN round-trip funding balance differs"
+    );
+    let after = native.nutshell_swap("wallet", "mint", "nutshell-cln-round-trip", 100)?;
+    anyhow::ensure!(
+        (before - 100..=before).contains(&after),
+        "Nutshell CLN round-trip balance accounting failed"
+    );
 
     let closed_experiment = client.call(
         "run_finish",

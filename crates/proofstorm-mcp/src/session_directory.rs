@@ -138,22 +138,26 @@ pub(super) fn read(
     for (index, session) in candidates.into_iter().take(200).enumerate() {
         let document = json!(session);
         if pattern.is_match(&document.to_string()) {
-            page.sessions.push(if request.scan {
-                let omitted = session.principal_id.len() > 512;
-                let mut summary = json!({"id":session.id,"principal_id":if omitted {None} else {Some(&session.principal_id)},"phase":session.phase,"last_activity_at_unix":session.last_activity_at_unix});
-                if omitted { summary["principal_id_omitted"] = json!(true); }
-                summary
-            } else { read_query::project(&document, &request.fields) });
-            page.next_cursor = Some(cursor(&session.id));
-            if read_query::wire_size(&page)? + 64 > MAX_AGENT_RESPONSE_BYTES {
-                page.sessions.pop();
+            let selected = if request.scan {
+                scan_session(&session)
+            } else {
+                read_query::project(&document, &request.fields)
+            };
+            if !proofstorm_app::query::push_bounded(
+                &mut page,
+                selected,
+                Some(cursor(&session.id)),
+                |page| (&mut page.sessions, &mut page.next_cursor),
+                |page| {
+                    read_query::wire_size(page).map(|size| size + 64 <= MAX_AGENT_RESPONSE_BYTES)
+                },
+            )? {
                 if page.sessions.is_empty() {
                     return Err(coded_invalid_request(
                         "session_response_too_large",
                         "one session exceeds the response budget; use scan or select smaller fields",
                     ));
                 }
-                page.next_cursor = Some(cursor(&boundary));
                 break;
             }
         }
@@ -172,6 +176,15 @@ pub(super) fn read(
         return Err(stale());
     }
     developer_result(page)
+}
+
+fn scan_session(session: &proofstorm_core::Session) -> Value {
+    let omitted = session.principal_id.len() > 512;
+    let mut summary = json!({"id":session.id,"principal_id":if omitted {None} else {Some(&session.principal_id)},"phase":session.phase,"last_activity_at_unix":session.last_activity_at_unix});
+    if omitted {
+        summary["principal_id_omitted"] = json!(true);
+    }
+    summary
 }
 
 fn continuation(
@@ -323,6 +336,44 @@ mod tests {
         assert_eq!(
             store.observation_token("alpha", "designer").unwrap(),
             before
+        );
+    }
+
+    #[test]
+    fn byte_limited_session_pages_advance_and_oversized_first_records_fail() {
+        let store = fixture();
+        let mut request = SessionListRequest {
+            instance_id: "directory".into(),
+            query: "session-0".into(),
+            fields: vec!["/id".into(), format!("/{}", "\"\\界".repeat(80))],
+            limit: 50,
+            ..Default::default()
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        loop {
+            let result = page(&store, &request);
+            let sessions = result["sessions"].as_array().unwrap();
+            assert!(sessions.len() < 50, "byte budget forces the boundary");
+            for session in sessions {
+                assert!(seen.insert(session["/id"].as_str().unwrap().to_owned()));
+            }
+            let Some(cursor) = result["next_cursor"].as_str() else {
+                break;
+            };
+            assert_ne!(cursor, request.cursor);
+            request.cursor = cursor.into();
+        }
+        assert_eq!(seen, (0..100).map(|i| format!("session-{i:03}")).collect());
+        request.cursor.clear();
+        request.fields = (0..32)
+            .map(|i| format!("/{i}{}", "\"\\界".repeat(80)))
+            .collect();
+        assert_eq!(
+            read(&store, "alpha", "designer", &request)
+                .unwrap_err()
+                .data
+                .unwrap()["code"],
+            "session_response_too_large"
         );
     }
 

@@ -1,5 +1,5 @@
 //! Live-edit convenience over the same durable plans used by reviewed apply.
-use super::{CellView, Cells};
+use super::{CellView, Cells, prepare_plan};
 use crate::Error;
 use proofstorm_core::CellSpec;
 
@@ -54,31 +54,22 @@ impl Cells {
                 ),
             ));
         }
-        self.store.create_draft(
+        let prepared = prepare_plan(
+            &self.store,
             &self.workspace,
             &self.principal,
             &draft_id,
             spec,
-            &format!("{draft_id}:draft"),
-        )?;
-        let revision = self.store.publish(
-            &self.workspace,
-            &self.principal,
-            &draft_id,
-            1,
-            &format!("{draft_id}:publish"),
-        )?;
-        let plan = self.store.plan_update(
-            &self.workspace,
-            &self.principal,
-            proofstorm_core::CellUpdateTarget {
+            Some(proofstorm_core::CellUpdateTarget {
                 delete_retained: delete_retained.to_vec(),
                 instance_id: instance.id,
                 expected_generation: generation,
                 delete_data,
-            },
-            &revision,
+            }),
         )?;
+        let plan = prepared
+            .update
+            .expect("edit preparation has an update target");
         self.store
             .save_update_plan(&self.workspace, &self.principal, &draft_id, &plan)?;
         Ok(plan)

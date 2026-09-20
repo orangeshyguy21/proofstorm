@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:f635778de90e17dc816b4da9c1eccf405491d582ac4546b60b3fd0ce72abf256",
+  "catalog_digest": "sha256:992b8484096c5f26d69e03f9152a198aa5ca62428507e8c146e62b06990c5309",
   "entries": [
     {
       "implementation": "bitcoin-core",

@@ -1,7 +1,7 @@
 //! Transport-independent component lifecycle admission and idempotent submission.
-use super::Cells;
-use crate::{Error, runtime::runtime_action_resource};
-use proofstorm_core::{Capability, CellOperation, ComponentKind, OperationKind, OperationPhase};
+use super::{Cells, submission::OperationAdmission};
+use crate::Error;
+use proofstorm_core::{Capability, CellOperation, ComponentKind, OperationKind};
 use proofstorm_kube::{CellAction, ComponentControlAction};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -65,43 +65,19 @@ impl Cells {
             &revision.lock,
         )
         .map_err(|e| Error::problem("invalid_operation", e.to_string()))?;
-        let mut payload = serde_json::to_value(&request)
-            .map_err(|e| Error::problem("invalid_operation", e.to_string()))?;
-        if let Some(fields) = payload.as_object_mut() {
-            fields.remove("idempotency_key");
-        }
-        let operation = self.store.create_operation_at_revision(
-            &revision.digest,
-            &self.workspace,
-            &self.principal,
-            &instance.id,
-            &request.experiment_id,
-            &request.session_id,
-            &request.operation_id,
-            kind,
-            &payload,
-            &request.idempotency_key,
-            capability,
-        )?;
-        // The store returns the current durable result on replay.
-        if operation.phase != OperationPhase::Pending {
-            return Ok(operation);
-        }
-        let resource = runtime_action_resource(
-            &self.runtime.control_namespace,
+        let operation = self.admit_action(
             &instance,
-            &operation,
-            action,
-        );
-        if let Some(grant) = &resource.spec.access_scope {
-            self.runtime.private_access(grant).await?;
-        }
-        self.runtime.apply_action(&instance, &resource).await?;
-        Ok(self.store.update_operation_phase(
-            &self.workspace,
-            &operation.id,
-            OperationPhase::Running,
-        )?)
+            OperationAdmission {
+                experiment_id: &request.experiment_id,
+                session_id: &request.session_id,
+                operation_id: &request.operation_id,
+                idempotency_key: &request.idempotency_key,
+                kind,
+                capability,
+            },
+            &request,
+        )?;
+        self.submit_action(&instance, operation, action).await
     }
 }
 

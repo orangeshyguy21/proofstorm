@@ -119,20 +119,6 @@
         ]
       },
       {
-        "operation": "peer_channel_mutation",
-        "prerequisites": [
-          "dependencies",
-          "protocol"
-        ]
-      },
-      {
-        "operation": "wallet_payment",
-        "prerequisites": [
-          "dependencies",
-          "protocol"
-        ]
-      },
-      {
         "operation": "authentication",
         "prerequisites": [
           "dependencies",

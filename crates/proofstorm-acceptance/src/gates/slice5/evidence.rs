@@ -11,20 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 fn expected(scenario: Scenario) -> BTreeMap<&'static str, &'static str> {
     let operations: &[(&str, &str)] = match scenario {
-        Scenario::Smoke => &[
-            ("bootstrap", "bootstrap_liquidity"),
-            ("wallet-initialize", "wallet_initialize"),
-            ("wallet-balance", "wallet_balance"),
-            ("wallet-fund", "wallet_fund"),
-            ("wallet-balance-before-pay", "wallet_balance"),
-            ("round-trip", "wallet_round_trip"),
-            ("conservation", "conservation_oracle"),
-            ("receiver-initialize", "wallet_initialize"),
-            ("wallet-invoice", "wallet_invoice"),
-            ("wallet-pay", "wallet_pay"),
-        ],
         Scenario::Recovery => &[
-            ("bootstrap", "bootstrap_liquidity"),
             ("lost-probe", "reachability_oracle"),
             ("cancelled-probe", "reachability_oracle"),
             ("payer-stop", "component_stop"),
@@ -46,28 +33,7 @@ fn expected(scenario: Scenario) -> BTreeMap<&'static str, &'static str> {
             ("receiver-wallet-mint-heal", "network_heal"),
             ("reachability-receiver-healed", "reachability_oracle"),
         ],
-        Scenario::Channels => &[
-            ("bootstrap", "bootstrap_liquidity"),
-            ("peer-connect", "peer_connect"),
-            ("channel-open", "channel_open"),
-            ("cln-peer-connect", "peer_connect"),
-            ("cln-channel-open", "channel_open"),
-            ("rebalance-bridge-peer-connect", "peer_connect"),
-            ("rebalance-bridge-channel-open", "channel_open"),
-            ("channel-rebalance", "channel_rebalance"),
-            ("rebalance-bridge-channel-close", "channel_close"),
-            ("channel-close", "channel_close"),
-            ("bootstrap-channel-close", "channel_close"),
-            ("peer-disconnect", "peer_disconnect"),
-            ("peer-reconnect", "peer_connect"),
-            ("force-channel-open", "channel_open"),
-            ("channel-force-close", "channel_force_close"),
-            ("cln-channel-close", "channel_close"),
-            ("cln-peer-disconnect", "peer_disconnect"),
-            ("cln-peer-reconnect", "peer_connect"),
-            ("cln-force-channel-open", "channel_open"),
-            ("cln-channel-force-close", "channel_force_close"),
-        ],
+        Scenario::Channels | Scenario::Smoke => &[],
     };
     operations.iter().copied().collect()
 }
@@ -112,23 +78,23 @@ pub(super) fn verify(
     client: &mut McpClient,
     state: &Materialized,
     scenario: Scenario,
+    native_operations: &[String],
 ) -> Result<()> {
-    let wanted = expected(scenario);
+    let mut wanted = expected(scenario);
+    for id in native_operations {
+        ensure!(
+            wanted.insert(id, "component_exec_live").is_none(),
+            "duplicate expected operation: {id}"
+        );
+    }
     let runtime = kinds_by_operation(&action_kinds(context, &state.instance_key)?)?;
-    // Conservation is computed from immutable recorded receipts in the control
-    // client. It belongs in the journal/evidence but must create no runtime Job.
-    let runtime_wanted = wanted
-        .iter()
-        .filter(|(_, kind)| **kind != "conservation_oracle")
-        .map(|(id, kind)| (*id, *kind))
-        .collect::<BTreeMap<_, _>>();
     ensure!(
         runtime
             .iter()
             .map(|(id, kind)| (id.as_str(), kind.as_str()))
             .collect::<BTreeMap<_, _>>()
-            == runtime_wanted,
-        "scenario did not create exactly its expected typed runtime actions: {runtime:?}"
+            == wanted,
+        "scenario did not create exactly its expected runtime actions: {runtime:?}"
     );
     let journal = crate::cell::journal(client, EXPERIMENT)?;
     let sequences = validate_journal(&journal, &wanted)?;
@@ -136,11 +102,19 @@ pub(super) fn verify(
         "run_finish",
         json!({"request_id":"6161","run_id":EXPERIMENT}),
     )?;
-    let explicit = if matches!(scenario, Scenario::Smoke) {
-        vec!["wallet-pay"]
+    let mut explicit = if matches!(scenario, Scenario::Smoke) {
+        vec![
+            "wallet-pay",
+            "wallet-pay-observe",
+            "wallet-pay-mint-observe",
+            "wallet-claim-observe",
+        ]
     } else {
         vec![]
     };
+    if let Some(id) = native_operations.last() {
+        explicit.push(id);
+    }
     let request = json!({"run_id":EXPERIMENT,"include_oracle_artifacts":true,
         "artifact_operation_ids":explicit,});
     let evidence = crate::cell::evidence(client, request.clone())?;
@@ -187,12 +161,17 @@ pub(super) fn verify(
         artifact_ids == expected_artifacts && artifact_ids.len() == artifacts.len(),
         "evidence artifact selection is incomplete or duplicated"
     );
-    let encoded = serde_json::to_string(&evidence)?.to_lowercase();
+    let mut generated = evidence.clone();
+    crate::native::omit_native_request_source(
+        generated["content"]["journal"]
+            .as_array_mut()
+            .expect("checked journal"),
+    );
+    let encoded = serde_json::to_string(&generated)?.to_lowercase();
     for forbidden in [
         "resource_name",
         "instance_key",
         "lnbcrt",
-        "payment_request",
         "adapter_quote",
         "mnemonic",
     ] {
@@ -201,6 +180,12 @@ pub(super) fn verify(
             "private or runtime-only material crossed evidence export: {forbidden}"
         );
     }
+    // Native command source may name an invoice field while reading it inside
+    // the component. No selected artifact may export that field or its value.
+    ensure!(
+        !serde_json::to_string(&evidence["content"]["artifacts"])?.contains("\"payment_request\""),
+        "an invoice field crossed evidence export"
+    );
     Ok(())
 }
 

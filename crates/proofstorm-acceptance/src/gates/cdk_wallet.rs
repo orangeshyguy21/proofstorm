@@ -110,13 +110,13 @@ fn balance(
     wallet: &str,
     expected: u64,
 ) -> Result<()> {
-    let observed = operation(
+    let observed = crate::native::json_content(&operation(
         client,
         directory,
-        "wallet_balance",
+        "cell_exec",
         id,
-        json!({"wallet":wallet,"mint":"mint"}),
-    )?;
+        crate::native::wallet_request("cdk-cli-wallet", wallet, "mint")?,
+    )?)?;
     if expect::integer(&observed, "/balance_sat")? != expected
         || expect::integer(&observed, "/reserved_sat")? != 0
         || expect::integer(&observed, "/pending_sat")? != 0
@@ -155,7 +155,6 @@ pub(super) fn exercise(
     if identities[0] == identities[1] {
         bail!("wallets share seed identity");
     }
-    crate::cell::assert_retired_wallet_routes(client)?;
     crate::cell::assert_retired_wallet_routes(client)?;
 
     crate::native::bootstrap(
@@ -523,7 +522,8 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     let directory = context
         .root
         .join("dev/wallet-integration-runs")
-        .join(&context.run_id);
+        .join(&context.run_id)
+        .join(format!("cdk-wallet-fee-ppk-{input_fee_ppk}"));
     fs::create_dir_all(&directory)?;
     let mut client = context.default_session(
         &format!("cdk-wallet-{}", context.run_id),
@@ -537,9 +537,9 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     save(&directory, "published", &published)?;
     let locked = cell::lock_entry(&published, "cdk-cli-wallet")?;
     if locked.pointer("/build_provenance/commit_sha")
-        != Some(&json!("d3dec24c784e8fec1fd65f853241c7a2261c7abd"))
+        != Some(&json!("a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"))
     {
-        bail!("wallet lock omitted source provenance");
+        bail!("wallet lock does not contain the CDK 0.18.1 source provenance");
     }
     crate::cell::apply(&mut client, &preview)?;
     // Always attempt normal cleanup after materialization, including failed gates.

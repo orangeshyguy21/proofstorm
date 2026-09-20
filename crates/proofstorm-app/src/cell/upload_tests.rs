@@ -1,6 +1,6 @@
 use super::*;
+use crate::cell::workspace_fixture;
 use proofstorm_core::OperationPhase;
-use proofstorm_store::{Store, Workspace};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -16,44 +16,9 @@ fn fixture() -> (
     tempfile::TempDir,
     Arc<Mutex<Cluster>>,
 ) {
-    let store = Store::memory().unwrap();
-    store
-        .put_workspace(&Workspace {
-            id: "local".into(),
-            name: "local".into(),
-        })
-        .unwrap();
+    let store = workspace_fixture::store();
     crate::developer::configure(&store, "local", "actor").unwrap();
-    let spec: proofstorm_core::CellSpec =
-        serde_json::from_str(include_str!("../../../../examples/workspace/cell.json")).unwrap();
-    store
-        .create_draft("local", "actor", "draft", &spec, "draft")
-        .unwrap();
-    let revision = store
-        .publish("local", "actor", "draft", 1, "publish")
-        .unwrap();
-    let instance = store
-        .materialize(
-            "local",
-            "actor",
-            "instance",
-            &revision.digest,
-            "materialize",
-        )
-        .unwrap();
-    let mut cell = ProofstormCell::new(
-        &instance.resource_name,
-        proofstorm_kube::ProofstormCellSpec {
-            workspace_id: "local".into(),
-            instance_id: instance.id,
-            instance_key: instance.instance_key.clone(),
-            revision_digest: revision.digest,
-            cell: spec,
-            lock: revision.lock,
-        },
-    );
-    cell.metadata.uid = Some("cell-uid".into());
-    let pod: Pod = serde_json::from_value(json!({"metadata":{"name":"scripts-pod","namespace":instance_namespace(&instance.instance_key),"uid":"pod-uid"},"status":{"phase":"Running"}})).unwrap();
+    let (cell, pod) = workspace_fixture::materialize(&store);
     let cluster = Arc::new(Mutex::new(Cluster {
         cell,
         pod,
@@ -265,16 +230,19 @@ async fn cancelled_or_revoked_uploads_do_not_commit_after_staging() {
         .unwrap();
     assert_eq!(operation.phase, OperationPhase::Cancelled);
     assert!(cluster.lock().unwrap().actions.is_empty());
-    let (service, request, _directory, cluster) = fixture();
-    let result = service
-        .upload_with(&request, |_, _, _| {
-            service
-                .store
-                .revoke("local", "actor", Capability::ComponentExecLive)
-                .unwrap();
-            std::future::ready(Ok(()))
-        })
-        .await;
-    assert!(result.is_err());
-    assert!(cluster.lock().unwrap().actions.is_empty());
+    for capability in [
+        Capability::ComponentExecLive,
+        Capability::ArtifactRead,
+        Capability::CellOperate,
+    ] {
+        let (service, request, _directory, cluster) = fixture();
+        let result = service
+            .upload_with(&request, |_, _, _| {
+                service.store.revoke("local", "actor", capability).unwrap();
+                std::future::ready(Ok(()))
+            })
+            .await;
+        assert!(result.is_err(), "revoked {capability:?}");
+        assert!(cluster.lock().unwrap().actions.is_empty());
+    }
 }

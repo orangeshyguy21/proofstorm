@@ -311,6 +311,61 @@ async fn candidate_request_collision_rolls_back_and_terminal_provenance_is_immut
 }
 
 #[tokio::test]
+async fn candidate_byte_pages_resume_after_skipped_records_without_losing_matches() {
+    let store = store();
+    for index in 0..5 {
+        admit(
+            &store,
+            "workspace",
+            "agent",
+            &request("cdk", &format!("record-{index}")),
+        )
+        .await
+        .unwrap();
+    }
+    let mut selectors = DirectoryQuery {
+        query: "record-[024]".into(),
+        regex: true,
+        limit: 50,
+        ..Default::default()
+    };
+    let all = directory(&store, "workspace", "agent", &selectors, 32 * 1024).unwrap();
+    let mut one = all.clone();
+    one["items"].as_array_mut().unwrap().truncate(1);
+    one["scanned_count"] = json!(2);
+    one["next_cursor"] = json!(format!(
+        "{}:record-1",
+        all["observation_digest"].as_str().unwrap()
+    ));
+    let budget = crate::query::wire_size(&one).unwrap() + 64;
+    let mut seen = Vec::new();
+    loop {
+        let page = directory(&store, "workspace", "agent", &selectors, budget).unwrap();
+        assert!(crate::query::wire_size(&page).unwrap() <= budget);
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        let id = page["items"][0]["id"].as_str().unwrap().to_owned();
+        assert!(!seen.contains(&id), "pagination must advance");
+        seen.push(id);
+        if seen.len() == 1 {
+            assert_eq!(page["scanned_count"], 2);
+            assert!(page["next_cursor"].as_str().unwrap().ends_with(":record-1"));
+        }
+        selectors.cursor = page["next_cursor"].as_str().map(str::to_owned);
+        if selectors.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(seen, ["record-0", "record-2", "record-4"]);
+    assert_eq!(
+        directory(&store, "workspace", "agent", &selectors, 1)
+            .unwrap_err()
+            .details
+            .unwrap()["code"],
+        "directory_value_too_large"
+    );
+}
+
+#[tokio::test]
 async fn candidate_directory_and_diagnostics_are_passive_bounded_and_snapshot_bound() {
     let store = store();
     for id in ["first", "second", "third"] {

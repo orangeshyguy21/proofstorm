@@ -1,7 +1,7 @@
 //! Passive, bounded search over recorded operations across a cell's actors and runs.
 use crate::{
     CallToolResult, ErrorData, MAX_AGENT_RESPONSE_BYTES, coded_invalid_request, developer_result,
-    serialized_size, store_error,
+    read_query, serialized_size, store_error,
 };
 use proofstorm_core::{CellOperation, OperationKind, OperationPhase, digest_json};
 use proofstorm_store::Store;
@@ -101,34 +101,10 @@ struct SelectedField {
     value_omitted: bool,
 }
 
-pub(super) fn wire(value: &impl Serialize) -> Result<CallToolResult, ErrorData> {
-    Ok(CallToolResult::structured(
-        serde_json::to_value(value)
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
-    ))
-}
-
-pub(super) fn validate_pointer(pointer: &str) -> Result<(), ErrorData> {
-    if pointer.len() > 4096 || (!pointer.is_empty() && !pointer.starts_with('/')) {
-        return Err(coded_invalid_request(
-            "invalid_json_pointer",
-            "Use an RFC 6901 pointer of at most 4096 bytes, such as /artifact/content/stdout",
-        ));
-    }
-    let mut chars = pointer.chars();
-    while let Some(c) = chars.next() {
-        if c == '~' && !matches!(chars.next(), Some('0' | '1')) {
-            return Err(coded_invalid_request(
-                "invalid_json_pointer",
-                "Escape ~ as ~0 and / inside a key as ~1",
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn pattern(request: &ActivitySearchRequest) -> Result<Regex, ErrorData> {
-    if request.query.len() > 4096 || request.fields.len() > 16 || !(1..=50).contains(&request.limit)
+    if request.query.len() > proofstorm_app::query::MAX_QUERY_BYTES
+        || request.fields.len() > 16
+        || !(1..=50).contains(&request.limit)
     {
         return Err(coded_invalid_request(
             "activity_search_limits",
@@ -144,18 +120,10 @@ fn pattern(request: &ActivitySearchRequest) -> Result<Regex, ErrorData> {
         ));
     }
     for field in &request.fields {
-        validate_pointer(field)?;
+        read_query::validate_pointer(field)?;
     }
-    let query = if request.regex {
-        request.query.clone()
-    } else {
-        regex::escape(&request.query)
-    };
-    regex::RegexBuilder::new(&query)
-        .case_insensitive(request.case_insensitive)
-        .size_limit(1024 * 1024)
-        .build()
-        .map_err(|error| coded_invalid_request("activity_search_regex_invalid", error.to_string()))
+    proofstorm_app::query::pattern(&request.query, request.regex, request.case_insensitive)
+        .map_err(|error| coded_invalid_request("activity_search_regex_invalid", error.message))
 }
 
 fn matches_filters(
@@ -272,7 +240,7 @@ fn hit(
         fields,
     };
     // An individual match must leave room for pagination and the dual MCP envelope.
-    while serialized_size(&wire(&hit)?)? > MAX_AGENT_RESPONSE_BYTES / 2 {
+    while read_query::wire_size(&hit)? > MAX_AGENT_RESPONSE_BYTES / 2 {
         if let Some(field) = hit.fields.iter_mut().rev().find(|f| f.value.is_some()) {
             field.value = None;
             field.value_omitted = true;
@@ -337,13 +305,24 @@ pub(super) fn search(
         for (index, operation) in operations.into_iter().enumerate() {
             let id = operation.id.clone();
             if let Some(hit) = hit(request, &regex, operation)? {
-                result.items.push(hit);
-                // Reserve the actual cursor before testing the full response size.
-                result.next_cursor = Some(format!("{fingerprint}:{id}"));
-                // Leave room for the final scanned_count increment as well.
-                if serialized_size(&wire(&result)?)? + 64 > MAX_AGENT_RESPONSE_BYTES {
-                    result.items.pop();
-                    result.next_cursor = Some(format!("{fingerprint}:{boundary}"));
+                // Measure with the candidate's actual cursor and reserve room
+                // for the final scanned_count increment.
+                if !proofstorm_app::query::push_bounded(
+                    &mut result,
+                    hit,
+                    Some(format!("{fingerprint}:{id}")),
+                    |page| (&mut page.items, &mut page.next_cursor),
+                    |page| {
+                        read_query::wire_size(page)
+                            .map(|size| size + 64 <= MAX_AGENT_RESPONSE_BYTES)
+                    },
+                )? {
+                    if result.items.is_empty() {
+                        return Err(coded_invalid_request(
+                            "activity_search_item_too_large",
+                            "Match metadata exceeds the response budget; request fewer fields",
+                        ));
+                    }
                     break 'scan;
                 }
             }

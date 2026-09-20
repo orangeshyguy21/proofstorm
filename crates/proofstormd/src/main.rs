@@ -6,6 +6,7 @@ mod probes;
 use component_lifecycle::same_lifecycle_identity;
 mod cell_updates;
 mod component_logs;
+mod generated_secrets;
 mod workspace_bridge;
 mod workspace_faults;
 use std::{
@@ -50,9 +51,8 @@ use proofstorm_kube::{
     ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
     ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
-    observe_component_statuses, render_candidate_build_job, render_cell,
-    render_cell_action_cleanup_job, render_cell_action_job, render_cell_security_spine,
-    render_component_network_policy,
+    observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
+    render_cell_security_spine, render_component_network_policy,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -1277,10 +1277,6 @@ fn lost_action_job_status(
     }
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "cancellation reconciliation keeps primary deletion, private cleanup, and terminal proof contiguous"
-)]
 async fn reconcile_action_cancellation(
     action: &ProofstormCellAction,
     context: &Context,
@@ -1319,66 +1315,6 @@ async fn reconcile_action_cancellation(
         )
         .await?;
         return Ok(Action::requeue(Duration::from_secs(1)));
-    }
-    let control_namespace = action
-        .namespace()
-        .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
-    let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
-    let cell = cells.get(&action.spec.cell_name).await?;
-    if let Some(mut cleanup) = render_cell_action_cleanup_job(action, &cell)? {
-        if let Some(pod) = cleanup
-            .spec
-            .as_mut()
-            .and_then(|spec| spec.template.spec.as_mut())
-        {
-            proofstorm_kube::drivers::bind_image(pod, &context.probes.image);
-        }
-        let cleanup_name = cleanup.name_any();
-        let Some(observed) = jobs.get_opt(&cleanup_name).await? else {
-            jobs.patch(
-                &cleanup_name,
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(&cleanup),
-            )
-            .await?;
-            return Ok(Action::requeue(Duration::from_secs(1)));
-        };
-        let cleanup_status = observed.status.unwrap_or_default();
-        if cleanup_status.failed.unwrap_or_default() > 0
-            || cleanup_status
-                .conditions
-                .as_ref()
-                .is_some_and(|conditions| {
-                    conditions
-                        .iter()
-                        .any(|condition| condition.type_ == "Failed" && condition.status == "True")
-                })
-        {
-            patch_action_status(
-                action,
-                context,
-                ProofstormCellActionStatus {
-                    phase: ActionPhase::Failed,
-                    observed_generation: action.metadata.generation,
-                    job_name: Some(cleanup_name),
-                    started_at_unix: action
-                        .status
-                        .as_ref()
-                        .and_then(|status| status.started_at_unix),
-                    completed_at_unix: Some(now_unix()),
-                    error: Some(status_object(serde_json::json!({
-                        "code": "cancellation_cleanup_failed",
-                        "message": "private action state could not be proven absent",
-                    }))),
-                    ..ProofstormCellActionStatus::default()
-                },
-            )
-            .await?;
-            return Ok(Action::await_change());
-        }
-        if cleanup_status.succeeded.unwrap_or_default() == 0 {
-            return Ok(Action::requeue(Duration::from_secs(1)));
-        }
     }
     let started_at_unix = action
         .status
@@ -1559,308 +1495,6 @@ fn reconciliation_failure_status(
     Some(status)
 }
 
-async fn ensure_generated_postgres_secret(
-    secrets: &Api<Secret>,
-    template: &Secret,
-    patch: &PatchParams,
-) -> Result<(), Error> {
-    let name = template.name_any();
-    if let Some(existing) = secrets.get_opt(&name).await? {
-        let data = existing.data.as_ref().ok_or_else(|| {
-            Error::SecretContract(format!("Secret {name:?} has no generated data"))
-        })?;
-        for key in [
-            "POSTGRES_USER",
-            "POSTGRES_PASSWORD",
-            "POSTGRES_DB",
-            "DATABASE_URL",
-            "database.toml",
-        ] {
-            if !data.contains_key(key) {
-                return Err(Error::SecretContract(format!(
-                    "Secret {name:?} is missing key {key:?}"
-                )));
-            }
-        }
-        return Ok(());
-    }
-
-    let template_data = template.string_data.as_ref().ok_or_else(|| {
-        Error::SecretContract(format!("Secret template {name:?} has no stringData"))
-    })?;
-    let username = template_data.get("POSTGRES_USER").ok_or_else(|| {
-        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_USER"))
-    })?;
-    let database = template_data.get("POSTGRES_DB").ok_or_else(|| {
-        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_DB"))
-    })?;
-    let component = template
-        .metadata
-        .labels
-        .as_ref()
-        .and_then(|labels| labels.get("proofstorm.dev/component"))
-        .ok_or_else(|| {
-            Error::SecretContract(format!(
-                "Secret template {name:?} has no component identity"
-            ))
-        })?;
-    let mut entropy = [0_u8; 32];
-    getrandom::fill(&mut entropy).map_err(|error| {
-        Error::SecretContract(format!(
-            "could not generate credentials for {name:?}: {error}"
-        ))
-    })?;
-    let password = entropy
-        .iter()
-        .fold(String::with_capacity(64), |mut encoded, byte| {
-            use std::fmt::Write as _;
-            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-            encoded
-        });
-    let url = format!("postgresql://{username}:{password}@{component}:5432/{database}");
-    let database_config = format!(
-        "\n[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = {url:?}\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
-    );
-    let mut desired = template.clone();
-    desired.string_data.get_or_insert_default().extend([
-        ("POSTGRES_PASSWORD".into(), password),
-        ("DATABASE_URL".into(), url),
-        ("database.toml".into(), database_config),
-    ]);
-    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
-    Ok(())
-}
-
-async fn ensure_generated_nutshell_secret(
-    secrets: &Api<Secret>,
-    template: &Secret,
-    patch: &PatchParams,
-) -> Result<(), Error> {
-    let name = template.name_any();
-    if let Some(existing) = secrets.get_opt(&name).await? {
-        let data = existing.data.as_ref().ok_or_else(|| {
-            Error::SecretContract(format!("Secret {name:?} has no generated data"))
-        })?;
-        for key in ["PROOFSTORM_SECRET_KIND", "MINT_PRIVATE_KEY"] {
-            if !data.contains_key(key) {
-                return Err(Error::SecretContract(format!(
-                    "Secret {name:?} is missing key {key:?}"
-                )));
-            }
-        }
-        return Ok(());
-    }
-    let kind = template
-        .string_data
-        .as_ref()
-        .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"));
-    if kind.map(String::as_str) != Some("nutshell-mint") {
-        return Err(Error::SecretContract(format!(
-            "Secret template {name:?} is not a Nutshell mint secret"
-        )));
-    }
-    let mut entropy = [0_u8; 32];
-    getrandom::fill(&mut entropy).map_err(|error| {
-        Error::SecretContract(format!(
-            "could not generate credentials for {name:?}: {error}"
-        ))
-    })?;
-    let private_key = entropy
-        .iter()
-        .fold(String::with_capacity(64), |mut encoded, byte| {
-            use std::fmt::Write as _;
-            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-            encoded
-        });
-    let mut desired = template.clone();
-    desired
-        .string_data
-        .get_or_insert_default()
-        .insert("MINT_PRIVATE_KEY".into(), private_key);
-    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
-    Ok(())
-}
-
-async fn ensure_generated_redis_secret(
-    secrets: &Api<Secret>,
-    template: &Secret,
-    patch: &PatchParams,
-) -> Result<(), Error> {
-    let name = template.name_any();
-    if let Some(existing) = secrets.get_opt(&name).await? {
-        let data = existing.data.as_ref().ok_or_else(|| {
-            Error::SecretContract(format!("Secret {name:?} has no generated data"))
-        })?;
-        for key in ["PROOFSTORM_SECRET_KIND", "REDIS_PASSWORD", "REDIS_URL"] {
-            if !data.contains_key(key) {
-                return Err(Error::SecretContract(format!(
-                    "Secret {name:?} is missing key {key:?}"
-                )));
-            }
-        }
-        return Ok(());
-    }
-    let kind = template
-        .string_data
-        .as_ref()
-        .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"));
-    if kind.map(String::as_str) != Some("redis-cache") {
-        return Err(Error::SecretContract(format!(
-            "Secret template {name:?} is not a Redis cache secret"
-        )));
-    }
-    let component = template
-        .metadata
-        .labels
-        .as_ref()
-        .and_then(|labels| labels.get("proofstorm.dev/component"))
-        .ok_or_else(|| {
-            Error::SecretContract(format!(
-                "Secret template {name:?} has no component identity"
-            ))
-        })?;
-    let mut entropy = [0_u8; 32];
-    getrandom::fill(&mut entropy).map_err(|error| {
-        Error::SecretContract(format!(
-            "could not generate credentials for {name:?}: {error}"
-        ))
-    })?;
-    let password = entropy
-        .iter()
-        .fold(String::with_capacity(64), |mut encoded, byte| {
-            use std::fmt::Write as _;
-            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-            encoded
-        });
-    let url = format!("redis://:{password}@{component}:6379/0");
-    let mut desired = template.clone();
-    desired.string_data.get_or_insert_default().extend([
-        ("REDIS_PASSWORD".into(), password),
-        ("REDIS_URL".into(), url),
-    ]);
-    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
-    Ok(())
-}
-
-#[allow(
-    clippy::too_many_lines,
-    reason = "the generated Keycloak secret is one atomic administrator, realm, client, and test-user bootstrap contract"
-)]
-async fn ensure_generated_keycloak_secret(
-    secrets: &Api<Secret>,
-    template: &Secret,
-    patch: &PatchParams,
-) -> Result<(), Error> {
-    let name = template.name_any();
-    if let Some(existing) = secrets.get_opt(&name).await? {
-        let data = existing.data.as_ref().ok_or_else(|| {
-            Error::SecretContract(format!("Secret {name:?} has no generated data"))
-        })?;
-        for key in [
-            "PROOFSTORM_SECRET_KIND",
-            "KEYCLOAK_ADMIN_PASSWORD",
-            "OIDC_TEST_USERNAME",
-            "OIDC_TEST_PASSWORD",
-            "realm.json",
-        ] {
-            if !data.contains_key(key) {
-                return Err(Error::SecretContract(format!(
-                    "Secret {name:?} is missing key {key:?}"
-                )));
-            }
-        }
-        return Ok(());
-    }
-    let template_data = template.string_data.as_ref().ok_or_else(|| {
-        Error::SecretContract(format!("Secret template {name:?} has no stringData"))
-    })?;
-    if template_data
-        .get("PROOFSTORM_SECRET_KIND")
-        .map(String::as_str)
-        != Some("keycloak-oidc")
-    {
-        return Err(Error::SecretContract(format!(
-            "Secret template {name:?} is not a Keycloak OIDC secret"
-        )));
-    }
-    let access_token_lifespan = template_data
-        .get("OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS")
-        .ok_or_else(|| {
-            Error::SecretContract(format!(
-                "Secret template {name:?} has no OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS"
-            ))
-        })?
-        .parse::<u64>()
-        .map_err(|error| {
-            Error::SecretContract(format!(
-                "Secret template {name:?} has an invalid OIDC token lifespan: {error}"
-            ))
-        })?;
-    let generate_password = || -> Result<String, Error> {
-        let mut entropy = [0_u8; 32];
-        getrandom::fill(&mut entropy).map_err(|error| {
-            Error::SecretContract(format!(
-                "could not generate credentials for {name:?}: {error}"
-            ))
-        })?;
-        Ok(entropy
-            .iter()
-            .fold(String::with_capacity(64), |mut encoded, byte| {
-                use std::fmt::Write as _;
-                write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-                encoded
-            }))
-    };
-    let administrator_password = generate_password()?;
-    let test_password = generate_password()?;
-    let test_username = "proofstorm-user";
-    let realm = serde_json::to_string_pretty(&serde_json::json!({
-        "realm": "proofstorm",
-        "enabled": true,
-        "sslRequired": "none",
-        "accessTokenLifespan": access_token_lifespan,
-        "clients": [{
-            "clientId": "cashu-client",
-            "protocol": "openid-connect",
-            "enabled": true,
-            "publicClient": true,
-            "standardFlowEnabled": true,
-            "directAccessGrantsEnabled": true,
-            "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "basic", "email"],
-            "optionalClientScopes": ["offline_access"],
-            "redirectUris": ["http://127.0.0.1:*", "http://localhost:*"],
-            "webOrigins": ["*"]
-        }],
-        "users": [{
-            "username": test_username,
-            "email": "proofstorm-user@example.invalid",
-            "firstName": "Proofstorm",
-            "lastName": "User",
-            "enabled": true,
-            "emailVerified": true,
-            "requiredActions": [],
-            "realmRoles": ["offline_access"],
-            "credentials": [{
-                "type": "password",
-                "value": test_password,
-                "temporary": false
-            }]
-        }]
-    }))
-    .map_err(|error| {
-        Error::SecretContract(format!("could not render realm for {name:?}: {error}"))
-    })?;
-    let mut desired = template.clone();
-    desired.string_data.get_or_insert_default().extend([
-        ("KEYCLOAK_ADMIN_PASSWORD".into(), administrator_password),
-        ("OIDC_TEST_USERNAME".into(), test_username.into()),
-        ("OIDC_TEST_PASSWORD".into(), test_password),
-        ("realm.json".into(), realm),
-    ]);
-    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
-    Ok(())
-}
-
 #[allow(
     clippy::too_many_lines,
     reason = "one reconciliation pass visibly applies the complete bounded instance inventory"
@@ -1984,16 +1618,7 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
                     )
                     .await?;
             }
-            Some("nutshell-mint") => {
-                ensure_generated_nutshell_secret(&secrets, resource, &patch).await?;
-            }
-            Some("redis-cache") => {
-                ensure_generated_redis_secret(&secrets, resource, &patch).await?;
-            }
-            Some("keycloak-oidc") => {
-                ensure_generated_keycloak_secret(&secrets, resource, &patch).await?;
-            }
-            _ => ensure_generated_postgres_secret(&secrets, resource, &patch).await?,
+            _ => generated_secrets::ensure(&secrets, resource, &patch).await?,
         }
     }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);

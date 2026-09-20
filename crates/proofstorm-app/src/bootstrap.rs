@@ -613,21 +613,26 @@ fn deploy(
     cluster::owned(installation)?;
     // Check existing objects before applying schemas or touching the controller.
     let crds: Value = serde_json::from_str(&kube(installation, &["get", "crds", "-o", "json"])?)?;
-    if crds["items"]
-        .as_array()
-        .context("CRD list missing")?
-        .iter()
-        .any(|item| item["metadata"]["name"] == "proofstormcells.proofstorm.dev")
-    {
-        let cells: Value = serde_json::from_str(&kube(
-            installation,
-            &["get", "proofstormcells", "-A", "-o", "json"],
-        )?)?;
-        for cell in cells["items"].as_array().context("cell list missing")? {
-            serde_json::from_value::<proofstorm_kube::ProofstormCellSpec>(cell["spec"].clone())
-                .context(
-                    "existing cell schema is incompatible; no automatic migration or deletion",
-                )?;
+    for (resource, validate) in [
+        (
+            "proofstormcells",
+            validate_existing_specs::<proofstorm_kube::ProofstormCellSpec>
+                as fn(&Value) -> Result<()>,
+        ),
+        (
+            "proofstormcellactions",
+            validate_existing_specs::<proofstorm_kube::ProofstormCellActionSpec>,
+        ),
+    ] {
+        if crds["items"]
+            .as_array()
+            .context("CRD list missing")?
+            .iter()
+            .any(|item| item["metadata"]["name"] == format!("{resource}.proofstorm.dev"))
+        {
+            let existing: Value =
+                serde_json::from_str(&kube(installation, &["get", resource, "-A", "-o", "json"])?)?;
+            validate(&existing)?;
         }
     }
     progress("Applying cell resource schemas");
@@ -692,6 +697,21 @@ fn deploy(
     ensure!(!expected.is_empty(), "missing deployment image");
     healthy(installation, controller)?;
     process::save(&receipt, &serde_json::to_vec(&inputs)?)?;
+    Ok(())
+}
+
+fn validate_existing_specs<T: serde::de::DeserializeOwned>(resources: &Value) -> Result<()> {
+    for resource in resources["items"]
+        .as_array()
+        .context("resource list missing")?
+    {
+        serde_json::from_value::<T>(resource["spec"].clone()).with_context(|| {
+            format!(
+                "existing runtime resource {} is incompatible; close its cell with the currently installed version before upgrading; no automatic migration or deletion",
+                resource["metadata"]["name"]
+            )
+        })?;
+    }
     Ok(())
 }
 

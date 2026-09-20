@@ -1,6 +1,6 @@
-use super::common::{INSTANCE, scoped, submit_idempotent};
+use super::common::{INSTANCE, scoped};
 use crate::{GateContext, McpClient, cell, json as expect};
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
 
@@ -8,21 +8,16 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
     let kubectl = &context.kubectl;
     // --- node lifecycle -----------------------------------------------------
     let node = json!({"component": "payer-lnd"});
-    let node_scoped = |operation: &str, key: &str| -> Value {
-        let mut extra = node.clone();
-        if let Some(target) = extra.as_object_mut() {
-            target.insert("idempotency_key".into(), Value::from(key));
-        }
-        scoped(operation, extra)
-    };
+    let node_scoped = |operation: &str| scoped(operation, node.clone());
 
-    submit_idempotent(
-        context,
-        client,
-        |_, client, request| client.call("component_stop", request),
-        node_scoped("payer-stop", "payer-stop-slice5"),
-        "node stop",
-    )?;
+    let accepted = client.call("component_stop", node_scoped("payer-stop"))?;
+    let retried = client.call("component_stop", node_scoped("payer-stop"))?;
+    for field in ["id", "experiment_id", "kind", "sequence", "request_digest"] {
+        ensure!(
+            accepted.get(field).is_some() && accepted[field] == retried[field],
+            "component stop retry changed {field}"
+        );
+    }
     let stopped = cell::wait_operation(client, "payer-stop", 120)?;
     if expect::string(cell::artifact_content(&stopped)?, "/state")? != "stopped" {
         bail!("node stop artifact is invalid: {stopped}");
@@ -53,10 +48,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         bail!("intentionally stopped node corrupted cell readiness");
     }
 
-    client.call(
-        "component_start",
-        node_scoped("payer-start", "payer-start-slice5"),
-    )?;
+    client.call("component_start", node_scoped("payer-start"))?;
     let started = cell::wait_operation(client, "payer-start", 120)?;
     if expect::string(cell::artifact_content(&started)?, "/state")? != "running" {
         bail!("node start artifact is invalid: {started}");
@@ -69,10 +61,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
         "-o",
         "jsonpath={.metadata.uid}",
     ])?;
-    client.call(
-        "component_restart",
-        node_scoped("payer-restart", "payer-restart-slice5"),
-    )?;
+    client.call("component_restart", node_scoped("payer-restart"))?;
     let restarted = cell::wait_operation(client, "payer-restart", 120)?;
     if !expect::boolean(cell::artifact_content(&restarted)?, "/restarted")? {
         bail!("node restart artifact is invalid: {restarted}");
@@ -88,6 +77,7 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient, namespace: &str
     if pod_after == pod_before {
         bail!("node restart completed without replacing the component pod");
     }
+    cell::wait_ready(client, INSTANCE)?;
 
     Ok(())
 }

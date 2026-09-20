@@ -1,5 +1,6 @@
 use super::*;
 use proofstorm_app::cell::WorkspaceCaptureRequest;
+use proofstorm_core::EvidenceBundle;
 use proofstorm_core::workspace::evidence::{
     CapturedFile, TaskCapture, WorkspaceEvidence, WorkspaceEvidenceContent,
 };

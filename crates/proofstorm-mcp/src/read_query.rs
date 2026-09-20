@@ -1,72 +1,36 @@
-//! Common query validation and projection for bounded agent reads.
-use crate::{ErrorData, coded_invalid_request};
-use serde_json::Value;
+//! Transport error mapping for shared bounded-query primitives.
+use crate::{CallToolResult, ErrorData, app_error, coded_invalid_request};
+use proofstorm_app::query;
+pub(super) use query::project;
 
 pub(super) fn pattern(
     query: &str,
     regex: bool,
     insensitive: bool,
 ) -> Result<regex::Regex, ErrorData> {
-    if query.len() > 4096 {
-        return Err(coded_invalid_request(
-            "search_query_invalid",
-            "query must be at most 4096 bytes",
-        ));
-    }
-    regex::RegexBuilder::new(&if regex {
-        query.to_owned()
-    } else {
-        regex::escape(query)
+    query::pattern(query, regex, insensitive).map_err(app_error)
+}
+
+pub(super) fn validate_pointer(pointer: &str) -> Result<(), ErrorData> {
+    use proofstorm_app::query::{self, PointerError};
+    query::validate_pointer(pointer, 4096).map_err(|error| {
+        coded_invalid_request("invalid_json_pointer", match error {
+            PointerError::RootOrLength => "Use an RFC 6901 pointer of at most 4096 bytes, such as /artifact/content/stdout",
+            PointerError::Escape => "Escape ~ as ~0 and / inside a key as ~1",
+        })
     })
-    .case_insensitive(insensitive)
-    .size_limit(1 << 20)
-    .build()
-    .map_err(|error| coded_invalid_request("search_regex_invalid", error.to_string()))
 }
 
 pub(super) fn validate_fields(fields: &[String]) -> Result<(), ErrorData> {
-    if fields.len() > 32
-        || fields.iter().any(|field| {
-            field.len() > 512 || (!field.is_empty() && !field.starts_with('/')) || {
-                let mut chars = field.chars();
-                let mut invalid = false;
-                while let Some(ch) = chars.next() {
-                    if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
-                        invalid = true;
-                        break;
-                    }
-                }
-                invalid
-            }
-        })
-    {
-        return Err(coded_invalid_request(
-            "search_fields_invalid",
-            "select at most 32 RFC 6901 JSON pointers, each at most 512 bytes",
-        ));
-    }
-    Ok(())
+    query::validate_fields(fields).map_err(app_error)
 }
 
-pub(super) fn project(entry: &Value, fields: &[String]) -> Value {
-    if fields.is_empty() {
-        return entry.clone();
-    }
-    Value::Object(
-        fields
-            .iter()
-            .map(|field| {
-                (
-                    field.clone(),
-                    entry.pointer(field).cloned().unwrap_or(Value::Null),
-                )
-            })
-            .collect(),
-    )
+pub(super) fn wire(value: &impl serde::Serialize) -> Result<CallToolResult, ErrorData> {
+    query::wire(value).map_err(|error| ErrorData::internal_error(error.to_string(), None))
 }
 
 pub(super) fn wire_size(value: &impl serde::Serialize) -> Result<usize, ErrorData> {
-    crate::serialized_size(&crate::activity_search::wire(value)?)
+    query::wire_size(value).map_err(|error| ErrorData::internal_error(error.to_string(), None))
 }
 
 #[cfg(test)]
@@ -74,21 +38,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn malformed_or_excessive_queries_fail_and_literal_search_escapes_metacharacters() {
-        assert!(pattern("[", true, false).is_err());
-        assert!(pattern(&"x".repeat(4097), false, false).is_err());
-        let literal = pattern("[A]", false, true).unwrap();
-        assert!(literal.is_match("value [a]"));
-        assert!(!literal.is_match("value A"));
-        assert!(validate_fields(&["/a~1b/~0".into(), String::new()]).is_ok());
-        for invalid in [
-            vec!["/trailing~".into()],
-            vec!["not-a-pointer".into()],
-            vec!["/id".into(); 33],
+    fn transport_errors_preserve_codes_and_longer_individual_pointer_limits() {
+        for (result, code) in [
+            (
+                pattern(&"x".repeat(4097), false, false).map(|_| ()),
+                "search_query_invalid",
+            ),
+            (
+                pattern("[", true, false).map(|_| ()),
+                "search_regex_invalid",
+            ),
+            (validate_fields(&["/bad~".into()]), "search_fields_invalid"),
         ] {
-            assert!(validate_fields(&invalid).is_err());
+            assert_eq!(result.unwrap_err().data.unwrap()["code"], code);
         }
-        let selected = project(&serde_json::json!({"a/b":{"~":42}}), &["/a~1b/~0".into()]);
-        assert_eq!(selected["/a~1b/~0"], 42);
+        let long = format!("/{}", "x".repeat(512));
+        assert!(validate_fields(std::slice::from_ref(&long)).is_err());
+        assert!(validate_pointer(&long).is_ok());
+        assert!(validate_pointer(&format!("/{}", "x".repeat(4095))).is_ok());
+        for pointer in ["/bad~".into(), format!("/{}", "x".repeat(4096))] {
+            assert_eq!(
+                validate_pointer(&pointer).unwrap_err().data.unwrap()["code"],
+                "invalid_json_pointer"
+            );
+        }
+        let request =
+            serde_json::from_value(serde_json::json!({"name":"cell","query":"[","regex":true}))
+                .unwrap();
+        let error = crate::activity_search::search(
+            &proofstorm_store::Store::memory().unwrap(),
+            "workspace",
+            "actor",
+            &request,
+        )
+        .unwrap_err();
+        assert_eq!(error.data.unwrap()["code"], "activity_search_regex_invalid");
     }
 }

@@ -2,9 +2,8 @@ use std::collections::BTreeMap;
 
 use proofstorm_core::{
     API_VERSION, CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, Capability,
-    CellPolicy, CellSpec, ComponentKind, ComponentSpec, ControlClass, DraftMutation,
-    LOCK_API_VERSION, OperationKind, OperationPhase, WalletQuoteDirection,
-    WalletQuoteObservationInput, WalletQuoteObservationRole,
+    CellPolicy, CellSpec, ComponentKind, ComponentSpec, ControlClass, LOCK_API_VERSION,
+    OperationKind, OperationPhase,
 };
 use proofstorm_store::{Store, StoreError, Workspace};
 
@@ -204,56 +203,6 @@ fn optimistic_idempotent_and_workspace_policy_is_enforced() {
             1,
             &empty_cell("stale"),
             "edit-stale"
-        ),
-        Err(StoreError::StaleDraft { actual: 2, .. })
-    ));
-}
-
-#[test]
-fn composer_mutations_are_idempotent_and_optimistic() {
-    let store = Store::memory().expect("store");
-    seed(&store);
-    store
-        .create_draft(
-            "alpha",
-            "designer",
-            "composed",
-            &empty_cell("composed"),
-            "create-composed",
-        )
-        .expect("create");
-
-    let mutation = DraftMutation::AddComponent {
-        component: ComponentSpec {
-            id: "chain".into(),
-            kind: ComponentKind::Bitcoin,
-            implementation: "bitcoin-core".into(),
-            version: Some("31.1".into()),
-            config_version: "bitcoin-core/31/v1".into(),
-            control: ControlClass::Cell,
-            config: BTreeMap::new(),
-        },
-    };
-    let composed = store
-        .mutate_draft("alpha", "designer", "composed", 1, &mutation, "add-chain")
-        .expect("component mutation");
-    assert_eq!(composed.version, 2);
-    assert_eq!(
-        store
-            .mutate_draft("alpha", "designer", "composed", 1, &mutation, "add-chain",)
-            .expect("idempotent mutation replay"),
-        composed
-    );
-    assert!(matches!(
-        store.mutate_draft(
-            "alpha",
-            "designer",
-            "composed",
-            1,
-            &DraftMutation::RemoveComponent {
-                component_id: "chain".into(),
-            },
-            "stale-remove-chain",
         ),
         Err(StoreError::StaleDraft { actual: 2, .. })
     ));
@@ -667,310 +616,62 @@ fn quote_operation(store: &Store, id: &str, kind: OperationKind, key: &str) {
 }
 
 #[test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "the atomic terminalization, immutable replay, and latest-observation assertions form one store contract"
-)]
-fn quote_observations_are_atomic_immutable_and_latest_by_sequence() {
+fn historical_wallet_receipts_remain_readable_and_immutable() {
     let store = quote_observation_store();
-    quote_operation(
-        &store,
-        "invoice-observation",
-        OperationKind::WalletInvoice,
-        "create-invoice-observation",
-    );
-    let unpaid = WalletQuoteObservationInput {
-        role: WalletQuoteObservationRole::InvoiceReceive,
-        wallet_id: "recipient-wallet".into(),
-        mint_id: "recipient-mint".into(),
-        direction: WalletQuoteDirection::Receive,
-        quote_id: "01234567-89ab-cdef-0123-456789abcdef".into(),
-        amount_sat: 100,
-        state: "UNPAID".into(),
-        wallet_created_at_unix: Some(1),
-        wallet_paid_at_unix: None,
-        wallet_expires_at_unix: Some(301),
-        fee_reserve_sat: None,
-        fee_paid_sat: None,
-    };
-    store
-        .record_operation_result_with_quote_observations(
-            "alpha",
-            "invoice-observation",
-            OperationPhase::Succeeded,
-            serde_json::json!({"state": "UNPAID"}),
-            std::slice::from_ref(&unpaid),
-        )
-        .expect("terminal result and observation");
-    let first = store
-        .wallet_quote_observation(
-            "alpha",
-            "designer",
-            "quote-observation-instance",
-            "recipient-wallet",
-            "recipient-mint",
-            WalletQuoteDirection::Receive,
-            &unpaid.quote_id,
-        )
-        .expect("first observation");
-    assert_eq!(first.state, "UNPAID");
-    assert_eq!(first.observed_by_operation, "invoice-observation");
-    assert!(matches!(
-        store.wallet_quote_observation(
-            "alpha",
-            "reader",
-            "quote-observation-instance",
-            "recipient-wallet",
-            "recipient-mint",
-            WalletQuoteDirection::Receive,
-            &unpaid.quote_id,
-        ),
-        Err(StoreError::AccessDenied { .. })
-    ));
-
-    let replay = WalletQuoteObservationInput {
-        state: "ISSUED".into(),
-        ..unpaid.clone()
-    };
-    store
-        .record_operation_result_with_quote_observations(
-            "alpha",
-            "invoice-observation",
-            OperationPhase::Failed,
-            serde_json::json!({"state": "ISSUED"}),
-            &[replay],
-        )
-        .expect("terminal replay is immutable");
-    assert_eq!(
-        store
-            .wallet_quote_observation(
-                "alpha",
-                "designer",
-                "quote-observation-instance",
-                "recipient-wallet",
-                "recipient-mint",
-                WalletQuoteDirection::Receive,
-                &unpaid.quote_id,
-            )
-            .expect("unchanged observation"),
-        first
-    );
-
-    quote_operation(
-        &store,
-        "claim-observation",
-        OperationKind::WalletQuoteClaim,
-        "create-claim-observation",
-    );
-    let issued = WalletQuoteObservationInput {
-        role: WalletQuoteObservationRole::ClaimReceive,
-        state: "ISSUED".into(),
-        wallet_paid_at_unix: Some(2),
-        ..unpaid
-    };
-    store
-        .record_operation_result_with_quote_observations(
-            "alpha",
-            "claim-observation",
-            OperationPhase::Succeeded,
-            serde_json::json!({"state": "ISSUED"}),
-            &[issued],
-        )
-        .expect("new observation");
-    let latest = store
-        .wallet_quote_observation(
-            "alpha",
-            "designer",
-            "quote-observation-instance",
-            "recipient-wallet",
-            "recipient-mint",
-            WalletQuoteDirection::Receive,
-            "01234567-89ab-cdef-0123-456789abcdef",
-        )
-        .expect("latest observation");
-    assert_eq!(latest.state, "ISSUED");
-    assert!(latest.observation_sequence > first.observation_sequence);
-    let snapshot = store
-        .wallet_quote_observation_max_sequence("alpha", "designer", "quote-observation-experiment")
-        .expect("observation snapshot");
-    let listed = store
-        .wallet_quote_observations(
-            "alpha",
-            "designer",
-            "quote-observation-experiment",
-            0,
-            snapshot,
-            10,
-        )
-        .expect("latest observations");
-    assert_eq!(listed, vec![latest]);
-}
-
-#[test]
-fn invalid_observation_cannot_terminalize_its_operation() {
-    let store = quote_observation_store();
-    quote_operation(
-        &store,
-        "invalid-observation",
-        OperationKind::WalletInvoice,
-        "create-invalid-observation",
-    );
-    let invalid = WalletQuoteObservationInput {
-        role: WalletQuoteObservationRole::PaymentMelt,
-        wallet_id: "recipient-wallet".into(),
-        mint_id: "recipient-mint".into(),
-        direction: WalletQuoteDirection::Receive,
-        quote_id: "01234567-89ab-cdef-0123-456789abcdef".into(),
-        amount_sat: 100,
-        state: "UNPAID".into(),
-        wallet_created_at_unix: None,
-        wallet_paid_at_unix: None,
-        wallet_expires_at_unix: None,
-        fee_reserve_sat: None,
-        fee_paid_sat: None,
-    };
-    assert!(matches!(
-        store.record_operation_result_with_quote_observations(
-            "alpha",
-            "invalid-observation",
-            OperationPhase::Succeeded,
-            serde_json::json!({"state": "UNPAID"}),
-            &[invalid],
-        ),
-        Err(StoreError::Validation(_))
-    ));
-    assert_eq!(
-        store
-            .operation("alpha", "designer", "invalid-observation")
-            .expect("operation remains readable")
-            .phase,
-        OperationPhase::Pending
-    );
-}
-
-#[test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "atomic identity rollback and concurrent single-flight admission are one payment-claim contract"
-)]
-fn payment_claims_are_idempotent_and_single_flight() {
-    let store = quote_observation_store();
-    let admit = |store: &Store, operation: &str, quote: &str| {
-        store.create_wallet_pay_operation(
-            &store
-                .instance("alpha", "designer", "quote-observation-instance")
-                .unwrap()
-                .revision_digest,
-            "alpha",
-            "designer",
-            "quote-observation-instance",
-            "quote-observation-experiment",
-            "quote-observation-session",
-            operation,
-            &serde_json::json!({"mint_quote_id": quote}),
-            &format!("create-{operation}"),
-            "recipient-wallet",
-            "recipient-mint",
-            quote,
-            "payer-wallet",
-            "payer-mint",
-        )
-    };
-    let first = admit(
-        &store,
-        "payment-one",
-        "01234567-89ab-cdef-0123-456789abcdef",
-    )
-    .expect("first atomic payment admission");
-    assert_eq!(
-        admit(
-            &store,
-            "payment-one",
-            "01234567-89ab-cdef-0123-456789abcdef"
-        )
-        .expect("idempotent payment admission"),
-        first
-    );
-    assert!(matches!(
-        admit(&store, "payment-two", "01234567-89ab-cdef-0123-456789abcdef"),
-        Err(StoreError::QuotePaymentAlreadyClaimed { operation, .. })
-            if operation == "payment-one"
-    ));
-    assert!(matches!(
-        store.operation("alpha", "designer", "payment-two"),
-        Err(StoreError::NotFound { .. })
-    ));
-    quote_operation(
-        &store,
-        "identity-conflict",
-        OperationKind::WalletInvoice,
-        "seed-identity-conflict",
-    );
-    assert!(matches!(
-        admit(
-            &store,
-            "identity-conflict",
-            "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-        ),
-        Err(StoreError::Conflict { .. })
-    ));
-    admit(
-        &store,
-        "payment-five",
-        "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
-    )
-    .expect("conflicting operation identity did not retain a payment claim");
-    for operation in ["payment-one", "identity-conflict", "payment-five"] {
-        store
-            .record_operation_result(
-                "alpha",
-                operation,
-                OperationPhase::Succeeded,
-                serde_json::json!({"fixture": true}),
-            )
-            .expect("finish setup operation");
+    for (id, kind) in [
+        ("old-invoice", OperationKind::WalletInvoice),
+        ("old-pay", OperationKind::WalletPay),
+        ("old-claim", OperationKind::WalletQuoteClaim),
+    ] {
+        quote_operation(&store, id, kind, id);
+        let artifact = serde_json::json!({"quote_observations":[{"role":"payment_melt","state":"PAID","quote_id":"historical"}]});
+        let recorded = store
+            .record_operation_result("alpha", id, OperationPhase::Succeeded, artifact.clone())
+            .unwrap();
+        assert_eq!(recorded.artifact.as_ref().unwrap().content, artifact);
+        assert_eq!(store.operation("alpha", "designer", id).unwrap(), recorded);
+        assert_eq!(
+            store
+                .record_operation_result(
+                    "alpha",
+                    id,
+                    OperationPhase::Failed,
+                    serde_json::json!({"changed":true})
+                )
+                .unwrap(),
+            recorded
+        );
     }
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let handles = ["payment-three", "payment-four"].map(|operation| {
-        let store = store.clone();
-        let barrier = barrier.clone();
-        std::thread::spawn(move || {
-            barrier.wait();
-            store.create_wallet_pay_operation(
-                &store
-                    .instance("alpha", "designer", "quote-observation-instance")
-                    .unwrap()
-                    .revision_digest,
-                "alpha",
-                "designer",
-                "quote-observation-instance",
-                "quote-observation-experiment",
-                "quote-observation-session",
-                operation,
-                &serde_json::json!({"mint_quote_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}),
-                &format!("create-{operation}"),
-                "recipient-wallet",
-                "recipient-mint",
-                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                "payer-wallet",
-                "payer-mint",
+}
+
+#[test]
+fn opening_store_does_not_create_or_rewrite_retired_wallet_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("store.sqlite3");
+    drop(Store::open(&path).unwrap());
+    let db = rusqlite::Connection::open(&path).unwrap();
+    for table in ["wallet_payment_claims", "wallet_quote_observations"] {
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?1)",
+                [table],
+                |row| row.get(0),
             )
-        })
-    });
-    let results = handles.map(|handle| handle.join().expect("payment claim thread"));
-    assert_eq!(
-        results.iter().filter(|result| result.is_ok()).count(),
-        1,
-        "{results:?}"
-    );
-    assert_eq!(
-        results
-            .iter()
-            .filter(|result| matches!(result, Err(StoreError::QuotePaymentAlreadyClaimed { .. })))
-            .count(),
-        1,
-        "{results:?}"
-    );
+            .unwrap();
+        assert!(!exists);
+        db.execute_batch(&format!("CREATE TABLE {table}(workspace_id TEXT, instance_id TEXT, legacy TEXT); INSERT INTO {table} VALUES ('workspace','instance','preserve');")).unwrap();
+    }
+    drop(db);
+    drop(Store::open(&path).unwrap());
+    let db = rusqlite::Connection::open(&path).unwrap();
+    for table in ["wallet_payment_claims", "wallet_quote_observations"] {
+        assert_eq!(
+            db.query_row(&format!("SELECT legacy FROM {table}"), [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            "preserve"
+        );
+    }
 }
 
 #[test]

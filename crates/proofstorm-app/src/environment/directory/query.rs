@@ -1,4 +1,4 @@
-use crate::{Error, environment::EnvironmentQuery};
+use crate::{Error, environment::EnvironmentQuery, query};
 use proofstorm_core::{ComponentKind, InstancePhase, digest_json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -97,11 +97,10 @@ impl EnvironmentReadQuery {
                 .map_err(|message| Error::problem("invalid_page", message));
         }
         if !(1..=50).contains(&self.limit)
-            || self.query.len() > 4096
-            || self.fields.len() > 32
+            || self.query.len() > query::MAX_QUERY_BYTES
+            || query::validate_fields(&self.fields).is_err()
             || self.sections.len() > 5
             || self.scan && (!self.sections.is_empty() || !self.fields.is_empty())
-            || self.fields.iter().any(|field| !valid_pointer(field))
             || self.sections.iter().any(|section| {
                 !["components", "links", "resources", "sessions", "activity"]
                     .contains(&section.as_str())
@@ -167,15 +166,7 @@ impl EnvironmentReadQuery {
         Ok(())
     }
     pub(super) fn pattern(&self) -> Result<regex::Regex, Error> {
-        regex::RegexBuilder::new(&if self.regex {
-            self.query.clone()
-        } else {
-            regex::escape(&self.query)
-        })
-        .case_insensitive(self.case_insensitive)
-        .size_limit(1 << 20)
-        .build()
-        .map_err(|error| Error::problem("search_regex_invalid", error.to_string()))
+        query::pattern(&self.query, self.regex, self.case_insensitive)
     }
     pub(super) fn load_sections(&self) -> Vec<String> {
         let mut sections = self.sections.clone();
@@ -267,19 +258,6 @@ fn stale() -> Error {
         "environment_cursor_invalid",
         "The directory or selectors changed, or the cursor is invalid. Repeat without cursor",
     )
-}
-
-fn valid_pointer(field: &str) -> bool {
-    if field.len() > 512 || !field.is_empty() && !field.starts_with('/') {
-        return false;
-    }
-    let mut chars = field.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
-            return false;
-        }
-    }
-    true
 }
 
 fn strings<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {

@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, query};
 use proofstorm_core::{CandidateBuild, digest_json};
 use proofstorm_store::Store;
 use proofstorm_view::DirectoryQuery;
@@ -23,15 +23,8 @@ pub fn directory(
     maximum_bytes: usize,
 ) -> Result<Value, Error> {
     validate(query)?;
-    let pattern = regex::RegexBuilder::new(&if query.regex {
-        query.query.clone()
-    } else {
-        regex::escape(&query.query)
-    })
-    .case_insensitive(query.case_insensitive)
-    .size_limit(1 << 20)
-    .build()
-    .map_err(|e| Error::problem("directory_query_invalid", e.to_string()))?;
+    let pattern = query::pattern(&query.query, query.regex, query.case_insensitive)
+        .map_err(|error| Error::problem("directory_query_invalid", error.message))?;
     let generation = store.candidate_directory_generation(workspace, principal)?;
     let mut selectors = query.clone();
     selectors.cursor = None;
@@ -73,24 +66,23 @@ pub fn directory(
                 } else if query.fields.is_empty() {
                     record
                 } else {
-                    query
-                        .fields
-                        .iter()
-                        .map(|p| (p.clone(), record.pointer(p).cloned().unwrap_or(Value::Null)))
-                        .collect::<serde_json::Map<_, _>>()
-                        .into()
+                    query::project(&record, &query.fields)
                 };
-                result.items.push(selected);
-                result.next_cursor = Some(format!("{digest}:{}", candidate.id));
-                if wire_size(&result)? + 64 > maximum_bytes {
-                    result.items.pop();
+                if !query::push_bounded(
+                    &mut result,
+                    selected,
+                    Some(format!("{digest}:{}", candidate.id)),
+                    |page| (&mut page.items, &mut page.next_cursor),
+                    |page| query::wire_size(page).map(|size| size + 64 <= maximum_bytes),
+                )
+                .map_err(|error| Error::failure(error.to_string(), None))?
+                {
                     if result.items.is_empty() {
                         return Err(Error::problem(
                             "directory_value_too_large",
                             "Select scan or smaller fields",
                         ));
                     }
-                    result.next_cursor = Some(format!("{digest}:{after}"));
                     break 'scan;
                 }
             }
@@ -113,13 +105,6 @@ pub fn directory(
     serde_json::to_value(result).map_err(|e| Error::failure(e.to_string(), None))
 }
 
-fn wire_size(value: &impl Serialize) -> Result<usize, Error> {
-    let value = serde_json::to_value(value).map_err(|e| Error::failure(e.to_string(), None))?;
-    serde_json::to_vec(&rmcp::model::CallToolResult::structured(value))
-        .map(|v| v.len())
-        .map_err(|e| Error::failure(e.to_string(), None))
-}
-
 fn record(candidate: &CandidateBuild) -> Value {
     let mut record = json!(super::receipt(candidate, false));
     record["id"] = json!(candidate.id);
@@ -136,14 +121,10 @@ fn record(candidate: &CandidateBuild) -> Value {
 
 fn validate(query: &DirectoryQuery) -> Result<(), Error> {
     if !(1..=50).contains(&query.limit)
-        || query.query.len() > 4096
-        || query.fields.len() > 32
+        || query.query.len() > query::MAX_QUERY_BYTES
+        || query::validate_fields(&query.fields).is_err()
         || query.scan && !query.fields.is_empty()
         || query.cursor.as_ref().is_some_and(|c| c.len() > 256)
-        || query
-            .fields
-            .iter()
-            .any(|p| p.len() > 512 || (!p.is_empty() && !p.starts_with('/')) || !valid_pointer(p))
     {
         return Err(Error::problem(
             "directory_query_invalid",
@@ -157,13 +138,4 @@ fn changed() -> Error {
         "directory_changed",
         "Build directory or selectors changed; restart without cursor",
     )
-}
-fn valid_pointer(pointer: &str) -> bool {
-    let mut chars = pointer.chars();
-    while let Some(c) = chars.next() {
-        if c == '~' && !matches!(chars.next(), Some('0' | '1')) {
-            return false;
-        }
-    }
-    true
 }

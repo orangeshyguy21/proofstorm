@@ -27,6 +27,7 @@ use thiserror::Error;
 use crate::{
     BACKEND_ID_ANNOTATION, EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL,
     REVISION_DIGEST_ANNOTATION, ROLLOUT_DIGEST_ANNOTATION, instance_namespace,
+    pod::{container_security, instance_affinity, pod_security},
 };
 
 pub const COMPONENT_LABEL: &str = "proofstorm.dev/component";
@@ -353,7 +354,7 @@ pub fn render_protocol_prober(
                     "automountServiceAccountToken": false,
                     "enableServiceLinks": false,
                     "terminationGracePeriodSeconds": 1,
-                    "securityContext": pod_security(),
+                    "securityContext": pod_security(1000),
                     "containers": containers
                 }
             }
@@ -1400,19 +1401,7 @@ fn aggregate_condition_state(
                 condition.state
             })
     });
-    let mut saw_unknown = false;
-    for state in states {
-        match state {
-            ComponentConditionState::False => return ComponentConditionState::False,
-            ComponentConditionState::Unknown => saw_unknown = true,
-            ComponentConditionState::True => {}
-        }
-    }
-    if saw_unknown {
-        ComponentConditionState::Unknown
-    } else {
-        ComponentConditionState::True
-    }
+    aggregate_states(states)
 }
 
 fn preserve_condition_transitions(
@@ -1475,10 +1464,7 @@ pub fn render_postgres_component(
                     "serviceAccountName": "proofstorm-workload",
                     "automountServiceAccountToken": false,
                     "enableServiceLinks": false,
-                    "securityContext": {
-                        "runAsNonRoot": true, "runAsUser": 70, "runAsGroup": 70, "fsGroup": 70,
-                        "seccompProfile": {"type": "RuntimeDefault"}
-                    },
+                    "securityContext": pod_security(70),
                     "affinity": instance_affinity(&plan.instance_key),
                     "containers": [{
                         "name": "component",
@@ -1581,7 +1567,7 @@ pub fn render_keycloak_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "args": ["start-dev", "--import-realm"],
                     "env": [
@@ -1646,7 +1632,7 @@ pub fn render_redis_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": ["sh", "-c"],
                     "args": [format!("exec redis-server --bind 0.0.0.0 --protected-mode yes --port {redis_port} --save '' --appendonly no --requirepass \"$REDIS_PASSWORD\" --maxmemory {maxmemory_mb}mb --maxmemory-policy allkeys-lru")],
@@ -1912,7 +1898,7 @@ pub fn render_cdk_component(
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut pod_spec = json!({
         "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+        "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
             "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
             "command": ["cdk-mintd"],
             "env": runtime.env,
@@ -2376,7 +2362,7 @@ pub fn render_nutshell_mint_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": command,
                     "envFrom": [{"configMapRef": {"name": config_name}}],
@@ -2846,7 +2832,7 @@ pub fn render_attacker_component(
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
                 "terminationGracePeriodSeconds":15,
-                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": [proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","serve"],
                     "workingDir":"/workspace",
@@ -2975,7 +2961,7 @@ fn render_cli_wallet_workspace(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": ["/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"],
                     "env": [{"name": "HOME", "value": "/wallet"}, {"name": "PROOFSTORM_WALLET", "value": plan.component_id}],
@@ -3030,7 +3016,7 @@ fn stateful_set(
         "spec": {"serviceName": component, "replicas": 1, "selector": {"matchLabels": labels},
             "template": {"metadata": template_metadata, "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(), "affinity": instance_affinity(instance_key), "containers": [container]
+                "securityContext": pod_security(1000), "affinity": instance_affinity(instance_key), "containers": [container]
             }},
             "volumeClaimTemplates": [{"metadata": {"name": "data", "labels": labels},
                 "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}}}]
@@ -3409,22 +3395,6 @@ fn plan_pod_metadata(plan: &ComponentPlanContract, labels: &BTreeMap<String, Str
     json!({"labels": labels, "annotations": rollout_annotations(plan)})
 }
 
-fn pod_security() -> Value {
-    json!({"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
-        "seccompProfile": {"type": "RuntimeDefault"}})
-}
-
-fn instance_affinity(instance_key: &str) -> Value {
-    json!({"podAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [{
-        "labelSelector": {"matchLabels": {INSTANCE_LABEL: instance_key}},
-        "topologyKey": "kubernetes.io/hostname"
-    }]}})
-}
-
-fn container_security() -> Value {
-    json!({"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}})
-}
-
 fn resource<T: DeserializeOwned>(value: Value) -> Result<T, AdapterError> {
     Ok(serde_json::from_value(value)?)
 }
@@ -3494,6 +3464,51 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn readiness_aggregation_requires_observations_and_false_overrides_unknown() {
+        use ComponentConditionState::{False, True, Unknown};
+        use ComponentConditionType::{ServiceReady, StorageReady, WorkloadReady};
+
+        let required = BTreeSet::from([WorkloadReady, StorageReady]);
+        let cases = [
+            (None, None, Unknown),
+            (Some(True), None, Unknown),
+            (None, Some(True), Unknown),
+            (Some(True), Some(True), True),
+            (Some(True), Some(Unknown), Unknown),
+            (Some(Unknown), Some(True), Unknown),
+            (None, Some(False), False),
+            (Some(False), None, False),
+            (Some(Unknown), Some(False), False),
+            (Some(False), Some(Unknown), False),
+            (Some(True), Some(False), False),
+            (Some(False), Some(True), False),
+        ];
+        for (workload, storage, expected) in cases {
+            let conditions = [
+                (WorkloadReady, workload),
+                (StorageReady, storage),
+                (ServiceReady, Some(False)), // Unrequired conditions do not affect readiness.
+            ]
+            .into_iter()
+            .filter_map(|(kind, state)| {
+                state.map(|state| {
+                    component_condition(kind, state, ComponentConditionReason::Observed, "", 1)
+                })
+            })
+            .collect::<Vec<_>>();
+            assert_eq!(
+                aggregate_condition_state(&required, &conditions),
+                expected,
+                "workload={workload:?}, storage={storage:?}"
+            );
+            assert_eq!(
+                aggregate_condition_state(&BTreeSet::new(), &conditions),
+                True
+            );
+        }
+    }
 
     fn component(
         id: &str,

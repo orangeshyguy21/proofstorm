@@ -191,13 +191,13 @@ fn exercise(
     );
     let funded = cell::wait_operation(client, "fund", 60)?;
     native_ok(cell::artifact_content(&funded)?)?;
-    let balance = operation(
+    let balance = crate::native::json_content(&operation(
         client,
         directory,
-        "wallet_balance",
+        "cell_exec",
         "funded-balance",
-        json!({"wallet":"wallet-a","mint":"mint"}),
-    )?;
+        crate::native::wallet_request("cdk-cli-wallet", "wallet-a", "mint")?,
+    )?)?;
     ensure!(
         balance["balance_sat"] == 64
             && balance["pending_sat"] == 0

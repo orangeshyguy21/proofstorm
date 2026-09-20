@@ -157,19 +157,23 @@ pub fn assert_materialized(
         }
     }
 
-    let count = psql(
-        kubectl,
-        namespace,
-        "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';",
-    )?;
-    let tables: u64 = count
-        .trim()
-        .parse()
-        .context("parse the schema table count")?;
+    let tables = schema_table_count(kubectl, namespace)?;
     if tables < MINIMUM_TABLES {
         bail!("CDK initialized only {tables} PostgreSQL schema tables");
     }
     Ok(tables)
+}
+
+/// Count public schema tables; each gate chooses its own initialization threshold.
+pub(crate) fn schema_table_count(kubectl: &Kubectl, namespace: &str) -> Result<u64> {
+    psql(
+        kubectl,
+        namespace,
+        "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';",
+    )?
+    .trim()
+    .parse()
+    .context("parse the schema table count")
 }
 
 /// Write a marker row that must survive a database restart.

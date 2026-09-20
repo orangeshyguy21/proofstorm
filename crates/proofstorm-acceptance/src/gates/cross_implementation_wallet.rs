@@ -214,176 +214,96 @@ fn exercise(context: &GateContext) -> Result<()> {
         json!({"request_id":"10001","run_id": EXPERIMENT, "name": INSTANCE}),
     )?;
 
-    crate::driver::liquidity_bootstrap(
-        context,
+    crate::native::bootstrap(
         &mut client,
-        json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "request_id": "cross-mint-bootstrap", "chain": "chain",
-            "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
-            "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000}),
+        INSTANCE,
+        EXPERIMENT,
+        "cross-mint-bootstrap",
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
-    let bootstrap = cell::wait_operation(&mut client, "cross-mint-bootstrap", 160)?;
-    if !expect::boolean(cell::artifact_content(&bootstrap)?, "/ready")? {
-        bail!("liquidity bootstrap artifact is invalid: {bootstrap}");
-    }
 
     for (implementation, mint, wallet) in [
         ("cdk", "cdk-mint", "cdk-wallet"),
         ("nutshell", "nutshell-mint", "nutshell-wallet"),
     ] {
         let prefix = format!("{implementation}-wallet");
-        let common = json!({
-            "name": INSTANCE, "run_id": EXPERIMENT,
-            "wallet": wallet, "mint": mint
-        });
-        let merge = |extra: Value| -> Value {
-            let mut base = common.clone();
-            if let (Some(target), Value::Object(source)) = (base.as_object_mut(), extra) {
-                for (key, value) in source {
-                    target.insert(key, value);
-                }
-            }
-            base
-        };
+        let mut native = crate::native::Session::new(&mut client, INSTANCE, EXPERIMENT);
+        native.nutshell_initialize(wallet, mint, &format!("{prefix}-initialize"))?;
+        anyhow::ensure!(
+            native.nutshell_balance(wallet, mint, &format!("{prefix}-balance"))? == 0,
+            "{implementation} wallet did not start empty"
+        );
+        anyhow::ensure!(
+            native.nutshell_fund(wallet, mint, "payer-lnd", &format!("{prefix}-fund"), 1000)?
+                == 1000,
+            "{implementation} wallet funding balance differs"
+        );
+        anyhow::ensure!(
+            native.nutshell_fund(
+                wallet,
+                mint,
+                "payer-lnd",
+                &format!("{prefix}-round-trip-fund"),
+                1000
+            )? == 2000,
+            "{implementation} round-trip funding balance differs"
+        );
+        native.nutshell_swap(wallet, mint, &format!("{prefix}-round-trip"), 100)?;
 
-        crate::driver::wallet_initialize(
-            context,
-            &mut client,
-            merge(json!({"request_id": format!("{prefix}-initialize")})),
-        )?;
-        let initialized = cell::wait_operation(&mut client, &format!("{prefix}-initialize"), 160)?;
-        if !expect::boolean(cell::artifact_content(&initialized)?, "/initialized")? {
-            bail!("{implementation} wallet initialization failed: {initialized}");
-        }
-
-        client.call(
-            "wallet_balance",
-            merge(json!({"request_id": format!("{prefix}-balance")})),
-        )?;
-        let balance = cell::wait_operation(&mut client, &format!("{prefix}-balance"), 160)?;
-        if expect::integer(cell::artifact_content(&balance)?, "/balance_sat")? != 0 {
-            bail!("{implementation} wallet did not start empty: {balance}");
-        }
-
-        crate::driver::wallet_fund(
-            context,
-            &mut client,
-            merge(
-                json!({"request_id": format!("{prefix}-fund"), "payer_lightning": "payer-lnd", "amount_sat": 1000}),
-            ),
-        )?;
-        let funded = cell::wait_operation(&mut client, &format!("{prefix}-fund"), 160)?;
-        let fund_content = cell::artifact_content(&funded)?;
-        if expect::integer(fund_content, "/funded_sat")? != 1000
-            || expect::integer(fund_content, "/balance_sat")? != 1000
-        {
-            bail!("{implementation} wallet funding failed: {funded}");
-        }
-
-        let baseline_id = format!("{prefix}-balance-before-round-trip");
-        client.call("wallet_balance", merge(json!({"request_id": baseline_id})))?;
-        let baseline = cell::wait_operation(
-            &mut client,
-            &format!("{prefix}-balance-before-round-trip"),
-            160,
-        )?;
-        if expect::integer(cell::artifact_content(&baseline)?, "/balance_sat")? != 1000 {
-            bail!("{implementation} wallet baseline is invalid: {baseline}");
-        }
-
-        crate::driver::wallet_round_trip(
-            context,
-            &mut client,
-            merge(
-                json!({"request_id": format!("{prefix}-round-trip"), "payer_lightning": "payer-lnd", "amount_sat": 1000, "tolerance_sat": 100}),
-            ),
-        )?;
-        let round_trip = cell::wait_operation(&mut client, &format!("{prefix}-round-trip"), 160)?;
-        let round_content = cell::artifact_content(&round_trip)?;
-        if expect::boolean(round_content, "/inflation")?
-            || expect::integer(round_content, "/minted_sat")? != 1000
-        {
-            bail!("{implementation} wallet round trip failed: {round_trip}");
-        }
-
-        // The oracle requires a later wallet_pay treatment, not a round trip
-        // that funds and spends in one action. Keep the round-trip assertion and
-        // give conservation its own immediately preceding baseline/payment.
         let recipient = format!("{implementation}-recipient");
-        crate::driver::wallet_initialize(
-            context,
-            &mut client,
-            merge(json!({"wallet":recipient,
-            "request_id":format!("{prefix}-recipient-initialize")})),
+        native.nutshell_initialize(&recipient, mint, &format!("{prefix}-recipient-initialize"))?;
+        let quote_id = native.nutshell_invoice(
+            &recipient,
+            mint,
+            &format!("{prefix}-recipient-invoice"),
+            100,
         )?;
-        cell::wait_operation(&mut client, &format!("{prefix}-recipient-initialize"), 160)?;
-        crate::driver::wallet_invoice(
-            context,
-            &mut client,
-            merge(
-                json!({"wallet":recipient,"amount_sat":100,"timeout_seconds":30,
-            "request_id":format!("{prefix}-recipient-invoice")}),
-            ),
+        let invoice = native.nutshell_invoice_projection(
+            &recipient,
+            mint,
+            &format!("{prefix}-invoice-read"),
+            &quote_id,
+            100,
         )?;
-        let invoice =
-            cell::wait_operation(&mut client, &format!("{prefix}-recipient-invoice"), 160)?;
-        let quote = expect::string(cell::artifact_content(&invoice)?, "/mint_quote_id")?;
-        client.call(
-            "wallet_balance",
-            merge(json!({"request_id":format!("{prefix}-balance-before-pay")})),
+        let before = native.nutshell_balance(wallet, mint, &format!("{prefix}-before-pay"))?;
+        let melt = native.nutshell_melt(
+            wallet,
+            mint,
+            &format!("{prefix}-pay"),
+            expect::string(&invoice, "/payment_request")?,
+            100,
         )?;
-        cell::wait_operation(&mut client, &format!("{prefix}-balance-before-pay"), 160)?;
-        crate::driver::wallet_pay(
-            context,
-            &mut client,
-            merge(
-                json!({"recipient_wallet":recipient,"recipient_mint":mint,"mint_quote_id":quote,
-            "request_id":format!("{prefix}-pay")}),
-            ),
-        )?;
-        let paid = cell::wait_operation(&mut client, &format!("{prefix}-pay"), 160)?;
-        let observations = expect::array(cell::artifact_content(&paid)?, "/quote_observations")?;
-        if !observations.iter().any(|o| {
-            o.get("role") == Some(&json!("payment_melt")) && o.get("state") == Some(&json!("PAID"))
-        }) || !observations.iter().any(|o| {
-            o.get("role") == Some(&json!("payment_receive"))
-                && o.get("state") == Some(&json!("ISSUED"))
-        }) {
-            bail!("conservation treatment did not pay recipient");
-        }
-        let oracle_request = merge(json!({
-            "request_id": format!("{prefix}-conservation"),
-            "baseline_operation_id": format!("{prefix}-balance-before-pay"),
-            "treatment_operation_id": format!("{prefix}-pay")}));
-        let oracle = if implementation == "cdk" {
-            // The existing mint-fee reader supports Nutshell SQLite only.
-            // Preserve its explicit unknown for CDK instead of fabricating a
-            // zero network fee or claiming cross-mint oracle parity.
-            let melt = observations
-                .iter()
-                .find(|o| o.get("role") == Some(&json!("payment_melt")))
-                .expect("verified melt");
-            if melt.get("fee_paid_sat") != Some(&Value::Null) {
-                bail!("CDK authoritative fee support changed; review this boundary fixture");
-            }
-            let refusal = crate::conservation::check(context, &mut client, oracle_request)
-                .expect_err("unknown authoritative fee must fail closed");
-            anyhow::ensure!(
-                refusal
-                    .to_string()
-                    .starts_with("conservation_treatment_artifact_invalid:"),
-                "unexpected conservation refusal: {refusal}"
-            );
-            json!({"refused":true,"code":"conservation_treatment_artifact_invalid",
-                "reason":"authoritative_mint_fee_unavailable","conservation_claimed":false})
+        anyhow::ensure!(melt["state"] == "PAID", "native payment did not settle");
+        let after = native.nutshell_balance(wallet, mint, &format!("{prefix}-after-pay"))?;
+        native.nutshell_claim(&recipient, mint, &format!("{prefix}-claim"), &quote_id, 100)?;
+        anyhow::ensure!(
+            native.nutshell_balance(&recipient, mint, &format!("{prefix}-received"))? == 100,
+            "recipient did not receive 100 sat"
+        );
+        let accounting = if implementation == "nutshell" {
+            let mint_observation = native.nutshell_mint_melt(
+                wallet,
+                mint,
+                &format!("{prefix}-mint-observe"),
+                &melt,
+            )?;
+            crate::native::assert_payment_accounting(before, after, &melt, &mint_observation)?;
+            json!({"before_sat":before,"after_sat":after,"wallet":melt,"mint":mint_observation,"conserved":true})
         } else {
-            crate::conservation::check(context, &mut client, oracle_request)?;
-            let oracle = cell::wait_operation(&mut client, &format!("{prefix}-conservation"), 160)?;
-            if !expect::boolean(cell::artifact_content(&oracle)?, "/conserved")? {
-                bail!("{implementation} conservation check failed: {oracle}");
-            }
-            oracle
+            // The installed passive mint-fee reader supports Nutshell SQLite.
+            // Wallet fee fields cannot establish CDK mint-side conservation.
+            anyhow::ensure!(
+                before
+                    .checked_sub(after)
+                    .is_some_and(|spent| (100..=110).contains(&spent)),
+                "CDK payment exceeded the fixture fee bound"
+            );
+            json!({"before_sat":before,"after_sat":after,"wallet":melt,"reason":"authoritative_mint_fee_unavailable","conservation_claimed":false})
         };
         fs::write(
             context
@@ -391,7 +311,7 @@ fn exercise(context: &GateContext) -> Result<()> {
                 .join("dev/wallet-integration-runs")
                 .join(&context.run_id)
                 .join(format!("{prefix}-conservation.json")),
-            serde_json::to_vec_pretty(&oracle)?,
+            serde_json::to_vec_pretty(&accounting)?,
         )?;
     }
 
@@ -433,7 +353,7 @@ fn exercise(context: &GateContext) -> Result<()> {
     expect::equals(&closed_experiment, "/phase", &Value::from("closed"))?;
 
     println!(
-        "CDK and Nutshell wallet workflows, Nutshell conservation, CDK missing-fee refusal and cache restart checks passed; verifying teardown next"
+        "Native CDK and Nutshell mint payments, exact Nutshell accounting, bounded CDK balances and cache restart checks passed; verifying teardown next"
     );
     Ok(())
 }

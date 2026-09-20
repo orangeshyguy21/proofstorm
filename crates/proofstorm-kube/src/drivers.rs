@@ -1,9 +1,19 @@
 //! Install one shared native helper into component/action Pods.
-use k8s_openapi::api::core::v1::PodSpec;
+use k8s_openapi::api::core::v1::{PodSpec, SecurityContext};
 use serde_json::json;
+
+use crate::pod::container_security;
 
 pub use proofstorm_driver::BINARY as DRIVER_PATH;
 pub const DRIVER_IMAGE: &str = "proofstorm-controller:driver-image-required";
+
+fn installer_security() -> SecurityContext {
+    SecurityContext {
+        read_only_root_filesystem: Some(true),
+        run_as_non_root: Some(true),
+        ..container_security()
+    }
+}
 
 /// Install the controller's static helper before component processes start.
 /// # Errors
@@ -24,7 +34,7 @@ pub fn install(pod: &mut PodSpec) -> Result<(), serde_json::Error> {
     pod.init_containers.get_or_insert_default().insert(0,serde_json::from_value(json!({
         "name":"proofstorm-driver", "image":DRIVER_IMAGE, "imagePullPolicy":"IfNotPresent",
         "command":["/usr/local/lib/proofstorm-driver","install"],
-        "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true},
+        "securityContext":installer_security(),
         "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"cpu":"200m","memory":"128Mi"}},
         "volumeMounts":[{"name":"proofstorm-driver","mountPath":"/opt/proofstorm"}]
     }))?);
@@ -59,7 +69,7 @@ pub fn install_workspace(pod: &mut PodSpec) -> Result<(), serde_json::Error> {
     pod.init_containers.get_or_insert_default().push(serde_json::from_value(json!({
         "name":"proofstorm-workspace","image":DRIVER_IMAGE,"imagePullPolicy":"IfNotPresent",
         "command":["/usr/local/lib/proofstorm-exec","workspace","install"],
-        "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true},
+        "securityContext":installer_security(),
         "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"cpu":"200m","memory":"128Mi"}},
         "volumeMounts":[{"name":"proofstorm-workspace","mountPath":"/opt/proofstorm"}]
     }))?);

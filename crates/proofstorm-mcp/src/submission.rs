@@ -1,9 +1,10 @@
 //! One immutable preview path for complete specifications and bounded stable-ID edits.
 use crate::{
-    AddLinkInput, CellInput, ErrorData, ProofstormMcp, coded_invalid_request, store_error,
+    AddLinkInput, CellInput, ErrorData, ProofstormMcp, app_error, coded_invalid_request,
+    store_error,
 };
 use proofstorm_core::{
-    CellPolicy, CellSpec, CellUpdateTarget, ComponentSpec, LinkSpec, digest_json,
+    CellPolicy, CellSpec, CellUpdateTarget, ComponentSpec, LinkSpec, apply_cell_patch, digest_json,
 };
 use proofstorm_store::{CellPreview, StoreError};
 use schemars::JsonSchema;
@@ -183,8 +184,13 @@ impl ProofstormMcp {
         };
         // The external name is authoritative, including when copying a configuration.
         cell.name.clone_from(&request.name);
-        if let Some(patch) = &request.patch {
-            apply_patch(&mut cell, patch)?;
+        if let Some(patch) = request.patch {
+            let patch = patch
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()
+                .map_err(invalid)?;
+            cell = apply_cell_patch(cell, patch).map_err(invalid)?;
         }
         let catalog = self
             .store
@@ -197,41 +203,21 @@ impl ProofstormMcp {
                 Some(json!({"code":"cell_plan_invalid","validation":validation})),
             ));
         }
-        self.store
-            .create_draft(
-                &self.workspace,
-                &self.principal,
-                &id,
-                &cell,
-                &format!("{id}:draft"),
-            )
-            .map_err(store_error)?;
-        let revision = self
-            .store
-            .publish(
-                &self.workspace,
-                &self.principal,
-                &id,
-                1,
-                &format!("{id}:publish"),
-            )
-            .map_err(store_error)?;
-        let update = target
-            .map(|instance| {
-                self.store.plan_update(
-                    &self.workspace,
-                    &self.principal,
-                    CellUpdateTarget {
-                        instance_id: instance.id,
-                        expected_generation: instance.generation,
-                        delete_data: request.delete_data,
-                        delete_retained: request.delete_retained,
-                    },
-                    &revision,
-                )
-            })
-            .transpose()
-            .map_err(store_error)?;
+        let prepared = proofstorm_app::cell::prepare_plan(
+            &self.store,
+            &self.workspace,
+            &self.principal,
+            &id,
+            &cell,
+            target.map(|instance| CellUpdateTarget {
+                instance_id: instance.id,
+                expected_generation: instance.generation,
+                delete_data: request.delete_data,
+                delete_retained: request.delete_retained,
+            }),
+        )
+        .map_err(app_error)?;
+        let revision = prepared.revision;
         let preview = CellPreview {
             id,
             request_digest,
@@ -239,7 +225,7 @@ impl ProofstormMcp {
             cell: revision.cell,
             revision_digest: revision.digest,
             lock_digest: revision.lock.digest,
-            update,
+            update: prepared.update,
         };
         self.store
             .save_cell_preview(&self.workspace, &self.principal, &preview)
@@ -252,58 +238,21 @@ fn invalid(message: impl Into<String>) -> ErrorData {
     coded_invalid_request("invalid_cell_input", message)
 }
 
-fn apply_patch(cell: &mut CellSpec, patch: &[CellPatch]) -> Result<(), ErrorData> {
-    if !(1..=100).contains(&patch.len()) {
-        return Err(invalid("patch must contain 1..=100 operations"));
+impl TryFrom<CellPatch> for proofstorm_core::CellPatch {
+    type Error = String;
+
+    fn try_from(change: CellPatch) -> Result<Self, Self::Error> {
+        Ok(match change {
+            CellPatch::AddComponent { component } => Self::AddComponent { component },
+            CellPatch::UpdateComponent { component } => Self::UpdateComponent { component },
+            CellPatch::RemoveComponent { id } => Self::RemoveComponent { id },
+            CellPatch::AddLink { link } => Self::AddLink {
+                link: LinkSpec::try_from(link)?,
+            },
+            CellPatch::RemoveLink { id } => Self::RemoveLink { id },
+            CellPatch::SetPolicy { policy } => Self::SetPolicy { policy },
+        })
     }
-    for change in patch {
-        match change {
-            CellPatch::AddComponent { component } => {
-                if cell.components.iter().any(|item| item.id == component.id) {
-                    return Err(invalid(format!(
-                        "Component {:?} already exists",
-                        component.id
-                    )));
-                }
-                cell.components.push(component.clone());
-            }
-            CellPatch::UpdateComponent { component } => {
-                let current = cell
-                    .components
-                    .iter_mut()
-                    .find(|item| item.id == component.id)
-                    .ok_or_else(|| invalid(format!("Component {:?} is absent", component.id)))?;
-                *current = component.clone();
-            }
-            CellPatch::RemoveComponent { id } => {
-                let index = cell
-                    .components
-                    .iter()
-                    .position(|item| item.id == *id)
-                    .ok_or_else(|| invalid(format!("Component {id:?} is absent")))?;
-                cell.components.remove(index);
-            }
-            CellPatch::AddLink { link } => {
-                let link = LinkSpec::try_from(link.clone()).map_err(invalid)?;
-                if cell.links.iter().any(|item| item.id == link.id) {
-                    return Err(invalid(format!("Link {:?} already exists", link.id)));
-                }
-                cell.links.push(link);
-            }
-            CellPatch::RemoveLink { id } => {
-                let index = cell
-                    .links
-                    .iter()
-                    .position(|item| item.id == *id)
-                    .ok_or_else(|| invalid(format!("Link {id:?} is absent")))?;
-                cell.links.remove(index);
-            }
-            CellPatch::SetPolicy { policy } => cell.policy = policy.clone(),
-        }
-    }
-    cell.components.sort_by(|a, b| a.id.cmp(&b.id));
-    cell.links.sort();
-    Ok(())
 }
 
 pub(super) fn receipt(preview: &CellPreview) -> Result<crate::CallToolResult, ErrorData> {

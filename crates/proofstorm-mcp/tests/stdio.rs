@@ -529,6 +529,7 @@ fn default_surface_exposes_the_complete_registry_without_manual_coordination() {
         "experiment_create",
         "session_start",
         "cell_recipe_bootstrap",
+        "wallet_balance",
         "wallet_pay",
     ] {
         assert!(!names.contains(&name));

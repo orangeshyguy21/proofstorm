@@ -27,13 +27,14 @@ fn operation(client: &mut McpClient, id: &str, component: &str, args: Value) -> 
 }
 
 fn balance(client: &mut McpClient, id: &str, expected: u64) -> Result<Value> {
-    client.call(
-        "wallet_balance",
-        json!({"name":NAME,"run_id":RUN,"request_id":id,"wallet":"wallet-a","mint":"mint"}),
+    let balance = native::observe_wallet(
+        client,
+        "nutshell-wallet",
+        &json!({"name":NAME,"run_id":RUN,"request_id":id,"wallet":"wallet-a","mint":"mint"}),
     )?;
     let receipt = cell::wait_succeeded(client, id)?;
     ensure!(
-        cell::artifact_content(&receipt)?["balance_sat"] == expected,
+        balance["balance_sat"] == expected,
         "issued balance was not retained: {receipt}"
     );
     Ok(receipt)

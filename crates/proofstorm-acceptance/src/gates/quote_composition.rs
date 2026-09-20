@@ -1,13 +1,12 @@
-//! Quote source-of-truth composition: a receive quote created through native
-//! wallet authority can be paid by the typed operation, and an externally
-//! paid typed invoice can be completed through the explicit claim operation.
+//! Native invoice/payment composition with independent command receipts and
+//! exact passive settlement observations.
 
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, cell, json as expect};
+use crate::{GateContext, cell, json as expect, native::omit_native_request_source};
 
 fn cell_document() -> Value {
     json!({
@@ -28,49 +27,6 @@ fn cell_document() -> Value {
         ],
         "policy": {"allow": ["component.forensics"], "limits": {"max_components": 16, "max_links": 32, "max_config_bytes": 32768}}
     })
-}
-
-fn native_output(operation: &Value) -> Result<&str> {
-    operation
-        .pointer("/artifact/content/combined_output")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("native operation has no combined output: {operation}"))
-}
-
-fn uuid_from(output: &str) -> Result<String> {
-    output
-        .split(|character: char| !character.is_ascii_hexdigit() && character != '-')
-        .find(|token| {
-            token.len() == 36 && token.chars().filter(|character| *character == '-').count() == 4
-        })
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow!("native output contains no quote UUID: {output}"))
-}
-
-fn invoice_from(output: &str) -> Result<String> {
-    output
-        .split_whitespace()
-        .map(|token| token.trim_matches(|character: char| !character.is_ascii_alphanumeric()))
-        .find(|token| token.starts_with("lnbcrt"))
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow!("native output contains no regtest invoice"))
-}
-
-fn scoped(instance: &str, experiment: &str, operation: &str, extra: Value) -> Value {
-    let mut request = json!({
-        "name": instance,
-        "run_id": experiment,
-
-        "request_id": operation
-    });
-    let Value::Object(fields) = extra else {
-        panic!("scoped fields must be an object");
-    };
-    request
-        .as_object_mut()
-        .expect("scoped request")
-        .extend(fields);
-    request
 }
 
 fn assert_no_invoice(value: &Value, label: &str) -> Result<()> {
@@ -97,242 +53,122 @@ pub fn run(context: &GateContext) -> Result<()> {
     crate::cell::review(&mut client, &preview)?;
     crate::cell::apply(&mut client, &preview)?;
     cell::wait_phase(&mut client, &instance, "ready", 200, Duration::from_secs(3))?;
-    let status = crate::cell::status(&mut client, &(instance))?;
-    let namespace = expect::string(&status, "/instance_namespace")?.to_owned();
 
     client.call(
         "run_start",
         json!({"request_id":"5413","run_id": experiment, "name": instance}),
     )?;
 
-    crate::driver::liquidity_bootstrap(
-        context,
+    crate::native::bootstrap(
         &mut client,
-        scoped(
-            &instance,
-            &experiment,
-            "bootstrap",
-            json!({
-                "chain": "chain", "mint_lightning": "mint-lnd", "payer_lightning": "payer-lnd",
-                "funding_sat": 50_000_000, "channel_sat": 10_000_000, "push_sat": 5_000_000}),
-        ),
+        &instance,
+        &experiment,
+        "bootstrap",
+        "chain",
+        "mint-lnd",
+        "payer-lnd",
+        50_000_000,
+        10_000_000,
+        5_000_000,
     )?;
-    cell::wait_operation(&mut client, "bootstrap", 180)?;
 
+    let mut native = crate::native::Session::new(&mut client, &instance, &experiment);
     for (operation, wallet) in [
         ("initialize-payer", "payer-wallet"),
         ("initialize-recipient", "recipient-wallet"),
     ] {
-        crate::driver::wallet_initialize(
-            context,
-            &mut client,
-            scoped(
-                &instance,
-                &experiment,
-                operation,
-                json!({
-                "wallet": wallet, "mint": "mint"}),
-            ),
-        )?;
-        cell::wait_operation(&mut client, operation, 120)?;
+        native.nutshell_initialize(wallet, "mint", operation)?;
     }
-    crate::driver::wallet_fund(
-        context,
-        &mut client,
-        scoped(
-            &instance,
-            &experiment,
-            "fund-payer",
-            json!({
-                "wallet": "payer-wallet", "mint": "mint", "payer_lightning": "payer-lnd",
-                "amount_sat": 1_000}),
-        ),
-    )?;
-    cell::wait_operation(&mut client, "fund-payer", 160)?;
+    native.nutshell_fund("payer-wallet", "mint", "payer-lnd", "fund-payer", 1000)?;
 
-    let compose_script = r#"set -eu; cd /app; output=$(mktemp /tmp/quote.XXXXXX); trap 'rm -f "$output"' EXIT; cashu -h http://mint:3338 -u sat -w wallet -t -y invoice 100 --no-check >"$output" 2>&1; sed -n 's/.*--id \([0-9a-f-][0-9a-f-]*\).*/\1/p' "$output" | head -1"#;
-    client.call(
-        "component_forensics",
-        scoped(
-            &instance,
-            &experiment,
-            "compose-invoice",
-            json!({
-            "component": "recipient-wallet", "script": compose_script,
-            "timeout_seconds": 60}),
-        ),
+    let composed_quote =
+        native.nutshell_invoice("recipient-wallet", "mint", "compose-invoice", 100)?;
+    let composed_invoice = native.nutshell_invoice_projection(
+        "recipient-wallet",
+        "mint",
+        "compose-invoice-read",
+        &composed_quote,
+        100,
     )?;
-    let composed = cell::wait_operation(&mut client, "compose-invoice", 120)?;
-    let composed_quote = uuid_from(native_output(&composed)?)?;
-
-    let pay_request = scoped(
-        &instance,
-        &experiment,
+    let before = native.nutshell_balance("payer-wallet", "mint", "compose-before")?;
+    let paid_content = native.nutshell_melt(
+        "payer-wallet",
+        "mint",
         "compose-pay",
-        json!({
-            "wallet": "payer-wallet", "mint": "mint", "recipient_wallet": "recipient-wallet",
-            "recipient_mint": "mint", "mint_quote_id": composed_quote}),
-    );
-    let accepted_pay = crate::driver::wallet_pay(context, &mut client, pay_request)?;
-    let refusal = crate::driver::wallet_pay(
-        context,
-        &mut client,
-        scoped(
-            &instance,
-            &experiment,
-            "compose-pay-racer",
-            json!({
-                "wallet": "payer-wallet", "mint": "mint", "recipient_wallet": "recipient-wallet",
-                "recipient_mint": "mint", "mint_quote_id": composed_quote}),
-        ),
-    )
-    .expect_err("an already claimed quote must reject a second payer");
+        expect::string(&composed_invoice, "/payment_request")?,
+        100,
+    )?;
     anyhow::ensure!(
-        refusal
-            .downcast_ref::<proofstorm_store::StoreError>()
-            .is_some_and(|error| error.code() == "quote_payment_already_claimed"),
-        "unexpected claim refusal: {refusal}"
+        paid_content["state"] == "PAID",
+        "native payment did not settle"
     );
-    let paid = cell::wait_operation(&mut client, "compose-pay", 160)?;
-    let paid_content = cell::artifact_content(&paid)?;
-    if expect::string(paid_content, "/quote_observations/0/state")? != "PAID"
-        || expect::string(paid_content, "/quote_observations/1/state")? != "ISSUED"
-        || expect::integer(paid_content, "/recipient_balance_sat")? != 100
-    {
-        bail!("composed quote did not pay and issue: {paid}");
-    }
-    let pay_resource = expect::string(&accepted_pay, "/resource_name")?;
-    let pay_jobs = context.kubectl.get_json(&[
-        "get",
-        "jobs",
-        "-n",
-        &namespace,
-        "-l",
-        &format!("proofstorm.dev/action={pay_resource}"),
-    ])?;
-    if expect::array(&pay_jobs, "/items")?.len() != 1 {
-        bail!("single-flight admission created more than one payment job: {pay_jobs}");
-    }
-
-    let accepted_invoice = crate::driver::wallet_invoice(
-        context,
-        &mut client,
-        scoped(
-            &instance,
-            &experiment,
-            "external-invoice",
-            json!({
-                "wallet": "recipient-wallet", "mint": "mint", "amount_sat": 200,
-                "timeout_seconds": 300}),
-        ),
-    )?;
-    let invoice_operation = cell::wait_operation(&mut client, "external-invoice", 120)?;
-    let invoice_content = cell::artifact_content(&invoice_operation)?;
-    let external_quote = expect::string(invoice_content, "/mint_quote_id")?.to_owned();
-    assert_no_invoice(invoice_content, "typed invoice artifact")?;
-
-    let read_script = format!(
-        "/opt/proofstorm/driver private-invoice /wallet recipient-wallet http://mint:3338 {external_quote}"
+    let after = native.nutshell_balance("payer-wallet", "mint", "compose-after")?;
+    anyhow::ensure!(
+        before
+            .checked_sub(after)
+            .is_some_and(|spent| (100..=110).contains(&spent)),
+        "native payment moved an unexpected amount"
     );
-    client.call(
-        "component_forensics",
-        scoped(
-            &instance,
-            &experiment,
-            "read-private-invoice",
-            json!({
-                "component": "recipient-wallet", "script": read_script, "timeout_seconds": 30}),
-        ),
+    native.nutshell_claim(
+        "recipient-wallet",
+        "mint",
+        "compose-claim",
+        &composed_quote,
+        100,
     )?;
-    let private_read = cell::wait_operation(&mut client, "read-private-invoice", 90)?;
-    if expect::integer(cell::artifact_content(&private_read)?, "/exit_code")? != 0 {
-        bail!("native private invoice lookup failed: {private_read}");
-    }
-    let external_invoice = invoice_from(native_output(&private_read)?)?;
-    let pay_invoice_script = format!(
-        "set -eu; attempt=0; until lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=payer-lnd:10009 getinfo >/dev/null 2>&1; do attempt=$((attempt+1)); test \"$attempt\" -lt 30; sleep 1; done; lncli --lnddir=/home/lnd/.lnd --network=regtest --rpcserver=payer-lnd:10009 payinvoice --force '{external_invoice}'"
+    anyhow::ensure!(
+        native.nutshell_balance("recipient-wallet", "mint", "compose-received")? == 100,
+        "recipient did not receive 100 sat"
     );
-    client.call(
-        "component_forensics",
-        scoped(
-            &instance,
-            &experiment,
-            "external-lightning-pay",
-            json!({
-                "component": "payer-lnd", "script": pay_invoice_script, "timeout_seconds": 60}),
-        ),
-    )?;
-    let external_payment = cell::wait_operation(&mut client, "external-lightning-pay", 120)?;
-    if expect::integer(cell::artifact_content(&external_payment)?, "/exit_code")? != 0 {
-        bail!("external Lightning payment failed: {external_payment}");
-    }
 
-    let accepted_claim = crate::driver::wallet_quote_claim(
-        context,
-        &mut client,
-        scoped(
-            &instance,
-            &experiment,
-            "external-claim",
-            json!({
-                "wallet": "recipient-wallet", "mint": "mint", "mint_quote_id": external_quote,
-                "timeout_seconds": 30}),
+    let external_quote =
+        native.nutshell_invoice("recipient-wallet", "mint", "external-invoice", 200)?;
+    let external_invoice = native.nutshell_invoice_projection(
+        "recipient-wallet",
+        "mint",
+        "external-invoice-read",
+        &external_quote,
+        200,
+    )?;
+    let external_payment = native.projected(
+        "payer-lnd",
+        "external-lightning-pay",
+        &format!(
+            "{} payinvoice --force --json {}",
+            crate::native::LND,
+            crate::native::quote(expect::string(&external_invoice, "/payment_request")?)
         ),
+        &json!({"mode":"json_fields","fields":["status","value_sat"]}),
     )?;
-    let claimed = cell::wait_operation(&mut client, "external-claim", 120)?;
-    let claim_content = cell::artifact_content(&claimed)?;
-    if expect::string(claim_content, "/quote_observations/0/state")? != "ISSUED" {
-        bail!("externally paid quote was not issued by explicit claim: {claimed}");
-    }
+    anyhow::ensure!(
+        external_payment == json!({"status":"SUCCEEDED","value_sat":"200"}),
+        "external payment did not settle"
+    );
 
-    let quote_status = crate::driver::quote_status(
-        context,
-        &mut client,
-        json!({"name": instance, "wallet": "recipient-wallet", "mint": "mint", "direction": "receive", "quote_id": external_quote}),
+    let claim_content = native.nutshell_claim(
+        "recipient-wallet",
+        "mint",
+        "external-claim",
+        &external_quote,
+        200,
     )?;
-    let quote_list = crate::driver::quote_observations(
-        context,
-        &mut client,
-        json!({"run_id": experiment, "limit": 20}),
-    )?;
-    let journal = Ok::<_, anyhow::Error>(
-        json!({"actions":crate::cell::journal(&mut client, &(experiment))?}),
-    )?;
+    anyhow::ensure!(
+        native.nutshell_balance("recipient-wallet", "mint", "external-claim-balance")? == 300,
+        "native claim did not preserve the recipient's earlier payment"
+    );
+    assert_no_invoice(&claim_content, "passive claim observation")?;
+    let claimed = cell::wait_succeeded(&mut client, "external-claim-observe")?;
+    expect::equals(&claimed, "/kind", &json!("component_exec_live"))?;
+
+    let mut journal = crate::cell::journal(&mut client, &experiment)?;
+    omit_native_request_source(&mut journal);
+    let journal = json!({"actions": journal});
     for (value, label) in [
-        (&paid, "typed pay operation"),
-        (&invoice_operation, "typed invoice operation"),
-        (&claimed, "typed claim operation"),
-        (&quote_status, "typed quote status"),
-        (&quote_list, "typed quote list"),
-        (&journal, "action journal"),
+        (&paid_content, "native melt observation"),
+        (&claimed, "native claim observation"),
+        (&journal, "journal outside caller-supplied requests"),
     ] {
         assert_no_invoice(value, label)?;
-    }
-
-    for resource in [
-        pay_resource,
-        expect::string(&accepted_invoice, "/resource_name")?,
-        expect::string(&accepted_claim, "/resource_name")?,
-    ] {
-        let action = context.kubectl.get_json(&[
-            "get",
-            "proofstormcellaction",
-            resource,
-            "-n",
-            "proofstorm-system",
-        ])?;
-        assert_no_invoice(&action, "typed action CR")?;
-        let (_, logs, stderr) = context.kubectl.try_run(&[
-            "logs",
-            "-n",
-            &namespace,
-            &format!("job/{resource}"),
-            "--all-containers=true",
-        ])?;
-        let combined = format!("{logs}\n{stderr}").to_ascii_lowercase();
-        if combined.contains("lnbcrt") || combined.contains("payment_request") {
-            bail!("typed action pod logs disclosed a Lightning invoice");
-        }
     }
 
     client.call(
@@ -343,24 +179,18 @@ pub fn run(context: &GateContext) -> Result<()> {
         &mut client,
         json!({
             "run_id": experiment, "include_oracle_artifacts": false,
-            "artifact_operation_ids": ["compose-pay", "external-invoice", "external-claim"]
+            "artifact_operation_ids": ["compose-pay", "compose-pay-observe", "compose-claim-observe", "external-invoice", "external-claim", "external-claim-observe"]
         }),
     )?;
-    let mut typed_evidence = evidence.clone();
-    for action in typed_evidence
+    let mut generated_evidence = evidence.clone();
+    let journal = generated_evidence
         .pointer_mut("/content/journal")
         .and_then(Value::as_array_mut)
-        .into_iter()
-        .flatten()
-    {
-        if action.get("kind").and_then(Value::as_str) == Some("component_forensics") {
-            action["request"] =
-                Value::String("component_forensics intentionally secret-bearing".into());
-        }
-    }
+        .ok_or_else(|| anyhow!("exported evidence has no journal"))?;
+    omit_native_request_source(journal);
     assert_no_invoice(
-        &typed_evidence,
-        "typed evidence outside component_forensics requests",
+        &generated_evidence,
+        "evidence outside caller-supplied native requests",
     )?;
 
     client.call("cell_remove", json!({"name": instance}))?;
@@ -375,7 +205,28 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("quote composition cell teardown was not verified: {closed}");
     }
     println!(
-        "Quote composition acceptance passed: CLI-created typed pay, single-flight job admission, external payment claim, and typed non-disclosure are verified"
+        "Quote composition acceptance passed: native invoices, wallet and external payments, claims, retries, balances and receipt non-disclosure are verified"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_native_input_does_not_exempt_receipts_or_typed_requests() {
+        let mut journal = vec![json!({"kind":"component_exec_live",
+            "request":{"script":"lncli payinvoice lnbcrt-caller-supplied"},
+            "artifact":{"stdout":"claim complete"}})];
+        omit_native_request_source(&mut journal);
+        assert!(assert_no_invoice(&json!(journal), "native input").is_ok());
+        journal[0]["artifact"]["stdout"] = json!("lnbcrt-generated");
+        assert!(assert_no_invoice(&json!(journal), "generated receipt").is_err());
+
+        let mut typed = vec![json!({"kind":"wallet_invoice",
+            "request":{"payment_request":"lnbcrt-generated"}})];
+        omit_native_request_source(&mut typed);
+        assert!(assert_no_invoice(&json!(typed), "typed request").is_err());
+    }
 }

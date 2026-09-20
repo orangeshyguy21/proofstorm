@@ -1,5 +1,5 @@
 //! Selected recorded receipt data, without polling the runtime or changing history.
-use crate::activity_search::{validate_pointer, wire};
+use crate::read_query::{validate_pointer, wire};
 use crate::{
     CallToolResult, ErrorData, MAX_AGENT_RESPONSE_BYTES, coded_invalid_request, serialized_size,
     store_error,

@@ -172,25 +172,8 @@ pub enum CellAction {
     ComponentStart(ComponentControlAction),
     ComponentStop(ComponentControlAction),
     ComponentRestart(ComponentControlAction),
-    BootstrapLiquidity(BootstrapLiquidityAction),
-    PeerConnect(PeerConnectAction),
-    PeerDisconnect(PeerDisconnectAction),
-    ChannelOpen(ChannelOpenAction),
-    ChannelPolicySet(ChannelPolicySetAction),
-    ChannelClose(ChannelCloseAction),
-    ChannelForceClose(ChannelCloseAction),
-    ChannelRebalance(ChannelRebalanceAction),
     NetworkPartition(NetworkPartitionAction),
     NetworkHeal(NetworkHealAction),
-    WalletInitialize(WalletInitializeAction),
-    WalletBalance(WalletBalanceAction),
-    WalletFund(WalletFundAction),
-    WalletInvoice(WalletInvoiceAction),
-    WalletPay(WalletPayAction),
-    WalletQuoteClaim(WalletQuoteClaimAction),
-    WalletMeltQuoteRefresh(WalletMeltQuoteRefreshAction),
-    WalletRoundTrip(WalletRoundTripAction),
-    ConservationOracle(ConservationOracleAction),
     ReachabilityOracle(ReachabilityOracleAction),
     ComponentForensics(ComponentForensicsAction),
     ComponentExecLive(ComponentExecLiveAction),
@@ -223,25 +206,8 @@ enum CellActionKindSchema {
     ComponentStart,
     ComponentStop,
     ComponentRestart,
-    BootstrapLiquidity,
-    PeerConnect,
-    PeerDisconnect,
-    ChannelOpen,
-    ChannelPolicySet,
-    ChannelClose,
-    ChannelForceClose,
-    ChannelRebalance,
     NetworkPartition,
     NetworkHeal,
-    WalletInitialize,
-    WalletBalance,
-    WalletFund,
-    WalletInvoice,
-    WalletPay,
-    WalletQuoteClaim,
-    WalletMeltQuoteRefresh,
-    WalletRoundTrip,
-    ConservationOracle,
     ReachabilityOracle,
     ComponentForensics,
     ComponentExecLive,
@@ -264,40 +230,14 @@ struct CellActionParametersSchema {
     private_payload: Option<PayloadBindingSchema>,
     component: Option<String>,
     target_component: Option<String>,
-    chain: Option<String>,
-    mint_lightning: Option<String>,
-    payer_lightning: Option<String>,
-    funding_sat: Option<u64>,
-    channel_sat: Option<u64>,
-    push_sat: Option<u64>,
-    from_lightning: Option<String>,
-    to_lightning: Option<String>,
-    lightning: Option<String>,
-    channel_id: Option<String>,
-    base_fee_msat: Option<u64>,
-    fee_rate_ppm: Option<u32>,
-    outgoing_channel_id: Option<String>,
-    incoming_channel_id: Option<String>,
-    max_fee_sat: Option<u64>,
     from_component: Option<String>,
     to_component: Option<String>,
     partition_operation_id: Option<String>,
-    wallet: Option<String>,
-    recipient_wallet: Option<String>,
-    recipient_mint: Option<String>,
     mint: Option<String>,
     identity_provider: Option<String>,
     session_secret: Option<String>,
     source_operation_id: Option<String>,
-    quote_id: Option<String>,
-    mint_quote_id: Option<String>,
-    melt_quote_id: Option<String>,
-    amount_sat: Option<u64>,
     timeout_seconds: Option<u32>,
-    expected_sat: Option<u64>,
-    baseline_operation_id: Option<String>,
-    treatment_operation_id: Option<String>,
-    tolerance_sat: Option<u64>,
     service: Option<String>,
     attempts: Option<u32>,
     script: Option<String>,
@@ -496,72 +436,6 @@ pub struct NativeExecutionRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BootstrapLiquidityAction {
-    pub chain: String,
-    pub mint_lightning: String,
-    pub payer_lightning: String,
-    pub funding_sat: u64,
-    pub channel_sat: u64,
-    pub push_sat: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PeerConnectAction {
-    pub from_lightning: String,
-    pub to_lightning: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PeerDisconnectAction {
-    pub from_lightning: String,
-    pub to_lightning: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChannelOpenAction {
-    pub chain: String,
-    pub from_lightning: String,
-    pub to_lightning: String,
-    pub channel_sat: u64,
-    pub push_sat: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChannelPolicySetAction {
-    pub from_lightning: String,
-    pub to_lightning: String,
-    pub base_fee_msat: u64,
-    pub fee_rate_ppm: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChannelCloseAction {
-    pub chain: String,
-    pub from_lightning: String,
-    pub to_lightning: String,
-    /// Opaque Proofstorm handle returned by channel creation.
-    pub channel_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChannelRebalanceAction {
-    pub lightning: String,
-    /// Opaque Proofstorm handle for the channel that sends the circular payment.
-    pub outgoing_channel_id: String,
-    /// Opaque Proofstorm handle for the channel that receives the circular payment.
-    pub incoming_channel_id: String,
-    pub amount_sat: u64,
-    pub max_fee_sat: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkPartitionAction {
     pub from_component: String,
     pub to_component: String,
@@ -572,88 +446,6 @@ pub struct NetworkPartitionAction {
 pub struct NetworkHealAction {
     /// Durable operation ID of the partition being healed.
     pub partition_operation_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletInitializeAction {
-    pub wallet: String,
-    pub mint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletBalanceAction {
-    pub wallet: String,
-    pub mint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletFundAction {
-    pub wallet: String,
-    pub mint: String,
-    pub payer_lightning: String,
-    pub amount_sat: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletInvoiceAction {
-    pub wallet: String,
-    pub mint: String,
-    pub amount_sat: u64,
-    pub timeout_seconds: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletPayAction {
-    pub wallet: String,
-    pub mint: String,
-    pub recipient_wallet: String,
-    pub recipient_mint: String,
-    pub mint_quote_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletQuoteClaimAction {
-    pub wallet: String,
-    pub mint: String,
-    pub mint_quote_id: String,
-    pub timeout_seconds: u32,
-}
-
-/// Refresh an exact payer-side melt quote through the wallet adapter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletMeltQuoteRefreshAction {
-    pub wallet: String,
-    pub mint: String,
-    pub melt_quote_id: String,
-    pub timeout_seconds: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WalletRoundTripAction {
-    pub wallet: String,
-    pub mint: String,
-    pub payer_lightning: String,
-    pub amount_sat: u64,
-    pub tolerance_sat: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConservationOracleAction {
-    pub wallet: String,
-    pub mint: String,
-    pub baseline_operation_id: String,
-    pub treatment_operation_id: String,
-    pub expected_sat: u64,
-    pub tolerance_sat: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

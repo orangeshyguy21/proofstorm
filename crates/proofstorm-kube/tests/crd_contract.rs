@@ -4,6 +4,77 @@ use kube::CustomResourceExt;
 use proofstorm_kube::{ProofstormCandidateBuild, ProofstormCell, ProofstormCellAction};
 
 #[test]
+fn retired_workflows_are_not_executable_but_history_is_readable() {
+    let crd = serde_json::to_value(ProofstormCellAction::crd()).unwrap();
+    let action = crd
+        .pointer(
+            "/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/action/properties",
+        )
+        .unwrap();
+    let kinds = action["kind"]["enum"].as_array().unwrap();
+    for kind in [
+        "wallet_balance",
+        "wallet_initialize",
+        "wallet_fund",
+        "wallet_round_trip",
+        "wallet_quote_claim",
+        "wallet_melt_quote_refresh",
+        "wallet_invoice",
+        "wallet_pay",
+        "conservation_oracle",
+        "bootstrap_liquidity",
+        "peer_connect",
+        "peer_disconnect",
+        "channel_open",
+        "channel_policy_set",
+        "channel_close",
+        "channel_force_close",
+        "channel_rebalance",
+    ] {
+        assert!(
+            !kinds.contains(&serde_json::json!(kind)),
+            "CRD admits {kind}"
+        );
+        let error = serde_json::from_value::<proofstorm_kube::CellAction>(
+            serde_json::json!({"kind": kind, "parameters": {}}),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown variant"), "{error}");
+        let historic: proofstorm_core::OperationKind =
+            serde_json::from_value(serde_json::json!(kind)).unwrap();
+        assert_eq!(serde_json::to_value(historic).unwrap(), kind);
+    }
+    for field in [
+        "payerLightning",
+        "meltQuoteId",
+        "wallet",
+        "recipientWallet",
+        "recipientMint",
+        "mintQuoteId",
+        "amountSat",
+        "expectedSat",
+        "toleranceSat",
+        "baselineOperationId",
+        "treatmentOperationId",
+        "channelId",
+        "fromLightning",
+        "toLightning",
+        "channelSat",
+        "pushSat",
+        "outgoingChannelId",
+        "incomingChannelId",
+        "baseFeeMsat",
+        "feeRatePpm",
+    ] {
+        assert!(
+            action["parameters"]["properties"].get(field).is_none(),
+            "CRD retains {field}"
+        );
+    }
+    assert!(kinds.contains(&serde_json::json!("component_exec_live")));
+}
+
+#[test]
 fn native_action_fields_survive_the_structural_schema() {
     // CRD regeneration alone cannot catch a field omitted from the hand-written
     // structural union. Check the actual serialized request against that union.

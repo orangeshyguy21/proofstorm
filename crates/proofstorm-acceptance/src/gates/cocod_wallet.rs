@@ -153,13 +153,13 @@ pub(super) fn balance(
     wallet: &str,
     expected: u64,
 ) -> Result<()> {
-    let receipt = operation(
+    let receipt = crate::native::json_content(&operation(
         client,
         directory,
-        "wallet_balance",
+        "cell_exec",
         id,
-        json!({"wallet":wallet,"mint":"mint"}),
-    )?;
+        crate::native::wallet_request("cocod-wallet", wallet, "mint")?,
+    )?)?;
     if receipt["balance_sat"] != expected
         || receipt["reserved_sat"] != 0
         || receipt["inflight_sat"] != 0
@@ -555,7 +555,16 @@ fn run_scoped(
     let directory = context
         .root
         .join("dev/wallet-integration-runs")
-        .join(&context.run_id);
+        .join(&context.run_id)
+        .join(if handoff {
+            "private-handoff"
+        } else if transfer {
+            "private-transfer"
+        } else if projection_only {
+            "cocod-projection"
+        } else {
+            "cocod-wallet"
+        });
     fs::create_dir_all(&directory)?;
     let mut client = context.default_session(
         &format!("cocod-wallet-{}", context.run_id),

@@ -240,9 +240,21 @@ impl Store {
         )?;
         tx.execute("DELETE FROM private_access_grants WHERE workspace_id=?1 AND json_extract(grant_json,'$.instance_id')=?2",params![ws,id])?;
         tx.execute("DELETE FROM operation_revisions WHERE workspace_id=?1 AND operation_id IN (SELECT id FROM actions WHERE workspace_id=?1 AND instance_id=?2)",params![ws,id])?;
+        // Retired wallet indexes can exist in older installations. Preserve them
+        // on open; remove only this cell's rows during its explicit teardown.
+        for table in ["wallet_payment_claims", "wallet_quote_observations"] {
+            if tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |row| row.get::<_, bool>(0),
+            )? {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE workspace_id=?1 AND instance_id=?2"),
+                    params![ws, id],
+                )?;
+            }
+        }
         for table in [
-            "wallet_payment_claims",
-            "wallet_quote_observations",
             "actions",
             "sessions",
             "experiments",

@@ -1,5 +1,6 @@
 //! The single public workflow, including guarantees previously split across profiles.
 use super::*;
+use proofstorm_core::{BitcoinNetwork, DependencyBinding};
 use serde_json::{Value, json};
 
 fn service() -> ProofstormMcp {
@@ -24,6 +25,53 @@ fn value(result: CallToolResult) -> Value {
         structured
     );
     structured
+}
+
+#[test]
+fn offline_preview_preparation_resumes_existing_publication_receipts() {
+    let store = tests::seeded_store();
+    proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+    let mcp = ProofstormMcp::new(store.clone(), "alpha", "designer").unwrap();
+    let input = request(json!({"name":"offline-preview", "request_id":"prepare", "cell":spec()}));
+    let id = format!(
+        "preview-{}",
+        &digest_json(&("alpha", "designer", "prepare"))[7..39]
+    );
+    let mut desired = CellSpec::try_from(input.cell.clone().unwrap()).unwrap();
+    desired.name = "offline-preview".into();
+    store
+        .create_draft("alpha", "designer", &id, &desired, &format!("{id}:draft"))
+        .unwrap();
+    let published = store
+        .publish("alpha", "designer", &id, 1, &format!("{id}:publish"))
+        .unwrap();
+    let mut later = desired;
+    later.components[0]
+        .config
+        .insert("txindex".into(), json!(false));
+    store
+        .edit_draft("alpha", "designer", &id, 1, &later, "later-draft-edit")
+        .unwrap();
+
+    let preview = mcp.prepare_submission(input.clone(), false).unwrap();
+    assert_eq!(preview.id, id);
+    assert_eq!(preview.cell, published.cell);
+    assert_eq!(preview.revision_digest, published.digest);
+    assert_eq!(preview.lock_digest, published.lock.digest);
+    assert!(preview.update.is_none());
+    assert_eq!(mcp.prepare_submission(input, false).unwrap(), preview);
+    assert_eq!(
+        store.cell_preview("alpha", "designer", &id).unwrap(),
+        Some(preview)
+    );
+    assert_eq!(
+        store.read_draft("alpha", "designer", &id).unwrap().version,
+        2
+    );
+    assert!(matches!(
+        store.resolve_cell("alpha", "designer", "offline-preview"),
+        Err(StoreError::NotFound { .. })
+    ));
 }
 
 #[tokio::test]
@@ -161,6 +209,109 @@ async fn preview_patch_exact_retry_and_replacement_are_fenced() {
         mcp.proofstorm_cell_up(Parameters(create)).await.is_err(),
         "a removed creation cannot resurrect its name"
     );
+}
+
+#[tokio::test]
+async fn ordered_patch_keeps_flat_request_identity_and_immutable_preview() {
+    let mcp = service();
+    let created = value(
+        mcp.proofstorm_cell_up(Parameters(request(json!({
+            "name":"patch-cell", "request_id":"create", "cell":spec()
+        }))))
+        .await
+        .unwrap(),
+    );
+    let mut chain = spec()["components"][0].clone();
+    chain["config"]["txindex"] = json!(false);
+    let patch = json!([
+        {"op":"remove_component", "id":"chain"},
+        {"op":"remove_link", "id":"mint-chain"},
+        {"op":"add_link", "link":{"id":"mint-chain", "kind":"chain_backend", "from":"mint", "to":"chain", "network":"regtest"}},
+        {"op":"add_component", "component":spec()["components"][0]},
+        {"op":"update_component", "component":chain},
+        {"op":"set_policy", "policy":{"allow":[], "limits":{"max_components":2}}}
+    ]);
+    let input = request(
+        json!({"name":"patch-cell", "request_id":"patch", "patch":patch,
+        "expected_generation":1, "expected_instance_key":created["instance_key"]}),
+    );
+    let preview = mcp.prepare_submission(input.clone(), false).unwrap();
+    // Independent fingerprint of the existing flat, ordered wire representation.
+    assert_eq!(
+        digest_json(&input.patch),
+        "sha256:65054f2227357690934e35096bdeae421ffdbacdcefdea92c676a5c9ac56fe39"
+    );
+    assert_eq!(
+        preview.request_digest,
+        digest_json(&(
+            "patch-cell",
+            Option::<CellSpec>::None,
+            &input.patch,
+            1,
+            &created["instance_key"],
+            false,
+            Vec::<String>::new()
+        )),
+        "saved identity uses the original flat link input"
+    );
+    assert_eq!(preview.cell.components[0].config["txindex"], false);
+    assert_eq!(preview.cell.policy.limits.max_components, Some(2));
+    assert_eq!(
+        preview.cell.links[0].binding,
+        Some(DependencyBinding::Chain {
+            network: BitcoinNetwork::Regtest
+        })
+    );
+    let updated = value(
+        mcp.proofstorm_cell_up(Parameters(input.clone()))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(updated["accepted_generation"], 2);
+    let replay = mcp.prepare_submission(input, false).unwrap();
+    assert_eq!(digest_json(&preview), digest_json(&replay));
+}
+
+#[tokio::test]
+async fn failed_patch_batches_leave_no_draft_or_preview_and_preserve_the_desired_revision() {
+    let mcp = service();
+    let created = value(
+        mcp.proofstorm_cell_up(Parameters(request(json!({
+            "name":"patch-cell", "request_id":"create", "cell":spec()
+        }))))
+        .await
+        .unwrap(),
+    );
+    let instance_id = created["cell"]["instance_id"].as_str().unwrap();
+    let before = mcp
+        .store
+        .instance("alpha", "designer", instance_id)
+        .unwrap();
+    let mut unknown_implementation = spec()["components"][0].clone();
+    unknown_implementation["implementation"] = json!("missing");
+    for (index, (patch, code)) in [
+        (json!([]), "invalid_cell_input"),
+        (json!(vec![json!({"op":"remove_link", "id":"mint-chain"}); 101]), "invalid_cell_input"),
+        (json!([{"op":"add_component", "component":spec()["components"][0]}]), "invalid_cell_input"),
+        (json!([{"op":"remove_component", "id":"chain"}, {"op":"remove_link", "id":"missing"}]), "invalid_cell_input"),
+        (json!([{"op":"remove_component", "id":"chain"}]), "cell_plan_invalid"),
+        (json!([{"op":"update_component", "component":unknown_implementation}]), "cell_plan_invalid"),
+        (json!([{"op":"set_policy", "policy":{"limits":{"max_components":1}}}]), "cell_plan_invalid"),
+        (json!([{"op":"remove_link", "id":"mint-chain"}, {"op":"add_link", "link":{"id":"mint-chain", "kind":"bitcoin_peer", "from":"mint", "to":"chain"}}]), "cell_plan_invalid"),
+    ].into_iter().enumerate() {
+        let request_id = format!("invalid-{index}");
+        let error = mcp.prepare_submission(request(json!({
+            "name":"patch-cell", "request_id":request_id, "patch":patch,
+            "expected_generation":1, "expected_instance_key":created["instance_key"]
+        })), false).unwrap_err();
+        assert_eq!(error.data.unwrap()["code"], code);
+        let id = format!("preview-{}", &digest_json(&json!(["alpha", "designer", request_id]))[7..39]);
+        assert!(mcp.store.cell_preview("alpha", "designer", &id).unwrap().is_none());
+        assert!(matches!(mcp.store.read_draft("alpha", "designer", &id), Err(StoreError::NotFound { .. })));
+        let current = mcp.store.instance("alpha", "designer", instance_id).unwrap();
+        assert_eq!(current.generation, before.generation);
+        assert_eq!(current.revision_digest, before.revision_digest);
+    }
 }
 
 #[test]

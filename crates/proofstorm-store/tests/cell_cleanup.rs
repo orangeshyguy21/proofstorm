@@ -1,44 +1,11 @@
-use proofstorm_core::{Capability, CellSpec, OperationKind, PublishedRevision};
-use proofstorm_store::{Store, Workspace};
+mod support;
+
+use proofstorm_core::{Capability, OperationKind};
+use proofstorm_store::Store;
 use serde_json::json;
 
-fn seed(store: &Store) {
-    store
-        .put_workspace(&Workspace {
-            id: "w".into(),
-            name: "w".into(),
-        })
-        .unwrap();
-    store.put_principal("agent").unwrap();
-    for cap in [
-        Capability::CellCreate,
-        Capability::CellRead,
-        Capability::CellEdit,
-        Capability::CellPublish,
-        Capability::CellMaterialize,
-        Capability::CellStatus,
-        Capability::CellClose,
-        Capability::CatalogRead,
-        Capability::ExperimentCreate,
-        Capability::ExperimentRead,
-        Capability::CellOperate,
-        Capability::ComponentExecLive,
-        Capability::ArtifactRead,
-    ] {
-        store.grant("w", "agent", cap).unwrap();
-    }
-}
-fn cell(ids: &[&str]) -> CellSpec {
-    serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"edit-test","components":ids.iter().map(|id|json!({"id":id,"kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}})).collect::<Vec<_>>(),"links":[]})).unwrap()
-}
-fn publish(store: &Store, id: &str, spec: &CellSpec) -> PublishedRevision {
-    store
-        .create_draft("w", "agent", id, spec, &format!("{id}-draft"))
-        .unwrap();
-    store
-        .publish("w", "agent", id, 1, &format!("{id}-publish"))
-        .unwrap()
-}
+use support::{cell, publish, seed};
+
 #[test]
 fn purge_releases_name_history_and_retries_but_preserves_shared_data() {
     let dir = tempfile::tempdir().unwrap();
@@ -71,6 +38,12 @@ fn purge_releases_name_history_and_retries_but_preserves_shared_data() {
         )
         .unwrap();
     publish(&store, "template", &cell(&["independent"]));
+    // Emulate indexes left by an older version, including a foreign cell's rows.
+    let legacy = rusqlite::Connection::open(&path).unwrap();
+    for table in ["wallet_payment_claims", "wallet_quote_observations"] {
+        legacy.execute_batch(&format!("CREATE TABLE {table}(workspace_id TEXT, instance_id TEXT, FOREIGN KEY (workspace_id,instance_id) REFERENCES instances(workspace_id,id)); INSERT INTO {table} VALUES ('w','demo'),('w','other');")).unwrap();
+    }
+    drop(legacy);
     let guard = store.try_lifecycle_guard().unwrap().unwrap();
     store.purge_cell(&old).unwrap();
     assert!(store.instance("w", "agent", "demo").is_err());
@@ -97,6 +70,20 @@ fn purge_releases_name_history_and_retries_but_preserves_shared_data() {
     assert_eq!(store.instance("w", "agent", "demo").unwrap(), fresh);
     drop(guard);
     let db = rusqlite::Connection::open(path).unwrap();
+    for table in ["wallet_payment_claims", "wallet_quote_observations"] {
+        let remaining: String = db
+            .query_row(&format!("SELECT instance_id FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, "other");
+        assert_eq!(
+            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
     assert!(
         db.prepare("PRAGMA foreign_key_check")
             .unwrap()
