@@ -43,6 +43,7 @@ pub mod surface;
 
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
+    "qualification",
     "smoke",
     "runtime-lifecycle",
     "mcp-surface",
@@ -98,6 +99,7 @@ pub const NAMES: &[&str] = &[
 /// Dispatch a gate by the name passed to `just e2e`.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
+        "qualification" => crate::qualification::run(context),
         "smoke" => smoke::run(context),
         "runtime-lifecycle" => runtime_lifecycle::run(context),
         "mcp-surface" => surface::run(context),

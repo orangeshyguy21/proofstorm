@@ -2841,6 +2841,7 @@ dependencies = [
  "proofstorm-app",
  "proofstorm-core",
  "proofstorm-kube",
+ "proofstorm-qualification",
  "proofstorm-store",
  "rusqlite",
  "serde",
@@ -2991,6 +2992,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "proofstorm-qualification"
+version = "0.1.0-alpha.6"
+dependencies = [
+ "anyhow",
+ "proofstorm-core",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

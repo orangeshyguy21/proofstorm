@@ -4,6 +4,11 @@
 lints and all workspace tests. It never starts Docker, opens an app, changes agent
 configuration, or publishes anything.
 
+The separate [merge qualification lane](../docs/merge-qualification.md) exercises
+the supported catalog on native AMD64 and ARM64. It runs within `Checks`, reports
+through `Merge qualification`, and includes exact-image receipts, payment and
+persistence scenarios, cleanup verification and documented upstream exclusions.
+
 ## Prerequisites
 
 Rust/rustup (pinned by `rust-toolchain.toml`), a native C toolchain, Git, Bash,

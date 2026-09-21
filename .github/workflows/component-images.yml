@@ -1,27 +1,18 @@
-name: Component image qualification
+name: Candidate component packaging
 
 on:
   workflow_dispatch:
   pull_request:
     branches: [main]
+    # Candidate packaging evidence is separate from shipped-image qualification.
     paths:
       - '.github/workflows/component-images.yml'
-      - 'Dockerfile.proofstormd'
-      - 'Cargo.lock'
-      - 'crates/proofstorm-driver/**'
+      - 'docker/**'
       - 'crates/proofstorm-core/src/release_policy.rs'
       - 'crates/proofstorm-xtask/src/release/catalog_images/**'
       - 'crates/proofstorm-xtask/src/release/catalog_images.rs'
-      - 'docker/**'
       - 'scripts/catalog-image.sh'
-      - 'scripts/test-component-driver.sh'
-      - 'tests/component-driver/**'
-      - 'tests/component-compat/**'
-      - 'crates/proofstorm-kube/tests/golden/**'
-      - 'crates/proofstorm-kube/src/adapter.rs'
-      - 'crates/proofstorm-kube/src/processor_adapter.rs'
-      - 'crates/proofstorm-core/src/backend.rs'
-      - 'crates/proofstorm-core/src/processor_*.rs'
+      - 'scripts/test-catalog-image.sh'
 
 permissions:
   contents: read
@@ -87,7 +78,7 @@ jobs:
           retention-days: 14
 
   native-components:
-    name: Native components (${{ matrix.arch }})
+    name: Candidate builds and compatibility (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:

@@ -58,12 +58,12 @@ and the CDK support floor applied:
 | Nutshell mint and wallet | 0.21.0, 0.20.3 |
 | CDK mint presets and CLI wallet | 0.18.1; add a second family when 0.19 qualifies |
 
-The existing CLN 26.06.7 catalog pin also needs requalification: upstream
+The catalog now selects the corrected CLN 26.06.7 artifact. Upstream
 [corrected its published images](https://github.com/ElementsProject/lightning/releases/tag/v26.06.7),
 and the corrected multi-platform digest is
 `sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4`.
-It differs from the installed catalog pin. The qualification workflow probes the
-corrected image; it does not replace the existing pin or rewrite historical locks.
+Installed-component qualification and candidate compatibility use that same pin.
+Historical release receipts and saved locks remain records of their original artifacts.
 
 ## Qualification and promotion
 

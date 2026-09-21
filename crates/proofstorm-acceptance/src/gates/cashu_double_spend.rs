@@ -234,7 +234,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?;
         let preview = client.call(
             "cell_plan",
-            json!({"name":INSTANCE,"cell":document(implementation),"request_id":"create"}),
+            json!({"name":INSTANCE,"cell":context.document(document(implementation))?,"request_id":"create"}),
         )?;
         crate::cell::review(&mut client, &preview)?;
         println!("{implementation}: preparing images and materializing...");

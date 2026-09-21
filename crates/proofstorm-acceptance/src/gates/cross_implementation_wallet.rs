@@ -92,7 +92,7 @@ fn exercise(context: &GateContext) -> Result<()> {
 
     let preview = client.call(
         "cell_plan",
-        json!({"name":INSTANCE,"cell":cell_document(),"request_id":"create-cross-mint-wallet"}),
+        json!({"name":INSTANCE,"cell":context.document(cell_document())?,"request_id":"create-cross-mint-wallet"}),
     )?;
     let published = crate::cell::review(&mut client, &preview)?;
 
@@ -111,7 +111,7 @@ fn exercise(context: &GateContext) -> Result<()> {
             .find(|entry| entry.get("component_id").and_then(Value::as_str) == Some(component))
             .ok_or_else(|| anyhow::anyhow!("no lock entry for {component}"))?;
         if expect::string(entry, "/catalog_id")? != catalog_id
-            || expect::string(entry, "/version")? != version
+            || expect::string(entry, "/version")? != context.selected_version(catalog_id, version)
             || expect::string(entry, "/config_version")? != config_version
             || !expect::string(entry, "/image")?.contains("@sha256:")
         {

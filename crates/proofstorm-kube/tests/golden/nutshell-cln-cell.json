@@ -599,7 +599,7 @@
         "environment": {
           "HOME": "/home/cln"
         },
-        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
         "mounts": [
           {
             "mount_path": "/home/cln/.lightning",
@@ -691,7 +691,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:143da94f0d5001b71d55c6f5c9f21e6f0f991fcd9a0f021e2c639c6ad124187e",
+      "rollout_digest": "sha256:5ae6f05d0bf5c065411ab4ec848354bcfa8eb1013b43d2bfed0460cee5db1d69",
       "storage": [
         {
           "claim_name": "data-mint-cln-0"
@@ -1650,7 +1650,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:143da94f0d5001b71d55c6f5c9f21e6f0f991fcd9a0f021e2c639c6ad124187e"
+                "proofstorm.dev/rollout-digest": "sha256:5ae6f05d0bf5c065411ab4ec848354bcfa8eb1013b43d2bfed0460cee5db1d69"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1699,7 +1699,7 @@
                   "command": [
                     "lightningd"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

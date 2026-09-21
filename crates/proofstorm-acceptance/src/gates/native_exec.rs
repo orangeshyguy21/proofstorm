@@ -81,8 +81,8 @@ fn cell_document() -> Value {
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Native Exec Mint"}}
         ],
         "links": [
-            {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "network": "regtest"},
-            {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "lightning", "method": "bolt11", "unit": "sat"}
+            {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding":{"type":"chain","network": "regtest"}},
+            {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "lightning", "binding":{"type":"payment","method": "bolt11", "unit": "sat"}}
         ],
         "policy": {
             "allow": ["component.exec_live"],
@@ -110,7 +110,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let preview = client.call(
         "cell_plan",
-        json!({"name":instance,"request_id":format!("preview-{run_id}"),"cell":cell_document()}),
+        json!({"name":instance,"request_id":format!("preview-{run_id}"),"cell":context.document(cell_document())?}),
     )?;
     let published = crate::cell::review(&mut client, &preview)?;
 

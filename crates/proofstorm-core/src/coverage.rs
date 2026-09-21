@@ -213,7 +213,7 @@ mod tests {
             [
                 AuthenticationMode::Unauthenticated,
                 AuthenticationMode::Nut21Clear,
-                AuthenticationMode::Nut22Blind,
+                AuthenticationMode::Nut22Blind
             ]
             .into()
         );

@@ -14,6 +14,7 @@ use std::{
 };
 
 pub struct Selection {
+    pub qualification: Option<(PathBuf, String)>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
     pub allow_development: bool,
@@ -31,6 +32,13 @@ impl Selection {
     }
 
     fn arguments(&self, command: &mut Command) {
+        if let Some((plan, case)) = &self.qualification {
+            command
+                .arg("--qualification-plan")
+                .arg(plan)
+                .arg("--qualification-case")
+                .arg(case);
+        }
         if let Some(home) = &self.checkout_home {
             command.arg("--checkout-home").arg(home);
         }
@@ -170,8 +178,24 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
         installation.home == home.canonicalize()?,
         "worker home mismatch"
     );
-    let context = GateContext::new(root, installation, selection.artifacts()?)?;
-    gates::run(name, &context)
+    let mut context = GateContext::new(root, installation, selection.artifacts()?)?;
+    if let Some((path, id)) = &selection.qualification {
+        let plan: proofstorm_qualification::Plan = serde_json::from_slice(&fs::read(path)?)?;
+        plan.validate()?;
+        let case = plan.case(id)?.clone();
+        ensure!(
+            case.required && name == "qualification",
+            "qualification worker gate mismatch"
+        );
+        crate::qualification::require_native(&case.platform)?;
+        context.qualification_observer = Some(crate::qualification::Observer::new(case.clone()));
+        context.qualification = Some(case);
+    }
+    gates::run(name, &context)?;
+    if let Some(observer) = &context.qualification_observer {
+        observer.finish()?;
+    }
+    Ok(())
 }
 
 fn command(program: &Path, home: &Path) -> Command {
@@ -350,6 +374,21 @@ pub fn run(
     cancelled: &AtomicBool,
 ) -> Result<()> {
     validate_gates(names)?;
+    let started = Instant::now();
+    ensure!(
+        selection.qualification.is_some() == (names == ["qualification"]),
+        "qualification requires one exact planned case"
+    );
+    let qualification = if let Some((path, id)) = &selection.qualification {
+        let plan: proofstorm_qualification::Plan = serde_json::from_slice(&fs::read(path)?)?;
+        plan.validate()?;
+        let case = plan.case(id)?.clone();
+        ensure!(case.required, "qualification case was not scheduled");
+        crate::qualification::require_native(&case.platform)?;
+        Some((plan, case))
+    } else {
+        None
+    };
     let artifacts = selection.artifacts()?; // Verify before creating state or contacting Docker.
     let root = root.canonicalize()?;
     let work = if let Some(destination) = destination {
@@ -377,6 +416,36 @@ pub fn run(
     let before = crate::preservation::snapshot(selection.checkout_home.as_deref())?;
     private_json(&work.join("preservation-before.json"), &before)?;
     let operation = (|| -> Result<()> {
+        if let Some((plan, case)) = &qualification {
+            private_json(
+                &work.join("qualification-plan.json"),
+                &serde_json::to_value(plan)?,
+            )?;
+            private_json(
+                &work.join("qualification-case.json"),
+                &serde_json::to_value(case)?,
+            )?;
+            let mut check = Command::new("bash");
+            check
+                .arg(root.join("scripts/qualification-images.sh"))
+                .arg(work.join("qualification-case.json"))
+                .arg(&work);
+            execute(
+                check,
+                &work.join("image-qualification.log"),
+                1200,
+                Some(cancelled),
+            )?;
+            if matches!(
+                case.scenario,
+                proofstorm_qualification::Scenario::Image { .. }
+                    | proofstorm_qualification::Scenario::Lightning { .. }
+            ) {
+                report["setup"] = json!("not_required");
+                report["gates"] = json!([{"name":"qualification","status":"passed"}]);
+                return Ok(());
+            }
+        }
         start_runtime(
             &artifacts,
             &work,
@@ -448,6 +517,16 @@ pub fn run(
     let cleanup_result = if home.join("runtime-resources.json").exists() {
         eprintln!("Removing only this run's recorded runtime and storage...");
         cleanup(&work)
+    } else if qualification.as_ref().is_some_and(|(_, case)| {
+        matches!(
+            case.scenario,
+            proofstorm_qualification::Scenario::Image { .. }
+                | proofstorm_qualification::Scenario::Lightning { .. }
+        )
+    }) && operation.is_ok()
+    {
+        report["cleanup"] = json!("passed");
+        save(&work, &report)
     } else {
         // No deletion authority: never discover/adopt a partly-created cluster here.
         report["cleanup"] = json!("not_run");
@@ -471,6 +550,54 @@ pub fn run(
         report["preservation_error"] = json!(format!("{error:#}"));
     }
     save(&work, &report)?;
+    if let Some((plan, case)) = &qualification {
+        let images = fs::read(work.join("images.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let receipt = proofstorm_qualification::Receipt {
+            format_version: 1,
+            identity: plan.identity.clone(),
+            plan_digest: plan.digest(),
+            case_id: case.id.clone(),
+            platform: case.platform.clone(),
+            components: case.components.clone(),
+            claims: case.claims.clone(),
+            images,
+            passed: operation.is_ok(),
+            cleanup_verified: cleanup_result.is_ok() && report["cleanup"] == "passed",
+            preservation_verified: preservation.is_ok(),
+            stage: if operation.is_ok() && cleanup_result.is_ok() && preservation.is_ok() {
+                "complete".into()
+            } else if report["setup"] != "passed" {
+                "images-or-runtime-setup".into()
+            } else {
+                fs::read(work.join("qualification-stage.json"))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<String>(&bytes).ok())
+                    .filter(|stage| {
+                        stage.len() < 80
+                            && stage
+                                .bytes()
+                                .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+                    })
+                    .unwrap_or_else(|| "gate-or-cleanup".into())
+            },
+            elapsed_seconds: started.elapsed().as_secs(),
+        };
+        eprintln!(
+            "Qualification {}: stage={}, passed={}, cleanup={}, preservation={}",
+            case.id,
+            receipt.stage,
+            receipt.passed,
+            receipt.cleanup_verified,
+            receipt.preservation_verified
+        );
+        private_json(
+            &work.join("qualification-receipt.json"),
+            &serde_json::to_value(receipt)?,
+        )?;
+    }
     eprintln!("Report: {}", work.join("acceptance.json").display());
     if let Err(error) = cleanup_result {
         eprintln!(
@@ -502,6 +629,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let work = root.path().join("must-not-exist");
         let selection = Selection {
+            qualification: None,
             checkout_home: None,
             bundle: None,
             allow_development: false,

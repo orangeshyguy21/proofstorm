@@ -10,11 +10,14 @@ use std::{thread::sleep, time::Duration};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{GateContext, cell, http, json as expect, postgres};
+use crate::{GateContext, cell, http, json as expect, native, postgres};
 
 const INSTANCE: &str = "cdk-ldk-instance";
 const DATABASE: &str = "proofstorm_ldk";
 const MARKER: &str = "ldk-persistent";
+const RUN: &str = "embedded-ldk-payments";
+const CLN: &str =
+    "lightning-cli --notifications=none --lightning-dir=/home/cln/.lightning --network=regtest";
 const IMAGE: &str = proofstorm_core::CDK_MINT_IMAGE;
 
 fn cell_document(postgres_enabled: bool) -> Value {
@@ -49,7 +52,13 @@ fn ldk_node_id(logs: &str) -> Option<&str> {
 
 pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     let client = context.default_session("cdk-ldk-live", "designer")?;
-    run_selected(context, client, postgres_enabled, "0.18.1", IMAGE)
+    run_selected(
+        context,
+        client,
+        postgres_enabled,
+        context.selected_version("cdk-ldk", "0.18.1"),
+        context.selected_image("cdk-ldk", IMAGE),
+    )
 }
 
 pub(super) fn run_candidate(
@@ -74,6 +83,9 @@ fn run_selected(
     selected_image: &str,
 ) -> Result<()> {
     let mut document = cell_document(postgres_enabled);
+    document["components"].as_array_mut().unwrap().push(json!({"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.21.0","config_version":"nutshell-wallet/0.20/v1","control":"cell","config":{}}));
+    document["policy"]["allow"] = json!(["component.exec_live"]);
+    let mut document = context.document(document)?;
     document["components"][2]["version"] = json!(selected_version);
 
     let preview = client.call(
@@ -146,7 +158,11 @@ fn run_selected(
             &format!("{node_id}@mint:9735"),
         ],
     )?;
-    sleep(Duration::from_secs(2));
+    client.call(
+        "run_start",
+        json!({"name":INSTANCE,"run_id":RUN,"request_id":"run"}),
+    )?;
+    fund_channel(&mut client, node_id)?;
 
     let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
     let info = http::get_json_retrying(&mut forward, "/v1/info", 30)?;
@@ -177,27 +193,127 @@ fn run_selected(
     }
     context.record("cdk-ldk-selected-quote.json", &quote)?;
 
-    if postgres_enabled {
-        let quote_id = expect::string(&quote, "/quote")?.to_string();
-        postgres::seed_sentinel(postgres_enabled, &context.kubectl, namespace, MARKER)?;
-        postgres::restart_database(postgres_enabled, &context.kubectl, namespace)?;
-        context
-            .kubectl
-            .rollout_restart(namespace, "deployment/mint")?;
-        postgres::verify_sentinel(postgres_enabled, &context.kubectl, namespace, MARKER)?;
-
-        let recovered = http::get_json_retrying(
+    let quote_id = expect::string(&quote, "/quote")?.to_owned();
+    let mut session = native::Session::new(&mut client, INSTANCE, RUN);
+    let invoice = session.json(
+        "peer",
+        "fetch-offer",
+        &format!(
+            "{CLN} fetchinvoice {}",
+            native::quote(expect::string(&quote, "/request")?)
+        ),
+    )?;
+    let payment = session.json(
+        "peer",
+        "pay-offer",
+        &format!(
+            "{CLN} pay {}",
+            native::quote(expect::string(&invoice, "/invoice")?)
+        ),
+    )?;
+    anyhow::ensure!(
+        payment["status"] == "complete",
+        "BOLT12 payment did not settle"
+    );
+    let mut credited = false;
+    for _ in 0..60 {
+        let paid = http::get_json_retrying(
             &mut forward,
             &format!("/v1/mint/quote/bolt12/{quote_id}"),
-            30,
-        )
-        .map_err(|error| {
-            anyhow::anyhow!("BOLT12 quote did not survive PostgreSQL and mint restarts: {error}")
-        })?;
-        if expect::string(&recovered, "/quote")? != quote_id {
-            bail!("recovered BOLT12 quote changed identity: {recovered}");
+            3,
+        )?;
+        if paid["amount_paid"]
+            .as_u64()
+            .is_some_and(|value| value >= 100)
+        {
+            credited = true;
+            break;
         }
+        sleep(Duration::from_secs(1));
     }
+    anyhow::ensure!(
+        credited,
+        "original BOLT12 quote did not recognize the settled payment"
+    );
+    session.nutshell_initialize("wallet", "mint", "initialize")?;
+    let wallet_quote = session.nutshell_invoice("wallet", "mint", "wallet-quote", 2000)?;
+    let invoice = session.nutshell_invoice_projection(
+        "wallet",
+        "mint",
+        "wallet-invoice",
+        &wallet_quote,
+        2000,
+    )?;
+    let paid = session.json(
+        "peer",
+        "wallet-pay",
+        &format!(
+            "{CLN} pay {}",
+            native::quote(expect::string(&invoice, "/payment_request")?)
+        ),
+    )?;
+    anyhow::ensure!(
+        paid["status"] == "complete",
+        "BOLT11 funding did not settle"
+    );
+    session.nutshell_claim("wallet", "mint", "wallet-claim", &wallet_quote, 2000)?;
+    anyhow::ensure!(
+        session.nutshell_balance("wallet", "mint", "funded")? == 2000,
+        "incorrect ecash issuance"
+    );
+    session.nutshell_swap("wallet", "mint", "swap", 50)?;
+    let balance = melt(&mut session, "before-restart")?;
+    drop(session);
+    postgres::seed_sentinel(postgres_enabled, &context.kubectl, namespace, MARKER)?;
+    postgres::restart_database(postgres_enabled, &context.kubectl, namespace)?;
+    context
+        .kubectl
+        .rollout_restart(namespace, "deployment/mint")?;
+    postgres::verify_sentinel(postgres_enabled, &context.kubectl, namespace, MARKER)?;
+    drop(forward);
+    let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
+    let recovered = http::get_json_retrying(
+        &mut forward,
+        &format!("/v1/mint/quote/bolt12/{quote_id}"),
+        30,
+    )?;
+    anyhow::ensure!(
+        recovered["quote"] == quote_id
+            && recovered["amount_paid"]
+                .as_u64()
+                .is_some_and(|value| value >= 100),
+        "paid BOLT12 quote did not survive restart"
+    );
+    let logs_after = context
+        .kubectl
+        .run(&["logs", "deployment/mint", "-n", namespace])?;
+    anyhow::ensure!(
+        ldk_node_id(&logs_after) == Some(node_id),
+        "embedded node identity changed"
+    );
+    let mut session = native::Session::new(&mut client, INSTANCE, RUN);
+    anyhow::ensure!(
+        session.nutshell_balance("wallet", "mint", "persisted")? == balance,
+        "wallet accounting changed through restart"
+    );
+    session.poll(
+        "peer",
+        "channel-reconnected",
+        &format!("{CLN} listpeerchannels"),
+        |value| {
+            Ok(value["channels"]
+                .as_array()
+                .is_some_and(|channels| {
+                    channels.iter().any(|channel| {
+                        channel["state"] == "CHANNELD_NORMAL" && channel["peer_connected"] == true
+                    })
+                })
+                .then_some(()))
+        },
+    )?;
+    melt(&mut session, "after-restart")?;
+    drop(session);
+    client.call("run_finish", json!({"run_id":RUN,"request_id":"finish"}))?;
 
     drop(forward);
 
@@ -212,4 +328,88 @@ fn run_selected(
         );
     }
     Ok(())
+}
+
+fn fund_channel(client: &mut crate::McpClient, node_id: &str) -> Result<()> {
+    let mut session = native::Session::new(client, INSTANCE, RUN);
+    session.execute(
+        "chain",
+        "miner",
+        &format!("{} createwallet default", native::BITCOIN_ROOT),
+    )?;
+    session.mine("chain", "mature", 110)?;
+    let address = session.json("peer", "address", &format!("{CLN} newaddr bech32"))?;
+    session.execute(
+        "chain",
+        "fund-peer",
+        &format!(
+            "{} sendtoaddress {} 0.1",
+            native::BITCOIN,
+            native::quote(expect::string(&address, "/bech32")?)
+        ),
+    )?;
+    session.mine("chain", "fund-confirm", 6)?;
+    session.poll("peer", "confirmed", &format!("{CLN} listfunds"), |value| {
+        Ok(value["outputs"]
+            .as_array()
+            .is_some_and(|outputs| outputs.iter().any(|output| output["status"] == "confirmed"))
+            .then_some(()))
+    })?;
+    session.json(
+        "peer",
+        "fund-channel",
+        &format!("{CLN} fundchannel {} 4000000", native::quote(node_id)),
+    )?;
+    session.mine("chain", "channel-confirm", 6)?;
+    session.poll(
+        "peer",
+        "channel-ready",
+        &format!("{CLN} listpeerchannels"),
+        |value| {
+            Ok(value["channels"]
+                .as_array()
+                .is_some_and(|channels| {
+                    channels
+                        .iter()
+                        .any(|channel| channel["state"] == "CHANNELD_NORMAL")
+                })
+                .then_some(()))
+        },
+    )?;
+    Ok(())
+}
+
+fn melt(session: &mut native::Session<'_>, id: &str) -> Result<u64> {
+    let before = session.nutshell_balance("wallet", "mint", &format!("{id}-balance"))?;
+    let invoice = session.json(
+        "peer",
+        &format!("{id}-invoice"),
+        &format!("{CLN} invoice 100000 {} qualification", native::quote(id)),
+    )?;
+    let paid = session.nutshell_melt(
+        "wallet",
+        "mint",
+        &format!("{id}-melt"),
+        expect::string(&invoice, "/bolt11")?,
+        100,
+    )?;
+    anyhow::ensure!(paid["state"] == "PAID", "wallet melt did not reach PAID");
+    let recipient = session.json(
+        "peer",
+        &format!("{id}-recipient"),
+        &format!("{CLN} listinvoices {}", native::quote(id)),
+    )?;
+    anyhow::ensure!(
+        recipient["invoices"][0]["status"] == "paid"
+            && recipient["invoices"][0]["amount_received_msat"] == 100_000,
+        "independent recipient settlement differs"
+    );
+    let after = session.nutshell_balance("wallet", "mint", &format!("{id}-after"))?;
+    anyhow::ensure!(
+        before
+            .checked_sub(after)
+            .is_some_and(|debit| (100..=150).contains(&debit)),
+        "unexpected wallet debit"
+    );
+    Ok(after)
 }

@@ -13,6 +13,11 @@ use std::{
 #[derive(Parser)]
 #[command(about = "Run live gates in a new, owned Proofstorm installation")]
 struct Arguments {
+    /// Catalog-derived qualification plan for a single isolated case.
+    #[arg(long, requires = "qualification_case")]
+    qualification_plan: Option<PathBuf>,
+    #[arg(long, requires = "qualification_plan")]
+    qualification_case: Option<String>,
     /// Verified checkout artifact source. Its runtime is never used or modified.
     #[arg(long, conflicts_with = "bundle")]
     checkout_home: Option<PathBuf>,
@@ -56,6 +61,7 @@ async fn main() -> Result<()> {
         return runner::cleanup(&work);
     }
     let selection = runner::Selection {
+        qualification: args.qualification_plan.zip(args.qualification_case),
         checkout_home: args.checkout_home,
         bundle: args.bundle,
         allow_development: args.allow_development,

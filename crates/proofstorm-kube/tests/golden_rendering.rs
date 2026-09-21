@@ -892,7 +892,7 @@ fn nutshell_oidc_auth_projects_exact_upstream_contract_and_persistent_auth_ledge
     reason = "the OIDC golden keeps provider topology, secret boundaries, and mint projection in one contract"
 )]
 fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_private() {
-    let spec = cell(
+    let mut spec = cell(
         "golden-nutshell-keycloak",
         vec![
             component(
@@ -933,6 +933,12 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
             authentication_link("mint", "identity"),
         ],
     );
+    // Authenticated integration remains on the supported 0.20 release family.
+    spec.components
+        .iter_mut()
+        .find(|component| component.id == "mint")
+        .unwrap()
+        .version = Some("0.20.3".into());
     let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell Keycloak lock");
     let rendered =
         render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Keycloak render");

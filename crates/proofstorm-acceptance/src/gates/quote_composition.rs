@@ -48,7 +48,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 
     let preview = client.call(
         "cell_plan",
-        json!({"name":instance,"cell":cell_document(),"request_id":format!("create-{run}")}),
+        json!({"name":instance,"cell":context.document(cell_document())?,"request_id":format!("create-{run}")}),
     )?;
     crate::cell::review(&mut client, &preview)?;
     crate::cell::apply(&mut client, &preview)?;

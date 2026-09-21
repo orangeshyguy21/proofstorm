@@ -289,6 +289,31 @@ pub enum CatalogPlatform {
     LinuxAmd64,
 }
 
+/// Resolve a catalog/local-registry lock to its immutable distribution source.
+/// Installation and qualification must use the same mapping.
+///
+/// # Errors
+/// Returns an error if the image does not contain a complete SHA-256 digest.
+pub fn catalog_image_source(image: &str) -> Result<String, String> {
+    let (repository, sha) = image
+        .split_once("@sha256:")
+        .ok_or("runtime image must be pinned")?;
+    if sha.len() != 64 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("invalid runtime image digest".into());
+    }
+    let source = if let Some(repository) =
+        repository.strip_prefix("proofstorm-registry.localhost:5000/upstream/")
+    {
+        repository.to_owned()
+    } else if let Some(repository) = repository.strip_prefix("proofstorm-registry.localhost:5000/")
+    {
+        format!("ghcr.io/orangeshyguy21/proofstorm/{repository}")
+    } else {
+        repository.to_owned()
+    };
+    Ok(format!("{source}@sha256:{sha}"))
+}
+
 /// Build a catalog for an explicit platform, independent of the build host.
 ///
 /// This lets maintainers generate and test both coverage contracts on either host.
@@ -412,7 +437,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             adapter_version,
             "26.06.7",
             ReleaseChannel::Stable,
-            "docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+            "docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -550,7 +575,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                     &["sat"],
                     &[],
                     &[AuthenticationMode::Unauthenticated],
-                    vec![version_support("nutshell-wallet", &["0.20.3"])],
+                    vec![],
                 ),
                 &[embedded_payment_binding(
                     PaymentMethod::Onchain,
@@ -797,8 +822,18 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
         entry.image = image.into();
         if entry.id == "nutshell" {
             entry.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
+            // 0.21's blind-auth database cannot issue valid auth proofs. Keep
+            // unauthenticated payments supported; do not advertise an unusable
+            // authenticated integration while waiting for an upstream fix.
+            entry.support_matrix.authentication =
+                BTreeSet::from([AuthenticationMode::Unauthenticated]);
+            entry.features.remove(&CatalogFeature::ClearAuth);
+            entry.features.remove(&CatalogFeature::BlindAuth);
+            entry
+                .compatible_dependencies
+                .retain(|dependency| dependency.link_kind != LinkKind::AuthenticationBackend);
         }
-        if entry.kind == ComponentKind::Mint {
+        if entry.kind == ComponentKind::Mint && entry.id != "cdk-bdk" {
             entry.support_matrix.compatible_wallet_adapters =
                 vec![version_support("nutshell-wallet", &["0.20.3", "0.21.0"])];
         }
@@ -973,16 +1008,35 @@ fn validate_support_matrix(entry: &CatalogEntry, entries: &[CatalogEntry]) -> Re
             ));
         }
     }
+    validate_wallet_support(entry, entries)
+}
+
+fn validate_wallet_support(entry: &CatalogEntry, entries: &[CatalogEntry]) -> Result<(), String> {
     for wallet in &entry.support_matrix.compatible_wallet_adapters {
         for version in &wallet.versions {
-            if !entries.iter().any(|candidate| {
+            let candidate = entries.iter().find(|candidate| {
                 candidate.id == wallet.implementation
                     && candidate.version == *version
                     && candidate.kind == ComponentKind::Wallet
-            }) {
+            });
+            let Some(candidate) = candidate else {
                 return Err(format!(
                     "catalog_wallet_adapter_version_missing: implementation {:?} version {:?} references unavailable wallet {:?} version {version:?}",
                     entry.id, entry.version, wallet.implementation
+                ));
+            };
+            if entry
+                .support_matrix
+                .payment_methods
+                .is_disjoint(&candidate.support_matrix.payment_methods)
+                || entry
+                    .support_matrix
+                    .units
+                    .is_disjoint(&candidate.support_matrix.units)
+            {
+                return Err(format!(
+                    "catalog_wallet_payment_incompatible: {}@{} and {}@{} have no common payment method/unit",
+                    entry.id, entry.version, candidate.id, candidate.version
                 ));
             }
         }
@@ -2160,6 +2214,57 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod qualification_support_tests {
+    use super::*;
+
+    #[test]
+    fn upstream_gaps_are_not_advertised_as_supported_on_either_platform() {
+        for platform in [CatalogPlatform::LinuxAmd64, CatalogPlatform::LinuxArm64] {
+            let catalog = catalog_for_platform(platform);
+            let current = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == "nutshell" && entry.version == "0.21.0")
+                .unwrap();
+            assert_eq!(
+                current.support_matrix.authentication,
+                [AuthenticationMode::Unauthenticated].into()
+            );
+            assert!(!current.features.contains(&CatalogFeature::ClearAuth));
+            assert!(!current.features.contains(&CatalogFeature::BlindAuth));
+            assert!(
+                !current
+                    .compatible_dependencies
+                    .iter()
+                    .any(|dependency| dependency.link_kind == LinkKind::AuthenticationBackend)
+            );
+            let previous = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
+                .unwrap();
+            assert!(
+                previous
+                    .support_matrix
+                    .authentication
+                    .contains(&AuthenticationMode::Nut22Blind)
+            );
+            let mut bdk = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == "cdk-bdk" && entry.version == "0.18.1")
+                .unwrap()
+                .clone();
+            assert!(bdk.support_matrix.compatible_wallet_adapters.is_empty());
+            bdk.support_matrix
+                .compatible_wallet_adapters
+                .push(version_support("nutshell-wallet", &["0.21.0"]));
+            assert!(validate_wallet_support(&bdk, &catalog.entries).is_err());
         }
     }
 }

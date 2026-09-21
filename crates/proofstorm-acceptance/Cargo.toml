@@ -14,6 +14,7 @@ proofstorm-app = { path = "../proofstorm-app" }
 clap = { version = "4.5", features = ["derive", "env"] }
 proofstorm-kube = { path = "../proofstorm-kube" }
 proofstorm-core = { path = "../proofstorm-core" }
+proofstorm-qualification = { path = "../proofstorm-qualification" }
 proofstorm-store = { path = "../proofstorm-store" }
 serde_json.workspace = true
 serde.workspace = true

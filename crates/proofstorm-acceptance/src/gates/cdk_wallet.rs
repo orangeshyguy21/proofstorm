@@ -531,7 +531,7 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     )?;
     let preview = client.call(
         "cell_plan",
-        json!({"name":INSTANCE,"cell":document(input_fee_ppk),"request_id":"create"}),
+        json!({"name":INSTANCE,"cell":context.document(document(input_fee_ppk))?,"request_id":"create"}),
     )?;
     let published = crate::cell::review(&mut client, &preview)?;
     save(&directory, "published", &published)?;
