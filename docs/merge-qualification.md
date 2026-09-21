@@ -101,11 +101,31 @@ failures report counts of added/removed/changed resources.
 Embedded LDK also reports configuration, version, peer connection, BOLT12 quote
 and payment, and teardown stages. Its channel setup seeds both directions and
 requires observed capacity above reserves before exercising issuance and melting.
+It also funds the embedded node's on-chain wallet through the upstream loopback
+dashboard and waits for spendable funds before opening an anchor channel. The
+channel balance and this on-chain emergency reserve are separate requirements.
+Dashboard cookies and CSRF values stay in private temporary files and memory.
+Proofstorm disables CLN's automatic reconnect, so after mint replacement the
+fixture reconnects CLN through the service name and checks the original peer's
+usable channel before requiring another settled melt.
 Each shard continues after individual case failures and ends with a list of failed
 case IDs and their exit codes or missing/copy-failed receipts. These failures also
 create individual CI annotations. A passing last case does not clear an earlier
 failure; inspect that case's preceding qualification summary for its failing stage.
 These diagnostics never include native output, resource identities or configuration contents.
+Failed gates additionally print `Gate failure` with repository-relative Rust
+source locations for the failing assertion. Native failures include numeric exit
+and RPC codes, execution/cleanup flags and a fixed error category where recognized.
+These summaries come from captured backtraces and selected typed status fields;
+arbitrary error messages and native output remain private. Read this console
+summary when a hosted runner's local `gate-0-qualification.log` is unavailable.
+The shard's final failure list and CI annotations repeat the failing stage,
+safe category and fixture source location when available, beside the case ID.
+Double-spend stages distinguish CDK and Nutshell startup from their replay checks.
+Nutshell waits for its linked LND REST service before starting, avoiding a fatal
+first backend check while LND is still initializing. Failed double-spend fixtures
+retain private mint/dependency startup logs and pod status before removing the
+cell; those logs remain excluded from public CI artifacts.
 Acceptance workers use a separate process group. Completion, failure, timeout
 and cancellation terminate that group through the OS signal API, including
 descendants left by an exited worker; cleanup does not depend on parsing a

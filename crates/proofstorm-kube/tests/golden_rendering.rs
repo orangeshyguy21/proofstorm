@@ -992,7 +992,10 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
         .iter()
         .map(|container| container["name"].as_str().unwrap())
         .collect();
-    assert_eq!(initializers, ["proofstorm-driver", "wait-for-oidc"]);
+    assert_eq!(
+        initializers,
+        ["proofstorm-driver", "wait-for-lightning", "wait-for-oidc"]
+    );
     assert_eq!(
         mint.pointer("/spec/template/spec/containers/0/command"),
         Some(&json!(["mint"]))

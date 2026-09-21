@@ -196,11 +196,19 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
         context.qualification_observer = Some(crate::qualification::Observer::new(case.clone()));
         context.qualification = Some(case);
     }
-    gates::run(name, &context)?;
-    if let Some(observer) = &context.qualification_observer {
-        observer.finish()?;
+    let result = gates::run(name, &context).and_then(|()| {
+        if let Some(observer) = &context.qualification_observer {
+            observer.finish()?;
+        }
+        Ok(())
+    });
+    if let Err(error) = &result {
+        context.record(
+            "gate-failure.json",
+            &crate::diagnostics::gate_failure(error),
+        )?;
     }
-    Ok(())
+    result
 }
 
 fn command(program: &Path, home: &Path) -> Command {
@@ -556,6 +564,15 @@ pub fn run(
                 .push(json!({"name":name,"status":"running"}));
             save(&work, &report)?;
             let mut worker = command(&std::env::current_exe()?, &home);
+            // Capture failing assertion locations even when the caller disabled
+            // backtraces. The public summary excludes error text and arguments.
+            worker.env("RUST_LIB_BACKTRACE", "1");
+            let failure_path = work.join("gate-failure.json");
+            for path in [&failure_path, &work.join("qualification-stage.json")] {
+                if path.exists() {
+                    fs::remove_file(path)?;
+                }
+            }
             selection.arguments(&mut worker);
             worker
                 .arg("--root")
@@ -569,6 +586,13 @@ pub fn run(
                 timeout,
                 Some(cancelled),
             );
+            if result.is_err()
+                && let Ok(bytes) = fs::read(&failure_path)
+                && let Ok(failure) = serde_json::from_slice::<Value>(&bytes)
+            {
+                eprintln!("Gate failure: {failure}");
+                report["gates"][index]["failure"] = failure;
+            }
             report["gates"][index]["status"] =
                 json!(if result.is_ok() { "passed" } else { "failed" });
             save(&work, &report)?;

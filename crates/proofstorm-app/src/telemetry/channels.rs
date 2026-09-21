@@ -39,7 +39,7 @@ pub(super) fn pubkey(key: &str) -> Option<String> {
         && key.bytes().all(|b| b.is_ascii_hexdigit()))
     .then(|| key.to_ascii_lowercase())
 }
-fn outpoint(value: &str) -> Option<String> {
+pub(super) fn outpoint(value: &str) -> Option<String> {
     let (txid, index) = value.split_once(':')?;
     let index: u32 = index.parse().ok()?;
     (txid.len() == 64 && txid.bytes().all(|b| b.is_ascii_hexdigit()))

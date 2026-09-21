@@ -1,8 +1,121 @@
-//! Public diagnostics contain only fixed labels and numeric capacity readings.
+//! Public diagnostics contain fixed labels, source locations and typed statuses.
 //! Native output, credentials and resource identities remain in private logs.
 use std::{fs, path::Path};
 
 use serde_json::{Value, json};
+
+/// Extract code locations from the captured Rust backtrace, never from error
+/// messages (which can contain credentials, proofs and native output).
+fn failure_locations(backtrace: &str) -> Vec<String> {
+    let mut locations = Vec::new();
+    let mut acceptance_frame = false;
+    for line in backtrace.lines() {
+        let line = line.trim();
+        if let Some((index, symbol)) = line.split_once(':')
+            && index.parse::<u32>().is_ok()
+        {
+            let symbol = symbol.trim();
+            acceptance_frame = symbol.starts_with("proofstorm_acceptance::")
+                || symbol.starts_with("<proofstorm_acceptance::");
+        }
+        let location = line
+            .split_once("crates/proofstorm-acceptance/src/")
+            .map(|(_, path)| path)
+            .or_else(|| {
+                if acceptance_frame {
+                    line.strip_prefix("at ./src/")
+                        .or_else(|| line.strip_prefix("at src/"))
+                } else {
+                    None
+                }
+            });
+        let Some(location) = location else {
+            continue;
+        };
+        let location = location.trim();
+        let Some((path, coordinates)) = location.split_once(".rs:") else {
+            continue;
+        };
+        if path.split('/').any(|part| {
+            part.is_empty()
+                || !part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+        }) || !coordinates
+            .split(':')
+            .all(|part| !part.is_empty() && part.parse::<u32>().is_ok())
+        {
+            continue;
+        }
+        let location = format!("crates/proofstorm-acceptance/src/{location}");
+        if !locations.contains(&location) {
+            locations.push(location);
+        }
+        if locations.len() == 8 {
+            break;
+        }
+    }
+    locations
+}
+
+fn native_failure(content: &Value) -> Value {
+    let rpc = content["stdout"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+    let message = rpc.as_ref().and_then(|value| value["message"].as_str());
+    let reason = match message {
+        Some(message) if message.contains("Channel request rejected") => "channel-request-rejected",
+        Some(message) if message.contains("Insufficient funds") => "insufficient-funds",
+        _ => "native-command-failed",
+    };
+    json!({
+        "reason":reason,
+        "exit_code":content["exit_code"].as_i64(),
+        "rpc_code":rpc.as_ref().and_then(|value| value["code"].as_i64()),
+        "timed_out":content["timed_out"].as_bool(),
+        "cancelled":content["cancelled"].as_bool(),
+        "cleanup_verified":content["cleanup_verified"].as_bool(),
+        "streams_complete":content["streams_complete"].as_bool(),
+        "output_truncated":content["output_truncated"].as_bool()
+    })
+}
+
+/// Public failure evidence identifies the failing assertion and native exit
+/// status without publishing any part of an arbitrary error message.
+pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
+    let native = error.chain().find_map(|cause| {
+        let message = cause.to_string();
+        let content = message.strip_prefix("native command failed or has incomplete evidence: ")?;
+        let content: Value = serde_json::from_str(content).ok()?;
+        Some(native_failure(&content))
+    });
+    let reason = native
+        .as_ref()
+        .and_then(|value| value["reason"].as_str())
+        .unwrap_or_else(|| {
+            for cause in error.chain() {
+                let message = cause.to_string();
+                if let Some(content) =
+                    message.strip_prefix("cell readiness blocked or superseded: ")
+                {
+                    let status = serde_json::from_str::<Value>(content).unwrap_or_default();
+                    if status["blockers"].as_array().is_some_and(|blockers| {
+                        blockers
+                            .iter()
+                            .any(|blocker| blocker["reason"] == "container_crash_loop")
+                    }) {
+                        return "container-crash-loop";
+                    }
+                    return "cell-readiness-blocked";
+                }
+                if message.starts_with("native observation ") && message.contains(" timed out:") {
+                    return "native-observation-timeout";
+                }
+            }
+            "gate-failed"
+        });
+    json!({"reason":reason,"locations":failure_locations(&error.backtrace().to_string()),"native":native})
+}
 
 fn text(path: &Path) -> Option<String> {
     let metadata = fs::symlink_metadata(path).ok()?;
@@ -68,6 +181,10 @@ fn gate_stage(work: &Path) -> &'static str {
         .and_then(|text| serde_json::from_str::<String>(&text).ok());
     match value.as_deref() {
         Some("materialize") => "materialize",
+        Some("cdk-materialize") => "cdk-materialize",
+        Some("nutshell-materialize") => "nutshell-materialize",
+        Some("cdk-replay") => "cdk-replay",
+        Some("nutshell-replay") => "nutshell-replay",
         Some("configuration") => "configuration",
         Some("version") => "version",
         Some("peer-connect") => "peer-connect",
@@ -143,6 +260,78 @@ pub(crate) fn qualification_stage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_failure_publishes_status_without_output_or_resource_identity() {
+        let content = json!({
+            "exit_code":1,"timed_out":false,"cleanup_verified":true,
+            "stdout":json!({"code":-1,"message":"They sent ERROR channel private-id: Channel request rejected","data":{"credential":"private-secret"}}).to_string(),
+            "stderr":"private-key","pod":"private-pod"
+        });
+        let error = anyhow::anyhow!("native command failed or has incomplete evidence: {content}");
+        let summary = gate_failure(&error);
+        assert_eq!(summary["native"]["reason"], "channel-request-rejected");
+        assert_eq!(summary["native"]["exit_code"], 1);
+        assert_eq!(summary["native"]["rpc_code"], -1);
+        assert_eq!(summary["native"]["cleanup_verified"], true);
+        assert!(!summary.to_string().contains("private-"));
+        if error.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
+            assert!(
+                summary["locations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| {
+                        value.as_str().is_some_and(|location| {
+                            location.starts_with("crates/proofstorm-acceptance/src/diagnostics.rs:")
+                        })
+                    }),
+                "captured backtrace: {}",
+                error.backtrace()
+            );
+        }
+        let arbitrary = gate_failure(&anyhow::anyhow!("private-secret"));
+        assert_eq!(arbitrary["native"], Value::Null);
+        assert!(!arbitrary.to_string().contains("private-secret"));
+        assert_eq!(
+            native_failure(&json!({"exit_code":"private-secret"}))["exit_code"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn failure_backtrace_retains_only_relative_rust_source_locations() {
+        let frames = "  at /home/private-user/work/repo/crates/proofstorm-acceptance/src/native.rs:107:5\n  at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:382:5\n  at /private/user/runtime.rs:1:1\n  at crates/proofstorm-acceptance/src/../../private.rs:1:1\n  at crates/proofstorm-acceptance/src/native.rs:private-secret";
+        assert_eq!(
+            failure_locations(frames),
+            vec![
+                "crates/proofstorm-acceptance/src/native.rs:107:5",
+                "crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:382:5"
+            ]
+        );
+        assert!(failure_locations("disabled backtrace").is_empty());
+        assert_eq!(
+            failure_locations(
+                " 0: other_crate::run\n at ./src/secret.rs:1:2\n 1: proofstorm_acceptance::gates::run\n at ./src/gates/cdk_ldk.rs:40:5"
+            ),
+            vec!["crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:40:5"]
+        );
+    }
+
+    #[test]
+    fn blocked_readiness_reports_a_fixed_reason_without_component_details() {
+        let status = json!({"blockers":[{"reason":"container_crash_loop", "message":"private-secret", "component_id":"private-component"}]});
+        let summary = gate_failure(&anyhow::anyhow!(
+            "cell readiness blocked or superseded: {status}"
+        ));
+        assert_eq!(summary["reason"], "container-crash-loop");
+        assert!(!summary.to_string().contains("private-"));
+        let summary = gate_failure(&anyhow::anyhow!(
+            "native observation private-id timed out: private-output"
+        ));
+        assert_eq!(summary["reason"], "native-observation-timeout");
+        assert!(!summary.to_string().contains("private-"));
+    }
 
     #[test]
     fn host_pressure_retains_only_numeric_counts_and_handles_unavailable_linux_files() {

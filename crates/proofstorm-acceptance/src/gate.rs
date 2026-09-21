@@ -25,10 +25,7 @@ pub struct GateContext {
 
 impl GateContext {
     pub fn qualification_stage(&self, stage: &'static str) -> Result<()> {
-        if self.qualification.is_some() {
-            self.record("qualification-stage.json", &serde_json::json!(stage))?;
-        }
-        Ok(())
+        self.record("qualification-stage.json", &serde_json::json!(stage))
     }
     pub fn selected_version<'a>(&'a self, implementation: &str, fallback: &'a str) -> &'a str {
         self.qualification

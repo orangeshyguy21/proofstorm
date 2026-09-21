@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 
 use crate::{GateContext, cell, http, json as expect, native, postgres};
 
+mod funding;
+
 const INSTANCE: &str = "cdk-ldk-instance";
 const DATABASE: &str = "proofstorm_ldk";
 const MARKER: &str = "ldk-persistent";
@@ -172,7 +174,16 @@ fn run_selected(
         json!({"name":INSTANCE,"run_id":RUN,"request_id":"run"}),
     )?;
     context.qualification_stage("funding")?;
-    fund_channel(&mut client, node_id)?;
+    if let Err(error) = fund_channel(context, &mut client, namespace, node_id) {
+        if let Ok(logs) =
+            context
+                .kubectl
+                .run(&["logs", "deployment/mint", "-n", namespace, "--tail=100"])
+        {
+            context.record("cdk-ldk-funding-mint-log.json", &json!(logs))?;
+        }
+        return Err(error);
+    }
 
     context.qualification_stage("bolt12-quote")?;
     let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
@@ -312,20 +323,21 @@ fn run_selected(
         session.nutshell_balance("wallet", "mint", "persisted")? == balance,
         "wallet accounting changed through restart"
     );
+    // Proofstorm starts CLN with --dev-no-reconnect. Re-establish the peer
+    // connection explicitly after replacing the mint process.
+    session.json(
+        "peer",
+        "reconnect-mint",
+        &format!(
+            "{CLN} connect {}",
+            native::quote(&format!("{node_id}@mint:9735"))
+        ),
+    )?;
     session.poll(
         "peer",
         "channel-reconnected",
         &format!("{CLN} listpeerchannels"),
-        |value| {
-            Ok(value["channels"]
-                .as_array()
-                .is_some_and(|channels| {
-                    channels.iter().any(|channel| {
-                        channel["state"] == "CHANNELD_NORMAL" && channel["peer_connected"] == true
-                    })
-                })
-                .then_some(()))
-        },
+        |value| Ok(channel_has_payment_capacity(value, node_id).then_some(())),
     )?;
     melt(&mut session, "after-restart")?;
     drop(session);
@@ -347,7 +359,12 @@ fn run_selected(
     Ok(())
 }
 
-fn fund_channel(client: &mut crate::McpClient, node_id: &str) -> Result<()> {
+fn fund_channel(
+    context: &GateContext,
+    client: &mut crate::McpClient,
+    namespace: &str,
+    node_id: &str,
+) -> Result<()> {
     let mut session = native::Session::new(client, INSTANCE, RUN);
     session.execute(
         "chain",
@@ -355,6 +372,19 @@ fn fund_channel(client: &mut crate::McpClient, node_id: &str) -> Result<()> {
         &format!("{} createwallet default", native::BITCOIN_ROOT),
     )?;
     session.mine("chain", "mature", 110)?;
+    // Inbound anchor channels require a separate on-chain emergency reserve in
+    // LDK Node. Pushing a channel balance does not supply that reserve.
+    let mut dashboard = funding::Dashboard::open(context, namespace)?;
+    let ldk_address = dashboard.new_address()?;
+    session.execute(
+        "chain",
+        "fund-ldk-reserve",
+        &format!(
+            "{} sendtoaddress {} 0.001",
+            native::BITCOIN,
+            native::quote(&ldk_address)
+        ),
+    )?;
     let address = session.json("peer", "address", &format!("{CLN} newaddr bech32"))?;
     session.execute(
         "chain",
@@ -366,6 +396,7 @@ fn fund_channel(client: &mut crate::McpClient, node_id: &str) -> Result<()> {
         ),
     )?;
     session.mine("chain", "fund-confirm", 6)?;
+    dashboard.wait_spendable(100_000)?;
     session.poll("peer", "confirmed", &format!("{CLN} listfunds"), |value| {
         Ok(value["outputs"]
             .as_array()

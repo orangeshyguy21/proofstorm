@@ -121,7 +121,7 @@ pub struct ObservedChannel {
     /// BOLT channel ID, shared across implementations.
     #[serde(default)]
     pub channel_id: Option<String>,
-    /// LDK reports send/receive capacities rounded down to whole sats.
+    /// Send/receive capacities rather than balances (embedded LDK rounds to sats).
     #[serde(default)]
     pub capacity_only: bool,
     pub funding_outpoint: String,

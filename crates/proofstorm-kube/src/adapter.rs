@@ -2426,6 +2426,24 @@ pub fn render_nutshell_mint_component(
         &mut rendered,
         &mut deployment["spec"]["template"]["spec"],
     )?;
+    if lightning.backend_id == "lnd" {
+        // Nutshell exits if its first REST request races LND startup. The
+        // Service publishes endpoints only after LND's getinfo probe succeeds.
+        // Wait here so normal dependency startup cannot become a mint crash loop.
+        append_init_container(
+            &mut deployment,
+            json!({
+                "name": "wait-for-lightning",
+                "image": PROBER_IMAGE,
+                "imagePullPolicy": "IfNotPresent",
+                "command": ["sh", "-ec", format!(
+                    "for attempt in $(seq 1 120); do if nc -z -w 2 {} {lightning_rest_port}; then exit 0; fi; sleep 1; done; echo 'LND REST dependency did not become ready' >&2; exit 1",
+                    lightning.component_id
+                )],
+                "securityContext": container_security()
+            }),
+        );
+    }
     add_nutshell_cache_init_container(&mut deployment, cache);
     add_nutshell_auth_init_container(&mut deployment, authentication);
     rendered.deployments.push(resource(deployment)?);

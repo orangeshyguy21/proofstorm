@@ -18,10 +18,30 @@ while IFS= read -r id; do
     --qualification-plan "$plan" --qualification-case "$id" --timeout 1200 qualification || status=$?
   if (( status != 0 )); then
     reason="acceptance exited $status"
+    if [[ -f "$work/$id/gate-failure.json" ]]; then
+      # Read only the public diagnostic schema, never error text/native output.
+      detail=$(jq -er '
+        (.reason // .native.reason // "gate-failed") as $reason |
+        (if (["channel-request-rejected", "insufficient-funds", "native-command-failed", "container-crash-loop", "cell-readiness-blocked", "native-observation-timeout"] | index($reason)) != null
+         then $reason else "gate-failed" end) as $category |
+        [.locations[]? | strings | select(test("^crates/proofstorm-acceptance/src/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.rs:[1-9][0-9]*(:[0-9]+)?$"))] as $locations |
+        ([$locations[] | select(contains("/gates/") or contains("/qualification/"))][0] // $locations[0]) as $location |
+        $category + (if $location then "; at " + $location else "" end)
+      ' "$work/$id/gate-failure.json" 2>/dev/null) || detail=''
+      if [[ -n "$detail" ]]; then
+        reason="$reason; $detail"
+      fi
+    fi
   fi
   if [[ -f "$work/$id/qualification-receipt.json" ]]; then
     if ! cp "$work/$id/qualification-receipt.json" "$receipts/$id.json"; then
       reason="${reason:+$reason; }receipt copy failed"
+    fi
+    if [[ -n "$reason" ]]; then
+      stage=$(jq -er '.stage | select(type=="string" and test("^[a-z][a-z0-9-]{0,63}$"))' "$work/$id/qualification-receipt.json" 2>/dev/null) || stage=''
+      if [[ -n "$stage" ]]; then
+        reason="$reason; stage=$stage"
+      fi
     fi
   else
     reason="${reason:+$reason; }receipt missing"

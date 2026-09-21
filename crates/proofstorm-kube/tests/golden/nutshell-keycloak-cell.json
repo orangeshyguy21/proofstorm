@@ -1438,6 +1438,24 @@
                   ]
                 },
                 {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "for attempt in $(seq 1 120); do if nc -z -w 2 lightning 8080; then exit 0; fi; sleep 1; done; echo 'LND REST dependency did not become ready' >&2; exit 1"
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "wait-for-lightning",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  }
+                },
+                {
                   "args": [
                     "until wget -q -O /dev/null http://identity:8080/realms/proofstorm/.well-known/openid-configuration; do sleep 1; done"
                   ],

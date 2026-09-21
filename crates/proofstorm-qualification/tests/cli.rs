@@ -248,8 +248,9 @@ printf 'private fixture output\n' > "$work/private.log"
 [[ "$id" != "$QUALIFICATION_TEST_MISSING" ]] || exit 0
 cp "$QUALIFICATION_TEST_FIXTURES/$id.json" "$work/qualification-receipt.json"
 if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
-  jq '.passed=false' "$work/qualification-receipt.json" > "$work/changed.json"
+  jq '.passed=false | .stage="funding"' "$work/qualification-receipt.json" > "$work/changed.json"
   mv "$work/changed.json" "$work/qualification-receipt.json"
+  printf '%s\n' '{"native":{"reason":"channel-request-rejected","stdout":"private fixture output"},"locations":["private fixture output","crates/proofstorm-acceptance/src/native.rs:100:5","crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"]}' > "$work/gate-failure.json"
   exit 7
 fi
 "#,
@@ -304,6 +305,10 @@ fn assert_shard_log(log: &str, fail: bool, ids: &[&String]) {
         let summary = log.split("Qualification shard failed:").nth(1).unwrap();
         assert!(summary.starts_with(" 2 of 3 cases failed."));
         assert!(summary.contains(&format!("{}: acceptance exited 7", ids[0])));
+        assert!(summary.contains(
+            "channel-request-rejected; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"
+        ));
+        assert!(summary.contains("stage=funding"));
         assert!(summary.contains(&format!("{}: receipt missing", ids[1])));
         assert!(
             !summary.contains(ids[2]),

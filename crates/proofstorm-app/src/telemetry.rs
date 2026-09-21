@@ -4,6 +4,7 @@ mod bitcoin;
 mod channels;
 mod holdings;
 mod ldk;
+mod ldk_server;
 mod retention;
 use crate::{Error, cell::Cells};
 use futures::{StreamExt, stream};
@@ -352,6 +353,68 @@ mod tests {
 #[cfg(test)]
 mod live_relationship_tests {
     use super::*;
+    #[tokio::test]
+    #[ignore = "requires an explicit existing test cell and kubeconfig"]
+    async fn standalone_ldk_channels_match_their_peer_observations() {
+        let path = std::env::var("PROOFSTORM_TEST_KUBECONFIG").unwrap();
+        let name = std::env::var("PROOFSTORM_TEST_CELL").unwrap();
+        let config = kube::config::Kubeconfig::read_from(path).unwrap();
+        let config = kube::Config::from_custom_kubeconfig(
+            config,
+            &kube::config::KubeConfigOptions::default(),
+        )
+        .await
+        .unwrap();
+        let client = kube::Client::try_from(config).unwrap();
+        let cells = Api::<ProofstormCell>::namespaced(client.clone(), "proofstorm-system");
+        let cell = cells.get(&name).await.unwrap();
+        let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
+        let inventory = pods.list(&ListParams::default()).await.unwrap().items;
+        let observations = balances::sample(&cell, &pods, &inventory).await;
+        let components = cell
+            .spec
+            .cell
+            .components
+            .iter()
+            .filter(|c| c.implementation == "ldk-server")
+            .collect::<Vec<_>>();
+        assert!(!components.is_empty(), "test cell needs standalone LDK");
+        for component in components {
+            let balance = observations
+                .iter()
+                .find(|b| b.component == component.id)
+                .unwrap();
+            assert!(
+                balance.error.is_none(),
+                "{} balance unavailable",
+                component.id
+            );
+            assert!(balance.amounts.iter().any(|a| a.label == "Lightning"));
+            let ldk = balance.lightning.as_ref().unwrap();
+            assert!(ldk.error.is_none(), "{} channels unavailable", component.id);
+            assert!(
+                !ldk.channels.is_empty(),
+                "test cell needs open LDK channels"
+            );
+            for channel in &ldk.channels {
+                let peer = observations
+                    .iter()
+                    .filter_map(|b| b.lightning.as_ref())
+                    .find(|o| o.node_pubkey.as_deref() == Some(&channel.peer_pubkey))
+                    .unwrap();
+                assert!(peer.error.is_none());
+                assert!(
+                    peer.channels.iter().any(|c| c.id() == channel.id()),
+                    "channel identity differs between endpoints"
+                );
+            }
+            println!(
+                "{}: balance observed, {} channels matched",
+                component.id,
+                ldk.channels.len()
+            );
+        }
+    }
     /// Opt-in read-only check against an existing cell; never creates peers/channels.
     #[tokio::test]
     #[ignore = "requires an explicit existing test cell and kubeconfig"]
