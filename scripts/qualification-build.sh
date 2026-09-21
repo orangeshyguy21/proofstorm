@@ -21,8 +21,11 @@ docker buildx build --platform "$platform" --load --provenance=false \
 docker image save "proofstorm-checkout-source:$sha" --output "$output/controller.tar"
 # Preserve the registration's absolute checkout path and executable permissions.
 # Hosted runners use the same workspace path for every job in this repository.
+# The registration is bound to installation.json. Include that identity only,
+# never the checkout's database, credentials or runtime ownership receipts.
 tar -cf "$output/host.tar" .proofstorm-dev/owner.json .proofstorm-dev/build.json \
-  .proofstorm-dev/state/checkout-artifacts.json .proofstorm-dev/resources .proofstorm-dev/web \
+  .proofstorm-dev/state/installation.json .proofstorm-dev/state/checkout-artifacts.json \
+  .proofstorm-dev/resources .proofstorm-dev/web \
   .proofstorm-dev/target/debug/proofstorm .proofstorm-dev/target/debug/proofstorm-mcp \
   target/check/debug/proofstorm-acceptance target/check/debug/proofstorm-qualification target/check/debug/proofstorm-xtask
 (cd "$output" && sha256sum host.tar controller.tar > SHA256SUMS)
