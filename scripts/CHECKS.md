@@ -12,7 +12,7 @@ persistence scenarios, cleanup verification and documented upstream exclusions.
 ## Prerequisites
 
 Rust/rustup (pinned by `rust-toolchain.toml`), a native C toolchain, Git, Bash,
-just, and ShellCheck. Install just and ShellCheck through your package manager.
+just, jq, and ShellCheck. Install just, jq, and ShellCheck through your package manager.
 The check script does not install tools. Cargo may download dependencies on its
 first run. Some tests need loopback listeners, child processes, and a pseudo-terminal;
 a sandbox denying these cannot run the complete suite.
@@ -48,6 +48,11 @@ binding, traversal/symlinks/size limits, altered hashes/modes, installer conflic
 reinstall, and exact upload/download evidence. Installer negative tests run the
 real shell installer with compiler/network stubs. These replace the old Python
 release implementation and its duplicate fixtures.
+
+Qualification flow tests run the real planner, matrix, verifier and shard script
+with synthetic receipts and a stub acceptance process. They check failure
+propagation and artifact handling; live payment evidence comes from the native
+hosted qualification jobs.
 
 The workflow guard rejects retired operational files, owned Python source, and
 Python execution in maintained adapters, acceptance fixtures and tooling.
