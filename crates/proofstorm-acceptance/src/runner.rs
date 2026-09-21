@@ -2,13 +2,18 @@
 //! teardown uses the shared installation resource-receipt implementation.
 use crate::{GateContext, client::clear_runtime_environment, gates};
 use anyhow::{Context, Result, ensure};
+use nix::{
+    errno::Errno,
+    sys::signal::{Signal, killpg},
+    unistd::{Pid, getpgrp},
+};
 use proofstorm_app::{artifacts::TestArtifacts, installation::Installation};
 use serde_json::{Value, json};
 use std::{
     fs,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -206,31 +211,83 @@ fn command(program: &Path, home: &Path) -> Command {
     command
 }
 
+// Keep cleanup tied to the child we spawned, including inspection/error paths.
+// Do not shell out to `kill`: Linux utilities may parse a negative group ID as
+// another option, leaving worker descendants alive after a timeout.
+struct Worker {
+    child: Child,
+    group: Option<Pid>,
+}
+
+impl Worker {
+    fn spawn(mut command: Command) -> Result<Self> {
+        use std::os::unix::process::CommandExt;
+        let mut child = command
+            .process_group(0)
+            .spawn()
+            .context("start acceptance operation")?;
+        let group = i32::try_from(child.id())
+            .ok()
+            .filter(|id| *id > 1 && *id != getpgrp().as_raw());
+        let Some(group) = group else {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("acceptance worker has no distinct owned process group");
+        };
+        Ok(Self {
+            child,
+            group: Some(Pid::from_raw(group)),
+        })
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        let Some(group) = self.group.take() else {
+            return Ok(());
+        };
+        let signal = match killpg(group, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => Ok(()),
+            Err(error) => Err(error),
+        };
+        if signal.is_err() {
+            let _ = self.child.kill();
+        }
+        let reaped = self.child.wait();
+        signal.context("terminate owned acceptance process group")?;
+        reaped.context("reap acceptance worker")?;
+        Ok(())
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
 fn execute(
     mut command: Command,
     log: &Path,
     seconds: u64,
     cancelled: Option<&AtomicBool>,
 ) -> Result<()> {
-    use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
+    use std::os::unix::fs::OpenOptionsExt;
     let output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(log)?;
-    command.stdout(output.try_clone()?).stderr(output);
+    command
+        .stdin(Stdio::null())
+        .stdout(output.try_clone()?)
+        .stderr(output);
     // Workers and their MCP/port-forward children share a fresh process group.
-    command.process_group(0);
-    let mut child = command.spawn().context("start acceptance operation")?;
+    let mut worker = Worker::spawn(command)?;
     let start = Instant::now();
     let mut last_progress = Instant::now();
     loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = worker.child.try_wait()? {
             // A failed/finished worker must not leave port-forwards or helper children.
-            let _ = Command::new("/bin/kill")
-                .args(["-KILL", &format!("-{}", child.id())])
-                .stderr(Stdio::null())
-                .status();
+            worker.stop()?;
             if !status.success() && log.file_name().is_some_and(|name| name == "setup.log") {
                 eprintln!(
                     "Setup failure: {}",
@@ -249,12 +306,7 @@ fn execute(
         if start.elapsed() > Duration::from_secs(seconds)
             || cancelled.is_some_and(|flag| flag.load(Ordering::SeqCst))
         {
-            // Exact child process-group ID, not a name search or shared shell group.
-            let _ = Command::new("/bin/kill")
-                .args(["-KILL", &format!("-{}", child.id())])
-                .status();
-            let _ = child.kill();
-            let _ = child.wait();
+            worker.stop()?;
             anyhow::bail!(
                 "acceptance operation interrupted or timed out; see {}",
                 log.display()
@@ -262,9 +314,13 @@ fn execute(
         }
         if last_progress.elapsed() >= Duration::from_secs(30) {
             eprintln!(
-                "Still running; progress log: {}; resources: {}",
+                "Still running; progress log: {}; progress: {}",
                 log.display(),
-                crate::diagnostics::resources(log.parent().context("progress log parent missing")?)
+                crate::diagnostics::progress(
+                    log.parent().context("progress log parent missing")?,
+                    log,
+                    start.elapsed().as_secs()
+                )
             );
             last_progress = Instant::now();
         }
@@ -711,5 +767,102 @@ mod tests {
             .is_err()
         );
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn worker_cleanup_stops_descendants_on_exit_failure_timeout_and_cancellation() {
+        struct Sentinel(Child);
+        impl Drop for Sentinel {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        struct Descendant(Pid);
+        impl Drop for Descendant {
+            fn drop(&mut self) {
+                let _ = nix::sys::signal::kill(self.0, Signal::SIGKILL);
+            }
+        }
+        let mut unrelated = Sentinel(Command::new("/bin/sleep").arg("60").spawn().unwrap());
+        for mode in ["success", "failure", "timeout", "cancel"] {
+            let root = tempfile::tempdir().unwrap();
+            let pid_file = root.path().join("descendant.pid");
+            let cancelled = AtomicBool::new(false);
+            let mut command = Command::new("/bin/sh");
+            command
+                .args([
+                    "-c",
+                    r#"
+sleep 60 &
+printf '%s' "$!" > "$1"
+case "$2" in
+  success) exit 0 ;;
+  failure) exit 7 ;;
+  *) wait ;;
+esac
+"#,
+                    "worker-fixture",
+                ])
+                .arg(&pid_file)
+                .arg(mode);
+            let result = std::thread::scope(|scope| {
+                if mode == "cancel" {
+                    scope.spawn(|| {
+                        let started = Instant::now();
+                        while fs::read_to_string(&pid_file)
+                            .ok()
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .is_none()
+                            && started.elapsed() < Duration::from_secs(5)
+                        {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        cancelled.store(true, Ordering::SeqCst);
+                    });
+                }
+                execute(
+                    command,
+                    &root.path().join("worker.log"),
+                    1,
+                    Some(&cancelled),
+                )
+            });
+            let descendant = Descendant(Pid::from_raw(
+                fs::read_to_string(&pid_file).unwrap().parse().unwrap(),
+            ));
+            assert_eq!(result.is_ok(), mode == "success", "{mode}: {result:?}");
+            assert!(
+                unrelated.0.try_wait().unwrap().is_none(),
+                "signalled an unrelated process"
+            );
+            let started = Instant::now();
+            loop {
+                let output = Command::new("ps")
+                    .args(["-o", "stat=", "-p", &descendant.0.to_string()])
+                    .output()
+                    .unwrap();
+                let state = String::from_utf8(output.stdout).unwrap();
+                // An orphan can briefly remain as a zombie until init reaps it.
+                if state.trim().is_empty() || state.trim().starts_with('Z') {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "{mode}: worker descendant survived cleanup"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_a_worker_after_an_inspection_error_reaps_it() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("60");
+        let worker = Worker::spawn(command).unwrap();
+        let pid = Pid::from_raw(i32::try_from(worker.child.id()).unwrap());
+        drop(worker);
+        assert_eq!(nix::sys::signal::kill(pid, None), Err(Errno::ESRCH));
     }
 }

@@ -94,9 +94,16 @@ retried using `proofstorm-acceptance --cleanup WORK_DIRECTORY`; it only acts on
 that run's recorded resources. Re-run the entire hosted workflow after a failure:
 receipts from an earlier attempt intentionally cannot satisfy a newer attempt.
 
-Console diagnostics include a fixed setup-stage/error category, available memory
-and disk, and counts of added/removed/changed resources on preservation failure.
+Console diagnostics include a fixed setup-stage/error category, the current mint
+test stage and operation elapsed time, available memory and disk, and Linux load,
+task counts and cumulative OOM kills. Unavailable readings are null. Preservation
+failures report counts of added/removed/changed resources.
 They never include native output, resource identities or configuration contents.
+Acceptance workers use a separate process group. Completion, failure, timeout
+and cancellation terminate that group through the OS signal API, including
+descendants left by an exited worker; cleanup does not depend on parsing a
+negative PID with an external `kill` command. Process-group signalling failures
+fail the operation instead of being silently ignored.
 Standalone Lightning cleanup removes the anonymous volumes declared by upstream
 LND/CLN images as well as the fixture's explicitly owned named volumes.
 
