@@ -231,6 +231,14 @@ fn execute(
                 .args(["-KILL", &format!("-{}", child.id())])
                 .stderr(Stdio::null())
                 .status();
+            if !status.success() && log.file_name().is_some_and(|name| name == "setup.log") {
+                eprintln!(
+                    "Setup failure: {}",
+                    crate::diagnostics::setup_failure(
+                        log.parent().context("setup log parent missing")?
+                    )
+                );
+            }
             ensure!(
                 status.success(),
                 "acceptance operation failed ({status}); see {}",
@@ -253,7 +261,11 @@ fn execute(
             );
         }
         if last_progress.elapsed() >= Duration::from_secs(30) {
-            eprintln!("Still running; progress log: {}", log.display());
+            eprintln!(
+                "Still running; progress log: {}; resources: {}",
+                log.display(),
+                crate::diagnostics::resources(log.parent().context("progress log parent missing")?)
+            );
             last_progress = Instant::now();
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -410,6 +422,7 @@ pub fn run(
     };
     let home = work.join("state");
     eprintln!("Acceptance run: {}", work.display());
+    eprintln!("Host resources: {}", crate::diagnostics::resources(&work));
     let mut report =
         json!({"format_version":1,"work":work,"setup":"not_run","gates":[],"cleanup":"not_run"});
     save(&work, &report)?;
@@ -567,22 +580,13 @@ pub fn run(
             passed: operation.is_ok(),
             cleanup_verified: cleanup_result.is_ok() && report["cleanup"] == "passed",
             preservation_verified: preservation.is_ok(),
-            stage: if operation.is_ok() && cleanup_result.is_ok() && preservation.is_ok() {
-                "complete".into()
-            } else if report["setup"] != "passed" {
-                "images-or-runtime-setup".into()
-            } else {
-                fs::read(work.join("qualification-stage.json"))
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<String>(&bytes).ok())
-                    .filter(|stage| {
-                        stage.len() < 80
-                            && stage
-                                .bytes()
-                                .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
-                    })
-                    .unwrap_or_else(|| "gate-or-cleanup".into())
-            },
+            stage: crate::diagnostics::qualification_stage(
+                &work,
+                &report,
+                operation.is_ok(),
+                cleanup_result.is_ok() && report["cleanup"] == "passed",
+                preservation.is_ok(),
+            ),
             elapsed_seconds: started.elapsed().as_secs(),
         };
         eprintln!(

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAC_ARM64: &str = "aarch64-apple-darwin";
 pub const LINUX_AMD64: &str = "x86_64-unknown-linux-gnu";
+pub const LINUX_ARM64: &str = "aarch64-unknown-linux-gnu";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +38,7 @@ pub fn host_parts(target: &str) -> Result<(&'static str, &'static str), String> 
     match target {
         MAC_ARM64 => Ok(("darwin", "arm64")),
         LINUX_AMD64 => Ok(("linux", "amd64")),
+        LINUX_ARM64 => Ok(("linux", "arm64")),
         _ => Err("unsupported host-tool target".into()),
     }
 }
@@ -144,7 +146,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn both_reviewed_manifests_validate_without_changing_their_bytes() {
+    fn reviewed_manifests_validate_without_changing_their_bytes() {
         for (target, encoded) in [
             (
                 MAC_ARM64,
@@ -153,6 +155,10 @@ mod tests {
             (
                 LINUX_AMD64,
                 include_str!("../../../release/bootstrap-tools-linux-amd64.json"),
+            ),
+            (
+                LINUX_ARM64,
+                include_str!("../../../release/bootstrap-tools-linux-arm64.json"),
             ),
         ] {
             Pins::parse(target, encoded).unwrap();

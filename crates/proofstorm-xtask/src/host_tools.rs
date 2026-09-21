@@ -201,6 +201,7 @@ fn checked(root: &Path, target: &str) -> Result<Pins> {
     let filename = match target {
         tool_pins::MAC_ARM64 => "bootstrap-tools.json",
         tool_pins::LINUX_AMD64 => "bootstrap-tools-linux-amd64.json",
+        tool_pins::LINUX_ARM64 => "bootstrap-tools-linux-arm64.json",
         _ => bail!("unsupported host-tool target"),
     };
     let pins = Pins::parse(
@@ -285,7 +286,8 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
             match (std::env::consts::OS, std::env::consts::ARCH) {
                 ("macos", "aarch64") => tool_pins::MAC_ARM64,
                 ("linux", "x86_64") => tool_pins::LINUX_AMD64,
-                _ => bail!("maintainer tools support macOS Apple Silicon and Linux x86-64"),
+                ("linux", "aarch64") => tool_pins::LINUX_ARM64,
+                _ => bail!("maintainer tools support macOS Apple Silicon and Linux AMD64/ARM64"),
             },
         ),
         ["resolve", root, target, output] => {

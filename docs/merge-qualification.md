@@ -26,6 +26,12 @@ are built once per architecture and transferred within the current CI run;
 controller reuse verifies its source identity, platform and executable metadata.
 PR jobs have no package-write permissions.
 
+Both native architectures must restore their build artifacts on fresh runners,
+start an owned runtime, pass the Bitcoin smoke scenario and verify cleanup before
+the full matrix begins. Linux ARM64 checkout
+setup uses its own checksum-verified host-tool pins; this does not add a published
+Linux ARM64 installer or update channel.
+
 Each live case owns a disposable installation. Its fixture must instantiate all
 planned component versions. The runner checks teardown and compares preexisting
 resources before and after execution. Failures and preservation drift are not
@@ -87,6 +93,12 @@ receipts indicate an interrupted or failed setup/execution. Local cleanup can be
 retried using `proofstorm-acceptance --cleanup WORK_DIRECTORY`; it only acts on
 that run's recorded resources. Re-run the entire hosted workflow after a failure:
 receipts from an earlier attempt intentionally cannot satisfy a newer attempt.
+
+Console diagnostics include a fixed setup-stage/error category, available memory
+and disk, and counts of added/removed/changed resources on preservation failure.
+They never include native output, resource identities or configuration contents.
+Standalone Lightning cleanup removes the anonymous volumes declared by upstream
+LND/CLN images as well as the fixture's explicitly owned named volumes.
 
 Hosted wall time and runner minutes still need to be measured. The 30–45 minute
 PR feedback target is a rollout goal, not a measured guarantee. Optimize repeated

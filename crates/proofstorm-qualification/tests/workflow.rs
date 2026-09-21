@@ -79,7 +79,7 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
         .iter()
         .map(|name| name.as_str().unwrap())
         .collect();
-    assert_eq!(needs, ["plan", "build", "execute"].into());
+    assert_eq!(needs, ["plan", "build", "preflight", "execute"].into());
     let platforms: BTreeSet<_> = jobs["build"]["strategy"]["matrix"]["include"]
         .as_array()
         .unwrap()
@@ -87,4 +87,40 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
         .map(|entry| entry["platform"].as_str().unwrap())
         .collect();
     assert_eq!(platforms, ["linux/amd64", "linux/arm64"].into());
+    assert_eq!(jobs["preflight"]["needs"], "build");
+    let preflight_arches: BTreeSet<_> = jobs["preflight"]["strategy"]["matrix"]["include"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["arch"].as_str().unwrap())
+        .collect();
+    assert_eq!(preflight_arches, ["amd64", "arm64"].into());
+    let steps = jobs["preflight"]["steps"].as_array().unwrap();
+    let smoke = steps
+        .iter()
+        .position(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|run| run.contains("native-runtime-smoke"))
+        })
+        .unwrap();
+    let restore = steps
+        .iter()
+        .position(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|value| value.contains("tar -xf"))
+        })
+        .unwrap();
+    assert!(restore < smoke);
+    assert!(steps[smoke]["if"].is_null());
+    assert!(steps.iter().all(|step| {
+        !step["uses"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("actions/upload-artifact@"))
+    }));
+    assert_eq!(
+        jobs["execute"]["needs"],
+        json!(["plan", "build", "preflight"])
+    );
 }

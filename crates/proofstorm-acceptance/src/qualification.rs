@@ -128,3 +128,39 @@ pub fn run(context: &GateContext) -> Result<()> {
         _ => bail!("image and standalone Lightning qualification do not require a managed runtime"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_planned_native_platform_can_bootstrap_a_checkout_runtime() {
+        use proofstorm_core::tool_pins::{LINUX_AMD64, LINUX_ARM64, Pins};
+        let plan = proofstorm_qualification::plan(
+            proofstorm_qualification::Identity {
+                revision: "a".repeat(40),
+                run_id: "0".into(),
+                attempt: 1,
+            },
+            true,
+        )
+        .unwrap();
+        let platforms: std::collections::BTreeSet<_> = plan
+            .cases
+            .iter()
+            .map(|case| case.platform.as_str())
+            .collect();
+        for platform in platforms {
+            let target = match platform {
+                "linux/amd64" => LINUX_AMD64,
+                "linux/arm64" => LINUX_ARM64,
+                _ => panic!("qualification runner has no host target"),
+            };
+            let arch = proofstorm_app::platform::container_arch_for(target).unwrap();
+            assert_eq!(format!("linux/{arch}"), platform);
+            Pins::parse(
+                target,
+                proofstorm_app::platform::bootstrap_pins_for(target).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+}

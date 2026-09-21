@@ -68,7 +68,10 @@ pair() (
       [[ -n "$name" ]] || continue
       docker logs "$name" > "$directory/${name##*-}.log" 2>&1 || true
       owner=$(docker inspect --format '{{index .Config.Labels "dev.proofstorm.compat.run"}}' "$name" 2>/dev/null) || continue
-      if [[ "$owner" == "$run_id" ]]; then docker rm -f "$name" >/dev/null || cleanup_ok=false; else cleanup_ok=false; fi
+      # Upstream LND/CLN images declare /root data volumes even though this
+      # fixture mounts its named data elsewhere. Remove those anonymous volumes
+      # with their owned container; named volumes are verified separately below.
+      if [[ "$owner" == "$run_id" ]]; then docker rm --force --volumes "$name" >/dev/null || cleanup_ok=false; else cleanup_ok=false; fi
     done
     for name in "${volumes[@]}"; do
       [[ -n "$name" ]] || continue

@@ -35,6 +35,7 @@
 
 pub mod cell;
 pub mod client;
+mod diagnostics;
 mod driver;
 pub mod gate;
 pub mod gates;
