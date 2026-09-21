@@ -68,11 +68,17 @@ fn gate_stage(work: &Path) -> &'static str {
         .and_then(|text| serde_json::from_str::<String>(&text).ok());
     match value.as_deref() {
         Some("materialize") => "materialize",
+        Some("configuration") => "configuration",
+        Some("version") => "version",
+        Some("peer-connect") => "peer-connect",
         Some("funding") => "funding",
+        Some("bolt12-quote") => "bolt12-quote",
+        Some("bolt12-payment") => "bolt12-payment",
         Some("issuance") => "issuance",
         Some("swap-and-melt") => "swap-and-melt",
         Some("restart") => "restart",
         Some("payment-after-restart") => "payment-after-restart",
+        Some("teardown") => "teardown",
         _ => "gate",
     }
 }
@@ -179,6 +185,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(progress(root.path(), &log, 121)["stage"], "gate");
+    }
+
+    #[test]
+    fn embedded_ldk_steps_remain_visible_in_failure_receipts() {
+        let root = tempfile::tempdir().unwrap();
+        for stage in [
+            "materialize",
+            "configuration",
+            "version",
+            "peer-connect",
+            "funding",
+            "bolt12-quote",
+            "bolt12-payment",
+            "issuance",
+            "swap-and-melt",
+            "restart",
+            "payment-after-restart",
+            "teardown",
+        ] {
+            fs::write(
+                root.path().join("qualification-stage.json"),
+                json!(stage).to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                qualification_stage(root.path(), &json!({"setup":"passed"}), false, true, true),
+                stage
+            );
+        }
     }
 
     #[test]

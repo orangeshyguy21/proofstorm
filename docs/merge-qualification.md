@@ -98,7 +98,14 @@ Console diagnostics include a fixed setup-stage/error category, the current mint
 test stage and operation elapsed time, available memory and disk, and Linux load,
 task counts and cumulative OOM kills. Unavailable readings are null. Preservation
 failures report counts of added/removed/changed resources.
-They never include native output, resource identities or configuration contents.
+Embedded LDK also reports configuration, version, peer connection, BOLT12 quote
+and payment, and teardown stages. Its channel setup seeds both directions and
+requires observed capacity above reserves before exercising issuance and melting.
+Each shard continues after individual case failures and ends with a list of failed
+case IDs and their exit codes or missing/copy-failed receipts. These failures also
+create individual CI annotations. A passing last case does not clear an earlier
+failure; inspect that case's preceding qualification summary for its failing stage.
+These diagnostics never include native output, resource identities or configuration contents.
 Acceptance workers use a separate process group. Completion, failure, timeout
 and cancellation terminate that group through the OS signal API, including
 descendants left by an exited worker; cleanup does not depend on parsing a

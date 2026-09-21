@@ -1,6 +1,5 @@
-//! CDK 0.18.1 embedded LDK: BOLT12 offer quoting through the mint's own HTTP
-//! API, an inbound CLN peer connection to the embedded node, and, on the
-//! PostgreSQL variant, quote survival across database and mint restarts.
+//! Embedded CDK LDK: BOLT12 payment recognition, BOLT11 issuance and melting,
+//! and payment/quote survival across mint and optional database restarts.
 //!
 //! Ported from `tests/kubernetes/cdk_ldk_mcp_client.py`. Serves both the
 //! `cdk-ldk` and `cdk-ldk-postgres` targets; `PROOFSTORM_STORAGE` selects which.
@@ -27,13 +26,14 @@ fn cell_document(postgres_enabled: bool) -> Value {
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {"id": "peer", "kind": "lightning", "implementation": "cln", "version": "26.06.7", "config_version": "cln/26.06/v1", "control": "cell", "config": {"alias": "proofstorm-ldk-introduction-peer"}},
-            {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.1", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 cell"}}
+            {"id": "mint", "kind": "mint", "implementation": "cdk-ldk", "version": "0.18.1", "config_version": "cdk-mintd-ldk/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LDK", "description": "Native CDK embedded-LDK BOLT12 cell"}},
+            {"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.21.0","config_version":"nutshell-wallet/0.20/v1","control":"cell","config":{}}
         ],
         "links": [
             {"id": "peer-chain", "kind": "chain_backend", "from": "peer", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
             {"id": "mint-chain", "kind": "chain_backend", "from": "mint", "to": "chain", "binding": {"type": "chain", "network": "regtest"}}
         ],
-        "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
+        "policy": {"allow": ["component.exec_live"], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
     });
     postgres::augment_cell(postgres_enabled, &mut cell, DATABASE);
     cell
@@ -82,10 +82,8 @@ fn run_selected(
     selected_version: &str,
     selected_image: &str,
 ) -> Result<()> {
-    let mut document = cell_document(postgres_enabled);
-    document["components"].as_array_mut().unwrap().push(json!({"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.21.0","config_version":"nutshell-wallet/0.20/v1","control":"cell","config":{}}));
-    document["policy"]["allow"] = json!(["component.exec_live"]);
-    let mut document = context.document(document)?;
+    context.qualification_stage("materialize")?;
+    let mut document = context.document(cell_document(postgres_enabled))?;
     document["components"][2]["version"] = json!(selected_version);
 
     let preview = client.call(
@@ -106,6 +104,7 @@ fn run_selected(
     }
     context.record("cdk-ldk-selected-ready.json", &ready)?;
 
+    context.qualification_stage("configuration")?;
     let config = context.kubectl.exec(
         namespace,
         "deployment/mint",
@@ -133,14 +132,24 @@ fn run_selected(
         DATABASE,
     )?;
 
+    context.qualification_stage("version")?;
     let version =
         context
             .kubectl
             .exec(namespace, "deployment/mint", &["cdk-mintd", "--version"])?;
-    if !version.contains("0.18.1") {
+    let expected_version = if selected_version.starts_with("candidate-") {
+        "0.18.1"
+    } else {
+        selected_version
+    };
+    if !version
+        .split_whitespace()
+        .any(|part| part == expected_version)
+    {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
+    context.qualification_stage("peer-connect")?;
     let logs = context
         .kubectl
         .run(&["logs", "deployment/mint", "-n", namespace])?;
@@ -162,8 +171,10 @@ fn run_selected(
         "run_start",
         json!({"name":INSTANCE,"run_id":RUN,"request_id":"run"}),
     )?;
+    context.qualification_stage("funding")?;
     fund_channel(&mut client, node_id)?;
 
+    context.qualification_stage("bolt12-quote")?;
     let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
     let info = http::get_json_retrying(&mut forward, "/v1/info", 30)?;
     if !serde_json::to_string(&info)?
@@ -193,6 +204,7 @@ fn run_selected(
     }
     context.record("cdk-ldk-selected-quote.json", &quote)?;
 
+    context.qualification_stage("bolt12-payment")?;
     let quote_id = expect::string(&quote, "/quote")?.to_owned();
     let mut session = native::Session::new(&mut client, INSTANCE, RUN);
     let invoice = session.json(
@@ -235,6 +247,7 @@ fn run_selected(
         credited,
         "original BOLT12 quote did not recognize the settled payment"
     );
+    context.qualification_stage("issuance")?;
     session.nutshell_initialize("wallet", "mint", "initialize")?;
     let wallet_quote = session.nutshell_invoice("wallet", "mint", "wallet-quote", 2000)?;
     let invoice = session.nutshell_invoice_projection(
@@ -261,9 +274,11 @@ fn run_selected(
         session.nutshell_balance("wallet", "mint", "funded")? == 2000,
         "incorrect ecash issuance"
     );
+    context.qualification_stage("swap-and-melt")?;
     session.nutshell_swap("wallet", "mint", "swap", 50)?;
     let balance = melt(&mut session, "before-restart")?;
     drop(session);
+    context.qualification_stage("restart")?;
     postgres::seed_sentinel(postgres_enabled, &context.kubectl, namespace, MARKER)?;
     postgres::restart_database(postgres_enabled, &context.kubectl, namespace)?;
     context
@@ -291,6 +306,7 @@ fn run_selected(
         ldk_node_id(&logs_after) == Some(node_id),
         "embedded node identity changed"
     );
+    context.qualification_stage("payment-after-restart")?;
     let mut session = native::Session::new(&mut client, INSTANCE, RUN);
     anyhow::ensure!(
         session.nutshell_balance("wallet", "mint", "persisted")? == balance,
@@ -317,6 +333,7 @@ fn run_selected(
 
     drop(forward);
 
+    context.qualification_stage("teardown")?;
     client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_closed(&mut client, INSTANCE)?;
 
@@ -324,7 +341,7 @@ fn run_selected(
         println!("CDK embedded LDK + PostgreSQL MCP BOLT12 persistence and teardown passed");
     } else {
         println!(
-            "CDK 0.18.1 embedded-LDK MCP materialization, database-backed configuration, BOLT12 quote, readiness, and teardown passed"
+            "CDK {selected_version} embedded-LDK MCP materialization, database-backed configuration, BOLT12 quote, readiness, and teardown passed"
         );
     }
     Ok(())
@@ -358,25 +375,39 @@ fn fund_channel(client: &mut crate::McpClient, node_id: &str) -> Result<()> {
     session.json(
         "peer",
         "fund-channel",
-        &format!("{CLN} fundchannel {} 4000000", native::quote(node_id)),
+        // CLN requires the mint to retain 1% of channel capacity. Seed outbound
+        // liquidity above that reserve before asking it to melt small amounts.
+        &format!(
+            "{CLN} -k fundchannel id={} amount=4000000sat push_msat=1000000000msat",
+            native::quote(node_id)
+        ),
     )?;
     session.mine("chain", "channel-confirm", 6)?;
     session.poll(
         "peer",
         "channel-ready",
         &format!("{CLN} listpeerchannels"),
-        |value| {
-            Ok(value["channels"]
-                .as_array()
-                .is_some_and(|channels| {
-                    channels
-                        .iter()
-                        .any(|channel| channel["state"] == "CHANNELD_NORMAL")
-                })
-                .then_some(()))
-        },
+        |value| Ok(channel_has_payment_capacity(value, node_id).then_some(())),
     )?;
     Ok(())
+}
+
+fn channel_has_payment_capacity(value: &Value, node_id: &str) -> bool {
+    value["channels"].as_array().is_some_and(|channels| {
+        channels.iter().any(|channel| {
+            channel["peer_id"] == node_id
+                && channel["state"] == "CHANNELD_NORMAL"
+                && channel["peer_connected"] == true
+                // These estimates already account for reserves. From CLN's
+                // perspective, receivable capacity is the mint's outbound side.
+                && channel["spendable_msat"]
+                    .as_u64()
+                    .is_some_and(|amount| amount >= 100_000_000)
+                && channel["receivable_msat"]
+                    .as_u64()
+                    .is_some_and(|amount| amount >= 100_000_000)
+        })
+    })
 }
 
 fn melt(session: &mut native::Session<'_>, id: &str) -> Result<u64> {
@@ -412,4 +443,74 @@ fn melt(session: &mut native::Session<'_>, id: &str) -> Result<u64> {
         "unexpected wallet debit"
     );
     Ok(after)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proofstorm_core::{CellSpec, resolve_lock};
+    use proofstorm_qualification::{Identity, Scenario};
+
+    #[test]
+    fn payment_channel_requires_liquidity_in_both_directions_to_the_selected_peer() {
+        let ready = json!({"channels":[{
+            "peer_id":"mint", "state":"CHANNELD_NORMAL", "peer_connected":true,
+            "spendable_msat":2_900_000_000_u64, "receivable_msat":960_000_000
+        }]});
+        assert!(channel_has_payment_capacity(&ready, "mint"));
+        assert!(!channel_has_payment_capacity(&ready, "another-mint"));
+        assert!(!channel_has_payment_capacity(
+            &json!({"channels":[]}),
+            "mint"
+        ));
+        for (field, value) in [
+            ("receivable_msat", json!(0)),
+            ("receivable_msat", json!(2_100_000)),
+            ("receivable_msat", Value::Null),
+            ("spendable_msat", json!(0)),
+            ("peer_connected", json!(false)),
+            ("state", json!("CHANNELD_AWAITING_LOCKIN")),
+        ] {
+            let mut unavailable = ready.clone();
+            unavailable["channels"][0][field] = value;
+            assert!(
+                !channel_has_payment_capacity(&unavailable, "mint"),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_ldk_fixtures_resolve_every_planned_storage_wallet_and_version() {
+        let plan = proofstorm_qualification::plan(
+            Identity {
+                revision: "a".repeat(40),
+                run_id: "0".into(),
+                attempt: 1,
+            },
+            true,
+        )
+        .unwrap();
+        let mut covered = std::collections::BTreeSet::new();
+        for case in &plan.cases {
+            let Scenario::Gate { name, versions } = &case.scenario else {
+                continue;
+            };
+            if !matches!(name.as_str(), "cdk-ldk" | "cdk-ldk-postgres") {
+                continue;
+            }
+            covered.insert((case.platform.as_str(), name.as_str()));
+            let mut fixture = cell_document(name == "cdk-ldk-postgres");
+            let observer = crate::qualification::Observer::new(case.clone());
+            observer.document(&mut fixture).unwrap();
+            observer.finish().unwrap();
+            let cell: CellSpec = serde_json::from_value(fixture).unwrap();
+            let catalog = proofstorm_qualification::catalog(&case.platform).unwrap();
+            let lock = resolve_lock(&cell, &catalog).unwrap();
+            for entry in lock.entries {
+                assert_eq!(entry.version, versions[&entry.catalog_id]);
+            }
+        }
+        assert_eq!(covered.len(), 4, "both storage variants on both platforms");
+    }
 }

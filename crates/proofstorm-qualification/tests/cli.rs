@@ -250,7 +250,7 @@ cp "$QUALIFICATION_TEST_FIXTURES/$id.json" "$work/qualification-receipt.json"
 if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
   jq '.passed=false' "$work/qualification-receipt.json" > "$work/changed.json"
   mv "$work/changed.json" "$work/qualification-receipt.json"
-  exit 1
+  exit 7
 fi
 "#,
     )
@@ -273,6 +273,7 @@ fi
             .output()
             .unwrap();
         assert_eq!(output.status.success(), !fail, "{output:?}");
+        assert_shard_log(&String::from_utf8(output.stdout).unwrap(), fail, &ids);
         assert_eq!(
             fs::read_to_string(calls)
                 .unwrap()
@@ -290,5 +291,31 @@ fi
             let receipt: Receipt = serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
             assert_eq!(receipt.passed, !(fail && receipt.case_id == *ids[0]));
         }
+    }
+}
+
+#[cfg(unix)]
+fn assert_shard_log(log: &str, fail: bool, ids: &[&String]) {
+    assert!(!log.contains("private fixture output"));
+    if fail {
+        for (id, reason) in [(ids[0], "acceptance exited 7"), (ids[1], "receipt missing")] {
+            assert!(log.contains(&format!("::error::Qualification {id}: {reason}")));
+        }
+        let summary = log.split("Qualification shard failed:").nth(1).unwrap();
+        assert!(summary.starts_with(" 2 of 3 cases failed."));
+        assert!(summary.contains(&format!("{}: acceptance exited 7", ids[0])));
+        assert!(summary.contains(&format!("{}: receipt missing", ids[1])));
+        assert!(
+            !summary.contains(ids[2]),
+            "the final passing case must not be blamed"
+        );
+        assert!(
+            log.find(&format!("{} completed", ids[2])).unwrap()
+                < log.find("Qualification shard failed:").unwrap(),
+            "the failure summary must remain visible after the final passing case"
+        );
+    } else {
+        assert!(log.ends_with("Qualification shard passed: 3 cases.\n"));
+        assert!(!log.contains("::error::"));
     }
 }
