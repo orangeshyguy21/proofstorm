@@ -62,7 +62,29 @@ if [[ "$mode" == --watch-web ]]; then
   exec "$trunk" watch "${web_args[@]}"
 fi
 printf 'Building checkout assets (no release archive or runtime changes)\n'
-"$trunk" build "${web_args[@]}"
+build_web() (
+  # Trunk fetches tools such as wasm-bindgen during the build. Retry only
+  # temporary HTTP download failures; compiler and asset errors fail immediately.
+  log=$(mktemp)
+  trap 'rm -f -- "$log"' EXIT
+  for attempt in 1 2 3; do
+    if "$trunk" build "${web_args[@]}" 2>&1 | tee "$log"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "$attempt" == 3 ]] ||
+      ! grep -Fq 'failed downloading release archive' "$log" ||
+      ! grep -Eq 'error downloading archive file: (408|429|500|502|503|504)([^0-9]|$)' "$log"; then
+      return "$status"
+    fi
+    delay=$((attempt * 5))
+    printf 'Temporary web build tool download failure; retrying in %s seconds (attempt %s/3)\n' \
+      "$delay" "$((attempt + 1))" >&2
+    sleep "$delay"
+  done
+)
+build_web
 if [[ "$mode" == --web-only ]]; then
   printf 'Web assets rebuilt. Refresh the managed GUI tab.\n'
   exit 0

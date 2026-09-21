@@ -26,6 +26,22 @@ case "${0##*/}" in
   cargo)
     if [[ " $* " == *' --bins '* && ${FAIL_BUILD:-0} == 1 ]]; then exit 9; fi ;;
   trunk)
+    case ${WEB_BUILD_FAILURE:-} in
+      transient)
+        if [[ $(grep -c '^<trunk><build>' "$TRACE") -lt 3 ]]; then
+          printf 'failed downloading release archive\nerror downloading archive file: 504\n' >&2
+          exit 17
+        fi ;;
+      unavailable)
+        printf 'failed downloading release archive\nerror downloading archive file: 503\n' >&2
+        exit 17 ;;
+      missing)
+        printf 'failed downloading release archive\nerror downloading archive file: 404\n' >&2
+        exit 17 ;;
+      compile)
+        printf 'error: could not compile proofstorm-web\n' >&2
+        exit 17 ;;
+    esac
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == --dist ]]; then
         mkdir -p "$2"
@@ -44,6 +60,11 @@ cat > "$fixture/.tools/bin/git" <<'STUB'
 printf 'Cargo.toml\0'
 STUB
 chmod +x "$fixture/.tools/bin/git"
+cat > "$fixture/.tools/bin/sleep" <<'STUB'
+#!/bin/sh
+printf '<sleep><%s>\n' "$1" >> "$TRACE"
+STUB
+chmod +x "$fixture/.tools/bin/sleep"
 cat > "$fixture/cache/debug/proofstorm" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -96,6 +117,27 @@ if grep -Eq '<register>|<--bins>|<export_crds>' "$TRACE"; then exit 1; fi
 
 if FAIL_BUILD=1 run; then printf 'Build failure did not propagate\n' >&2; exit 1; fi
 if grep -q '<register>' "$TRACE"; then printf 'Registered a failed build\n' >&2; exit 1; fi
+
+# Temporary tool download failures are retried with bounded backoff.
+WEB_BUILD_FAILURE=transient run
+[[ $(grep -c '^<trunk><build>' "$TRACE") == 3 ]]
+[[ $(grep -c '^<sleep>' "$TRACE") == 2 ]]
+grep -q '^<sleep><5>$' "$TRACE"
+grep -q '^<sleep><10>$' "$TRACE"
+[[ $(grep -c '^<register>$' "$TRACE") == 1 ]]
+
+# Exhaustion preserves the failing exit status and never builds/registers binaries.
+if WEB_BUILD_FAILURE=unavailable run; then exit 1; else [[ $? == 17 ]]; fi
+[[ $(grep -c '^<trunk><build>' "$TRACE") == 3 ]]
+[[ $(grep -c '^<sleep>' "$TRACE") == 2 ]]
+if grep -Eq '<register>|<--bins>|<export_crds>' "$TRACE"; then exit 1; fi
+
+# A missing release or a compiler failure is not a transient download error.
+for failure in missing compile; do
+  if WEB_BUILD_FAILURE="$failure" run; then exit 1; else [[ $? == 17 ]]; fi
+  [[ $(grep -c '^<trunk><build>' "$TRACE") == 1 ]]
+  if grep -Eq '<sleep>|<register>|<--bins>|<export_crds>' "$TRACE"; then exit 1; fi
+done
 
 # Recovery must finish before any compiler or asset writer touches the build.
 printf '{}\n' > "$fixture/.proofstorm-dev/reset-pending.json"
