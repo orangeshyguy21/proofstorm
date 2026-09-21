@@ -65,7 +65,7 @@ pub(super) fn extend(
         vec![
             ControlClass::Cell,
             ControlClass::Target,
-            ControlClass::Attacker,
+            ControlClass::Workspace,
         ],
     ));
     entries.push(catalog_entry_with_lifecycle(

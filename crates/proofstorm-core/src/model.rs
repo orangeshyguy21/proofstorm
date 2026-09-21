@@ -135,7 +135,7 @@ pub enum ComponentKind {
     Database,
     IdentityProvider,
     Wallet,
-    Attacker,
+    Workspace,
     Proxy,
     Oracle,
 }
@@ -145,7 +145,7 @@ pub enum ComponentKind {
 pub enum ControlClass {
     Cell,
     Target,
-    Attacker,
+    Workspace,
     Oracle,
 }
 

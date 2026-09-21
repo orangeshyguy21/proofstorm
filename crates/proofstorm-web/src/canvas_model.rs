@@ -190,7 +190,7 @@ pub fn ensure_positions(nodes: &[CanvasNode], positions: &mut Positions) {
             ComponentKind::Bitcoin | ComponentKind::IdentityProvider | ComponentKind::Database => 0,
             ComponentKind::Lightning | ComponentKind::PaymentProcessor | ComponentKind::Proxy => 1,
             ComponentKind::Mint | ComponentKind::Oracle => 2,
-            ComponentKind::Wallet | ComponentKind::Attacker => 3,
+            ComponentKind::Wallet | ComponentKind::Workspace => 3,
         };
         let x = 40.0 + f64::from(column) * 340.0;
         let mut y = 40.0;
@@ -318,7 +318,7 @@ pub fn appearance(kind: ComponentKind) -> (&'static str, &'static str, &'static 
             "Oracle",
             "M2 12s4-8 10-8 10 8 10 8-4 8-10 8S2 12 2 12Z M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
         ),
-        ComponentKind::Attacker => (
+        ComponentKind::Workspace => (
             "workspace",
             "Workspace",
             "M3 4h18v16H3Z M6 8l4 4-4 4 M13 16h5",

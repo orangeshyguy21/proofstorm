@@ -9,10 +9,10 @@ use proofstorm_core::{
 use proofstorm_kube::{
     CellAction, ComponentForensicsAction, ProofstormCell, ProofstormCellAction,
     ProofstormCellActionSpec, ProofstormCellSpec, RenderedComponent, compile_component_plans,
-    render_attacker_component, render_bitcoin_component, render_cdk_component, render_cell,
-    render_cell_action_job, render_cln_component, render_keycloak_component, render_lnd_component,
+    render_bitcoin_component, render_cdk_component, render_cell, render_cell_action_job,
+    render_cln_component, render_keycloak_component, render_lnd_component,
     render_nutshell_mint_component, render_postgres_component, render_redis_component,
-    render_security_spine, render_wallet_component,
+    render_security_spine, render_wallet_component, render_workspace_component,
 };
 use serde_json::{Value, json};
 
@@ -299,16 +299,16 @@ fn backend_cell(backend_id: &str) -> (CellSpec, &'static str) {
         ),
         "workspace" => (
             cell(
-                "golden-attacker",
+                "golden-workspace",
                 vec![component(
-                    "attacker",
-                    ComponentKind::Attacker,
                     "workspace",
-                    ControlClass::Attacker,
+                    ComponentKind::Workspace,
+                    "workspace",
+                    ControlClass::Workspace,
                 )],
                 vec![],
             ),
-            "attacker",
+            "workspace",
         ),
         _ => panic!("uncharacterized backend {backend_id}"),
     }
@@ -379,7 +379,7 @@ fn render_backend_with_catalog(backend_id: &str, catalog: &CatalogResponse) -> V
         "postgresql" => render_postgres_component(plan),
         "redis" => render_redis_component(plan),
         "keycloak" => render_keycloak_component(plan),
-        "workspace" => render_attacker_component(plan),
+        "workspace" => render_workspace_component(plan),
         _ => panic!("uncharacterized backend {backend_id}"),
     }
     .expect("backend render");
@@ -479,10 +479,10 @@ fn full_baseline_cell() -> CellSpec {
                 ControlClass::Cell,
             ),
             component(
-                "attacker",
-                ComponentKind::Attacker,
                 "workspace",
-                ControlClass::Attacker,
+                ComponentKind::Workspace,
+                "workspace",
+                ControlClass::Workspace,
             ),
         ],
         vec![

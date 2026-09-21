@@ -1342,7 +1342,7 @@ mod tests {
                 component("chain-b", ComponentKind::Bitcoin, "bitcoin-core"),
                 component("mint-lnd", ComponentKind::Lightning, "lnd"),
                 component("payer-lnd", ComponentKind::Lightning, "lnd"),
-                component("attacker-cln", ComponentKind::Lightning, "cln"),
+                component("workspace-cln", ComponentKind::Lightning, "cln"),
                 component("mint", ComponentKind::Mint, "cdk"),
                 component("wallet", ComponentKind::Wallet, "nutshell-wallet"),
             ],

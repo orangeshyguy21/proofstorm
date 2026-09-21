@@ -224,11 +224,11 @@ async fn workspace_control_uses_bounded_recorded_exec_and_exact_retry_identity()
     let mut cell = spec();
     cell.components.push(ComponentSpec {
         id: "scripts".into(),
-        kind: ComponentKind::Attacker,
+        kind: ComponentKind::Workspace,
         implementation: "workspace".into(),
         version: None,
         config_version: "workspace/0.1/v1".into(),
-        control: ControlClass::Attacker,
+        control: ControlClass::Workspace,
         config: BTreeMap::new(),
     });
     cells.up("demo", &cell).await.unwrap();
@@ -297,11 +297,11 @@ async fn workspace_file_write_limits_count_content_bytes_and_preserve_retries() 
     let mut cell = spec();
     cell.components.push(ComponentSpec {
         id: "scripts".into(),
-        kind: ComponentKind::Attacker,
+        kind: ComponentKind::Workspace,
         implementation: "workspace".into(),
         version: None,
         config_version: "workspace/0.1/v1".into(),
-        control: ControlClass::Attacker,
+        control: ControlClass::Workspace,
         config: BTreeMap::new(),
     });
     cells.up("demo", &cell).await.unwrap();
@@ -1249,11 +1249,11 @@ async fn workspace_lifecycle_and_fault_grants_check_capabilities_even_through_na
     let mut cell = spec();
     cell.components.push(ComponentSpec {
         id: "scripts".into(),
-        kind: ComponentKind::Attacker,
+        kind: ComponentKind::Workspace,
         implementation: "workspace".into(),
         version: None,
         config_version: "workspace/0.1/v1".into(),
-        control: ControlClass::Attacker,
+        control: ControlClass::Workspace,
         config: BTreeMap::new(),
     });
     cells.up("demo", &cell).await.unwrap();

@@ -13,10 +13,10 @@
     },
     {
       "id": "scripts",
-      "kind": "attacker",
+      "kind": "workspace",
       "implementation": "workspace",
       "config_version": "workspace/0.1/v1",
-      "control": "attacker",
+      "control": "workspace",
       "config": {"storage_size": "1Gi", "service_port": 8080}
     }
   ],

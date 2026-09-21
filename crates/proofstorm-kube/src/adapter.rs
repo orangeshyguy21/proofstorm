@@ -54,7 +54,7 @@ pub use processor::{
 static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> =
     LazyLock::new(|| {
         BTreeMap::from([
-            ("workspace", render_attacker_component as ComponentRenderer),
+            ("workspace", render_workspace_component as ComponentRenderer),
             ("bitcoin-core", render_bitcoin_component),
             ("cdk", render_cdk_component),
             ("cdk-ldk", render_cdk_component),
@@ -2827,15 +2827,15 @@ fn nutshell_mint_environment(
 ///
 /// # Errors
 ///
-/// Returns an error when the plan does not select the attacker backend.
+/// Returns an error when the plan does not select the workspace backend.
 ///
 /// # Panics
 /// Panics only if the generated workspace deployment lacks its required pod specification.
-pub fn render_attacker_component(
+pub fn render_workspace_component(
     plan: &ComponentPlanContract,
 ) -> Result<RenderedComponent, AdapterError> {
-    require_plan_backend(plan, "workspace", ComponentKind::Attacker)?;
-    let EffectiveComponentConfig::AttackerWorkspace(config) = &plan.effective_config else {
+    require_plan_backend(plan, "workspace", ComponentKind::Workspace)?;
+    let EffectiveComponentConfig::Workspace(config) = &plan.effective_config else {
         return Err(AdapterError::InvalidPlan(
             "workspace configuration expected".into(),
         ));
@@ -3741,10 +3741,10 @@ mod tests {
                     ControlClass::Cell,
                 ),
                 component(
-                    "attacker",
-                    ComponentKind::Attacker,
                     "workspace",
-                    ControlClass::Attacker,
+                    ComponentKind::Workspace,
+                    "workspace",
+                    ControlClass::Workspace,
                 ),
             ],
             links: vec![],
@@ -4818,7 +4818,7 @@ mod tests {
     }
 
     #[test]
-    fn wallet_and_attacker_metadata_revisions_do_not_churn_pods() {
+    fn wallet_and_workspace_metadata_revisions_do_not_churn_pods() {
         let cell = workspace_cell();
         let lock = resolve_lock(&cell, default_catalog()).expect("workspace lock");
         let compile = |revision| {
@@ -4827,7 +4827,7 @@ mod tests {
         };
         let first = compile("sha256:first-revision");
         let revised = compile("sha256:metadata-only-revision");
-        for id in ["wallet-a", "attacker"] {
+        for id in ["wallet-a", "workspace"] {
             let first_plan = first
                 .iter()
                 .find(|plan| plan.component_id == id)
@@ -4837,8 +4837,8 @@ mod tests {
                 .find(|plan| plan.component_id == id)
                 .expect("revised component plan");
             let render = |plan| {
-                if id == "attacker" {
-                    render_attacker_component(plan)
+                if id == "workspace" {
+                    render_workspace_component(plan)
                 } else {
                     render_wallet_component(plan)
                 }
@@ -4871,15 +4871,15 @@ mod tests {
                 .expect("workspace plans");
         let plan = plans
             .iter()
-            .find(|plan| plan.component_id == "attacker")
-            .expect("attacker plan");
-        let rendered = render_attacker_component(plan).expect("attacker render");
+            .find(|plan| plan.component_id == "workspace")
+            .expect("workspace plan");
+        let rendered = render_workspace_component(plan).expect("workspace render");
         assert!(rendered.config_maps.is_empty());
         assert!(rendered.services.is_empty());
         assert!(rendered.stateful_sets.is_empty());
         assert_eq!(rendered.persistent_volume_claims.len(), 1);
         let deployment =
-            serde_json::to_value(&rendered.deployments[0]).expect("attacker deployment");
+            serde_json::to_value(&rendered.deployments[0]).expect("workspace deployment");
         assert_eq!(
             deployment["spec"]["template"]["spec"]["automountServiceAccountToken"],
             false
@@ -4913,7 +4913,7 @@ mod tests {
         let component = cell
             .components
             .iter_mut()
-            .find(|c| c.id == "attacker")
+            .find(|c| c.id == "workspace")
             .unwrap();
         component.config.insert(
             "runtime_image".into(),
@@ -4924,7 +4924,7 @@ mod tests {
         let component = cell
             .components
             .iter_mut()
-            .find(|c| c.id == "attacker")
+            .find(|c| c.id == "workspace")
             .unwrap();
         component
             .config
@@ -4936,15 +4936,15 @@ mod tests {
         let entry = lock
             .entries
             .iter()
-            .find(|entry| entry.component_id == "attacker")
+            .find(|entry| entry.component_id == "workspace")
             .unwrap();
         assert!(entry.image.ends_with(&image));
         let plans = compile_component_plans("i-workspace", "revision", &cell, &lock).unwrap();
         let plan = plans
             .iter()
-            .find(|plan| plan.component_id == "attacker")
+            .find(|plan| plan.component_id == "workspace")
             .unwrap();
-        let mut rendered = render_attacker_component(plan).unwrap();
+        let mut rendered = render_workspace_component(plan).unwrap();
         assert_eq!(plan.target_descriptor.ports["http"], 8080);
         assert_eq!(
             rendered.services[0]
@@ -5274,11 +5274,11 @@ mod tests {
         let plans =
             compile_component_plans("i0123456789012345678", "sha256:revision", &cell, &lock)
                 .expect("workspace plans");
-        let attacker = plans
+        let workspace = plans
             .iter()
-            .find(|plan| plan.component_id == "attacker")
-            .expect("attacker plan");
-        let mut rendered = render_attacker_component(attacker).expect("attacker render");
+            .find(|plan| plan.component_id == "workspace")
+            .expect("workspace plan");
+        let mut rendered = render_workspace_component(workspace).expect("workspace render");
         let workload = available_deployment(rendered.deployments.remove(0));
         let mut claim = rendered.persistent_volume_claims.remove(0);
         claim.status = Some(serde_json::from_value(json!({"phase":"Bound"})).unwrap());
@@ -5296,7 +5296,7 @@ mod tests {
         assert!(
             !pending
                 .iter()
-                .find(|status| status.id == "attacker")
+                .find(|status| status.id == "workspace")
                 .unwrap()
                 .ready
         );
@@ -5308,11 +5308,11 @@ mod tests {
             observe_component_statuses("instance", &plans, &resources, &[], &BTreeSet::new(), 10);
         let status = observed
             .iter()
-            .find(|status| status.id == "attacker")
-            .expect("attacker status");
+            .find(|status| status.id == "workspace")
+            .expect("workspace status");
         assert!(status.ready);
-        assert_eq!(status.observed_revision_digest, attacker.revision_digest);
-        assert_eq!(status.observed_rollout_digest, attacker.rollout_digest);
+        assert_eq!(status.observed_revision_digest, workspace.revision_digest);
+        assert_eq!(status.observed_rollout_digest, workspace.rollout_digest);
         assert_eq!(
             status_condition(status, ComponentConditionType::ComponentReady).state,
             ComponentConditionState::True
@@ -5323,13 +5323,13 @@ mod tests {
             &plans,
             &resources,
             &observed,
-            &BTreeSet::from(["attacker".to_owned()]),
+            &BTreeSet::from(["workspace".to_owned()]),
             20,
         );
         let status = stopped
             .iter()
-            .find(|status| status.id == "attacker")
-            .expect("attacker status");
+            .find(|status| status.id == "workspace")
+            .expect("workspace status");
         assert!(!status.ready);
         let component = status_condition(status, ComponentConditionType::ComponentReady);
         assert_eq!(component.state, ComponentConditionState::False);
@@ -5984,7 +5984,7 @@ mod tests {
         let policy = render_component_network_policy(
             "i0123456789012345678",
             "mint-lnd",
-            &["payer-lnd".into(), "attacker-cln".into()],
+            &["payer-lnd".into(), "workspace-cln".into()],
         )
         .expect("component policy");
         let value = serde_json::to_value(policy).expect("policy JSON");
@@ -5998,7 +5998,7 @@ mod tests {
         assert_eq!(ingress["operator"], "NotIn");
         assert_eq!(
             ingress["values"],
-            serde_json::json!(["payer-lnd", "attacker-cln"])
+            serde_json::json!(["payer-lnd", "workspace-cln"])
         );
         assert_eq!(
             value["spec"]["egress"][1]["ports"][0]["port"],
@@ -6019,16 +6019,16 @@ mod tests {
                     ControlClass::Cell,
                 ),
                 component(
-                    "attacker-cln",
+                    "workspace-cln",
                     ComponentKind::Lightning,
                     "cln",
-                    ControlClass::Attacker,
+                    ControlClass::Workspace,
                 ),
             ],
             links: vec![LinkSpec {
-                id: "attacker-cln-chain".into(),
+                id: "workspace-cln-chain".into(),
                 kind: LinkKind::ChainBackend,
-                from: "attacker-cln".into(),
+                from: "workspace-cln".into(),
                 to: "chain".into(),
                 binding: Some(DependencyBinding::Chain {
                     network: BitcoinNetwork::Regtest,
@@ -6042,7 +6042,7 @@ mod tests {
         let cln = rendered
             .stateful_sets
             .iter()
-            .find(|stateful_set| stateful_set.metadata.name.as_deref() == Some("attacker-cln"))
+            .find(|stateful_set| stateful_set.metadata.name.as_deref() == Some("workspace-cln"))
             .expect("CLN StatefulSet");
         let pod = cln
             .spec
@@ -6059,7 +6059,7 @@ mod tests {
             component_ports(
                 cell.components
                     .iter()
-                    .find(|component| component.id == "attacker-cln")
+                    .find(|component| component.id == "workspace-cln")
                     .expect("CLN component")
             ),
             BTreeMap::from([("p2p".to_owned(), 9_735)])

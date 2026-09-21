@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:22fc62cfc8b97d1508e68f2269401d8d35f8b354c19e6dea9869f1016bfa952c",
+  "catalog_digest": "sha256:c710bd50e4f1c8e49510efce5c74baec3f3c13047706e395aa197eda6619af3a",
   "entries": [
     {
       "implementation": "bitcoin-core",
@@ -2866,7 +2866,7 @@
     },
     {
       "implementation": "workspace",
-      "kind": "attacker",
+      "kind": "workspace",
       "upstream_version": "0.1.0-alpha.1",
       "release_channel": "prerelease",
       "support_lifecycle": "preferred",

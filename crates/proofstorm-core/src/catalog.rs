@@ -360,7 +360,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Cell, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Workspace],
         ),
         catalog_entry_with_lifecycle(
             amd64,
@@ -393,7 +393,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Cell, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Workspace],
         ),
         catalog_entry_with_lifecycle(
             amd64,
@@ -426,7 +426,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Cell, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Workspace],
         ),
         catalog_entry(
             amd64,
@@ -458,7 +458,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Cell, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Workspace],
         ),
         catalog_entry(
             amd64,
@@ -735,7 +735,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[AuthenticationMode::Unauthenticated],
                 vec![],
             ),
-            vec![ControlClass::Cell, ControlClass::Attacker],
+            vec![ControlClass::Cell, ControlClass::Workspace],
         ),
         cdk_cli_wallet_entry(amd64, backends, adapter_version),
         cocod_wallet_entry(amd64, backends, adapter_version),
@@ -743,7 +743,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             amd64,
             "workspace",
             backends,
-            ComponentKind::Attacker,
+            ComponentKind::Workspace,
             "Persistent programmable workspace with managed tasks, source snapshots, rotating logs and optional custom runtime",
             adapter_version,
             "0.1.0-alpha.1",
@@ -760,7 +760,7 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 &[],
                 vec![],
             ),
-            vec![ControlClass::Attacker],
+            vec![ControlClass::Workspace],
         ),
     ];
     for entry in &mut entries {
@@ -1343,7 +1343,7 @@ fn cdk_cli_wallet_entry(
             &[AuthenticationMode::Unauthenticated],
             vec![],
         ),
-        vec![ControlClass::Cell, ControlClass::Attacker],
+        vec![ControlClass::Cell, ControlClass::Workspace],
     );
     entry.protocol_action_adapter_version = Some("cdk-cli/0.18/observations/v1".into());
     let provenance: BuildProvenance =
@@ -1389,7 +1389,7 @@ fn cocod_wallet_entry(
             &[AuthenticationMode::Unauthenticated],
             vec![],
         ),
-        vec![ControlClass::Cell, ControlClass::Attacker],
+        vec![ControlClass::Cell, ControlClass::Workspace],
     );
     entry.support_lifecycle = SupportLifecycle::Experimental;
     entry.protocol_action_adapter_version = Some("cocod/44e5101c/observations/v1".into());

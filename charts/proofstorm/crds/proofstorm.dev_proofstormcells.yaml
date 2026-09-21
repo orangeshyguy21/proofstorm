@@ -38,7 +38,7 @@ spec:
                           enum:
                           - cell
                           - target
-                          - attacker
+                          - workspace
                           - oracle
                           type: string
                         id:
@@ -54,7 +54,7 @@ spec:
                           - database
                           - identity_provider
                           - wallet
-                          - attacker
+                          - workspace
                           - proxy
                           - oracle
                           type: string
@@ -619,7 +619,7 @@ spec:
                       - database
                       - identity_provider
                       - wallet
-                      - attacker
+                      - workspace
                       - proxy
                       - oracle
                       type: string

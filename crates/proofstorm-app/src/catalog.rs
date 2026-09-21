@@ -275,7 +275,7 @@ pub fn summary(entry: &CatalogEntry, preferred: bool, platform: &str) -> Value {
     let control = [
         ControlClass::Target,
         ControlClass::Cell,
-        ControlClass::Attacker,
+        ControlClass::Workspace,
         ControlClass::Oracle,
     ]
     .into_iter()
@@ -304,6 +304,24 @@ mod tests {
     }
     fn page(value: Value) -> CatalogPage {
         list(default_catalog(), &query(value), "linux/arm64", 24 * 1024).unwrap()
+    }
+
+    #[test]
+    fn workspace_filter_returns_an_authorable_workspace_contract() {
+        let result = page(json!({"kinds":["workspace"]}));
+        assert_eq!(result.matched_count, 1);
+        let entry = &result.items[0];
+        assert_eq!(entry["id"], "workspace");
+        assert_eq!(entry["kind"], "workspace");
+        assert_eq!(entry["allowed_control"], json!(["workspace"]));
+        assert_eq!(entry["recommended_control"], "workspace");
+        let component = serde_json::from_value(json!({
+            "id":"scripts", "kind":entry["kind"], "implementation":entry["id"],
+            "version":entry["version"], "config_version":entry["config_version"],
+            "control":entry["recommended_control"], "config":{}
+        }))
+        .unwrap();
+        proofstorm_core::validate_catalog_component(&component, default_catalog()).unwrap();
     }
 
     #[test]
