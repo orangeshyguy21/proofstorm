@@ -980,7 +980,7 @@
                   "command": [
                     "sh",
                     "-ec",
-                    "# The Service exposes only ready PostgreSQL endpoints. Wait before running any\n# configuration/database mutation; do not retry a failed initializer itself.\nfor attempt in $(seq 1 120); do\n    if nc -z -w 2 \"$1\" \"$2\"; then\n        exit 0\n    fi\n    sleep 1\ndone\necho 'PostgreSQL service did not become ready before mint initialization' >&2\nexit 1\n",
+                    "# The Service exposes only ready PostgreSQL endpoints. Wait before running any\n# configuration/database mutation; do not retry a failed initializer itself.\nfor attempt in $(seq 1 120); do\n    if nc -z -w 2 \"$1\" \"$2\"; then\n        exit 0\n    fi\n    sleep 1\ndone\necho 'PostgreSQL service did not become ready before component initialization' >&2\nexit 1\n",
                     "wait-for-database",
                     "database",
                     "5432"

@@ -1578,7 +1578,13 @@ pub fn render_keycloak_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key),
+                "initContainers": [{
+                    "name": "wait-for-database", "image": PROBER_IMAGE, "imagePullPolicy": "IfNotPresent",
+                    "command": ["sh", "-ec", include_str!("../drivers/wait_for_database.sh"), "wait-for-database", database.component_id, database_port.to_string()],
+                    "securityContext": container_security()
+                }],
+                "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "args": ["start-dev", "--import-realm"],
                     "env": [

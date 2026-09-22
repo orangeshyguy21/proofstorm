@@ -6,5 +6,5 @@ for attempt in $(seq 1 120); do
     fi
     sleep 1
 done
-echo 'PostgreSQL service did not become ready before mint initialization' >&2
+echo 'PostgreSQL service did not become ready before component initialization' >&2
 exit 1

@@ -129,8 +129,8 @@ container exit, image pull, configuration, and scheduling failures. Startup
 failures retain private pod status and current/previous logs from every component
 and initializer before runtime cleanup, including Lightning and identity-provider
 dependencies. Capture has a bounded time budget; these are not public CI artifacts.
-All CDK payment backends wait for their linked PostgreSQL service before reading
-or initializing mint configuration. PostgreSQL readiness probes TCP loopback so
+All CDK payment backends and Keycloak wait for their linked PostgreSQL service
+before initializing the application. PostgreSQL readiness probes TCP loopback so
 its temporary socket-only bootstrap server cannot prematurely expose a ready
 Service endpoint. SQLite startup has no database wait; configuration failures
 after PostgreSQL is available still fail without retrying initialization.

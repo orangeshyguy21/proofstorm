@@ -616,6 +616,68 @@ fn cdk_waits_for_external_lightning_before_reading_credentials_or_opening_rpc() 
 }
 
 #[test]
+fn keycloak_waits_for_its_actual_database_service_without_database_credentials() {
+    for platform in [CatalogPlatform::LinuxAmd64, CatalogPlatform::LinuxArm64] {
+        let (mut spec, _) = backend_cell("keycloak");
+        spec.components
+            .iter_mut()
+            .find(|c| c.id == "database")
+            .unwrap()
+            .id = "identity-storage".into();
+        spec.links
+            .iter_mut()
+            .find(|link| link.kind == LinkKind::DatabaseBackend)
+            .unwrap()
+            .to = "identity-storage".into();
+        let lock = resolve_lock(&spec, &catalog_for_platform(platform)).unwrap();
+        let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let plan = plans.iter().find(|p| p.component_id == "identity").unwrap();
+        let rendered = render_keycloak_component(plan).unwrap();
+        let pod = rendered.deployments[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap();
+        let init = pod.init_containers.as_ref().unwrap();
+        assert_eq!(init.len(), 1);
+        assert_eq!(init[0].name, "wait-for-database");
+        assert_eq!(
+            &init[0].command.as_ref().unwrap()[4..],
+            ["identity-storage", "5432"]
+        );
+        assert!(init[0].env.is_none());
+        assert!(init[0].volume_mounts.is_none());
+        let database = plans
+            .iter()
+            .find(|p| p.component_id == "identity-storage")
+            .unwrap();
+        let rendered = render_postgres_component(database).unwrap();
+        let probe = rendered.stateful_sets[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap()
+            .containers[0]
+            .readiness_probe
+            .as_ref()
+            .unwrap()
+            .exec
+            .as_ref()
+            .unwrap()
+            .command
+            .as_ref()
+            .unwrap();
+        assert_eq!(&probe[..5], ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]);
+    }
+}
+
+#[test]
 fn every_cdk_backend_waits_for_its_linked_postgres_before_initialization() {
     for backend in ["cdk", "cdk-ldk", "cdk-bdk", "ldk-server"] {
         for postgres in [false, true] {
