@@ -16,7 +16,9 @@ export DOCKER_CONFIG="$work/anonymous-docker"
 mkdir "$DOCKER_CONFIG"
 printf '{}\n' > "$DOCKER_CONFIG/config.json"
 printf '{}\n' > "$work/images.json"
+image_stage() { printf '"%s"\n' "$1" > "$work/qualification-image-stage.json"; }
 while IFS= read -r source; do
+  image_stage registry-manifest
   timeout 90 docker buildx imagetools inspect --raw "$source" > "$work/manifest.json"
   digest=${source##*@}
   if jq -e '.manifests' "$work/manifest.json" >/dev/null; then
@@ -24,10 +26,13 @@ while IFS= read -r source; do
   fi
   [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
   selected="${source%@*}@$digest"
+  image_stage registry-platform-manifest
   timeout 90 docker buildx imagetools inspect --raw "$selected" > "$work/selected-manifest.json"
   config=$(jq -er '.config.digest' "$work/selected-manifest.json")
   [[ "$config" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+  image_stage image-pull
   timeout 300 docker pull --platform "$platform" "$selected" > "$work/pull.log" 2>&1
+  image_stage image-inspection
   timeout 30 docker image inspect "$selected" > "$work/image-inspect.json"
   jq -e --arg arch "${platform#linux/}" --arg config "$config" --arg manifest "$digest" \
     '.[0]|.Os=="linux" and .Architecture==$arch and (.Id==$config or .Id==$manifest or .Descriptor.annotations["config.digest"]==$config)' \
@@ -71,6 +76,7 @@ if [[ "$kind" == image ]]; then
     exit "$result"
   }
   trap cleanup EXIT
+  image_stage image-probe
   timeout 120 docker run --rm --name "$name" --label "dev.proofstorm.qualification=$name" \
     --platform "$platform" --network none --read-only --cap-drop ALL \
     --security-opt no-new-privileges --memory 512m --cpus 1 --pids-limit 128 \
@@ -84,6 +90,7 @@ if [[ "$kind" == image ]]; then
 elif [[ "$kind" == lightning ]]; then
   jq '{bitcoin:[.components[]|select(.implementation=="bitcoin-core")|{version,image:.source}],lightning:[.scenario.component|{implementation,version,image:.source}]}' \
     "$case_file" > "$work/lightning-input.json"
+  image_stage lightning-compatibility
   bash "$root/tests/component-compat/bitcoin-lightning.sh" "$work/lightning-input.json" "$platform" "$work/lightning"
   jq -e '.passed==true and .expected_cases==1 and .completed_cases==1 and all(.cases[]; .passed==true and .cleanup_verified==true)' "$work/lightning/result.json" >/dev/null
 fi

@@ -160,7 +160,7 @@ fn run_selected(
     context.record("cdk-bdk-selected-plan.json", &published)?;
 
     crate::cell::apply(&mut client, &preview)?;
-    let ready = cell::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
     if selected_version.starts_with("candidate-") {
         super::candidates::pod_image(context, namespace, selected_image)?;

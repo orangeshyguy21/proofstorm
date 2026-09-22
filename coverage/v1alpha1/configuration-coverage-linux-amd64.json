@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:c710bd50e4f1c8e49510efce5c74baec3f3c13047706e395aa197eda6619af3a",
+  "catalog_digest": "sha256:eb536e7d1f5ab42dcff795f11cbd928497799f8d0f4d10cb624df2373c5d9ae5",
   "entries": [
     {
       "implementation": "bitcoin-core",
@@ -2302,9 +2302,7 @@
           }
         ],
         "authentication": [
-          "unauthenticated",
-          "nut21_clear",
-          "nut22_blind"
+          "unauthenticated"
         ],
         "compatible_wallet_adapters": [
           {
@@ -2343,13 +2341,6 @@
           "implementation": "redis",
           "versions": [
             "8.10.1"
-          ]
-        },
-        {
-          "link_kind": "authentication_backend",
-          "implementation": "keycloak",
-          "versions": [
-            "25.0.6"
           ]
         }
       ]

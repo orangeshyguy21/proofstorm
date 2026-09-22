@@ -50,6 +50,7 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
+    context.qualification_stage("materialize")?;
     let mut client = context.default_session("nutshell-oidc-live", "designer")?;
     let kubectl = &context.kubectl;
 
@@ -72,9 +73,10 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     crate::cell::apply(&mut client, &preview)?;
-    let status = cell::wait_phase(&mut client, INSTANCE, "ready", 240, Duration::from_secs(3))?;
+    let status = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
+    context.qualification_stage("funding")?;
     bitcoin(context, &namespace, &["createwallet", "default"])?;
     let miner = bitcoin(
         context,
@@ -116,6 +118,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         bail!("LND did not synchronize to the acceptance chain");
     }
 
+    context.qualification_stage("configuration")?;
     let mint_config = kubectl.get_json(&["get", "configmap/mint-config", "-n", &namespace])?;
     for (key, wanted) in [
         ("MINT_REQUIRE_AUTH", "TRUE"),

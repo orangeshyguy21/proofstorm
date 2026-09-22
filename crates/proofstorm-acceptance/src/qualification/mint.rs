@@ -102,7 +102,7 @@ pub(super) fn run(context: &GateContext, selection: &MintRoundtrip) -> Result<()
         );
     }
     cell::apply(&mut client, &preview)?;
-    let ready = cell::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?.to_owned();
     client.call(
         "run_start",

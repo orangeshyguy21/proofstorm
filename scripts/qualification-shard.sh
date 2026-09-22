@@ -22,7 +22,7 @@ while IFS= read -r id; do
       # Read only the public diagnostic schema, never error text/native output.
       detail=$(jq -er '
         (.reason // .native.reason // "gate-failed") as $reason |
-        (if (["channel-request-rejected", "insufficient-funds", "native-command-failed", "container-crash-loop", "cell-readiness-blocked", "native-observation-timeout"] | index($reason)) != null
+        (if (["channel-request-rejected", "insufficient-funds", "native-command-failed", "image-pull-failed", "image-pull-backoff", "invalid-image-name", "container-config-error", "container-crash-loop", "container-start-error", "container-exited", "pod-unschedulable", "cell-readiness-blocked", "native-observation-timeout"] | index($reason)) != null
          then $reason else "gate-failed" end) as $category |
         [.locations[]? | strings | select(test("^crates/proofstorm-acceptance/src/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.rs:[1-9][0-9]*(:[0-9]+)?$"))] as $locations |
         ([$locations[] | select(contains("/gates/") or contains("/qualification/"))][0] // $locations[0]) as $location |

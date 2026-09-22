@@ -600,8 +600,6 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 CatalogFeature::Regtest,
                 CatalogFeature::PersistentState,
                 CatalogFeature::Bolt11,
-                CatalogFeature::ClearAuth,
-                CatalogFeature::BlindAuth,
                 CatalogFeature::Sqlite,
                 CatalogFeature::Postgres,
                 CatalogFeature::RedisCache,
@@ -615,7 +613,6 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
                 dependency(LinkKind::DatabaseBackend, "redis", &["8.10.1"]),
-                dependency(LinkKind::AuthenticationBackend, "keycloak", &["25.0.6"]),
             ],
             support_matrix(
                 &[StorageBackend::Sqlite, StorageBackend::Postgres],
@@ -631,11 +628,9 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                         &["0.20.4-beta", "0.21.3-beta"],
                     ),
                 ],
-                &[
-                    AuthenticationMode::Unauthenticated,
-                    AuthenticationMode::Nut21Clear,
-                    AuthenticationMode::Nut22Blind,
-                ],
+                // Both shipped Nutshell families have an auth promises schema
+                // that cannot satisfy the shared ledger's issuance writes.
+                &[AuthenticationMode::Unauthenticated],
                 vec![version_support("nutshell-wallet", &["0.20.3"])],
             ),
             vec![ControlClass::Target],
@@ -822,16 +817,6 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
         entry.image = image.into();
         if entry.id == "nutshell" {
             entry.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
-            // 0.21's blind-auth database cannot issue valid auth proofs. Keep
-            // unauthenticated payments supported; do not advertise an unusable
-            // authenticated integration while waiting for an upstream fix.
-            entry.support_matrix.authentication =
-                BTreeSet::from([AuthenticationMode::Unauthenticated]);
-            entry.features.remove(&CatalogFeature::ClearAuth);
-            entry.features.remove(&CatalogFeature::BlindAuth);
-            entry
-                .compatible_dependencies
-                .retain(|dependency| dependency.link_kind != LinkKind::AuthenticationBackend);
         }
         if entry.kind == ComponentKind::Mint && entry.id != "cdk-bdk" {
             entry.support_matrix.compatible_wallet_adapters =
@@ -2226,34 +2211,25 @@ mod qualification_support_tests {
     fn upstream_gaps_are_not_advertised_as_supported_on_either_platform() {
         for platform in [CatalogPlatform::LinuxAmd64, CatalogPlatform::LinuxArm64] {
             let catalog = catalog_for_platform(platform);
-            let current = catalog
-                .entries
-                .iter()
-                .find(|entry| entry.id == "nutshell" && entry.version == "0.21.0")
-                .unwrap();
-            assert_eq!(
-                current.support_matrix.authentication,
-                [AuthenticationMode::Unauthenticated].into()
-            );
-            assert!(!current.features.contains(&CatalogFeature::ClearAuth));
-            assert!(!current.features.contains(&CatalogFeature::BlindAuth));
-            assert!(
-                !current
-                    .compatible_dependencies
+            for version in ["0.20.3", "0.21.0"] {
+                let entry = catalog
+                    .entries
                     .iter()
-                    .any(|dependency| dependency.link_kind == LinkKind::AuthenticationBackend)
-            );
-            let previous = catalog
-                .entries
-                .iter()
-                .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
-                .unwrap();
-            assert!(
-                previous
-                    .support_matrix
-                    .authentication
-                    .contains(&AuthenticationMode::Nut22Blind)
-            );
+                    .find(|entry| entry.id == "nutshell" && entry.version == version)
+                    .unwrap();
+                assert_eq!(
+                    entry.support_matrix.authentication,
+                    [AuthenticationMode::Unauthenticated].into()
+                );
+                assert!(!entry.features.contains(&CatalogFeature::ClearAuth));
+                assert!(!entry.features.contains(&CatalogFeature::BlindAuth));
+                assert!(
+                    !entry
+                        .compatible_dependencies
+                        .iter()
+                        .any(|dependency| dependency.link_kind == LinkKind::AuthenticationBackend)
+                );
+            }
             let mut bdk = catalog
                 .entries
                 .iter()

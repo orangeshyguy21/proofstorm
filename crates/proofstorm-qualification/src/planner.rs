@@ -344,7 +344,14 @@ impl Builder<'_> {
             .filter(|entry| entry.support_lifecycle.is_supported())
         {
             match entry.id.as_str() {
-                "bitcoin-core" | "nutshell-wallet" | "postgresql" | "redis" | "keycloak" => {}
+                "bitcoin-core" | "nutshell-wallet" | "postgresql" | "redis" => {}
+                "keycloak" => self.gate(
+                    "keycloak",
+                    &[entry],
+                    &["postgresql"],
+                    behavioral(entry),
+                    true,
+                )?,
                 "lnd" | "cln" => {
                     let bitcoin = preferred(self.catalog, "bitcoin-core")?;
                     let mut claims = behavioral(entry);

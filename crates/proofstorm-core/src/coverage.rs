@@ -210,12 +210,7 @@ mod tests {
         );
         assert_eq!(
             nutshell.support.authentication,
-            [
-                AuthenticationMode::Unauthenticated,
-                AuthenticationMode::Nut21Clear,
-                AuthenticationMode::Nut22Blind
-            ]
-            .into()
+            [AuthenticationMode::Unauthenticated].into()
         );
         assert_eq!(
             nutshell.fields["oidc_discovery_url"].classification,

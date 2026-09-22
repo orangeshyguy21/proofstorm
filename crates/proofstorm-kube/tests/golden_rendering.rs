@@ -563,6 +563,134 @@ fn assert_postgres_bootstrap_env(container: &Value) {
 }
 
 #[test]
+fn cdk_waits_for_external_lightning_before_reading_credentials_or_opening_rpc() {
+    for (backend, port) in [("lnd", "10009"), ("cln", "9735")] {
+        for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+            let (mut spec, _) = backend_cell("cdk");
+            *spec
+                .components
+                .iter_mut()
+                .find(|component| component.id == "lightning")
+                .unwrap() = component(
+                "lightning",
+                ComponentKind::Lightning,
+                backend,
+                ControlClass::Cell,
+            );
+            let lock = resolve_lock(&spec, &catalog_for_platform(platform)).unwrap();
+            let plans =
+                compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+            let rendered = render_cdk_component(
+                plans
+                    .iter()
+                    .find(|plan| plan.component_id == "mint")
+                    .unwrap(),
+            )
+            .unwrap();
+            let pod = rendered.deployments[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .template
+                .spec
+                .as_ref()
+                .unwrap();
+            let init = pod.init_containers.as_ref().unwrap();
+            let wait = init
+                .iter()
+                .position(|container| container.name == "wait-for-lightning")
+                .unwrap();
+            let initialize = init
+                .iter()
+                .position(|container| container.name == "initialize-config")
+                .unwrap();
+            assert!(wait < initialize);
+            assert_eq!(
+                &init[wait].command.as_ref().unwrap()[4..],
+                ["lightning", port]
+            );
+            assert!(init[wait].env.is_none());
+            assert!(init[wait].volume_mounts.is_none());
+        }
+    }
+}
+
+#[test]
+fn every_cdk_backend_waits_for_its_linked_postgres_before_initialization() {
+    for backend in ["cdk", "cdk-ldk", "cdk-bdk", "ldk-server"] {
+        for postgres in [false, true] {
+            let (mut spec, _) = backend_cell(backend);
+            if postgres {
+                spec.components.push(component(
+                    "mint-storage",
+                    ComponentKind::Database,
+                    "postgresql",
+                    ControlClass::Cell,
+                ));
+                spec.links.push(database_link("mint", "mint-storage"));
+            }
+            for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+                let catalog = catalog_for_platform(platform);
+                let lock = resolve_lock(&spec, &catalog).unwrap();
+                let plans =
+                    compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+                let plan = plans.iter().find(|p| p.component_id == "mint").unwrap();
+                let rendered = render_cdk_component(plan).unwrap();
+                let pod = rendered.deployments[0]
+                    .spec
+                    .as_ref()
+                    .unwrap()
+                    .template
+                    .spec
+                    .as_ref()
+                    .unwrap();
+                let init = pod.init_containers.as_ref().unwrap();
+                let wait = init.iter().position(|c| c.name == "wait-for-database");
+                if postgres {
+                    let wait = wait.expect("PostgreSQL must precede CDK config access");
+                    let initialize = init
+                        .iter()
+                        .position(|c| c.name == "initialize-config")
+                        .unwrap();
+                    assert!(wait < initialize);
+                    let command = init[wait].command.as_ref().unwrap();
+                    assert_eq!(&command[4..], ["mint-storage", "5432"]);
+                    // Waiting needs connectivity, not the database credential.
+                    assert!(init[wait].env.is_none());
+                    assert!(init[wait].volume_mounts.is_none());
+                    let database = plans
+                        .iter()
+                        .find(|p| p.component_id == "mint-storage")
+                        .unwrap();
+                    let rendered = render_postgres_component(database).unwrap();
+                    let pod = rendered.stateful_sets[0]
+                        .spec
+                        .as_ref()
+                        .unwrap()
+                        .template
+                        .spec
+                        .as_ref()
+                        .unwrap();
+                    let probe = pod.containers[0]
+                        .readiness_probe
+                        .as_ref()
+                        .unwrap()
+                        .exec
+                        .as_ref()
+                        .unwrap()
+                        .command
+                        .as_ref()
+                        .unwrap();
+                    assert_eq!(&probe[..5], ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]);
+                } else {
+                    assert!(wait.is_none(), "SQLite must not wait for PostgreSQL");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
     let spec = cell(
         "golden-cdk-postgres",
@@ -933,13 +1061,27 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
             authentication_link("mint", "identity"),
         ],
     );
-    // Authenticated integration remains on the supported 0.20 release family.
+    // Exercise the retained renderer with an explicit synthetic compatibility
+    // declaration. Shipped Nutshell releases cannot issue blind-auth proofs.
     spec.components
         .iter_mut()
         .find(|component| component.id == "mint")
         .unwrap()
         .version = Some("0.20.3".into());
-    let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell Keycloak lock");
+    let mut catalog = default_catalog().clone();
+    assert!(resolve_lock(&spec, &catalog).is_err());
+    catalog
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
+        .unwrap()
+        .compatible_dependencies
+        .push(proofstorm_core::CatalogDependencySupport {
+            link_kind: LinkKind::AuthenticationBackend,
+            implementation: "keycloak".into(),
+            versions: ["25.0.6".into()].into(),
+        });
+    let lock = resolve_lock(&spec, &catalog).expect("synthetic Nutshell Keycloak lock");
     let rendered =
         render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Keycloak render");
     let mint_config = rendered

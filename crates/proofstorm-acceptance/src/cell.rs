@@ -51,6 +51,67 @@ pub fn wait_ready(client: &mut McpClient, instance_id: &str) -> Result<Value> {
     bail!("cell {instance_id} did not become ready within 480 seconds")
 }
 
+/// Keep startup evidence private and collect it before the owned runtime is
+/// removed. Include every component and init container: a mint can be waiting
+/// on its database, Lightning node, or identity provider when startup fails.
+pub(crate) fn wait_ready_recorded(
+    context: &crate::GateContext,
+    client: &mut McpClient,
+    instance_id: &str,
+) -> Result<Value> {
+    let result = wait_ready(client, instance_id);
+    if result.is_err()
+        && let Ok(status) = status(client, instance_id)
+        && let Some(namespace) = status["instance_namespace"].as_str()
+    {
+        let _ = context.record("startup-cell.json", &status);
+        if let Ok(pods) =
+            context
+                .kubectl
+                .get_json(&["get", "pods", "-n", namespace, "--request-timeout=10s"])
+        {
+            let _ = context.record("startup-pods.json", &pods);
+            let started = std::time::Instant::now();
+            let mut logs = Vec::new();
+            'pods: for pod in pods["items"].as_array().into_iter().flatten() {
+                let Some(name) = pod["metadata"]["name"].as_str() else {
+                    continue;
+                };
+                for group in ["initContainers", "containers"] {
+                    for container in pod["spec"][group].as_array().into_iter().flatten() {
+                        let Some(container) = container["name"].as_str() else {
+                            continue;
+                        };
+                        for previous in [false, true] {
+                            if started.elapsed() >= Duration::from_secs(45) {
+                                break 'pods;
+                            }
+                            let mut args = vec![
+                                "logs",
+                                name,
+                                "-n",
+                                namespace,
+                                "-c",
+                                container,
+                                "--tail=100",
+                                "--request-timeout=5s",
+                            ];
+                            if previous {
+                                args.push("--previous");
+                            }
+                            if let Ok(output) = context.kubectl.run(&args) {
+                                logs.push(json!({"pod":name,"container":container,"previous":previous,"output":output}));
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = context.record("startup-container-logs.json", &json!(logs));
+        }
+    }
+    result
+}
+
 /// Wait for a verified close.
 pub fn wait_closed(client: &mut McpClient, instance_id: &str) -> Result<Value> {
     // Verified close removes the named instance. Wait on the cached incarnation

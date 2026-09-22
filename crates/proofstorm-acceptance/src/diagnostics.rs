@@ -99,12 +99,22 @@ pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
                     message.strip_prefix("cell readiness blocked or superseded: ")
                 {
                     let status = serde_json::from_str::<Value>(content).unwrap_or_default();
-                    if status["blockers"].as_array().is_some_and(|blockers| {
-                        blockers
-                            .iter()
-                            .any(|blocker| blocker["reason"] == "container_crash_loop")
+                    if let Some(reason) = status["blockers"].as_array().and_then(|blockers| {
+                        blockers.iter().find_map(|blocker| {
+                            Some(match blocker["reason"].as_str()? {
+                                "image_pull_failed" => "image-pull-failed",
+                                "image_pull_backoff" => "image-pull-backoff",
+                                "invalid_image_name" => "invalid-image-name",
+                                "container_config_error" => "container-config-error",
+                                "container_crash_loop" => "container-crash-loop",
+                                "container_start_error" => "container-start-error",
+                                "container_exited" => "container-exited",
+                                "pod_unschedulable" => "pod-unschedulable",
+                                _ => return None,
+                            })
+                        })
                     }) {
-                        return "container-crash-loop";
+                        return reason;
                     }
                     return "cell-readiness-blocked";
                 }
@@ -200,10 +210,44 @@ fn gate_stage(work: &Path) -> &'static str {
     }
 }
 
+fn image_stage(work: &Path) -> &'static str {
+    let result = text(&work.join("lightning/result.json"))
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let stage = result
+        .as_ref()
+        .and_then(|result| result["cases"].as_array())
+        .and_then(|cases| cases.iter().find(|case| case["passed"] == false))
+        .and_then(|case| case["last_stage"].as_str());
+    match stage {
+        Some("setup") => "lightning-setup",
+        Some("bitcoin-startup") => "lightning-bitcoin-startup",
+        Some("lightning-startup") => "lightning-startup",
+        Some("funding") => "lightning-funding",
+        Some("channel-ready") => "lightning-channel-ready",
+        Some("payment") => "lightning-payment",
+        Some("restart") => "lightning-restart",
+        Some("mint-wallet-compatibility") => "lightning-mint-wallet",
+        Some("complete") => "lightning-cleanup",
+        _ => {
+            let phase = text(&work.join("qualification-image-stage.json"))
+                .and_then(|text| serde_json::from_str::<String>(&text).ok());
+            match phase.as_deref() {
+                Some("registry-manifest") => "registry-manifest",
+                Some("registry-platform-manifest") => "registry-platform-manifest",
+                Some("image-pull") => "image-pull",
+                Some("image-inspection") => "image-inspection",
+                Some("image-probe") => "image-probe",
+                Some("lightning-compatibility") => "lightning-compatibility",
+                _ => "images",
+            }
+        }
+    }
+}
+
 pub(crate) fn progress(work: &Path, log: &Path, elapsed_seconds: u64) -> Value {
     let stage = match log.file_name().and_then(|name| name.to_str()) {
         Some("setup.log") => setup_stage(work),
-        Some("image-qualification.log") => "images",
+        Some("image-qualification.log") => image_stage(work),
         _ => gate_stage(work),
     };
     json!({"stage":stage,"elapsed_seconds":elapsed_seconds,"resources":resources(work)})
@@ -251,7 +295,7 @@ pub(crate) fn qualification_stage(
         .into();
     }
     match report["setup"].as_str() {
-        Some("not_run" | "not_required") => "images".into(),
+        Some("not_run" | "not_required") => image_stage(work).into(),
         Some("passed") => gate_stage(work).into(),
         _ => setup_stage(work).into(),
     }
@@ -326,6 +370,23 @@ mod tests {
         ));
         assert_eq!(summary["reason"], "container-crash-loop");
         assert!(!summary.to_string().contains("private-"));
+        for (reason, expected) in [
+            ("image_pull_failed", "image-pull-failed"),
+            ("image_pull_backoff", "image-pull-backoff"),
+            ("invalid_image_name", "invalid-image-name"),
+            ("container_config_error", "container-config-error"),
+            ("container_start_error", "container-start-error"),
+            ("container_exited", "container-exited"),
+            ("pod_unschedulable", "pod-unschedulable"),
+            ("private-secret", "cell-readiness-blocked"),
+        ] {
+            let status = json!({"blockers":[{"reason":reason,"component_id":"private-component","message":"private-secret"}]});
+            let summary = gate_failure(&anyhow::anyhow!(
+                "cell readiness blocked or superseded: {status}"
+            ));
+            assert_eq!(summary["reason"], expected);
+            assert!(!summary.to_string().contains("private-"));
+        }
         let summary = gate_failure(&anyhow::anyhow!(
             "native observation private-id timed out: private-output"
         ));
@@ -401,6 +462,60 @@ mod tests {
             assert_eq!(
                 qualification_stage(root.path(), &json!({"setup":"passed"}), false, true, true),
                 stage
+            );
+        }
+    }
+
+    #[test]
+    fn standalone_lightning_failures_report_only_allowlisted_behavioral_stages() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("lightning")).unwrap();
+        for (stage, expected) in [
+            ("payment", "lightning-payment"),
+            ("restart", "lightning-restart"),
+            ("private-secret", "images"),
+        ] {
+            fs::write(root.path().join("lightning/result.json"), json!({
+                "cases":[{"passed":true,"last_stage":"complete"},{"passed":false,"last_stage":stage,"stderr":"private-secret"}]
+            }).to_string()).unwrap();
+            assert_eq!(
+                qualification_stage(
+                    root.path(),
+                    &json!({"setup":"not_required"}),
+                    false,
+                    true,
+                    true
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn image_failures_distinguish_registry_transfer_and_probe_without_private_text() {
+        let root = tempfile::tempdir().unwrap();
+        for stage in [
+            "registry-manifest",
+            "registry-platform-manifest",
+            "image-pull",
+            "image-inspection",
+            "image-probe",
+            "lightning-compatibility",
+            "private-secret",
+        ] {
+            fs::write(
+                root.path().join("qualification-image-stage.json"),
+                json!(stage).to_string(),
+            )
+            .unwrap();
+            let expected = if stage == "private-secret" {
+                "images"
+            } else {
+                stage
+            };
+            assert_eq!(
+                qualification_stage(root.path(), &json!({"setup":"not_run"}), false, false, true),
+                expected
             );
         }
     }

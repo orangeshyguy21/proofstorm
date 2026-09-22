@@ -34,6 +34,7 @@ fn cell_document() -> Value {
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
+    context.qualification_stage("materialize")?;
     let mut client = context.default_session("cdk-postgres-live", "designer")?;
 
     let catalog = client.call(
@@ -89,9 +90,10 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     crate::cell::apply(&mut client, &preview)?;
-    let ready = cell::wait_phase(&mut client, INSTANCE, "ready", 200, Duration::from_secs(3))?;
+    let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
 
+    context.qualification_stage("configuration")?;
     let public_config = context.kubectl.run(&[
         "get",
         "configmap/mint-config",
@@ -130,12 +132,16 @@ pub fn run(context: &GateContext) -> Result<()> {
     let deployment = context
         .kubectl
         .get_json(&["get", "deployment/mint", "-n", namespace])?;
-    for group in ["initContainers", "containers"] {
+    for (group, name) in [
+        ("initContainers", "initialize-config"),
+        ("containers", "component"),
+    ] {
         let containers = expect::array(&deployment, &format!("/spec/template/spec/{group}"))?;
-        let first = containers
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("{group} is empty"))?;
-        let url = first
+        let container = containers
+            .iter()
+            .find(|container| container["name"] == name)
+            .ok_or_else(|| anyhow::anyhow!("{name} is missing from {group}"))?;
+        let url = container
             .get("env")
             .and_then(Value::as_array)
             .and_then(|env| {
@@ -200,6 +206,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "jsonpath={.data}",
     ];
     let management_digest = context.kubectl.digest(&management_args)?;
+    context.qualification_stage("restart")?;
     context
         .kubectl
         .rollout_restart(CONTROL_NAMESPACE, "deployment/proofstormd")?;
@@ -218,6 +225,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     postgres::verify_sentinel(true, &context.kubectl, namespace, MARKER)?;
 
     cell::wait_phase(&mut client, INSTANCE, "ready", 60, Duration::from_secs(3))?;
+    context.qualification_stage("teardown")?;
     client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_phase(&mut client, INSTANCE, "closed", 60, Duration::from_secs(3))?;
 

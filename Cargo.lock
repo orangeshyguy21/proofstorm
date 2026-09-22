@@ -2836,6 +2836,7 @@ name = "proofstorm-acceptance"
 version = "0.1.0-alpha.6"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "nix",
  "proofstorm-app",

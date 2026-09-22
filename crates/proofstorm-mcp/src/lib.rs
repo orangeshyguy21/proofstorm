@@ -4040,12 +4040,12 @@ mod tests {
                 .contains(&proofstorm_core::CatalogFeature::RedisCache)
         );
         assert!(
-            nutshell
+            !nutshell
                 .features
                 .contains(&proofstorm_core::CatalogFeature::ClearAuth)
         );
         assert!(
-            nutshell
+            !nutshell
                 .features
                 .contains(&proofstorm_core::CatalogFeature::BlindAuth)
         );

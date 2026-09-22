@@ -51,11 +51,14 @@ Failed, missing, duplicate, skipped or stale evidence cannot qualify a merge.
 - Embedded BDK covers on-chain deposits, confirmation and dust handling,
   concurrent quote addresses and persistent settled quotes. Its catalog no
   longer advertises the BOLT11-only Nutshell wallet as an on-chain wallet pairing.
-- Nutshell 0.21's NUT-21/NUT-22 integration is excluded from supported claims
-  because the existing upstream blind-auth database defect prevents issuance.
-  The supported 0.20.3 authentication contract remains scheduled. Restore newer
-  authenticated support only with a qualifying upstream artifact and passing
-  positive, negative and replay/persistence tests; do not patch around it in CI.
+- Nutshell 0.20.3 and 0.21.0 NUT-21/NUT-22 integrations are excluded from supported
+  claims. Both shipped upstream authentication schemas lack columns used by the
+  shared ledger's blind-auth issuance query (`mint_quote`, `melt_quote`, `swap_id`,
+  and `order_index`). The 0.20.3 live conformance test also fails blind-auth issuance.
+  Restore authenticated support only with a qualifying upstream artifact and
+  passing positive, negative and replay/persistence tests; do not patch around it
+  in CI. Keycloak remains independently qualified for discovery, valid/invalid
+  logins, generated credentials, signing keys and persistence after restart.
 - CLN uses the corrected 26.06.7 digest published in the
   [upstream release notes](https://github.com/ElementsProject/lightning/releases/tag/v26.06.7).
   The previous image reported the same version without the release fixes.
@@ -121,6 +124,22 @@ arbitrary error messages and native output remain private. Read this console
 summary when a hosted runner's local `gate-0-qualification.log` is unavailable.
 The shard's final failure list and CI annotations repeat the failing stage,
 safe category and fixture source location when available, beside the case ID.
+Readiness failures preserve the specific fixed blocker category, including
+container exit, image pull, configuration, and scheduling failures. Startup
+failures retain private pod status and current/previous logs from every component
+and initializer before runtime cleanup, including Lightning and identity-provider
+dependencies. Capture has a bounded time budget; these are not public CI artifacts.
+All CDK payment backends wait for their linked PostgreSQL service before reading
+or initializing mint configuration. PostgreSQL readiness probes TCP loopback so
+its temporary socket-only bootstrap server cannot prematurely expose a ready
+Service endpoint. SQLite startup has no database wait; configuration failures
+after PostgreSQL is available still fail without retrying initialization.
+CDK also waits for its linked LND or CLN service before reading shared credentials
+or opening the native RPC connection. Standalone Lightning failures report their
+payment, funding, channel or restart stage from the private compatibility result,
+instead of treating every failure in that runner as an image download failure.
+Registry manifest lookup, image download, local image inspection and executable
+version probes also have separate fixed stage labels.
 Double-spend stages distinguish CDK and Nutshell startup from their replay checks.
 Nutshell waits for its linked LND REST service before starting, avoiding a fatal
 first backend check while LND is still initializing. Failed double-spend fixtures

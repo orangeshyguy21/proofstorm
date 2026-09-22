@@ -131,6 +131,28 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
 }
 
 #[test]
+fn unsupported_mint_auth_does_not_remove_identity_provider_coverage() {
+    let root = TempDir::new().unwrap();
+    let (_, plan) = planned(root.path(), "full");
+    let cases = serde_json::to_value(&plan.cases).unwrap();
+    for platform in ["linux/amd64", "linux/arm64"] {
+        assert!(cases.as_array().unwrap().iter().any(|case| {
+            case["platform"] == platform
+                && case["required"] == true
+                && case["scenario"]["name"] == "keycloak"
+                && case["components"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["implementation"] == "postgresql")
+        }));
+    }
+    assert!(!cases.to_string().contains("nutshell-oidc"));
+    assert!(!cases.to_string().contains("nut21_clear"));
+    assert!(!cases.to_string().contains("nut22_blind"));
+}
+
+#[test]
 fn downloaded_artifacts_and_aggregate_reject_failed_missing_duplicate_and_stale_evidence() {
     let root = TempDir::new().unwrap();
     let (plan_path, plan) = planned(root.path(), "full");
@@ -251,14 +273,19 @@ if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
   jq '.passed=false | .stage="funding"' "$work/qualification-receipt.json" > "$work/changed.json"
   mv "$work/changed.json" "$work/qualification-receipt.json"
   printf '%s\n' '{"native":{"reason":"channel-request-rejected","stdout":"private fixture output"},"locations":["private fixture output","crates/proofstorm-acceptance/src/native.rs:100:5","crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"]}' > "$work/gate-failure.json"
+  if [[ "$QUALIFICATION_TEST_CATEGORY" == "container-exited" ]]; then
+    jq '.reason="container-exited" | .native=null' "$work/gate-failure.json" > "$work/changed.json"
+    mv "$work/changed.json" "$work/gate-failure.json"
+  fi
   exit 7
 fi
 "#,
     )
     .unwrap();
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o700)).unwrap();
-    for fail in [false, true] {
-        let directory = root.path().join(if fail { "failed" } else { "successful" });
+    for category in ["successful", "channel-request-rejected", "container-exited"] {
+        let fail = category != "successful";
+        let directory = root.path().join(category);
         fs::create_dir(&directory).unwrap();
         let calls = directory.join("calls");
         let output = Command::new("bash")
@@ -271,10 +298,16 @@ fi
             .env("QUALIFICATION_TEST_FIXTURES", &fixtures)
             .env("QUALIFICATION_TEST_FAILED", if fail { ids[0] } else { "" })
             .env("QUALIFICATION_TEST_MISSING", if fail { ids[1] } else { "" })
+            .env("QUALIFICATION_TEST_CATEGORY", category)
             .output()
             .unwrap();
         assert_eq!(output.status.success(), !fail, "{output:?}");
-        assert_shard_log(&String::from_utf8(output.stdout).unwrap(), fail, &ids);
+        assert_shard_log(
+            &String::from_utf8(output.stdout).unwrap(),
+            fail,
+            category,
+            &ids,
+        );
         assert_eq!(
             fs::read_to_string(calls)
                 .unwrap()
@@ -296,7 +329,7 @@ fi
 }
 
 #[cfg(unix)]
-fn assert_shard_log(log: &str, fail: bool, ids: &[&String]) {
+fn assert_shard_log(log: &str, fail: bool, category: &str, ids: &[&String]) {
     assert!(!log.contains("private fixture output"));
     if fail {
         for (id, reason) in [(ids[0], "acceptance exited 7"), (ids[1], "receipt missing")] {
@@ -305,9 +338,9 @@ fn assert_shard_log(log: &str, fail: bool, ids: &[&String]) {
         let summary = log.split("Qualification shard failed:").nth(1).unwrap();
         assert!(summary.starts_with(" 2 of 3 cases failed."));
         assert!(summary.contains(&format!("{}: acceptance exited 7", ids[0])));
-        assert!(summary.contains(
-            "channel-request-rejected; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"
-        ));
+        assert!(summary.contains(&format!(
+            "{category}; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"
+        )));
         assert!(summary.contains("stage=funding"));
         assert!(summary.contains(&format!("{}: receipt missing", ids[1])));
         assert!(

@@ -134,6 +134,7 @@ pub(super) fn exercise(
     namespace: &str,
     input_fee_ppk: u64,
 ) -> Result<()> {
+    context.qualification_stage("configuration")?;
     native(
         client,
         directory,
@@ -157,6 +158,7 @@ pub(super) fn exercise(
     }
     crate::cell::assert_retired_wallet_routes(client)?;
 
+    context.qualification_stage("funding")?;
     crate::native::bootstrap(
         client,
         INSTANCE,
@@ -268,6 +270,7 @@ pub(super) fn exercise(
         bail!("native balance did not corroborate funding: {native_balance}");
     }
 
+    context.qualification_stage("swap-and-melt")?;
     let fee_per_payment = if input_fee_ppk == 0 { 0 } else { 2 };
     let native_melt_fee = u64::from(input_fee_ppk != 0);
     // A fresh melt of an already-paid invoice can complete a preparation swap
@@ -282,6 +285,7 @@ pub(super) fn exercise(
         ),
     ] {
         if id == "after-restart-payment" {
+            context.qualification_stage("restart")?;
             operation(
                 client,
                 directory,
@@ -519,6 +523,7 @@ pub fn run(context: &GateContext) -> Result<()> {
 }
 
 pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
+    context.qualification_stage("materialize")?;
     let directory = context
         .root
         .join("dev/wallet-integration-runs")
@@ -544,7 +549,7 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     crate::cell::apply(&mut client, &preview)?;
     // Always attempt normal cleanup after materialization, including failed gates.
     let result = (|| -> Result<()> {
-        let ready = cell::wait_ready(&mut client, INSTANCE)?;
+        let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
         save(&directory, "ready", &ready)?;
         client.call(
             "run_start",

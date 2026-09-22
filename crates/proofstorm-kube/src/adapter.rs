@@ -1488,7 +1488,9 @@ pub fn render_postgres_component(
                         "ports": [{"name": "postgres", "containerPort": postgres_port}],
                         "securityContext": container_security(),
                         "readinessProbe": {
-                            "exec": {"command": ["pg_isready", "-U", "proofstorm", "-d", config.database_name]},
+                            // The entrypoint's temporary bootstrap server only
+                            // listens on a Unix socket. Consumers need TCP.
+                            "exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-p", postgres_port.to_string(), "-U", "proofstorm", "-d", config.database_name]},
                             "periodSeconds": 3,
                             "failureThreshold": 40
                         },
@@ -2030,6 +2032,7 @@ fn cdk_runtime_resources(
     ];
     let mut ports = vec![json!({"name": "http", "containerPort": http_port})];
     let grpc_target = processor::grpc_target(plan)?;
+    let mut lightning_target = None;
     let native_config = if let Some(target) = grpc_target {
         volume_mounts.push(processor::tls_mount(
             "payment-processor",
@@ -2089,6 +2092,7 @@ fn cdk_runtime_resources(
             )));
         };
         let lightning = plan_execution_target(plan, &payment_mount.name)?;
+        lightning_target = Some(lightning);
         let credential = plan_execution_credential(plan, &payment_mount.name)?;
         if lightning.backend_id != payment_mount.name
             || credential.source_component_id != lightning.component_id
@@ -2118,8 +2122,39 @@ fn cdk_runtime_resources(
         )?
     };
     let mut init_containers = Vec::new();
+    if database_secret.is_some() {
+        let database = plan_linked_target(plan, LinkKind::DatabaseBackend)?;
+        let port = target_port(database, "postgres")?;
+        init_containers.push(json!({
+            "name": "wait-for-database",
+            "image": PROBER_IMAGE,
+            "imagePullPolicy": "IfNotPresent",
+            "command": [
+                "sh", "-ec", include_str!("../drivers/wait_for_database.sh"),
+                "wait-for-database", database.component_id, port.to_string()
+            ],
+            "securityContext": container_security()
+        }));
+    }
     if let Some(target) = grpc_target {
         init_containers.push(processor::wait_for_processor(plan, target)?);
+    }
+    if let Some(lightning) = lightning_target {
+        let port = target_port(
+            lightning,
+            if lightning.backend_id == "lnd" {
+                "rpc"
+            } else {
+                "p2p"
+            },
+        )?;
+        init_containers.push(json!({
+            "name": "wait-for-lightning",
+            "image": PROBER_IMAGE,
+            "imagePullPolicy": "IfNotPresent",
+            "command": ["sh", "-ec", include_str!("../drivers/wait_for_lightning.sh"), "wait-for-lightning", lightning.component_id, port.to_string()],
+            "securityContext": container_security()
+        }));
     }
     if matches!(plan.backend_id.as_str(), "cdk-ldk" | "cdk-bdk") {
         let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
@@ -4428,14 +4463,13 @@ mod tests {
                 .expect("LND mount")["readOnly"],
             true
         );
-        assert_eq!(
-            deployment["spec"]["template"]["spec"]["initContainers"][0]["name"],
-            "initialize-config"
-        );
-        assert_eq!(
-            deployment["spec"]["template"]["spec"]["initContainers"][0]["command"][2],
-            CDK_INITIALIZE_CONFIG
-        );
+        let initializer = deployment["spec"]["template"]["spec"]["initContainers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|container| container["name"] == "initialize-config")
+            .expect("configuration initializer");
+        assert_eq!(initializer["command"][2], CDK_INITIALIZE_CONFIG);
         assert_eq!(deployment["spec"]["strategy"]["type"], "Recreate");
         assert_cdk_018_config_contract(config);
 
