@@ -73,7 +73,7 @@ pub fn CatalogPanel() -> impl IntoView {
             <div class="catalog-filters">
                 <input class="search" aria-label="Search catalog" placeholder="Search components, versions or images…" prop:value=move || search.get() on:input=move |ev| { cursor.set(None); search.set(event_target_value(&ev)); } />
                 <select aria-label="Component type" on:change=move |ev| { cursor.set(None); kind.set(event_target_value(&ev)); }>
-                    <option value="">"All component types"</option><option value="mint">"Mints"</option><option value="wallet">"Wallets"</option><option value="bitcoin">"Bitcoin"</option><option value="lightning">"Lightning"</option><option value="payment_processor">"Payment processors"</option><option value="database">"Databases"</option><option value="identity_provider">"Identity providers"</option><option value="attacker">"Attackers"</option><option value="proxy">"Proxies"</option><option value="oracle">"Oracles"</option>
+                    <option value="">"All component types"</option><option value="mint">"Mints"</option><option value="wallet">"Wallets"</option><option value="bitcoin">"Bitcoin"</option><option value="lightning">"Lightning"</option><option value="payment_processor">"Payment processors"</option><option value="database">"Databases"</option><option value="identity_provider">"Identity providers"</option><option value="workspace">"Workspaces"</option><option value="proxy">"Proxies"</option><option value="oracle">"Oracles"</option>
                 </select>
                 <select aria-label="Image origin" on:change=move |ev| { cursor.set(None); origin.set(event_target_value(&ev)); }>
                     <option value="">"All origins"</option><option value="built_in">"Built-in"</option><option value="candidate">"Candidate"</option>
@@ -115,7 +115,7 @@ fn CatalogRow(entry: Value, expanded: RwSignal<BTreeSet<String>>) -> impl IntoVi
         "wallet" => "Wallet",
         "database" => "Database",
         "identity_provider" => "Identity provider",
-        "attacker" => "Attacker",
+        "workspace" => "Workspace",
         "proxy" => "Proxy",
         "oracle" => "Oracle",
         _ => "Unknown",

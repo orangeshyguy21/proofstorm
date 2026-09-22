@@ -7,7 +7,7 @@
       "experiment_controllable"
     ],
     "backend_id": "workspace",
-    "component_id": "attacker",
+    "component_id": "workspace",
     "condition_aggregation": [
       {
         "all_of": [
@@ -59,7 +59,7 @@
       "implementation": "workspace"
     },
     "execution_context": {
-      "component_id": "attacker",
+      "component_id": "workspace",
       "environment": {
         "HOME": "/workspace",
         "PROOFSTORM_WORKSPACE": "/workspace"
@@ -78,7 +78,7 @@
       "state_contract": "proofstorm/workspace-state/v1"
     },
     "instance_key": "i-golden-b2",
-    "kind": "attacker",
+    "kind": "workspace",
     "linked_targets": {},
     "operation_admission": [
       {
@@ -131,20 +131,20 @@
     "rollout_digest": "sha256:e2130bb2f119bbf52cab4972a85364c271832640d52a6cd6b985b6ecb32ddbca",
     "storage": [
       {
-        "claim_name": "attacker-data"
+        "claim_name": "workspace-data"
       }
     ],
     "target_descriptor": {
       "backend_id": "workspace",
-      "component_id": "attacker",
-      "kind": "attacker",
+      "component_id": "workspace",
+      "kind": "workspace",
       "ports": {},
       "version": "0.1.0-alpha.1"
     },
     "workload": {
       "desired_replicas": 1,
       "kind": "deployment",
-      "name": "attacker"
+      "name": "workspace"
     }
   },
   "resources": {
@@ -161,11 +161,11 @@
           },
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "attacker",
+            "proofstorm.dev/component": "workspace",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "attacker"
+            "proofstorm.dev/network-identity": "workspace"
           },
-          "name": "attacker",
+          "name": "workspace",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {
@@ -173,9 +173,9 @@
           "selector": {
             "matchLabels": {
               "app.kubernetes.io/managed-by": "proofstormd",
-              "proofstorm.dev/component": "attacker",
+              "proofstorm.dev/component": "workspace",
               "proofstorm.dev/instance": "i-golden-b2",
-              "proofstorm.dev/network-identity": "attacker"
+              "proofstorm.dev/network-identity": "workspace"
             }
           },
           "strategy": {
@@ -188,9 +188,9 @@
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
-                "proofstorm.dev/component": "attacker",
+                "proofstorm.dev/component": "workspace",
                 "proofstorm.dev/instance": "i-golden-b2",
-                "proofstorm.dev/network-identity": "attacker"
+                "proofstorm.dev/network-identity": "workspace"
               }
             },
             "spec": {
@@ -331,7 +331,7 @@
                 {
                   "name": "workspace",
                   "persistentVolumeClaim": {
-                    "claimName": "attacker-data"
+                    "claimName": "workspace-data"
                   }
                 },
                 {
@@ -351,11 +351,11 @@
         "metadata": {
           "labels": {
             "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "attacker",
+            "proofstorm.dev/component": "workspace",
             "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "attacker"
+            "proofstorm.dev/network-identity": "workspace"
           },
-          "name": "attacker-data",
+          "name": "workspace-data",
           "namespace": "proofstorm-i-golden-b2"
         },
         "spec": {

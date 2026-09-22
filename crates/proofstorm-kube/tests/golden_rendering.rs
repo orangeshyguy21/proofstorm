@@ -9,10 +9,10 @@ use proofstorm_core::{
 use proofstorm_kube::{
     CellAction, ComponentForensicsAction, ProofstormCell, ProofstormCellAction,
     ProofstormCellActionSpec, ProofstormCellSpec, RenderedComponent, compile_component_plans,
-    render_attacker_component, render_bitcoin_component, render_cdk_component, render_cell,
-    render_cell_action_job, render_cln_component, render_keycloak_component, render_lnd_component,
+    render_bitcoin_component, render_cdk_component, render_cell, render_cell_action_job,
+    render_cln_component, render_keycloak_component, render_lnd_component,
     render_nutshell_mint_component, render_postgres_component, render_redis_component,
-    render_security_spine, render_wallet_component,
+    render_security_spine, render_wallet_component, render_workspace_component,
 };
 use serde_json::{Value, json};
 
@@ -299,16 +299,16 @@ fn backend_cell(backend_id: &str) -> (CellSpec, &'static str) {
         ),
         "workspace" => (
             cell(
-                "golden-attacker",
+                "golden-workspace",
                 vec![component(
-                    "attacker",
-                    ComponentKind::Attacker,
                     "workspace",
-                    ControlClass::Attacker,
+                    ComponentKind::Workspace,
+                    "workspace",
+                    ControlClass::Workspace,
                 )],
                 vec![],
             ),
-            "attacker",
+            "workspace",
         ),
         _ => panic!("uncharacterized backend {backend_id}"),
     }
@@ -379,7 +379,7 @@ fn render_backend_with_catalog(backend_id: &str, catalog: &CatalogResponse) -> V
         "postgresql" => render_postgres_component(plan),
         "redis" => render_redis_component(plan),
         "keycloak" => render_keycloak_component(plan),
-        "workspace" => render_attacker_component(plan),
+        "workspace" => render_workspace_component(plan),
         _ => panic!("uncharacterized backend {backend_id}"),
     }
     .expect("backend render");
@@ -479,10 +479,10 @@ fn full_baseline_cell() -> CellSpec {
                 ControlClass::Cell,
             ),
             component(
-                "attacker",
-                ComponentKind::Attacker,
                 "workspace",
-                ControlClass::Attacker,
+                ComponentKind::Workspace,
+                "workspace",
+                ControlClass::Workspace,
             ),
         ],
         vec![
@@ -560,6 +560,242 @@ fn assert_postgres_bootstrap_env(container: &Value) {
         postgres_url["valueFrom"]["secretKeyRef"],
         json!({"name": "database-credentials", "key": "DATABASE_URL"})
     );
+}
+
+#[test]
+fn cdk_waits_for_external_lightning_before_reading_credentials_or_opening_rpc() {
+    for (backend, port) in [("lnd", "10009"), ("cln", "9735")] {
+        for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+            let (mut spec, _) = backend_cell("cdk");
+            *spec
+                .components
+                .iter_mut()
+                .find(|component| component.id == "lightning")
+                .unwrap() = component(
+                "lightning",
+                ComponentKind::Lightning,
+                backend,
+                ControlClass::Cell,
+            );
+            let lock = resolve_lock(&spec, &catalog_for_platform(platform)).unwrap();
+            let plans =
+                compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+            let rendered = render_cdk_component(
+                plans
+                    .iter()
+                    .find(|plan| plan.component_id == "mint")
+                    .unwrap(),
+            )
+            .unwrap();
+            let pod = rendered.deployments[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .template
+                .spec
+                .as_ref()
+                .unwrap();
+            let init = pod.init_containers.as_ref().unwrap();
+            let wait = init
+                .iter()
+                .position(|container| container.name == "wait-for-lightning")
+                .unwrap();
+            let initialize = init
+                .iter()
+                .position(|container| container.name == "initialize-config")
+                .unwrap();
+            assert!(wait < initialize);
+            assert_eq!(
+                &init[wait].command.as_ref().unwrap()[4..],
+                ["lightning", port]
+            );
+            assert!(init[wait].env.is_none());
+            assert!(init[wait].volume_mounts.is_none());
+        }
+    }
+}
+
+#[test]
+fn keycloak_waits_for_its_actual_database_service_without_database_credentials() {
+    for platform in [CatalogPlatform::LinuxAmd64, CatalogPlatform::LinuxArm64] {
+        let (mut spec, _) = backend_cell("keycloak");
+        spec.components
+            .iter_mut()
+            .find(|c| c.id == "database")
+            .unwrap()
+            .id = "identity-storage".into();
+        spec.links
+            .iter_mut()
+            .find(|link| link.kind == LinkKind::DatabaseBackend)
+            .unwrap()
+            .to = "identity-storage".into();
+        let lock = resolve_lock(&spec, &catalog_for_platform(platform)).unwrap();
+        let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let plan = plans.iter().find(|p| p.component_id == "identity").unwrap();
+        let rendered = render_keycloak_component(plan).unwrap();
+        let pod = rendered.deployments[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap();
+        let init = pod.init_containers.as_ref().unwrap();
+        assert_eq!(init.len(), 1);
+        assert_eq!(init[0].name, "wait-for-database");
+        assert_eq!(
+            &init[0].command.as_ref().unwrap()[4..],
+            ["identity-storage", "5432"]
+        );
+        assert!(init[0].env.is_none());
+        assert!(init[0].volume_mounts.is_none());
+        let database = plans
+            .iter()
+            .find(|p| p.component_id == "identity-storage")
+            .unwrap();
+        let rendered = render_postgres_component(database).unwrap();
+        let probe = rendered.stateful_sets[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap()
+            .containers[0]
+            .readiness_probe
+            .as_ref()
+            .unwrap()
+            .exec
+            .as_ref()
+            .unwrap()
+            .command
+            .as_ref()
+            .unwrap();
+        assert_eq!(&probe[..5], ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]);
+    }
+}
+
+/// The JVM augments and imports its realm at startup and does not fit the
+/// namespace default, so the limit must stay above it or the pod is OOM killed
+/// before it can ever pass its readiness probe.
+#[test]
+fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
+    let mebibytes = |quantity: &k8s_openapi::apimachinery::pkg::api::resource::Quantity| {
+        let value = &quantity.0;
+        let (amount, scale) = value.split_at(value.len() - 2);
+        amount.parse::<u64>().unwrap()
+            * match scale {
+                "Mi" => 1,
+                "Gi" => 1024,
+                other => panic!("unexpected quantity scale {other:?} in {value:?}"),
+            }
+    };
+    let default = render_security_spine(INSTANCE_KEY)
+        .limits
+        .spec
+        .unwrap()
+        .limits[0]
+        .default
+        .clone()
+        .unwrap();
+    let (spec, _) = backend_cell("keycloak");
+    let lock = resolve_lock(&spec, default_catalog()).unwrap();
+    let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+    let plan = plans.iter().find(|p| p.component_id == "identity").unwrap();
+    let rendered = render_keycloak_component(plan).unwrap();
+    let resources = rendered.deployments[0]
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap()
+        .containers[0]
+        .resources
+        .as_ref()
+        .expect("keycloak declares its own resources");
+    let limits = resources.limits.as_ref().unwrap();
+    let requests = resources.requests.as_ref().unwrap();
+    assert!(mebibytes(&limits["memory"]) > mebibytes(&default["memory"]));
+    assert!(mebibytes(&requests["memory"]) <= mebibytes(&limits["memory"]));
+}
+
+#[test]
+fn every_cdk_backend_waits_for_its_linked_postgres_before_initialization() {
+    for backend in ["cdk", "cdk-ldk", "cdk-bdk", "ldk-server"] {
+        for postgres in [false, true] {
+            let (mut spec, _) = backend_cell(backend);
+            if postgres {
+                spec.components.push(component(
+                    "mint-storage",
+                    ComponentKind::Database,
+                    "postgresql",
+                    ControlClass::Cell,
+                ));
+                spec.links.push(database_link("mint", "mint-storage"));
+            }
+            for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+                let catalog = catalog_for_platform(platform);
+                let lock = resolve_lock(&spec, &catalog).unwrap();
+                let plans =
+                    compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+                let plan = plans.iter().find(|p| p.component_id == "mint").unwrap();
+                let rendered = render_cdk_component(plan).unwrap();
+                let pod = rendered.deployments[0]
+                    .spec
+                    .as_ref()
+                    .unwrap()
+                    .template
+                    .spec
+                    .as_ref()
+                    .unwrap();
+                let init = pod.init_containers.as_ref().unwrap();
+                let wait = init.iter().position(|c| c.name == "wait-for-database");
+                if postgres {
+                    let wait = wait.expect("PostgreSQL must precede CDK config access");
+                    let initialize = init
+                        .iter()
+                        .position(|c| c.name == "initialize-config")
+                        .unwrap();
+                    assert!(wait < initialize);
+                    let command = init[wait].command.as_ref().unwrap();
+                    assert_eq!(&command[4..], ["mint-storage", "5432"]);
+                    // Waiting needs connectivity, not the database credential.
+                    assert!(init[wait].env.is_none());
+                    assert!(init[wait].volume_mounts.is_none());
+                    let database = plans
+                        .iter()
+                        .find(|p| p.component_id == "mint-storage")
+                        .unwrap();
+                    let rendered = render_postgres_component(database).unwrap();
+                    let pod = rendered.stateful_sets[0]
+                        .spec
+                        .as_ref()
+                        .unwrap()
+                        .template
+                        .spec
+                        .as_ref()
+                        .unwrap();
+                    let probe = pod.containers[0]
+                        .readiness_probe
+                        .as_ref()
+                        .unwrap()
+                        .exec
+                        .as_ref()
+                        .unwrap()
+                        .command
+                        .as_ref()
+                        .unwrap();
+                    assert_eq!(&probe[..5], ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]);
+                } else {
+                    assert!(wait.is_none(), "SQLite must not wait for PostgreSQL");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -892,7 +1128,7 @@ fn nutshell_oidc_auth_projects_exact_upstream_contract_and_persistent_auth_ledge
     reason = "the OIDC golden keeps provider topology, secret boundaries, and mint projection in one contract"
 )]
 fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_private() {
-    let spec = cell(
+    let mut spec = cell(
         "golden-nutshell-keycloak",
         vec![
             component(
@@ -933,7 +1169,27 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
             authentication_link("mint", "identity"),
         ],
     );
-    let lock = resolve_lock(&spec, default_catalog()).expect("Nutshell Keycloak lock");
+    // Exercise the retained renderer with an explicit synthetic compatibility
+    // declaration. Shipped Nutshell releases cannot issue blind-auth proofs.
+    spec.components
+        .iter_mut()
+        .find(|component| component.id == "mint")
+        .unwrap()
+        .version = Some("0.20.3".into());
+    let mut catalog = default_catalog().clone();
+    assert!(resolve_lock(&spec, &catalog).is_err());
+    catalog
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
+        .unwrap()
+        .compatible_dependencies
+        .push(proofstorm_core::CatalogDependencySupport {
+            link_kind: LinkKind::AuthenticationBackend,
+            implementation: "keycloak".into(),
+            versions: ["25.0.6".into()].into(),
+        });
+    let lock = resolve_lock(&spec, &catalog).expect("synthetic Nutshell Keycloak lock");
     let rendered =
         render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Keycloak render");
     let mint_config = rendered
@@ -986,7 +1242,10 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
         .iter()
         .map(|container| container["name"].as_str().unwrap())
         .collect();
-    assert_eq!(initializers, ["proofstorm-driver", "wait-for-oidc"]);
+    assert_eq!(
+        initializers,
+        ["proofstorm-driver", "wait-for-lightning", "wait-for-oidc"]
+    );
     assert_eq!(
         mint.pointer("/spec/template/spec/containers/0/command"),
         Some(&json!(["mint"]))

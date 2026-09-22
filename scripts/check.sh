@@ -78,6 +78,7 @@ check_shell() {
   shellcheck --external-sources scripts/update-site.sh scripts/test-update-site.sh
   shellcheck scripts/test-component-driver.sh tests/component-driver/*.sh
   shellcheck tests/component-compat/*.sh
+  shellcheck scripts/qualification-*.sh
   shellcheck scripts/test-cdk-config.sh tests/cdk18-config-contract.sh crates/proofstorm-acceptance/drivers/cashu_double_spend.sh
 }
 

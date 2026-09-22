@@ -36,6 +36,7 @@ pub fn clear_runtime_environment(command: &mut Command) {
 /// The child is killed on drop, so a gate that aborts mid-way never leaks a
 /// server process.
 pub struct McpClient {
+    pub(crate) qualification: Option<crate::qualification::Observer>,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -73,6 +74,7 @@ impl McpClient {
         let stdout = BufReader::new(child.stdout.take().context("child stdout")?);
 
         let mut client = Self {
+            qualification: None,
             child: Some(child),
             stdin: Some(stdin),
             stdout,
@@ -136,6 +138,11 @@ impl McpClient {
     ///
     /// This mirrors what every Python client did: `json.loads(result["content"][0]["text"])`.
     pub fn call(&mut self, tool: &str, mut arguments: Value) -> Result<Value> {
+        if matches!(tool, "cell_plan" | "cell_up") && arguments["cell"].is_object() {
+            if let Some(observer) = &self.qualification {
+                observer.document(&mut arguments["cell"])?;
+            }
+        }
         // Gate convenience: follow the same status -> close -> wait token contract as agents.
         // Raw envelope helpers intentionally do not fill fields, for contract refusal tests.
         if (tool == "cell_remove" || (tool == "cell_wait" && arguments["target_phase"] == "closed"))

@@ -21,6 +21,7 @@ pub mod dynamic_cell;
 pub mod failed_melt;
 pub mod gui;
 pub mod isolation;
+pub mod keycloak;
 pub mod ldk_server;
 pub mod mint_management;
 pub mod native_exec;
@@ -43,6 +44,7 @@ pub mod surface;
 
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
+    "qualification",
     "smoke",
     "runtime-lifecycle",
     "mcp-surface",
@@ -93,11 +95,13 @@ pub const NAMES: &[&str] = &[
     "failed-melt",
     "quote-composition",
     "nutshell-oidc",
+    "keycloak",
 ];
 
 /// Dispatch a gate by the name passed to `just e2e`.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
+        "qualification" => crate::qualification::run(context),
         "smoke" => smoke::run(context),
         "runtime-lifecycle" => runtime_lifecycle::run(context),
         "mcp-surface" => surface::run(context),
@@ -148,6 +152,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "failed-melt" => failed_melt::run(context),
         "quote-composition" => quote_composition::run(context),
         "nutshell-oidc" => nutshell_oidc::run(context),
+        "keycloak" => keycloak::run(context),
         other => bail!(
             "unknown gate {other}; available gates: {}",
             NAMES.join(", ")

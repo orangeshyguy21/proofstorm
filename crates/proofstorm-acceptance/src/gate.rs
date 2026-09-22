@@ -13,6 +13,8 @@ pub const CONTROL_NAMESPACE: &str = "proofstorm-system";
 /// Everything a gate needs: where the server is, a private database, and a
 /// kubectl bound to the cell cluster.
 pub struct GateContext {
+    pub(crate) qualification_observer: Option<crate::qualification::Observer>,
+    pub qualification: Option<proofstorm_qualification::Case>,
     pub root: PathBuf,
     pub kubectl: Kubectl,
     pub run_id: String,
@@ -22,6 +24,30 @@ pub struct GateContext {
 }
 
 impl GateContext {
+    pub fn qualification_stage(&self, stage: &'static str) -> Result<()> {
+        self.record("qualification-stage.json", &serde_json::json!(stage))
+    }
+    pub fn selected_version<'a>(&'a self, implementation: &str, fallback: &'a str) -> &'a str {
+        self.qualification
+            .as_ref()
+            .and_then(|case| {
+                case.components
+                    .iter()
+                    .find(|component| component.implementation == implementation)
+            })
+            .map_or(fallback, |component| component.version.as_str())
+    }
+
+    pub fn selected_image<'a>(&'a self, implementation: &str, fallback: &'a str) -> &'a str {
+        self.qualification
+            .as_ref()
+            .and_then(|case| {
+                case.components
+                    .iter()
+                    .find(|component| component.implementation == implementation)
+            })
+            .map_or(fallback, |component| component.image.as_str())
+    }
     /// Ordinary product CLI, pinned to this owned run and its verified artifacts.
     pub fn command(&self, args: &[&str]) -> Result<std::process::Command> {
         self.artifacts.verify_for(&self.installation.home)?;
@@ -63,6 +89,8 @@ impl GateContext {
         let database = installation.database();
         let run_id = installation.id.clone();
         Ok(Self {
+            qualification_observer: None,
+            qualification: None,
             root: root.to_path_buf(),
             kubectl: Kubectl::for_installation(&installation)?,
             run_id,
@@ -70,6 +98,16 @@ impl GateContext {
             artifacts,
             database,
         })
+    }
+
+    /// Select the explicitly planned catalog versions in a qualification fixture.
+    /// Normal and candidate acceptance runs retain their authored documents.
+    pub fn document(&self, mut document: serde_json::Value) -> Result<serde_json::Value> {
+        let Some(case) = &self.qualification else {
+            return Ok(document);
+        };
+        crate::qualification::select_versions(case, &mut document)?;
+        Ok(document)
     }
 
     /// Configure and open the ordinary project attachment, without launching an agent model.
@@ -100,7 +138,11 @@ impl GateContext {
             .arg("--attachment")
             .arg(actor)
             .current_dir(&project);
-        McpClient::from_command(command, label)
+        let mut client = McpClient::from_command(command, label)?;
+        client
+            .qualification
+            .clone_from(&self.qualification_observer);
+        Ok(client)
     }
 
     /// An explicitly scoped authorization fixture using the single registry's default grants.
@@ -127,7 +169,7 @@ impl GateContext {
         proofstorm_app::bootstrap::verify_runtime_identity(&self.installation)?;
         let home = self.installation.home.to_string_lossy().to_string();
         let joined = capabilities.join(",");
-        McpClient::spawn(
+        let mut client = McpClient::spawn(
             &self.artifacts.mcp,
             workspace,
             &[
@@ -137,7 +179,11 @@ impl GateContext {
                 ("PROOFSTORM_CAPABILITIES", joined.as_str()),
                 ("PROOFSTORM_CONTROL_NAMESPACE", CONTROL_NAMESPACE),
             ],
-        )
+        )?;
+        client
+            .qualification
+            .clone_from(&self.qualification_observer);
+        Ok(client)
     }
 
     /// Path to this gate's private `SQLite` database.

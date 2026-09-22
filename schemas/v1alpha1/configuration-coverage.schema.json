@@ -173,7 +173,7 @@
         "database",
         "identity_provider",
         "wallet",
-        "attacker",
+        "workspace",
         "proxy",
         "oracle"
       ],

@@ -95,21 +95,7 @@ fn images() -> BTreeSet<String> {
 }
 
 fn source(image: &str) -> Result<String> {
-    let (repository, sha) = image
-        .split_once("@sha256:")
-        .context("runtime image must be pinned")?;
-    ensure!(digest(sha), "invalid runtime image digest");
-    let source = if let Some(repository) =
-        repository.strip_prefix("proofstorm-registry.localhost:5000/upstream/")
-    {
-        repository.to_owned()
-    } else if let Some(repository) = repository.strip_prefix("proofstorm-registry.localhost:5000/")
-    {
-        format!("ghcr.io/orangeshyguy21/proofstorm/{repository}")
-    } else {
-        repository.to_owned()
-    };
-    Ok(format!("{source}@sha256:{sha}"))
+    proofstorm_core::catalog_image_source(image).map_err(anyhow::Error::msg)
 }
 
 fn tool(home: &Path, name: &str) -> Result<PathBuf> {

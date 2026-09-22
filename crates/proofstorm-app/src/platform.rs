@@ -1,7 +1,8 @@
-//! Host and container targets supported by the alpha. Never infer one from the other.
+//! Host/container targets for runtime setup, including native CI checkout builds.
+//! Published installer targets are selected separately by the release tooling.
 use anyhow::{Result, bail};
 
-pub use proofstorm_core::tool_pins::{LINUX_AMD64, MAC_ARM64};
+pub use proofstorm_core::tool_pins::{LINUX_AMD64, LINUX_ARM64, MAC_ARM64};
 
 #[must_use]
 pub fn target() -> &'static str {
@@ -14,15 +15,18 @@ pub fn bootstrap_pins_for(target: &str) -> Result<&'static str> {
         LINUX_AMD64 => Ok(include_str!(
             "../../../release/bootstrap-tools-linux-amd64.json"
         )),
+        LINUX_ARM64 => Ok(include_str!(
+            "../../../release/bootstrap-tools-linux-arm64.json"
+        )),
         _ => bail!("no bootstrap tools for this host"),
     }
 }
 
 pub fn container_arch_for(target: &str) -> Result<&'static str> {
     match target {
-        MAC_ARM64 => Ok("arm64"),
+        MAC_ARM64 | LINUX_ARM64 => Ok("arm64"),
         LINUX_AMD64 => Ok("amd64"),
-        _ => bail!("this alpha supports macOS Apple Silicon and Linux x86-64"),
+        _ => bail!("runtime setup supports macOS Apple Silicon and Linux AMD64/ARM64"),
     }
 }
 
@@ -53,6 +57,7 @@ mod tests {
         for (host, aliases) in [
             (MAC_ARM64, ["arm64", "aarch64"]),
             (LINUX_AMD64, ["amd64", "x86_64"]),
+            (LINUX_ARM64, ["arm64", "aarch64"]),
         ] {
             for arch in aliases {
                 assert!(docker_matches(host, "linux", arch));
@@ -61,7 +66,8 @@ mod tests {
         }
         assert!(!docker_matches(LINUX_AMD64, "linux", "arm64"));
         assert!(!docker_matches(MAC_ARM64, "linux", "amd64"));
-        assert!(container_arch_for("aarch64-unknown-linux-gnu").is_err());
+        assert!(!docker_matches(LINUX_ARM64, "linux", "amd64"));
+        assert!(container_arch_for("unknown").is_err());
         assert!(!docker_matches("unknown", "linux", "amd64"));
     }
 }

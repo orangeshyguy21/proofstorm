@@ -4022,7 +4022,7 @@ mod tests {
         let nutshell = catalog
             .entries
             .iter()
-            .find(|entry| entry.id == "nutshell")
+            .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
             .expect("Nutshell mint support contract");
         assert_eq!(nutshell.config_version, "nutshell-mint/0.20/v1");
         assert_eq!(
@@ -4040,12 +4040,12 @@ mod tests {
                 .contains(&proofstorm_core::CatalogFeature::RedisCache)
         );
         assert!(
-            nutshell
+            !nutshell
                 .features
                 .contains(&proofstorm_core::CatalogFeature::ClearAuth)
         );
         assert!(
-            nutshell
+            !nutshell
                 .features
                 .contains(&proofstorm_core::CatalogFeature::BlindAuth)
         );

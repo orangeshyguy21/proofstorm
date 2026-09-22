@@ -13,7 +13,7 @@ pub(super) fn run(client: &mut McpClient, bootstrap_point: &str) -> Result<Vec<S
     let mut native = Session::new(client, INSTANCE, EXPERIMENT);
     let mint = native.json("mint-lnd", "mint-identity", &format!("{LND} getinfo"))?;
     let payer = native.json("payer-lnd", "payer-identity", &format!("{LND} getinfo"))?;
-    let cln = native.json("attacker-cln", "cln-identity", &format!("{CLN} getinfo"))?;
+    let cln = native.json("workspace-cln", "cln-identity", &format!("{CLN} getinfo"))?;
     let mint_key = expect::string(&mint, "/identity_pubkey")?;
     let payer_key = expect::string(&payer, "/identity_pubkey")?;
     let cln_key = expect::string(&cln, "/id")?;
@@ -29,7 +29,7 @@ pub(super) fn run(client: &mut McpClient, bootstrap_point: &str) -> Result<Vec<S
     let point = open(&mut native, "mint-lnd", payer_key, "channel", 2_000_000, 0)?;
     connect(
         &mut native,
-        "attacker-cln",
+        "workspace-cln",
         CLN,
         "mint-lnd",
         mint_key,
@@ -47,7 +47,7 @@ pub(super) fn run(client: &mut McpClient, bootstrap_point: &str) -> Result<Vec<S
         &mut native,
         "payer-lnd",
         LND,
-        "attacker-cln",
+        "workspace-cln",
         cln_key,
         "bridge-peer-connect",
     )?;
@@ -101,7 +101,7 @@ pub(super) fn run(client: &mut McpClient, bootstrap_point: &str) -> Result<Vec<S
     close_cln(&mut native, "cln-close", &cln_point, false)?;
     disconnect(
         &mut native,
-        "attacker-cln",
+        "workspace-cln",
         CLN,
         "mint-lnd",
         LND,
@@ -111,7 +111,7 @@ pub(super) fn run(client: &mut McpClient, bootstrap_point: &str) -> Result<Vec<S
     )?;
     connect(
         &mut native,
-        "attacker-cln",
+        "workspace-cln",
         CLN,
         "mint-lnd",
         mint_key,
@@ -382,7 +382,7 @@ fn close_cln(native: &mut Session<'_>, id: &str, point: &str, force: bool) -> Re
             r#"{"channels":[{"channel_id":true,"funding_txid":true,"funding_outnum":true,"peer_id":true,"state":true}]}"#
         )
     );
-    let channels = native.json("attacker-cln", &format!("{id}-before"), &list_channels)?;
+    let channels = native.json("workspace-cln", &format!("{id}-before"), &list_channels)?;
     let channel = expect::array(&channels, "/channels")?
         .iter()
         .find(|channel| {
@@ -404,7 +404,7 @@ fn close_cln(native: &mut Session<'_>, id: &str, point: &str, force: bool) -> Re
         String::new()
     };
     native.start(
-        "attacker-cln",
+        "workspace-cln",
         id,
         &format!(
             "{disconnect}{CLN} close {} {}",
@@ -452,7 +452,7 @@ fn close_cln(native: &mut Session<'_>, id: &str, point: &str, force: bool) -> Re
         "CLN close did not spend the selected funding outpoint"
     );
     native.poll(
-        "attacker-cln",
+        "workspace-cln",
         &format!("{id}-observed"),
         &list_channels,
         |snapshot| {

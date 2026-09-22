@@ -146,7 +146,7 @@ fn recommended_control(entry: &CatalogEntry) -> ControlClass {
     [
         ControlClass::Target,
         ControlClass::Cell,
-        ControlClass::Attacker,
+        ControlClass::Workspace,
         ControlClass::Oracle,
     ]
     .into_iter()

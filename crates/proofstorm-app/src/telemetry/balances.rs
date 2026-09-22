@@ -27,6 +27,7 @@ pub(super) async fn sample(
                         | "lnd"
                         | "cln"
                         | "cdk-ldk"
+                        | "ldk-server"
                         | "cdk-cli-wallet"
                         | "cocod-wallet"
                         | "nutshell-wallet"
@@ -60,30 +61,33 @@ pub(super) async fn sample(
                         )
                 })
         });
-        let mut result =
-            ComponentBalance {
-                bitcoin: (component.implementation == "bitcoin-core").then(|| BitcoinObservation {
-                    error: Some("Peer observation unavailable".into()),
+        let mut result = ComponentBalance {
+            bitcoin: (component.implementation == "bitcoin-core").then(|| BitcoinObservation {
+                error: Some("Peer observation unavailable".into()),
+                ..Default::default()
+            }),
+            component: component.id.clone(),
+            rollout_digest: entry.map(|e| e.rollout_digest.clone()),
+            observed_at_unix: super::now(),
+            error: Some("Observation unavailable".into()),
+            amounts: vec![],
+            block_height: None,
+            lightning: matches!(
+                component.implementation.as_str(),
+                "lnd" | "cln" | "cdk-ldk" | "ldk-server"
+            )
+            .then(|| LightningObservation {
+                error: Some("Channel observation unavailable".into()),
+                ..Default::default()
+            }),
+            holdings: component
+                .implementation
+                .ends_with("wallet")
+                .then(|| HoldingsObservation {
+                    error: Some("Holdings observation unavailable".into()),
                     ..Default::default()
                 }),
-                component: component.id.clone(),
-                rollout_digest: entry.map(|e| e.rollout_digest.clone()),
-                observed_at_unix: super::now(),
-                error: Some("Observation unavailable".into()),
-                amounts: vec![],
-                block_height: None,
-                lightning: matches!(component.implementation.as_str(), "lnd" | "cln" | "cdk-ldk")
-                    .then(|| LightningObservation {
-                        error: Some("Channel observation unavailable".into()),
-                        ..Default::default()
-                    }),
-                holdings: component.implementation.ends_with("wallet").then(|| {
-                    HoldingsObservation {
-                        error: Some("Holdings observation unavailable".into()),
-                        ..Default::default()
-                    }
-                }),
-            };
+        };
         if let Some(pod) = pod {
             observe(
                 cell,
@@ -119,6 +123,7 @@ async fn observe(
 ) {
     match implementation {
         "bitcoin-core" => observe_bitcoin(cell, pods, pod, inventory, result).await,
+        "ldk-server" => super::ldk_server::observe(pods, pod, result).await,
         "cdk-ldk" => {
             let (dashboard, channels) = tokio::join!(
                 super::ldk::page(pods, pod, "/"),
@@ -296,7 +301,7 @@ fn cln_amounts(funds: &Value) -> Option<Vec<BalanceAmount>> {
     ])
 }
 
-async fn read(pods: &Api<Pod>, pod: &str, command: Vec<String>) -> Option<Value> {
+pub(super) async fn read(pods: &Api<Pod>, pod: &str, command: Vec<String>) -> Option<Value> {
     tokio::time::timeout(Duration::from_secs(4), async {
         let mut process = pods
             .exec(

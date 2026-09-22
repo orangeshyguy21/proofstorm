@@ -118,7 +118,7 @@
         "database",
         "identity_provider",
         "wallet",
-        "attacker",
+        "workspace",
         "proxy",
         "oracle"
       ],
@@ -169,7 +169,7 @@
       "enum": [
         "cell",
         "target",
-        "attacker",
+        "workspace",
         "oracle"
       ],
       "type": "string"

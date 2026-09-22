@@ -73,12 +73,16 @@ fn extraction_never_accepts_a_link_duplicate_missing_or_truncated_member() {
 }
 
 #[test]
-fn both_checked_in_manifests_match_versions_and_stale_existing_tools_fail_closed() {
+fn checked_in_manifests_match_versions_and_stale_existing_tools_fail_closed() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap();
-    for target in [tool_pins::MAC_ARM64, tool_pins::LINUX_AMD64] {
+    for target in [
+        tool_pins::MAC_ARM64,
+        tool_pins::LINUX_AMD64,
+        tool_pins::LINUX_ARM64,
+    ] {
         checked(&root, target).unwrap();
     }
     let fixture = tempfile::tempdir().unwrap();

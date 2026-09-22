@@ -530,7 +530,7 @@ pub enum EffectiveComponentConfig {
     #[serde(rename = "cocod-wallet")]
     CocodWallet,
     #[serde(rename = "workspace")]
-    AttackerWorkspace(WorkspaceConfig),
+    Workspace(WorkspaceConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -776,7 +776,7 @@ impl BackendContractRegistry {
 }
 
 fn workspace_service_ports(config: &EffectiveComponentConfig) -> Option<BTreeMap<String, u16>> {
-    let EffectiveComponentConfig::AttackerWorkspace(config) = config else {
+    let EffectiveComponentConfig::Workspace(config) = config else {
         return None;
     };
     Some(if config.service_port == 0 {
@@ -981,7 +981,7 @@ impl EffectiveComponentConfig {
             "nutshell-wallet" => Ok(Self::NutshellWallet),
             "cdk-cli-wallet" => Ok(Self::CdkCliWallet),
             "cocod-wallet" => Ok(Self::CocodWallet),
-            "workspace" => Ok(Self::AttackerWorkspace(WorkspaceConfig {
+            "workspace" => Ok(Self::Workspace(WorkspaceConfig {
                 runtime_image: string("runtime_image")?,
                 storage_size: string("storage_size")?,
                 service_port: required_config_value(component, "service_port")?
@@ -1879,7 +1879,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         ),
         contract(
             "workspace",
-            ComponentKind::Attacker,
+            ComponentKind::Workspace,
             "workspace/0.1/v1",
             workspace_config_fields(),
             BTreeMap::new(),
@@ -4190,8 +4190,8 @@ mod tests {
 
     #[test]
     fn execution_context_and_target_descriptor_compose_independently() {
-        let mut executor = component("attacker", "workspace", ComponentKind::Attacker);
-        executor.control = crate::ControlClass::Attacker;
+        let mut executor = component("workspace", "workspace", ComponentKind::Workspace);
+        executor.control = crate::ControlClass::Workspace;
         let target = component("chain", "bitcoin-core", ComponentKind::Bitcoin);
         let cell = crate::CellSpec {
             api_version: crate::API_VERSION.into(),

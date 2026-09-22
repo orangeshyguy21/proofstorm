@@ -22,7 +22,7 @@ covers the adversarial expansion (Phase 6+).
 ## 1. Why this is not already covered by CDK/Nutshell tests
 
 Both upstream suites already test double-spend and concurrency — but **in
-process**, not as a network attacker against a deployed daemon. That distinction
+process**, not as a network adversary against a deployed daemon. That distinction
 is the whole reason proofstorm exists.
 
 Grounded in the actual suites:
@@ -39,7 +39,7 @@ The upstream race tests call `ledger.db_write._verify_spent_proofs_and_set_pendi
 or spawn tokio tasks **inside one process against one in-memory `Ledger`**. They
 prove the locking primitive is correct. They do **not** exercise:
 
-1. **The black-box HTTP surface.** An attacker is an untrusted client speaking
+1. **The black-box HTTP surface.** An adversary is an untrusted client speaking
    NUT-XX over the network, not an in-process caller. Request parsing, the HTTP
    framework, the deployed rate limiter, and the real DB connection pool are all
    in scope over the wire and out of scope for a unit test.
@@ -77,7 +77,7 @@ Single regtest network, all local, all throwaway:
                     │ NUT HTTP                 │ NUT HTTP
                     └────────────┬─────────────┘
                           ┌──────┴───────┐
-                          │  adversary   │  wallets + raw HTTP attacker
+                          │  adversary   │  wallets + raw HTTP client
                           └──────────────┘
 ```
 

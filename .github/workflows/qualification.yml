@@ -1,0 +1,188 @@
+name: Catalog qualification
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Plan the exact catalog and complete proposed change
+        id: plan
+        env:
+          CARGO_TARGET_DIR: target/check
+          REVISION: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          cargo build --locked -p proofstorm-qualification
+          qualifier=target/check/debug/proofstorm-qualification
+          mode=full
+          if [[ "$EVENT" == pull_request && "$BASE" =~ ^[a-f0-9]{40}$ && "$HEAD" =~ ^[a-f0-9]{40}$ ]]; then
+            if git diff --name-only "$BASE...$HEAD" > "$RUNNER_TEMP/changed-paths"; then
+              mode=$("$qualifier" policy "$RUNNER_TEMP/changed-paths")
+            fi
+          fi
+          "$qualifier" plan "$REVISION" "$RUN_ID" "$ATTEMPT" "$mode" "$RUNNER_TEMP/plan.json"
+          printf 'matrix=%s\n' "$("$qualifier" matrix "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+          jq -r '.cases[]|"- " + .id + " / " + .platform + ": " + .reason' "$RUNNER_TEMP/plan.json" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan.json
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.42.4'
+      - name: Build verified host and controller artifacts once
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/qualification-build.sh "$PLATFORM" "$RUNNER_TEMP/artifacts"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-build-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/artifacts/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+  preflight:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-build-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/artifacts
+      - name: Restore matching immutable build artifacts on a fresh runner
+        run: |
+          (cd "$RUNNER_TEMP/artifacts" && sha256sum --check SHA256SUMS)
+          tar -xf "$RUNNER_TEMP/artifacts/host.tar"
+          docker image load --input "$RUNNER_TEMP/artifacts/controller.tar"
+      - name: Validate native runtime startup and owned cleanup before fanout
+        # Private runtime state and logs remain on this disposable runner.
+        run: |
+          target/check/debug/proofstorm-acceptance --root "$PWD" \
+            --checkout-home "$PWD/.proofstorm-dev/state" \
+            --work-dir "$RUNNER_TEMP/native-runtime-smoke" --timeout 300 smoke
+
+  execute:
+    needs: [plan, build, preflight]
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-build-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/artifacts
+      - name: Restore matching immutable build artifacts
+        run: |
+          (cd "$RUNNER_TEMP/artifacts" && sha256sum --check SHA256SUMS)
+          tar -xf "$RUNNER_TEMP/artifacts/host.tar"
+          docker image load --input "$RUNNER_TEMP/artifacts/controller.tar"
+      - name: Run every planned case and verify owned cleanup
+        env:
+          CASES: ${{ toJSON(matrix.cases) }}
+        run: |
+          printf '%s\n' "$CASES" > "$RUNNER_TEMP/cases.json"
+          bash scripts/qualification-shard.sh "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/cases.json" "$RUNNER_TEMP/cases" "$RUNNER_TEMP/receipts"
+      - name: Save redacted execution receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-receipts-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
+          # Never upload runtime homes, seeds, native output or credentials.
+          path: ${{ runner.temp }}/receipts/*.json
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    if: always()
+    needs: [plan, build, preflight, execute]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require every planned lane to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: jq -e 'keys==["build","execute","plan","preflight"] and all(.[]; .result=="success")' <<< "$NEEDS"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: qualification-receipts-*-${{ github.sha }}-${{ github.run_attempt }}
+          merge-multiple: false
+          path: ${{ runner.temp }}/receipts
+      - name: Require complete current evidence for both native architectures
+        env:
+          CARGO_TARGET_DIR: target/check
+          REVISION: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          jq -e --arg sha "$REVISION" --arg run "$RUN_ID" --argjson attempt "$ATTEMPT" '.identity=={revision:$sha,run_id:$run,attempt:$attempt}' "$RUNNER_TEMP/plan/plan.json"
+          cargo run --locked -p proofstorm-qualification -- verify "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/receipts"

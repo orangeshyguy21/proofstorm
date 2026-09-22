@@ -126,8 +126,9 @@ pub fn post_status(url: &str, payload: &Value) -> Result<u32> {
     output.trim().parse().context("parse the HTTP status code")
 }
 
-fn curl(args: &[&str]) -> Result<String> {
+pub(crate) fn curl(args: &[&str]) -> Result<String> {
     let output = Command::new("curl")
+        .arg("-q")
         .args(args)
         .output()
         .context("run curl")?;

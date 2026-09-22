@@ -83,7 +83,7 @@ const fn component_kind_name(kind: ComponentKind) -> &'static str {
         ComponentKind::Database => "database",
         ComponentKind::IdentityProvider => "identity_provider",
         ComponentKind::Wallet => "wallet",
-        ComponentKind::Attacker => "workspace",
+        ComponentKind::Workspace => "workspace",
         ComponentKind::Proxy => "proxy",
         ComponentKind::Oracle => "oracle",
     }

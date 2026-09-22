@@ -63,7 +63,9 @@ pub fn edges(cell: &EnvironmentCell, usage: Option<&CellUsage>, now: i64) -> Vec
         .items
         .iter()
         .filter(|l| {
-            resource_parents.get(&l.to) != Some(&l.from)
+            kind(&l.from) != Some(ComponentKind::Workspace)
+                && kind(&l.to) != Some(ComponentKind::Workspace)
+                && resource_parents.get(&l.to) != Some(&l.from)
                 && !matches!(l.kind, LinkKind::LightningPeer | LinkKind::BitcoinPeer)
                 && !matches!(
                     (kind(&l.from), kind(&l.to)),

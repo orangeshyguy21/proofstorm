@@ -177,6 +177,77 @@ fn reusable(installation: &Installation, sha: &str) -> Result<Option<Value>> {
     Ok(None)
 }
 
+fn local_image(
+    installation: &Installation,
+    source: &Path,
+    sha: &str,
+    progress: &dyn Fn(&str),
+) -> Result<(String, Value)> {
+    progress("Building checkout controller (may take minutes)");
+    let iid = tempfile::NamedTempFile::new_in(&installation.home)?;
+    let tag = format!("proofstorm-checkout-source:{sha}");
+    let cached = docker(
+        &installation.home,
+        &["image", "inspect", &tag, "--format", "{{json .}}"],
+        15,
+    )
+    .ok();
+    let inspect: Value = if let Some(value) = cached {
+        progress("Verifying matching local controller image");
+        serde_json::from_str(&value)?
+    } else {
+        process::controller_build(
+            &installation.home,
+            &[
+                "buildx",
+                "build",
+                "--platform",
+                &crate::platform::container_platform()?,
+                "--load",
+                "--provenance=false",
+                "--progress",
+                "plain",
+                "--build-arg",
+                "CARGO_BUILD_JOBS=2",
+                "--build-arg",
+                &format!("PROOFSTORM_CONTROLLER_SOURCE_SHA256={sha}"),
+                "--iidfile",
+                iid.path().to_str().context("image receipt path")?,
+                "--file",
+                source
+                    .join("Dockerfile.proofstormd")
+                    .to_str()
+                    .context("controller recipe path")?,
+                "--tag",
+                &tag,
+                source.to_str().context("controller source path")?,
+            ],
+        )?;
+        let build_id = fs::read_to_string(iid.path())?.trim().to_owned();
+        ensure!(
+            build_id.strip_prefix("sha256:").is_some_and(digest),
+            "invalid built controller ID"
+        );
+        let inspect: Value = serde_json::from_str(&docker(
+            &installation.home,
+            &["image", "inspect", &tag, "--format", "{{json .}}"],
+            15,
+        )?)?;
+        built_identity(&inspect, &build_id, sha)?;
+        inspect
+    };
+    let image_id = built_identity(
+        &inspect,
+        inspect["Id"]
+            .as_str()
+            .context("controller image ID missing")?,
+        sha,
+    )?;
+    let info = super::controller_metadata(&installation.home, &image_id)?;
+    metadata(&info, sha)?;
+    Ok((image_id, info))
+}
+
 pub(super) fn prepare(
     installation: &Installation,
     source: &Path,
@@ -192,49 +263,7 @@ pub(super) fn prepare(
         digest(sha) && source.is_absolute() && source.join("Dockerfile.proofstormd").is_file(),
         "invalid registered controller snapshot"
     );
-    progress("Building checkout controller (may take minutes)");
-    let iid = tempfile::NamedTempFile::new_in(&installation.home)?;
-    let tag = format!("proofstorm-checkout:{}-{sha}", installation.id);
-    process::controller_build(
-        &installation.home,
-        &[
-            "buildx",
-            "build",
-            "--platform",
-            &crate::platform::container_platform()?,
-            "--load",
-            "--provenance=false",
-            "--progress",
-            "plain",
-            "--build-arg",
-            "CARGO_BUILD_JOBS=2",
-            "--build-arg",
-            &format!("PROOFSTORM_CONTROLLER_SOURCE_SHA256={sha}"),
-            "--iidfile",
-            iid.path().to_str().context("image receipt path")?,
-            "--file",
-            source
-                .join("Dockerfile.proofstormd")
-                .to_str()
-                .context("controller recipe path")?,
-            "--tag",
-            &tag,
-            source.to_str().context("controller source path")?,
-        ],
-    )?;
-    let build_id = fs::read_to_string(iid.path())?.trim().to_owned();
-    ensure!(
-        build_id.strip_prefix("sha256:").is_some_and(digest),
-        "invalid built controller ID"
-    );
-    let inspect: Value = serde_json::from_str(&docker(
-        &installation.home,
-        &["image", "inspect", &tag, "--format", "{{json .}}"],
-        15,
-    )?)?;
-    let image_id = built_identity(&inspect, &build_id, sha)?;
-    let info = super::controller_metadata(&installation.home, &image_id)?;
-    metadata(&info, sha)?;
+    let (image_id, info) = local_image(installation, source, sha, progress)?;
     // The only publication destination is the owned loopback registry, never GHCR.
     cluster::owned(installation)?;
     let destination = format!(

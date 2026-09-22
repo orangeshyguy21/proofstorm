@@ -108,9 +108,43 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
 pub fn verify(before: &Value, after: &Value) -> Result<()> {
     ensure!(
         before == after,
-        "preexisting Docker resources or configuration changed; compare preservation-before.json and preservation-after.json (no repair/adoption attempted)"
+        "preexisting Docker resources or configuration changed: {}; compare private preservation snapshots for identities",
+        differences(before, after)
     );
     Ok(())
+}
+
+/// Counts only: resource identities, paths and configuration contents stay private.
+fn differences(before: &Value, after: &Value) -> Value {
+    let mut summary = serde_json::Map::new();
+    for key in ["containers", "networks", "volumes", "configuration_sha256"] {
+        let mut added = 0;
+        let mut removed = 0;
+        let mut changed = 0;
+        match (&before[key], &after[key]) {
+            (Value::Object(old), Value::Object(new)) => {
+                added = new.keys().filter(|id| !old.contains_key(*id)).count();
+                removed = old.keys().filter(|id| !new.contains_key(*id)).count();
+                changed = old
+                    .iter()
+                    .filter(|(id, value)| new.get(*id).is_some_and(|new| new != *value))
+                    .count();
+            }
+            (Value::Array(old), Value::Array(new)) => {
+                added = new.iter().filter(|id| !old.contains(id)).count();
+                removed = old.iter().filter(|id| !new.contains(id)).count();
+            }
+            (old, new) if old != new => changed = 1,
+            _ => {}
+        }
+        if added + removed + changed > 0 {
+            summary.insert(
+                key.into(),
+                json!({"added":added,"removed":removed,"changed":changed}),
+            );
+        }
+    }
+    summary.into()
 }
 
 #[cfg(test)]
@@ -126,5 +160,24 @@ mod tests {
         let mut after = before.clone();
         after["configuration_sha256"]["config"] = json!("changed");
         assert!(verify(&before, &after).is_err());
+    }
+
+    #[test]
+    fn drift_summary_identifies_leaks_without_exposing_private_values() {
+        let before = json!({"containers":{},"volumes":["private-volume"],"networks":[],"configuration_sha256":{"private-path":"private-hash"}});
+        let after = json!({"containers":{},"volumes":["private-volume","private-leak"],"networks":[],"configuration_sha256":{"private-path":"changed-private-hash"}});
+        assert_eq!(
+            differences(&before, &after),
+            json!({"volumes":{"added":1,"removed":0,"changed":0},"configuration_sha256":{"added":0,"removed":0,"changed":1}})
+        );
+        let message = verify(&before, &after).unwrap_err().to_string();
+        for private in [
+            "private-volume",
+            "private-leak",
+            "private-path",
+            "private-hash",
+        ] {
+            assert!(!message.contains(private));
+        }
     }
 }

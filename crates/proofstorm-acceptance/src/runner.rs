@@ -2,18 +2,24 @@
 //! teardown uses the shared installation resource-receipt implementation.
 use crate::{GateContext, client::clear_runtime_environment, gates};
 use anyhow::{Context, Result, ensure};
+use nix::{
+    errno::Errno,
+    sys::signal::{Signal, killpg},
+    unistd::{Pid, getpgrp},
+};
 use proofstorm_app::{artifacts::TestArtifacts, installation::Installation};
 use serde_json::{Value, json};
 use std::{
     fs,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
 pub struct Selection {
+    pub qualification: Option<(PathBuf, String)>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
     pub allow_development: bool,
@@ -31,6 +37,13 @@ impl Selection {
     }
 
     fn arguments(&self, command: &mut Command) {
+        if let Some((plan, case)) = &self.qualification {
+            command
+                .arg("--qualification-plan")
+                .arg(plan)
+                .arg("--qualification-case")
+                .arg(case);
+        }
         if let Some(home) = &self.checkout_home {
             command.arg("--checkout-home").arg(home);
         }
@@ -170,8 +183,32 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
         installation.home == home.canonicalize()?,
         "worker home mismatch"
     );
-    let context = GateContext::new(root, installation, selection.artifacts()?)?;
-    gates::run(name, &context)
+    let mut context = GateContext::new(root, installation, selection.artifacts()?)?;
+    if let Some((path, id)) = &selection.qualification {
+        let plan: proofstorm_qualification::Plan = serde_json::from_slice(&fs::read(path)?)?;
+        plan.validate()?;
+        let case = plan.case(id)?.clone();
+        ensure!(
+            case.required && name == "qualification",
+            "qualification worker gate mismatch"
+        );
+        crate::qualification::require_native(&case.platform)?;
+        context.qualification_observer = Some(crate::qualification::Observer::new(case.clone()));
+        context.qualification = Some(case);
+    }
+    let result = gates::run(name, &context).and_then(|()| {
+        if let Some(observer) = &context.qualification_observer {
+            observer.finish()?;
+        }
+        Ok(())
+    });
+    if let Err(error) = &result {
+        context.record(
+            "gate-failure.json",
+            &crate::diagnostics::gate_failure(error),
+        )?;
+    }
+    result
 }
 
 fn command(program: &Path, home: &Path) -> Command {
@@ -182,31 +219,91 @@ fn command(program: &Path, home: &Path) -> Command {
     command
 }
 
+// Keep cleanup tied to the child we spawned, including inspection/error paths.
+// Do not shell out to `kill`: Linux utilities may parse a negative group ID as
+// another option, leaving worker descendants alive after a timeout.
+struct Worker {
+    child: Child,
+    group: Option<Pid>,
+}
+
+impl Worker {
+    fn spawn(mut command: Command) -> Result<Self> {
+        use std::os::unix::process::CommandExt;
+        let mut child = command
+            .process_group(0)
+            .spawn()
+            .context("start acceptance operation")?;
+        let group = i32::try_from(child.id())
+            .ok()
+            .filter(|id| *id > 1 && *id != getpgrp().as_raw());
+        let Some(group) = group else {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("acceptance worker has no distinct owned process group");
+        };
+        Ok(Self {
+            child,
+            group: Some(Pid::from_raw(group)),
+        })
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        let Some(group) = self.group.take() else {
+            return Ok(());
+        };
+        let signal = match killpg(group, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => Ok(()),
+            Err(error) => Err(error),
+        };
+        if signal.is_err() {
+            let _ = self.child.kill();
+        }
+        let reaped = self.child.wait();
+        signal.context("terminate owned acceptance process group")?;
+        reaped.context("reap acceptance worker")?;
+        Ok(())
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
 fn execute(
     mut command: Command,
     log: &Path,
     seconds: u64,
     cancelled: Option<&AtomicBool>,
 ) -> Result<()> {
-    use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
+    use std::os::unix::fs::OpenOptionsExt;
     let output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(log)?;
-    command.stdout(output.try_clone()?).stderr(output);
+    command
+        .stdin(Stdio::null())
+        .stdout(output.try_clone()?)
+        .stderr(output);
     // Workers and their MCP/port-forward children share a fresh process group.
-    command.process_group(0);
-    let mut child = command.spawn().context("start acceptance operation")?;
+    let mut worker = Worker::spawn(command)?;
     let start = Instant::now();
     let mut last_progress = Instant::now();
     loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = worker.child.try_wait()? {
             // A failed/finished worker must not leave port-forwards or helper children.
-            let _ = Command::new("/bin/kill")
-                .args(["-KILL", &format!("-{}", child.id())])
-                .stderr(Stdio::null())
-                .status();
+            worker.stop()?;
+            if !status.success() && log.file_name().is_some_and(|name| name == "setup.log") {
+                eprintln!(
+                    "Setup failure: {}",
+                    crate::diagnostics::setup_failure(
+                        log.parent().context("setup log parent missing")?
+                    )
+                );
+            }
             ensure!(
                 status.success(),
                 "acceptance operation failed ({status}); see {}",
@@ -217,19 +314,22 @@ fn execute(
         if start.elapsed() > Duration::from_secs(seconds)
             || cancelled.is_some_and(|flag| flag.load(Ordering::SeqCst))
         {
-            // Exact child process-group ID, not a name search or shared shell group.
-            let _ = Command::new("/bin/kill")
-                .args(["-KILL", &format!("-{}", child.id())])
-                .status();
-            let _ = child.kill();
-            let _ = child.wait();
+            worker.stop()?;
             anyhow::bail!(
                 "acceptance operation interrupted or timed out; see {}",
                 log.display()
             );
         }
         if last_progress.elapsed() >= Duration::from_secs(30) {
-            eprintln!("Still running; progress log: {}", log.display());
+            eprintln!(
+                "Still running; progress log: {}; progress: {}",
+                log.display(),
+                crate::diagnostics::progress(
+                    log.parent().context("progress log parent missing")?,
+                    log,
+                    start.elapsed().as_secs()
+                )
+            );
             last_progress = Instant::now();
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -350,6 +450,21 @@ pub fn run(
     cancelled: &AtomicBool,
 ) -> Result<()> {
     validate_gates(names)?;
+    let started = Instant::now();
+    ensure!(
+        selection.qualification.is_some() == (names == ["qualification"]),
+        "qualification requires one exact planned case"
+    );
+    let qualification = if let Some((path, id)) = &selection.qualification {
+        let plan: proofstorm_qualification::Plan = serde_json::from_slice(&fs::read(path)?)?;
+        plan.validate()?;
+        let case = plan.case(id)?.clone();
+        ensure!(case.required, "qualification case was not scheduled");
+        crate::qualification::require_native(&case.platform)?;
+        Some((plan, case))
+    } else {
+        None
+    };
     let artifacts = selection.artifacts()?; // Verify before creating state or contacting Docker.
     let root = root.canonicalize()?;
     let work = if let Some(destination) = destination {
@@ -371,12 +486,43 @@ pub fn run(
     };
     let home = work.join("state");
     eprintln!("Acceptance run: {}", work.display());
+    eprintln!("Host resources: {}", crate::diagnostics::resources(&work));
     let mut report =
         json!({"format_version":1,"work":work,"setup":"not_run","gates":[],"cleanup":"not_run"});
     save(&work, &report)?;
     let before = crate::preservation::snapshot(selection.checkout_home.as_deref())?;
     private_json(&work.join("preservation-before.json"), &before)?;
     let operation = (|| -> Result<()> {
+        if let Some((plan, case)) = &qualification {
+            private_json(
+                &work.join("qualification-plan.json"),
+                &serde_json::to_value(plan)?,
+            )?;
+            private_json(
+                &work.join("qualification-case.json"),
+                &serde_json::to_value(case)?,
+            )?;
+            let mut check = Command::new("bash");
+            check
+                .arg(root.join("scripts/qualification-images.sh"))
+                .arg(work.join("qualification-case.json"))
+                .arg(&work);
+            execute(
+                check,
+                &work.join("image-qualification.log"),
+                1200,
+                Some(cancelled),
+            )?;
+            if matches!(
+                case.scenario,
+                proofstorm_qualification::Scenario::Image { .. }
+                    | proofstorm_qualification::Scenario::Lightning { .. }
+            ) {
+                report["setup"] = json!("not_required");
+                report["gates"] = json!([{"name":"qualification","status":"passed"}]);
+                return Ok(());
+            }
+        }
         start_runtime(
             &artifacts,
             &work,
@@ -418,6 +564,15 @@ pub fn run(
                 .push(json!({"name":name,"status":"running"}));
             save(&work, &report)?;
             let mut worker = command(&std::env::current_exe()?, &home);
+            // Capture failing assertion locations even when the caller disabled
+            // backtraces. The public summary excludes error text and arguments.
+            worker.env("RUST_LIB_BACKTRACE", "1");
+            let failure_path = work.join("gate-failure.json");
+            for path in [&failure_path, &work.join("qualification-stage.json")] {
+                if path.exists() {
+                    fs::remove_file(path)?;
+                }
+            }
             selection.arguments(&mut worker);
             worker
                 .arg("--root")
@@ -431,6 +586,13 @@ pub fn run(
                 timeout,
                 Some(cancelled),
             );
+            if result.is_err()
+                && let Ok(bytes) = fs::read(&failure_path)
+                && let Ok(failure) = serde_json::from_slice::<Value>(&bytes)
+            {
+                eprintln!("Gate failure: {failure}");
+                report["gates"][index]["failure"] = failure;
+            }
             report["gates"][index]["status"] =
                 json!(if result.is_ok() { "passed" } else { "failed" });
             save(&work, &report)?;
@@ -448,6 +610,16 @@ pub fn run(
     let cleanup_result = if home.join("runtime-resources.json").exists() {
         eprintln!("Removing only this run's recorded runtime and storage...");
         cleanup(&work)
+    } else if qualification.as_ref().is_some_and(|(_, case)| {
+        matches!(
+            case.scenario,
+            proofstorm_qualification::Scenario::Image { .. }
+                | proofstorm_qualification::Scenario::Lightning { .. }
+        )
+    }) && operation.is_ok()
+    {
+        report["cleanup"] = json!("passed");
+        save(&work, &report)
     } else {
         // No deletion authority: never discover/adopt a partly-created cluster here.
         report["cleanup"] = json!("not_run");
@@ -471,6 +643,45 @@ pub fn run(
         report["preservation_error"] = json!(format!("{error:#}"));
     }
     save(&work, &report)?;
+    if let Some((plan, case)) = &qualification {
+        let images = fs::read(work.join("images.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let receipt = proofstorm_qualification::Receipt {
+            format_version: 1,
+            identity: plan.identity.clone(),
+            plan_digest: plan.digest(),
+            case_id: case.id.clone(),
+            platform: case.platform.clone(),
+            components: case.components.clone(),
+            claims: case.claims.clone(),
+            images,
+            passed: operation.is_ok(),
+            cleanup_verified: cleanup_result.is_ok() && report["cleanup"] == "passed",
+            preservation_verified: preservation.is_ok(),
+            stage: crate::diagnostics::qualification_stage(
+                &work,
+                &report,
+                operation.is_ok(),
+                cleanup_result.is_ok() && report["cleanup"] == "passed",
+                preservation.is_ok(),
+            ),
+            elapsed_seconds: started.elapsed().as_secs(),
+        };
+        eprintln!(
+            "Qualification {}: stage={}, passed={}, cleanup={}, preservation={}",
+            case.id,
+            receipt.stage,
+            receipt.passed,
+            receipt.cleanup_verified,
+            receipt.preservation_verified
+        );
+        private_json(
+            &work.join("qualification-receipt.json"),
+            &serde_json::to_value(receipt)?,
+        )?;
+    }
     eprintln!("Report: {}", work.join("acceptance.json").display());
     if let Err(error) = cleanup_result {
         eprintln!(
@@ -502,6 +713,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let work = root.path().join("must-not-exist");
         let selection = Selection {
+            qualification: None,
             checkout_home: None,
             bundle: None,
             allow_development: false,
@@ -579,5 +791,102 @@ mod tests {
             .is_err()
         );
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn worker_cleanup_stops_descendants_on_exit_failure_timeout_and_cancellation() {
+        struct Sentinel(Child);
+        impl Drop for Sentinel {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        struct Descendant(Pid);
+        impl Drop for Descendant {
+            fn drop(&mut self) {
+                let _ = nix::sys::signal::kill(self.0, Signal::SIGKILL);
+            }
+        }
+        let mut unrelated = Sentinel(Command::new("/bin/sleep").arg("60").spawn().unwrap());
+        for mode in ["success", "failure", "timeout", "cancel"] {
+            let root = tempfile::tempdir().unwrap();
+            let pid_file = root.path().join("descendant.pid");
+            let cancelled = AtomicBool::new(false);
+            let mut command = Command::new("/bin/sh");
+            command
+                .args([
+                    "-c",
+                    r#"
+sleep 60 &
+printf '%s' "$!" > "$1"
+case "$2" in
+  success) exit 0 ;;
+  failure) exit 7 ;;
+  *) wait ;;
+esac
+"#,
+                    "worker-fixture",
+                ])
+                .arg(&pid_file)
+                .arg(mode);
+            let result = std::thread::scope(|scope| {
+                if mode == "cancel" {
+                    scope.spawn(|| {
+                        let started = Instant::now();
+                        while fs::read_to_string(&pid_file)
+                            .ok()
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .is_none()
+                            && started.elapsed() < Duration::from_secs(5)
+                        {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        cancelled.store(true, Ordering::SeqCst);
+                    });
+                }
+                execute(
+                    command,
+                    &root.path().join("worker.log"),
+                    1,
+                    Some(&cancelled),
+                )
+            });
+            let descendant = Descendant(Pid::from_raw(
+                fs::read_to_string(&pid_file).unwrap().parse().unwrap(),
+            ));
+            assert_eq!(result.is_ok(), mode == "success", "{mode}: {result:?}");
+            assert!(
+                unrelated.0.try_wait().unwrap().is_none(),
+                "signalled an unrelated process"
+            );
+            let started = Instant::now();
+            loop {
+                let output = Command::new("ps")
+                    .args(["-o", "stat=", "-p", &descendant.0.to_string()])
+                    .output()
+                    .unwrap();
+                let state = String::from_utf8(output.stdout).unwrap();
+                // An orphan can briefly remain as a zombie until init reaps it.
+                if state.trim().is_empty() || state.trim().starts_with('Z') {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "{mode}: worker descendant survived cleanup"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_a_worker_after_an_inspection_error_reaps_it() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("60");
+        let worker = Worker::spawn(command).unwrap();
+        let pid = Pid::from_raw(i32::try_from(worker.child.id()).unwrap());
+        drop(worker);
+        assert_eq!(nix::sys::signal::kill(pid, None), Err(Errno::ESRCH));
     }
 }

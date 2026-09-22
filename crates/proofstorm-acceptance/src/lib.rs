@@ -35,6 +35,7 @@
 
 pub mod cell;
 pub mod client;
+mod diagnostics;
 mod driver;
 pub mod gate;
 pub mod gates;
@@ -45,6 +46,7 @@ pub mod native;
 pub mod postgres;
 mod preservation;
 pub mod process;
+pub mod qualification;
 pub mod runner;
 
 pub use client::{McpClient, PROTOCOL_VERSION};

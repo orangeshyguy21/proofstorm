@@ -5,7 +5,9 @@ tasks independently of agent connections. Native `cell_exec` commands remain
 bounded to five minutes; the workspace supervisor owns longer tasks.
 
 Create a cell from [cell.json](cell.json) with `cell_up`, then wait for readiness.
-The catalog kind is still `attacker`; the implementation is `workspace`.
+The component kind, implementation, and control class are all `workspace`.
+Saved cell definitions must use these names; the former kind and control names
+are no longer accepted.
 
 ## Files and reusable functions
 

@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:d167659276b9f3b087bdf96d302f1f66d339beceb31e62412f27a2c1601b0859",
+  "catalog_digest": "sha256:eb536e7d1f5ab42dcff795f11cbd928497799f8d0f4d10cb624df2373c5d9ae5",
   "entries": [
     {
       "implementation": "bitcoin-core",
@@ -748,14 +748,7 @@
         "authentication": [
           "unauthenticated"
         ],
-        "compatible_wallet_adapters": [
-          {
-            "implementation": "nutshell-wallet",
-            "versions": [
-              "0.20.3"
-            ]
-          }
-        ]
+        "compatible_wallet_adapters": []
       },
       "compatible_dependencies": [
         {
@@ -954,15 +947,7 @@
         "authentication": [
           "unauthenticated"
         ],
-        "compatible_wallet_adapters": [
-          {
-            "implementation": "nutshell-wallet",
-            "versions": [
-              "0.20.3",
-              "0.21.0"
-            ]
-          }
-        ]
+        "compatible_wallet_adapters": []
       },
       "compatible_dependencies": [
         {
@@ -1616,7 +1601,7 @@
       "support_lifecycle": "preferred",
       "config_version": "cln/26.06/v1",
       "config_schema_digest": "sha256:1af8bae18445cca3dd6d67f9469145d70447781ea8d6ad369b33fb96f7ae0eee",
-      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:f0bd6bf244b815adf1b633bcfff6fc0cf5fd026efefa1367839552f1490f7fbd",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
       "fields": {
         "alias": {
           "classification": "agent_authorable",
@@ -2317,9 +2302,7 @@
           }
         ],
         "authentication": [
-          "unauthenticated",
-          "nut21_clear",
-          "nut22_blind"
+          "unauthenticated"
         ],
         "compatible_wallet_adapters": [
           {
@@ -2358,13 +2341,6 @@
           "implementation": "redis",
           "versions": [
             "8.10.1"
-          ]
-        },
-        {
-          "link_kind": "authentication_backend",
-          "implementation": "keycloak",
-          "versions": [
-            "25.0.6"
           ]
         }
       ]
@@ -2643,9 +2619,7 @@
           }
         ],
         "authentication": [
-          "unauthenticated",
-          "nut21_clear",
-          "nut22_blind"
+          "unauthenticated"
         ],
         "compatible_wallet_adapters": [
           {
@@ -2685,13 +2659,6 @@
           "implementation": "redis",
           "versions": [
             "8.10.1"
-          ]
-        },
-        {
-          "link_kind": "authentication_backend",
-          "implementation": "keycloak",
-          "versions": [
-            "25.0.6"
           ]
         }
       ]
@@ -2890,7 +2857,7 @@
     },
     {
       "implementation": "workspace",
-      "kind": "attacker",
+      "kind": "workspace",
       "upstream_version": "0.1.0-alpha.1",
       "release_channel": "prerelease",
       "support_lifecycle": "preferred",

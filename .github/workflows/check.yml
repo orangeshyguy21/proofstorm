@@ -6,19 +6,42 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
-  group: checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   JUST_VERSION: '1.42.4'
 
 jobs:
+  qualification:
+    name: Native catalog qualification
+    uses: ./.github/workflows/qualification.yml
+
+  merge-qualification:
+    name: Merge qualification
+    if: always()
+    needs: [quick, rust, macos-installer-contract, qualification]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require all checks and qualification evidence
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          CARGO_TARGET_DIR: target/check
+        run: |
+          printf '%s\n' "$NEEDS" > "$RUNNER_TEMP/needs.json"
+          cargo run --locked -p proofstorm-qualification -- aggregate "$RUNNER_TEMP/needs.json"
+
   quick:
     name: Formatting and shell
     runs-on: ubuntu-24.04

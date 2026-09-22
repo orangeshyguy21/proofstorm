@@ -221,6 +221,11 @@ fn exercise(
 
 pub fn run(context: &GateContext) -> Result<()> {
     for implementation in ["cdk", "nutshell"] {
+        context.qualification_stage(if implementation == "cdk" {
+            "cdk-materialize"
+        } else {
+            "nutshell-materialize"
+        })?;
         println!("{implementation}: preparing isolated cell...");
         let directory = context
             .installation
@@ -234,13 +239,18 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?;
         let preview = client.call(
             "cell_plan",
-            json!({"name":INSTANCE,"cell":document(implementation),"request_id":"create"}),
+            json!({"name":INSTANCE,"cell":context.document(document(implementation))?,"request_id":"create"}),
         )?;
         crate::cell::review(&mut client, &preview)?;
         println!("{implementation}: preparing images and materializing...");
         crate::cell::apply(&mut client, &preview)?;
         let result = (|| -> Result<()> {
             let ready = cell::wait_ready(&mut client, INSTANCE)?;
+            context.qualification_stage(if implementation == "cdk" {
+                "cdk-replay"
+            } else {
+                "nutshell-replay"
+            })?;
             println!("{implementation}: funding wallets and checking replay/race...");
             client.call(
                 "run_start",
@@ -254,6 +264,56 @@ pub fn run(context: &GateContext) -> Result<()> {
                 expect::string(&ready, "/instance_namespace")?,
             )
         })();
+        // Retain private startup evidence before this fixture removes the
+        // failed mint. Public summaries must never copy these logs.
+        if result.is_err()
+            && let Ok(status) = cell::status(&mut client, INSTANCE)
+            && let Some(namespace) = status["instance_namespace"].as_str()
+        {
+            let _ = fs::write(directory.join("cell-status.json"), status.to_string());
+            if let Ok(pods) = context.kubectl.run(&[
+                "get",
+                "pods",
+                "-n",
+                namespace,
+                "-o",
+                "json",
+                "--request-timeout=10s",
+            ]) {
+                let _ = fs::write(directory.join("pods.json"), pods);
+            }
+            for (name, resource) in [
+                ("mint", "deployment/mint"),
+                ("mint-lnd", "statefulset/mint-lnd"),
+                ("chain", "statefulset/chain"),
+            ] {
+                for previous in [false, true] {
+                    let mut args = vec![
+                        "logs",
+                        resource,
+                        "-n",
+                        namespace,
+                        "-c",
+                        "component",
+                        "--tail=100",
+                        "--request-timeout=10s",
+                    ];
+                    if previous {
+                        args.push("--previous");
+                    }
+                    if let Ok(logs) = context.kubectl.run(&args) {
+                        let _ = fs::write(
+                            directory.join(if previous {
+                                format!("{name}-previous.log")
+                            } else {
+                                format!("{name}.log")
+                            }),
+                            logs,
+                        );
+                    }
+                }
+            }
+        }
         println!("{implementation}: removing test cell...");
         let cleanup = (|| -> Result<()> {
             client.call("cell_remove", json!({"name":INSTANCE}))?;

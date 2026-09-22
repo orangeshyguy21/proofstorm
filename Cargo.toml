@@ -10,6 +10,7 @@ members = [
     "crates/proofstorm-kube",
     "crates/proofstorm-mcp",
     "crates/proofstorm-prober",
+    "crates/proofstorm-qualification",
     "crates/proofstorm-store",
     "crates/proofstorm-transfer",
     "crates/proofstormd",

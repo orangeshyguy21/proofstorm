@@ -113,7 +113,13 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
 
 pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
     let client = context.default_session("cdk-bdk-stress-live", "designer")?;
-    run_selected(context, client, postgres_enabled, "0.18.1", IMAGE)
+    run_selected(
+        context,
+        client,
+        postgres_enabled,
+        context.selected_version("cdk-bdk", "0.18.1"),
+        context.selected_image("cdk-bdk", IMAGE),
+    )
 }
 
 pub(super) fn run_candidate(
@@ -137,7 +143,7 @@ fn run_selected(
     selected_version: &str,
     selected_image: &str,
 ) -> Result<()> {
-    let mut document = cell_document(postgres_enabled);
+    let mut document = context.document(cell_document(postgres_enabled))?;
     document["components"][1]["version"] = json!(selected_version);
 
     let preview = client.call(
@@ -154,7 +160,7 @@ fn run_selected(
     context.record("cdk-bdk-selected-plan.json", &published)?;
 
     crate::cell::apply(&mut client, &preview)?;
-    let ready = cell::wait_ready(&mut client, INSTANCE)?;
+    let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
     if selected_version.starts_with("candidate-") {
         super::candidates::pod_image(context, namespace, selected_image)?;
