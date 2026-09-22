@@ -80,6 +80,66 @@ fn native_failure(content: &Value) -> Value {
     })
 }
 
+/// Terminal failure codes the daemon assigns from a closed set. Anything else
+/// is a code this build does not know and is dropped rather than republished.
+const OPERATION_CODES: [&str; 8] = [
+    "action_cancelled",
+    "action_deadline_exceeded",
+    "action_failed",
+    "action_job_lost",
+    "action_runtime_not_found",
+    "container_failed",
+    "terminal_artifact_missing",
+    "terminal_artifact_serialization_failed",
+];
+
+/// Termination reasons the kubelet assigns. `OOMKilled` is the one that
+/// distinguishes an undersized container limit from a component that failed on
+/// its own terms, so it has to survive into the public diagnostic.
+const TERMINATION_REASONS: [&str; 5] = [
+    "Completed",
+    "ContainerStatusUnknown",
+    "DeadlineExceeded",
+    "Error",
+    "OOMKilled",
+];
+
+/// A container name is a DNS label drawn from this project's own rendering, not
+/// from any observed output.
+fn container_name(value: &Value) -> Option<&str> {
+    value.as_str().filter(|name| {
+        !name.is_empty()
+            && name.len() <= 63
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    })
+}
+
+/// Public evidence for an operation that reached a terminal failure. The
+/// daemon's failure code, the terminated container and its Kubernetes exit
+/// facts are closed-set values; the native error tail and wallet diagnostic
+/// reason that may accompany them are not, and stay in the private log.
+fn operation_failure(content: &Value) -> Value {
+    let failure = &content["operation"]["artifact"]["content"];
+    let code = failure["code"].as_str().unwrap_or_default();
+    let reason = match code {
+        "container_failed" => "operation-container-failed",
+        "action_deadline_exceeded" => "operation-deadline-exceeded",
+        "action_job_lost" | "action_runtime_not_found" => "operation-runtime-lost",
+        _ => "operation-failed",
+    };
+    json!({
+        "reason":reason,
+        "code":OPERATION_CODES.contains(&code).then_some(code),
+        "phase":content["phase"].as_str().filter(|phase| ["failed","cancelled"].contains(phase)),
+        "container":container_name(&failure["container"]),
+        "exit_code":failure["exit_code"].as_i64(),
+        "termination_reason":failure["reason"].as_str()
+            .filter(|reason| TERMINATION_REASONS.contains(reason))
+    })
+}
+
 /// Public failure evidence identifies the failing assertion and native exit
 /// status without publishing any part of an arbitrary error message.
 pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
@@ -89,8 +149,15 @@ pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
         let content: Value = serde_json::from_str(content).ok()?;
         Some(native_failure(&content))
     });
+    let operation = error.chain().find_map(|cause| {
+        let message = cause.to_string();
+        let content = message.strip_prefix("operation reached a terminal failure: ")?;
+        let content: Value = serde_json::from_str(content).ok()?;
+        Some(operation_failure(&content))
+    });
     let reason = native
         .as_ref()
+        .or(operation.as_ref())
         .and_then(|value| value["reason"].as_str())
         .unwrap_or_else(|| {
             for cause in error.chain() {
@@ -124,7 +191,7 @@ pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
             }
             "gate-failed"
         });
-    json!({"reason":reason,"locations":failure_locations(&error.backtrace().to_string()),"native":native})
+    json!({"reason":reason,"locations":failure_locations(&error.backtrace().to_string()),"native":native,"operation":operation})
 }
 
 fn text(path: &Path) -> Option<String> {
@@ -392,6 +459,59 @@ mod tests {
         ));
         assert_eq!(summary["reason"], "native-observation-timeout");
         assert!(!summary.to_string().contains("private-"));
+    }
+
+    #[test]
+    fn terminal_operation_failures_publish_only_closed_set_runtime_facts() {
+        let failure = |content: Value| {
+            let message = json!({
+                "operation_id":"private-operation",
+                "phase":"failed",
+                "operation":{"artifact":{"content":content},"run_id":"private-run"}
+            });
+            gate_failure(&anyhow::anyhow!(
+                "operation reached a terminal failure: {message}"
+            ))
+        };
+        let summary = failure(json!({
+            "code":"container_failed", "container":"component", "exit_code":137,
+            "reason":"OOMKilled", "native_error_tail":"private-secret",
+            "diagnostic_reason":"private-secret"
+        }));
+        assert_eq!(summary["reason"], "operation-container-failed");
+        assert_eq!(summary["operation"]["code"], "container_failed");
+        assert_eq!(summary["operation"]["container"], "component");
+        assert_eq!(summary["operation"]["exit_code"], 137);
+        assert_eq!(summary["operation"]["termination_reason"], "OOMKilled");
+        assert_eq!(summary["operation"]["phase"], "failed");
+        assert!(!summary.to_string().contains("private-"));
+        for (code, expected) in [
+            ("action_deadline_exceeded", "operation-deadline-exceeded"),
+            ("action_job_lost", "operation-runtime-lost"),
+            ("action_runtime_not_found", "operation-runtime-lost"),
+            ("action_failed", "operation-failed"),
+            ("private-secret", "operation-failed"),
+        ] {
+            let summary = failure(json!({"code":code}));
+            assert_eq!(summary["reason"], expected);
+            assert!(!summary.to_string().contains("private-"));
+        }
+        // Anything outside the closed sets is dropped rather than republished.
+        let summary = failure(json!({
+            "code":"container_failed", "container":"PRIVATE Secret!", "exit_code":"private-secret",
+            "reason":"private-secret"
+        }));
+        assert_eq!(summary["operation"]["container"], Value::Null);
+        assert_eq!(summary["operation"]["exit_code"], Value::Null);
+        assert_eq!(summary["operation"]["termination_reason"], Value::Null);
+        assert!(!summary.to_string().contains("private-"));
+        // A native receipt still classifies as a native failure.
+        let summary = gate_failure(&anyhow::anyhow!(
+            "native command failed or has incomplete evidence: {}",
+            json!({"exit_code":3,"stdout":"private-secret"})
+        ));
+        assert_eq!(summary["reason"], "native-command-failed");
+        assert_eq!(summary["operation"], Value::Null);
     }
 
     #[test]

@@ -222,6 +222,40 @@ fn downloaded_artifacts_and_aggregate_reject_failed_missing_duplicate_and_stale_
     }
 }
 
+/// Stands in for the acceptance binary: records each case it was asked to
+/// run, emits the fixture receipt, and writes one public gate diagnostic per
+/// category the shard script has to classify.
+#[cfg(unix)]
+const ACCEPTANCE_STUB: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+while (( $# )); do
+  case "$1" in
+    --work-dir) work=$2; shift ;;
+    --qualification-case) id=$2; shift ;;
+  esac
+  shift
+done
+mkdir "$work"
+printf '%s\n' "$id" >> "$QUALIFICATION_TEST_CALLS"
+printf 'private fixture output\n' > "$work/private.log"
+[[ "$id" != "$QUALIFICATION_TEST_MISSING" ]] || exit 0
+cp "$QUALIFICATION_TEST_FIXTURES/$id.json" "$work/qualification-receipt.json"
+if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
+  jq '.passed=false | .stage="funding"' "$work/qualification-receipt.json" > "$work/changed.json"
+  mv "$work/changed.json" "$work/qualification-receipt.json"
+  printf '%s\n' '{"native":{"reason":"channel-request-rejected","stdout":"private fixture output"},"locations":["private fixture output","crates/proofstorm-acceptance/src/native.rs:100:5","crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"]}' > "$work/gate-failure.json"
+  if [[ "$QUALIFICATION_TEST_CATEGORY" == "container-exited" ]]; then
+    jq '.reason="container-exited" | .native=null' "$work/gate-failure.json" > "$work/changed.json"
+    mv "$work/changed.json" "$work/gate-failure.json"
+  fi
+  if [[ "$QUALIFICATION_TEST_CATEGORY" == "operation-container-failed" ]]; then
+    jq '.reason="operation-container-failed" | .native=null | .operation={"reason":"operation-container-failed","code":"container_failed","phase":"failed","container":"component","exit_code":137,"termination_reason":"OOMKilled"}' "$work/gate-failure.json" > "$work/changed.json"
+    mv "$work/changed.json" "$work/gate-failure.json"
+  fi
+  exit 7
+fi
+"#;
+
 #[cfg(unix)]
 #[test]
 fn real_shard_continues_after_failures_and_exports_only_receipts() {
@@ -253,37 +287,14 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
         write_json(&fixtures.join(format!("{}.json", receipt.case_id)), receipt);
     }
     let stub = binaries.join("proofstorm-acceptance");
-    fs::write(
-        &stub,
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-while (( $# )); do
-  case "$1" in
-    --work-dir) work=$2; shift ;;
-    --qualification-case) id=$2; shift ;;
-  esac
-  shift
-done
-mkdir "$work"
-printf '%s\n' "$id" >> "$QUALIFICATION_TEST_CALLS"
-printf 'private fixture output\n' > "$work/private.log"
-[[ "$id" != "$QUALIFICATION_TEST_MISSING" ]] || exit 0
-cp "$QUALIFICATION_TEST_FIXTURES/$id.json" "$work/qualification-receipt.json"
-if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
-  jq '.passed=false | .stage="funding"' "$work/qualification-receipt.json" > "$work/changed.json"
-  mv "$work/changed.json" "$work/qualification-receipt.json"
-  printf '%s\n' '{"native":{"reason":"channel-request-rejected","stdout":"private fixture output"},"locations":["private fixture output","crates/proofstorm-acceptance/src/native.rs:100:5","crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"]}' > "$work/gate-failure.json"
-  if [[ "$QUALIFICATION_TEST_CATEGORY" == "container-exited" ]]; then
-    jq '.reason="container-exited" | .native=null' "$work/gate-failure.json" > "$work/changed.json"
-    mv "$work/changed.json" "$work/gate-failure.json"
-  fi
-  exit 7
-fi
-"#,
-    )
-    .unwrap();
+    fs::write(&stub, ACCEPTANCE_STUB).unwrap();
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o700)).unwrap();
-    for category in ["successful", "channel-request-rejected", "container-exited"] {
+    for category in [
+        "successful",
+        "channel-request-rejected",
+        "container-exited",
+        "operation-container-failed",
+    ] {
         let fail = category != "successful";
         let directory = root.path().join(category);
         fs::create_dir(&directory).unwrap();
@@ -342,6 +353,13 @@ fn assert_shard_log(log: &str, fail: bool, category: &str, ids: &[&String]) {
             "{category}; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5"
         )));
         assert!(summary.contains("stage=funding"));
+        if category == "operation-container-failed" {
+            // The kubelet's termination reason is what separates an undersized
+            // container limit from a component that failed on its own terms.
+            assert!(summary.contains(&format!(
+                "{category}; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5; OOMKilled; exit 137"
+            )));
+        }
         assert!(summary.contains(&format!("{}: receipt missing", ids[1])));
         assert!(
             !summary.contains(ids[2]),

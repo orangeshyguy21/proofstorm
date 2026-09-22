@@ -138,9 +138,13 @@ pub fn wait_operation(client: &mut McpClient, operation_id: &str, attempts: u32)
         let operation = client.call("operation_status", json!({"operation_id": operation_id}))?;
         match expect::string(&operation, "/phase")? {
             "succeeded" => return Ok(operation),
-            "failed" | "cancelled" => {
-                bail!("operation {operation_id} failed: {operation}")
-            }
+            // A fixed prefix and a JSON body let the public diagnostic classify
+            // the daemon's failure code; the operation identity stays inside the
+            // private message.
+            phase @ ("failed" | "cancelled") => bail!(
+                "operation reached a terminal failure: {}",
+                json!({"operation_id":operation_id,"phase":phase,"operation":&operation})
+            ),
             _ => {}
         }
         if attempt + 1 < attempts {

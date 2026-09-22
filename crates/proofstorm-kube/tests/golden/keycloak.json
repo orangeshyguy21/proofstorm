@@ -327,6 +327,16 @@
                     },
                     "periodSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "cpu": "2",
+                      "memory": "2Gi"
+                    },
+                    "requests": {
+                      "cpu": "250m",
+                      "memory": "512Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {

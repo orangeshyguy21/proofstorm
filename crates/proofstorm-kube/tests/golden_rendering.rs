@@ -677,6 +677,52 @@ fn keycloak_waits_for_its_actual_database_service_without_database_credentials()
     }
 }
 
+/// The JVM augments and imports its realm at startup and does not fit the
+/// namespace default, so the limit must stay above it or the pod is OOM killed
+/// before it can ever pass its readiness probe.
+#[test]
+fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
+    let mebibytes = |quantity: &k8s_openapi::apimachinery::pkg::api::resource::Quantity| {
+        let value = &quantity.0;
+        let (amount, scale) = value.split_at(value.len() - 2);
+        amount.parse::<u64>().unwrap()
+            * match scale {
+                "Mi" => 1,
+                "Gi" => 1024,
+                other => panic!("unexpected quantity scale {other:?} in {value:?}"),
+            }
+    };
+    let default = render_security_spine(INSTANCE_KEY)
+        .limits
+        .spec
+        .unwrap()
+        .limits[0]
+        .default
+        .clone()
+        .unwrap();
+    let (spec, _) = backend_cell("keycloak");
+    let lock = resolve_lock(&spec, default_catalog()).unwrap();
+    let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+    let plan = plans.iter().find(|p| p.component_id == "identity").unwrap();
+    let rendered = render_keycloak_component(plan).unwrap();
+    let resources = rendered.deployments[0]
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap()
+        .containers[0]
+        .resources
+        .as_ref()
+        .expect("keycloak declares its own resources");
+    let limits = resources.limits.as_ref().unwrap();
+    let requests = resources.requests.as_ref().unwrap();
+    assert!(mebibytes(&limits["memory"]) > mebibytes(&default["memory"]));
+    assert!(mebibytes(&requests["memory"]) <= mebibytes(&limits["memory"]));
+}
+
 #[test]
 fn every_cdk_backend_waits_for_its_linked_postgres_before_initialization() {
     for backend in ["cdk", "cdk-ldk", "cdk-bdk", "ldk-server"] {

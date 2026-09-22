@@ -1604,6 +1604,10 @@ pub fn render_keycloak_component(
                     ],
                     "ports": [{"name": "http", "containerPort": http_port}],
                     "securityContext": container_security(),
+                    // The namespace LimitRange defaults a container to 512Mi. The JVM
+                    // augments and imports the realm at startup, and its peak resident
+                    // set does not fit that default, so declare the limit here.
+                    "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "2Gi"}},
                     "readinessProbe": {"httpGet": {"path": "/realms/proofstorm/.well-known/openid-configuration", "port": http_port}, "periodSeconds": 3, "failureThreshold": 60},
                     "volumeMounts": [{"name": "realm-import", "mountPath": "/opt/keycloak/data/import/realm.json", "subPath": "realm.json", "readOnly": true}]
                 }],

@@ -22,11 +22,15 @@ while IFS= read -r id; do
       # Read only the public diagnostic schema, never error text/native output.
       detail=$(jq -er '
         (.reason // .native.reason // "gate-failed") as $reason |
-        (if (["channel-request-rejected", "insufficient-funds", "native-command-failed", "image-pull-failed", "image-pull-backoff", "invalid-image-name", "container-config-error", "container-crash-loop", "container-start-error", "container-exited", "pod-unschedulable", "cell-readiness-blocked", "native-observation-timeout"] | index($reason)) != null
+        (if (["channel-request-rejected", "insufficient-funds", "native-command-failed", "image-pull-failed", "image-pull-backoff", "invalid-image-name", "container-config-error", "container-crash-loop", "container-start-error", "container-exited", "pod-unschedulable", "cell-readiness-blocked", "native-observation-timeout", "operation-failed", "operation-container-failed", "operation-deadline-exceeded", "operation-runtime-lost"] | index($reason)) != null
          then $reason else "gate-failed" end) as $category |
         [.locations[]? | strings | select(test("^crates/proofstorm-acceptance/src/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.rs:[1-9][0-9]*(:[0-9]+)?$"))] as $locations |
         ([$locations[] | select(contains("/gates/") or contains("/qualification/"))][0] // $locations[0]) as $location |
+        ((.operation.termination_reason | strings | select(test("^[A-Za-z]{1,32}$"))) // null) as $termination |
+        ((.operation.exit_code | numbers | select(. == floor and . >= 0 and . <= 255)) // null) as $exit |
         $category + (if $location then "; at " + $location else "" end)
+          + (if $termination then "; " + $termination else "" end)
+          + (if $exit then "; exit " + ($exit | tostring) else "" end)
       ' "$work/$id/gate-failure.json" 2>/dev/null) || detail=''
       if [[ -n "$detail" ]]; then
         reason="$reason; $detail"

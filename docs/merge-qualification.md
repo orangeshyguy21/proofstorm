@@ -125,7 +125,13 @@ summary when a hosted runner's local `gate-0-qualification.log` is unavailable.
 The shard's final failure list and CI annotations repeat the failing stage,
 safe category and fixture source location when available, beside the case ID.
 Readiness failures preserve the specific fixed blocker category, including
-container exit, image pull, configuration, and scheduling failures. Startup
+container exit, image pull, configuration, and scheduling failures.
+An operation that reaches a terminal failure reports the runtime's own failure
+code as a category, with the terminated container's kubelet termination reason
+and exit code where both are recognized values. `OOMKilled` there means the
+container's memory limit, not the component, ended the operation. The native
+error tail and wallet diagnostic reason that can accompany that code stay in the
+private log. Startup
 failures retain private pod status and current/previous logs from every component
 and initializer before runtime cleanup, including Lightning and identity-provider
 dependencies. Capture has a bounded time budget; these are not public CI artifacts.
