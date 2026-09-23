@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-acceptance"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2865,7 +2865,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-app"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -2902,7 +2902,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-core"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "base64 0.22.1",
  "lightning-invoice",
@@ -2914,7 +2914,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-driver"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2935,7 +2935,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-exec"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "nix",
  "proofstorm-core",
@@ -2946,7 +2946,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-kube"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "k8s-openapi",
@@ -2964,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-mcp"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-prober"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "bytes",
  "futures",
@@ -3008,7 +3008,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-qualification"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "proofstorm-core",
@@ -3021,7 +3021,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-store"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "proofstorm-core",
  "proofstorm-view",
@@ -3035,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-transfer"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "getrandom 0.3.4",
  "rusqlite",
@@ -3048,7 +3048,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-view"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "proofstorm-core",
  "schemars 1.2.2",
@@ -3058,7 +3058,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-web"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "console_error_panic_hook",
  "gloo-net",
@@ -3076,7 +3076,7 @@ dependencies = [
 
 [[package]]
 name = "proofstorm-xtask"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "proofstormd"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "bip39",
  "futures",
