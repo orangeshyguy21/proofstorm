@@ -21,8 +21,10 @@ env:
 
 jobs:
   qualification:
-    name: Native catalog qualification
+    name: Native catalog compatibility
     uses: ./.github/workflows/qualification.yml
+    with:
+      suite: compatibility
 
   merge-qualification:
     name: Merge qualification

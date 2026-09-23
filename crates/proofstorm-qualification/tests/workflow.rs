@@ -124,3 +124,39 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
         json!(["plan", "build", "preflight"])
     );
 }
+
+#[test]
+fn upstream_behavioral_suite_is_manual_and_independent_of_required_checks() {
+    let checks = workflow(include_str!("../../../.github/workflows/check.yml"));
+    let behavioral = workflow(include_str!("../../../.github/workflows/behavioral.yml"));
+    let qualification = workflow(include_str!("../../../.github/workflows/qualification.yml"));
+    assert_eq!(
+        checks["jobs"]["qualification"]["with"]["suite"],
+        "compatibility"
+    );
+    assert_eq!(
+        qualification["on"]["workflow_call"]["inputs"]["suite"]["default"],
+        "compatibility"
+    );
+    assert_eq!(
+        behavioral["on"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["workflow_dispatch"]
+    );
+    assert_eq!(
+        behavioral["jobs"]["qualification"]["uses"],
+        "./.github/workflows/qualification.yml"
+    );
+    assert_eq!(behavioral["jobs"]["qualification"]["with"]["suite"], "full");
+    assert!(
+        checks["jobs"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|job| job["uses"] != "./.github/workflows/behavioral.yml")
+    );
+}

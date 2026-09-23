@@ -140,7 +140,7 @@ mod tests {
                 run_id: "0".into(),
                 attempt: 1,
             },
-            true,
+            proofstorm_qualification::Mode::Compatibility,
         )
         .unwrap();
         let platforms: std::collections::BTreeSet<_> = plan

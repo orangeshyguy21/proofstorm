@@ -2,7 +2,7 @@
 use std::{fs, path::Path, thread::sleep, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{GateContext, McpClient, cell, json as expect};
@@ -10,9 +10,9 @@ use crate::{GateContext, McpClient, cell, json as expect};
 const INSTANCE: &str = "proof-spend";
 const DRIVER: &str = include_str!("../../drivers/cashu_double_spend.sh");
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Receipt {
+pub(crate) struct Receipt {
     before: u64,
     first: u64,
     after_replay: u64,
@@ -22,9 +22,21 @@ struct Receipt {
     fresh_balance: u64,
     race_rc: [u32; 2],
     race_spent: [bool; 2],
+    race_pending: [bool; 2],
+    race_replay_rc: u32,
+    race_replay_spent: bool,
+    race_replay_balance: u64,
     race_balance: [u64; 2],
     source_after: u64,
 }
+
+// This typed context contains only numbers/booleans and is safe for public CI.
+impl std::fmt::Display for Receipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Cashu double-spend receipt")
+    }
+}
+impl std::error::Error for Receipt {}
 
 impl Receipt {
     fn verify(&self) -> Result<()> {
@@ -54,12 +66,16 @@ impl Receipt {
             } else {
                 ensure!(
                     self.race_rc[index] == 1
-                        && self.race_spent[index]
+                        && (self.race_spent[index] || self.race_pending[index])
                         && self.race_balance[index] == 0,
                     "race loser was credited or failed for an unverified reason"
                 );
             }
         }
+        ensure!(
+            self.race_replay_rc == 1 && self.race_replay_spent && self.race_replay_balance == 0,
+            "post-race replay did not prove the winning proofs were spent"
+        );
         ensure!(
             self.source_after == 16,
             "unexpected source debit; fixture requires zero input fees"
@@ -216,7 +232,7 @@ fn exercise(
     )?;
     native_ok(&result)?;
     let receipt: Receipt = serde_json::from_str(expect::string(&result, "/stdout")?)?;
-    receipt.verify()
+    receipt.verify().map_err(|error| error.context(receipt))
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
@@ -348,6 +364,7 @@ mod tests {
 
     fn receipt() -> Value {
         json!({"before":64,"first":32,"after_replay":32,"replay_rc":1,"fresh_rc":1,"fresh_spent":true,
+            "race_pending":[false,false],"race_replay_rc":1,"race_replay_spent":true,"race_replay_balance":0,
             "fresh_balance":0,"race_rc":[0,1],"race_spent":[false,true],"race_balance":[16,0],"source_after":16})
     }
 
@@ -366,6 +383,10 @@ mod tests {
             .verify()
             .unwrap();
         for (key, value) in [
+            ("race_replay_rc", json!(0)),
+            ("race_replay_rc", json!(124)),
+            ("race_replay_spent", json!(false)),
+            ("race_replay_balance", json!(16)),
             ("race_rc", json!([0, 0])),
             ("race_rc", json!([1, 1])),
             ("race_rc", json!([0, 124])),
@@ -413,3 +434,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+mod driver_tests;

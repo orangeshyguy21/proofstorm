@@ -266,7 +266,7 @@ mod tests {
                 run_id: "1".into(),
                 attempt: 1,
             },
-            true,
+            proofstorm_qualification::Mode::Compatibility,
         )
         .unwrap();
         for case in &plan.cases {

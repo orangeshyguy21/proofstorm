@@ -2,7 +2,7 @@
 
 `Checks` starts on every pull request, main push, manual run and merge-group
 event. Its stable `Merge qualification` result requires formatting, Rust tests,
-the Mac installer isolation contract and native catalog qualification to succeed.
+the Mac installer isolation contract and native catalog compatibility to succeed.
 Every main SHA keeps its own run; only obsolete PR runs are cancelled. A failed
 qualification therefore also prevents the existing release-promotion validator
 from accepting that `Checks` run.
@@ -10,13 +10,32 @@ from accepting that `Checks` run.
 The planner reads both platform catalogs. It enumerates preferred and supported
 versions and the experimental LDK processor relationship exposed by CDK. Plans
 record exact image sources, component versions, storage/authentication choices,
-wallet pairings and coverage claims. A full run exercises each planned case on
-native Linux AMD64 and ARM64. Only a nonempty diff consisting entirely of the
+wallet pairings and coverage claims. The required compatibility suite exercises
+each supported pairing on native Linux AMD64 and ARM64. Only a nonempty diff consisting entirely of the
 explicitly allowed documentation paths may omit cases outside the fixed baseline.
-All other changes select the full matrix. The baseline includes native image and
-Lightning contracts, preferred external mint/wallet payment paths with SQLite
-and PostgreSQL, Redis, authenticated Nutshell 0.20, workspace persistence and
-control-plane lifecycle checks.
+All other changes select the complete compatibility matrix. The baseline includes
+native image and Lightning contracts, preferred external mint/wallet payment paths
+with SQLite and PostgreSQL, Redis, Keycloak, workspace persistence and control-plane
+lifecycle checks.
+
+Required CI checks Proofstorm's integration contract: image identity, startup,
+configuration, supported component pairings, ordinary payment/deposit flows,
+persistence, cleanup, and Proofstorm regressions such as incorrect settlement
+reporting or controller recovery. It does not gate merges or deployments on
+upstream adversarial races or load testing.
+
+`Upstream behavioral qualification` is a separate, manually dispatched workflow.
+It selects `full`, adding CDK/Nutshell double-spend replay/races and 24 concurrent
+BDK quote requests on both database backends to the compatibility suite. Failures
+remain failures in that workflow, but it is not a dependency of `Checks` or release
+promotion. Required BDK cases use four sequential quote requests and retain
+configuration, valid deposits, invalid-input/dust checks, restart persistence and
+cleanup. No case-level retries or `continue-on-error` hide failures.
+
+Plans explicitly bind their suite (`documentation`, `compatibility`, or `full`),
+so receipts cannot be reused between suites. The planner verifies every catalog
+claim is covered by scheduled cases in both compatibility and full plans.
+Documentation-only PRs retain the fixed compatibility baseline.
 
 Qualification pulls published images anonymously by digest and records the
 selected platform manifest and config digest. A source build cannot replace a
@@ -28,8 +47,7 @@ PR jobs have no package-write permissions.
 
 Both native architectures must restore their build artifacts on fresh runners,
 start an owned runtime, pass the Bitcoin smoke scenario and verify cleanup before
-the full matrix begins. Linux ARM64 checkout
-setup uses its own checksum-verified host-tool pins; this does not add a published
+the selected matrix begins. Linux ARM64 checkout setup uses its own checksum-verified host-tool pins; this does not add a published
 Linux ARM64 installer or update channel.
 
 Each live case owns a disposable installation. Its fixture must instantiate all
@@ -48,8 +66,9 @@ Failed, missing, duplicate, skipped or stale evidence cannot qualify a merge.
   payment recognition, then checks persistent identity/quote state. BOLT12
   ecash issuance is not covered. The experimental gRPC processor has the same
   explicit BOLT12 payment-recognition boundary.
-- Embedded BDK covers on-chain deposits, confirmation and dust handling,
-  concurrent quote addresses and persistent settled quotes. Its catalog no
+- Embedded BDK compatibility covers on-chain deposits, confirmation and dust
+  handling, sequential quote addresses and persistent settled quotes. Concurrent
+  quote generation is reserved for the opt-in behavioral suite. Its catalog no
   longer advertises the BOLT11-only Nutshell wallet as an on-chain wallet pairing.
 - Nutshell 0.20.3 and 0.21.0 NUT-21/NUT-22 integrations are excluded from supported
   claims. Both shipped upstream authentication schemas lack columns used by the
@@ -73,10 +92,10 @@ just check
 cargo test -p proofstorm-qualification
 ```
 
-To inspect a complete plan:
+To inspect the required compatibility plan (use `full` for the opt-in suite):
 
 ```sh
-cargo run -p proofstorm-qualification -- plan "$(git rev-parse HEAD)" 0 1 full /tmp/qualification-plan.json
+cargo run -p proofstorm-qualification -- plan "$(git rev-parse HEAD)" 0 1 compatibility /tmp/qualification-plan.json
 ```
 
 For a native Linux live case, prepare matching checkout artifacts with
@@ -146,7 +165,15 @@ payment, funding, channel or restart stage from the private compatibility result
 instead of treating every failure in that runner as an image download failure.
 Registry manifest lookup, image download, local image inspection and executable
 version probes also have separate fixed stage labels.
-Double-spend stages distinguish CDK and Nutshell startup from their replay checks.
+The opt-in double-spend gate distinguishes CDK and Nutshell startup from replay
+checks. A race loser must report a recognized spent/pending rejection and remain
+uncredited; exactly one wallet must win. After both commands complete, an
+independent fresh wallet must reject those same proofs as spent. Ordinary replay
+checks still require spent errors. Timeouts, unknown failures, duplicate winners
+and balance drift fail the gate. Public failure summaries include only the typed
+numeric/boolean receipt, including both race exits, balances and post-race replay
+results; raw wallet logs and tokens remain private. Deterministic shell-fixture
+tests exercise both winner orderings and spent/pending/error outcomes.
 Nutshell waits for its linked LND REST service before starting, avoiding a fatal
 first backend check while LND is still initializing. Failed double-spend fixtures
 retain private mint/dependency startup logs and pod status before removing the

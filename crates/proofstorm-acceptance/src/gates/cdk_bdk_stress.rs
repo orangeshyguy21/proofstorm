@@ -1,9 +1,9 @@
-//! CDK 0.18.1 embedded BDK: full agent-authored metadata rendering, 24
-//! concurrent NUT-30 on-chain quotes with unique addresses, NUT-20 pubkey
+//! CDK embedded BDK compatibility with optional concurrent quote stress.
+//! Verifies agent-authored metadata rendering, unique addresses, NUT-20 pubkey
 //! enforcement, dust rejection, and settled-state survival across a restart.
 //!
 //! Ported from `tests/kubernetes/cdk_bdk_stress_mcp_client.py`. Serves both the
-//! `cdk-bdk-stress` and `cdk-bdk-postgres` targets.
+//! compatibility and explicit stress targets for SQLite and PostgreSQL.
 
 use std::{thread::sleep, time::Duration};
 
@@ -111,12 +111,13 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
     context.kubectl.exec(namespace, "statefulset/chain", &argv)
 }
 
-pub fn run(context: &GateContext, postgres_enabled: bool) -> Result<()> {
+pub fn run(context: &GateContext, postgres_enabled: bool, stress: bool) -> Result<()> {
     let client = context.default_session("cdk-bdk-stress-live", "designer")?;
     run_selected(
         context,
         client,
         postgres_enabled,
+        stress,
         context.selected_version("cdk-bdk", "0.18.1"),
         context.selected_image("cdk-bdk", IMAGE),
     )
@@ -131,6 +132,7 @@ pub(super) fn run_candidate(
         context,
         client,
         false,
+        true,
         expect::string(receipt, "/catalog_entry/version")?,
         expect::string(receipt, "/image")?,
     )
@@ -140,6 +142,7 @@ fn run_selected(
     context: &GateContext,
     mut client: crate::McpClient,
     postgres_enabled: bool,
+    stress: bool,
     selected_version: &str,
     selected_image: &str,
 ) -> Result<()> {
@@ -217,23 +220,32 @@ fn run_selected(
     }
 
     let quote_url = forward.url("/v1/mint/quote/onchain");
-    let quotes: Vec<Value> = std::thread::scope(|scope| -> Result<Vec<Value>> {
-        let handles: Vec<_> = (0..QUOTES)
-            .map(|_| {
-                let url = quote_url.clone();
-                scope
-                    .spawn(move || http::post_json(&url, &json!({"unit": "sat", "pubkey": PUBKEY})))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| {
-                handle
-                    .join()
-                    .map_err(|_| anyhow::anyhow!("quote thread panicked"))?
-            })
-            .collect()
-    })?;
+    let quotes: Vec<Value> = if stress {
+        std::thread::scope(|scope| -> Result<Vec<Value>> {
+            let handles: Vec<_> = (0..QUOTES)
+                .map(|_| {
+                    let url = quote_url.clone();
+                    scope.spawn(move || {
+                        http::post_json(&url, &json!({"unit": "sat", "pubkey": PUBKEY}))
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("quote thread panicked"))?
+                })
+                .collect()
+        })?
+    } else {
+        // Compatibility needs ordinary deposits and restart persistence, not
+        // upstream behavior under 24 simultaneous quote requests.
+        (0..4)
+            .map(|_| http::post_json(&quote_url, &json!({"unit": "sat", "pubkey": PUBKEY})))
+            .collect::<Result<_>>()?
+    };
 
     context.record("cdk-bdk-selected-quotes.json", &json!(quotes))?;
 
@@ -242,8 +254,9 @@ fn run_selected(
         .map(|quote| expect::string(quote, "/request"))
         .collect::<Result<_>>()?;
     let unique: std::collections::BTreeSet<&&str> = addresses.iter().collect();
-    if unique.len() != QUOTES || !addresses.iter().all(|address| address.starts_with("bcrt1")) {
-        bail!("concurrent NUT-30 quotes did not return unique regtest addresses: {addresses:?}");
+    if unique.len() != quotes.len() || !addresses.iter().all(|address| address.starts_with("bcrt1"))
+    {
+        bail!("NUT-30 quotes did not return unique regtest addresses: {addresses:?}");
     }
     addresses.clear();
 
@@ -368,7 +381,7 @@ fn run_selected(
         println!("CDK embedded BDK + PostgreSQL MCP NUT-30 persistence and teardown passed");
     } else {
         println!(
-            "CDK 0.18.1 embedded-BDK database-backed configuration, NUT-30 stress, restart persistence, and teardown passed"
+            "CDK embedded-BDK configuration, on-chain deposits, restart persistence, and teardown passed"
         );
     }
     Ok(())

@@ -7,7 +7,7 @@ use proofstorm_core::{
 };
 use serde::Serialize;
 
-use crate::{Case, Component, Identity, MintRoundtrip, Plan, Scenario};
+use crate::{Case, Component, Identity, MintRoundtrip, Mode, Plan, Scenario};
 
 /// Catalog for an explicitly native qualification target, independent of host.
 ///
@@ -140,7 +140,7 @@ fn dependencies(entry: &CatalogEntry, components: &[Component]) -> BTreeSet<Stri
 struct Builder<'a> {
     catalog: &'a CatalogResponse,
     platform: &'a str,
-    full: bool,
+    mode: Mode,
     cases: Vec<Case>,
 }
 
@@ -158,19 +158,24 @@ impl Builder<'_> {
         components.dedup();
         let digest = digest_json(&(self.platform, &scenario, &components, &claims));
         let id = format!("{label}-{}", &digest[7..23]);
+        let stress = matches!(&scenario, Scenario::Gate { name, .. }
+            if matches!(name.as_str(), "cashu-double-spend" | "cdk-bdk-stress" | "cdk-bdk-postgres-stress"));
         self.cases.push(Case {
             id,
             platform: self.platform.into(),
             scenario,
             components,
             claims,
-            required: self.full || baseline,
-            reason: if baseline {
-                "fixed merge baseline"
-            } else if self.full {
-                "full qualification: main, shared code, or unclassified change"
+            required: self.mode == Mode::Full
+                || (!stress && (self.mode == Mode::Compatibility || baseline)),
+            reason: if stress {
+                "opt-in upstream adversarial/stress scenario"
+            } else if baseline {
+                "fixed compatibility baseline"
+            } else if self.mode == Mode::Documentation {
+                "documentation-only PR: covered by the main compatibility run"
             } else {
-                "documentation-only PR: covered by the full main run"
+                "supported catalog compatibility"
             }
             .into(),
         });
@@ -372,10 +377,26 @@ impl Builder<'_> {
                         let gate = match (entry.id.as_str(), storage) {
                             ("cdk-ldk", StorageBackend::Sqlite) => "cdk-ldk",
                             ("cdk-ldk", StorageBackend::Postgres) => "cdk-ldk-postgres",
-                            ("cdk-bdk", StorageBackend::Sqlite) => "cdk-bdk-stress",
+                            ("cdk-bdk", StorageBackend::Sqlite) => "cdk-bdk",
                             ("cdk-bdk", StorageBackend::Postgres) => "cdk-bdk-postgres",
                             _ => bail!("unmapped embedded backend/storage"),
                         };
+                        if entry.id == "cdk-bdk" {
+                            let mut dependencies = vec!["bitcoin-core"];
+                            let stress_gate = if *storage == StorageBackend::Postgres {
+                                dependencies.push("postgresql");
+                                "cdk-bdk-postgres-stress"
+                            } else {
+                                "cdk-bdk-stress"
+                            };
+                            self.gate(
+                                stress_gate,
+                                &[entry],
+                                &dependencies,
+                                BTreeSet::new(),
+                                false,
+                            )?;
+                        }
                         let mut claims = BTreeSet::from([
                             claim(entry, "behavior", &entry.id),
                             claim(entry, "storage", storage),
@@ -555,17 +576,17 @@ impl Builder<'_> {
     }
 }
 
-/// Generate obligations and executable cases. `full=false` is reserved for a
-/// proven documentation-only PR; all software/unclassified changes use `true`.
+/// Generate exact obligations and executable cases for the selected suite.
+/// Full adds upstream stress tests; compatibility retains all catalog claims.
 ///
 /// # Errors
 /// Rejects invalid identities and catalog claims without an explicit scenario.
-pub fn plan(identity: Identity, full: bool) -> Result<Plan> {
+pub fn plan(identity: Identity, mode: Mode) -> Result<Plan> {
     identity.validate()?;
     let mut plan = Plan {
-        format_version: 1,
+        format_version: 2,
         identity,
-        full,
+        mode,
         catalog_digests: BTreeMap::new(),
         obligations: BTreeMap::new(),
         cases: vec![],
@@ -581,7 +602,7 @@ pub fn plan(identity: Identity, full: bool) -> Result<Plan> {
         let cases = Builder {
             catalog: &catalog,
             platform,
-            full,
+            mode,
             cases: vec![],
         }
         .build()?;
@@ -598,6 +619,17 @@ pub fn plan(identity: Identity, full: bool) -> Result<Plan> {
             covered.is_subset(&required),
             "qualification claims undeclared support"
         );
+        if mode != Mode::Documentation {
+            let scheduled: BTreeSet<_> = cases
+                .iter()
+                .filter(|case| case.required)
+                .flat_map(|case| case.claims.iter().cloned())
+                .collect();
+            ensure!(
+                scheduled == required,
+                "scheduled suite omits catalog compatibility claims"
+            );
+        }
         plan.catalog_digests
             .insert(platform.into(), digest_json(&catalog));
         plan.obligations.insert(platform.into(), required);

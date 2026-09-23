@@ -191,7 +191,8 @@ pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
             }
             "gate-failed"
         });
-    json!({"reason":reason,"locations":failure_locations(&error.backtrace().to_string()),"native":native,"operation":operation})
+    let cashu_double_spend = error.downcast_ref::<crate::gates::cashu_double_spend::Receipt>();
+    json!({"reason":reason,"locations":failure_locations(&error.backtrace().to_string()),"native":native,"operation":operation,"cashu_double_spend":cashu_double_spend})
 }
 
 fn text(path: &Path) -> Option<String> {
