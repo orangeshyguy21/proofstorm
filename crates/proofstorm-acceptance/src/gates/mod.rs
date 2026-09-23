@@ -12,6 +12,7 @@ pub mod cashu_double_spend;
 pub mod cdk_bdk_stress;
 pub mod cdk_cln;
 pub mod cdk_ldk;
+mod cdk_mint_identity;
 pub mod cdk_postgres;
 pub mod cdk_wallet;
 pub mod cocod_wallet;
@@ -85,6 +86,7 @@ pub const NAMES: &[&str] = &[
     "cdk-bdk-stress",
     "cdk-bdk-postgres",
     "cross-implementation-wallet",
+    "cdk-mint-identity",
     "native-exec",
     "reliable-exec",
     "slice2",
@@ -142,6 +144,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "cdk-bdk-stress" => cdk_bdk_stress::run(context, crate::postgres::enabled()),
         "cdk-bdk-postgres" => cdk_bdk_stress::run(context, true),
         "cross-implementation-wallet" => cross_implementation_wallet::run(context),
+        "cdk-mint-identity" => cdk_mint_identity::run(context),
         "native-exec" => native_exec::run(context),
         "reliable-exec" => reliable_exec::run(context),
         "slice2" => slice2::run(context),

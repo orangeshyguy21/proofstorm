@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 proofstorm-transfer = { path = "../proofstorm-transfer" }
+bip39 = "2.2"
 futures.workspace = true
 getrandom.workspace = true
 rcgen = "=0.13.2"

@@ -159,7 +159,7 @@ mod tests {
         );
         assert_eq!(
             cdk.fields["mnemonic"].classification,
-            ConfigSettingClass::RuntimePolicy
+            ConfigSettingClass::GeneratedInstanceSecret
         );
         assert_eq!(
             cdk.support.compatible_wallet_adapters[0].implementation,
@@ -183,7 +183,7 @@ mod tests {
         assert!(cdk_ldk.support.payment_bindings.is_empty());
         assert_eq!(
             cdk_ldk.fields["ldk_node_mnemonic"].classification,
-            ConfigSettingClass::RuntimePolicy
+            ConfigSettingClass::GeneratedInstanceSecret
         );
         let nutshell = manifest
             .entries

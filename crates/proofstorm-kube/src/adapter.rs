@@ -34,10 +34,6 @@ pub const COMPONENT_LABEL: &str = "proofstorm.dev/component";
 const NETWORK_IDENTITY_LABEL: &str = "proofstorm.dev/network-identity";
 pub const RPC_USER: &str = "proofstorm";
 pub const RPC_PASSWORD: &str = "proofstorm-regtest-only";
-const CDK_MINT_MNEMONIC: &str =
-    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-const CDK_WALLET_MNEMONIC: &str =
-    "legal winner thank year wave sausage worth useful legal winner thank yellow";
 pub const PROTOCOL_PROBER_NAME: &str = "proofstorm-protocol-prober";
 pub const PROTOCOL_PROBER_LABEL: &str = "proofstorm.dev/prober";
 use crate::images::PROBE_IMAGE as PROBER_IMAGE;
@@ -1905,8 +1901,6 @@ pub fn render_cdk_component(
         "type": "Opaque",
         "stringData": {
             "PROOFSTORM_SECRET_KIND": "cdk-mint",
-            "mint-mnemonic": CDK_MINT_MNEMONIC,
-            "wallet-mnemonic": CDK_WALLET_MNEMONIC,
             "bitcoin-rpc-password": RPC_PASSWORD
         }
     }))?);

@@ -2,26 +2,28 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::Secret;
-use kube::{
-    Api, ResourceExt,
-    api::{Patch, PatchParams},
-};
+use kube::{Api, ResourceExt, api::PostParams};
 
 use crate::Error;
 
 type GenerateData = fn(&Secret) -> Result<BTreeMap<String, String>, Error>;
 
-pub(super) async fn ensure(
-    secrets: &Api<Secret>,
-    template: &Secret,
-    patch: &PatchParams,
-) -> Result<(), Error> {
+pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(), Error> {
     let kind = template
         .string_data
         .as_ref()
         .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
         .map(String::as_str);
     let (required, generate): (&[&str], GenerateData) = match kind {
+        Some("cdk-mint") => (
+            &[
+                "PROOFSTORM_SECRET_KIND",
+                "mint-mnemonic",
+                "wallet-mnemonic",
+                "bitcoin-rpc-password",
+            ],
+            cdk_data,
+        ),
         Some("nutshell-mint") => (
             &["PROOFSTORM_SECRET_KIND", "MINT_PRIVATE_KEY"],
             nutshell_data,
@@ -51,47 +53,62 @@ pub(super) async fn ensure(
             postgres_data,
         ),
     };
-    ensure_generated_secret(secrets, template, patch, required, || generate(template)).await
+    ensure_generated_secret(secrets, template, required, || generate(template)).await
 }
 
 async fn ensure_generated_secret(
     secrets: &Api<Secret>,
     template: &Secret,
-    patch: &PatchParams,
     required: &[&str],
     generate: impl FnOnce() -> Result<BTreeMap<String, String>, Error>,
 ) -> Result<(), Error> {
     let name = template.name_any();
     if let Some(existing) = secrets.get_opt(&name).await? {
-        let data = existing.data.as_ref().ok_or_else(|| {
-            Error::SecretContract(format!("Secret {name:?} has no generated data"))
-        })?;
-        for key in required {
-            if !data.contains_key(*key) {
-                return Err(Error::SecretContract(format!(
-                    "Secret {name:?} is missing key {key:?}"
-                )));
-            }
-        }
-        return Ok(());
+        return validate(&existing, required);
     }
     let mut desired = template.clone();
     desired
         .string_data
         .get_or_insert_default()
         .extend(generate()?);
-    secrets.patch(&name, patch, &Patch::Apply(&desired)).await?;
+    // Create, never apply: concurrent reconcilers must not rotate each other's credentials.
+    match secrets.create(&PostParams::default(), &desired).await {
+        Ok(_) => Ok(()),
+        Err(kube::Error::Api(response)) if response.code == 409 => {
+            validate(&secrets.get(&name).await?, required)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate(existing: &Secret, required: &[&str]) -> Result<(), Error> {
+    let name = existing.name_any();
+    let data = existing
+        .data
+        .as_ref()
+        .ok_or_else(|| Error::SecretContract(format!("Secret {name:?} has no generated data")))?;
+    for key in required {
+        if !data.contains_key(*key) {
+            return Err(Error::SecretContract(format!(
+                "Secret {name:?} is missing key {key:?}"
+            )));
+        }
+    }
     Ok(())
 }
 
-fn random_hex(name: &str) -> Result<String, Error> {
-    let mut entropy = [0_u8; 32];
+fn random_bytes<const N: usize>(name: &str) -> Result<[u8; N], Error> {
+    let mut entropy = [0_u8; N];
     getrandom::fill(&mut entropy).map_err(|error| {
         Error::SecretContract(format!(
             "could not generate credentials for {name:?}: {error}"
         ))
     })?;
-    Ok(entropy
+    Ok(entropy)
+}
+
+fn random_hex(name: &str) -> Result<String, Error> {
+    Ok(random_bytes::<32>(name)?
         .iter()
         .fold(String::with_capacity(64), |mut encoded, byte| {
             use std::fmt::Write as _;
@@ -121,6 +138,24 @@ fn postgres_data(template: &Secret) -> Result<BTreeMap<String, String>, Error> {
         ("POSTGRES_PASSWORD".into(), password),
         ("DATABASE_URL".into(), url),
         ("database.toml".into(), database_config),
+    ]))
+}
+
+/// Each CDK mint owns independent Cashu signing and payment-wallet seeds.
+fn cdk_data(template: &Secret) -> Result<BTreeMap<String, String>, Error> {
+    let name = template.name_any();
+    let mnemonic = |purpose: &str| -> Result<String, Error> {
+        bip39::Mnemonic::from_entropy(&random_bytes::<16>(&name)?)
+            .map(|mnemonic| mnemonic.to_string())
+            .map_err(|error| {
+                Error::SecretContract(format!(
+                    "could not encode {purpose} mnemonic for {name:?}: {error}"
+                ))
+            })
+    };
+    Ok(BTreeMap::from([
+        ("mint-mnemonic".into(), mnemonic("mint")?),
+        ("wallet-mnemonic".into(), mnemonic("wallet")?),
     ]))
 }
 

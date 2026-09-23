@@ -4,6 +4,7 @@ use k8s_openapi::ByteString;
 use kube::{Client, client::Body};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     convert::Infallible,
     sync::{Arc, Mutex},
 };
@@ -11,10 +12,12 @@ use std::{
 #[derive(Default)]
 struct Cluster {
     secret: Option<Secret>,
-    patches: Vec<Secret>,
+    creates: Vec<Secret>,
     reads: usize,
     read_error: Option<u16>,
-    patch_error: Option<u16>,
+    create_error: Option<u16>,
+    /// Another reconciler creates this Secret between our read and create.
+    concurrent: Option<Secret>,
 }
 
 fn api(cluster: &Arc<Mutex<Cluster>>) -> Api<Secret> {
@@ -26,17 +29,12 @@ fn api(cluster: &Arc<Mutex<Cluster>>) -> Api<Secret> {
                 let method = request.method().clone();
                 assert_eq!(
                     request.uri().path(),
-                    "/api/v1/namespaces/test/secrets/credentials"
+                    if method == http::Method::POST {
+                        "/api/v1/namespaces/test/secrets"
+                    } else {
+                        "/api/v1/namespaces/test/secrets/credentials"
+                    }
                 );
-                if method == http::Method::PATCH {
-                    let query = request.uri().query().unwrap();
-                    assert!(query.contains("fieldManager=proofstorm-controller"));
-                    assert!(query.contains("force=true"));
-                    assert_eq!(
-                        request.headers()["content-type"],
-                        "application/apply-patch+yaml"
-                    );
-                }
                 let bytes = request.into_body().collect_bytes().await.unwrap();
                 let mut state = cluster.lock().unwrap();
                 let result = match method {
@@ -46,11 +44,14 @@ fn api(cluster: &Arc<Mutex<Cluster>>) -> Api<Secret> {
                             .read_error
                             .map_or_else(|| state.secret.clone().ok_or(404), Err)
                     }
-                    http::Method::PATCH => {
+                    http::Method::POST => {
                         let mut secret: Secret = serde_json::from_slice(&bytes).unwrap();
-                        state.patches.push(secret.clone());
-                        if let Some(code) = state.patch_error {
+                        state.creates.push(secret.clone());
+                        if let Some(code) = state.create_error {
                             Err(code)
+                        } else if let Some(winner) = state.concurrent.take() {
+                            state.secret = Some(winner);
+                            Err(409)
                         } else {
                             for (key, value) in secret.string_data.take().unwrap() {
                                 secret
@@ -85,16 +86,13 @@ fn api(cluster: &Arc<Mutex<Cluster>>) -> Api<Secret> {
     Api::namespaced(client, "test")
 }
 
-fn patch() -> PatchParams {
-    PatchParams::apply("proofstorm-controller").force()
-}
-
 fn fixtures() -> Vec<(Secret, Vec<&'static str>)> {
     [
         (json!({"POSTGRES_USER":"proofstorm", "POSTGRES_DB":"mint"}), vec!["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DATABASE_URL", "database.toml"]),
         (json!({"PROOFSTORM_SECRET_KIND":"nutshell-mint"}), vec!["PROOFSTORM_SECRET_KIND", "MINT_PRIVATE_KEY"]),
         (json!({"PROOFSTORM_SECRET_KIND":"redis-cache"}), vec!["PROOFSTORM_SECRET_KIND", "REDIS_PASSWORD", "REDIS_URL"]),
         (json!({"PROOFSTORM_SECRET_KIND":"keycloak-oidc", "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS":"300"}), vec!["PROOFSTORM_SECRET_KIND", "KEYCLOAK_ADMIN_PASSWORD", "OIDC_TEST_USERNAME", "OIDC_TEST_PASSWORD", "realm.json"]),
+        (json!({"PROOFSTORM_SECRET_KIND":"cdk-mint", "bitcoin-rpc-password":"regtest"}), vec!["PROOFSTORM_SECRET_KIND", "mint-mnemonic", "wallet-mnemonic", "bitcoin-rpc-password"]),
     ].into_iter().map(|(data, required)| {
         let mut template: Secret = serde_json::from_value(json!({
             "apiVersion":"v1", "kind":"Secret", "type":"Opaque",
@@ -113,6 +111,11 @@ fn is_random_hex(value: &str) {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     );
+}
+
+fn is_mnemonic(value: &str) {
+    let mnemonic: bip39::Mnemonic = value.parse().unwrap();
+    assert_eq!(mnemonic.word_count(), 12);
 }
 
 fn assert_generated_contract(data: &BTreeMap<String, String>) {
@@ -135,6 +138,11 @@ fn assert_generated_contract(data: &BTreeMap<String, String>) {
             );
         }
         Some("nutshell-mint") => is_random_hex(&data["MINT_PRIVATE_KEY"]),
+        Some("cdk-mint") => {
+            is_mnemonic(&data["mint-mnemonic"]);
+            is_mnemonic(&data["wallet-mnemonic"]);
+            assert_ne!(data["mint-mnemonic"], data["wallet-mnemonic"]);
+        }
         Some("redis-cache") => {
             is_random_hex(&data["REDIS_PASSWORD"]);
             assert_eq!(
@@ -168,10 +176,10 @@ fn assert_generated_contract(data: &BTreeMap<String, String>) {
 async fn generated_shapes_preserve_templates_and_reconnects_never_rotate_credentials() {
     for (mut template, required) in fixtures() {
         let cluster = Arc::new(Mutex::new(Cluster::default()));
-        ensure(&api(&cluster), &template, &patch()).await.unwrap();
+        ensure(&api(&cluster), &template).await.unwrap();
         let persisted = {
             let state = cluster.lock().unwrap();
-            let written = &state.patches[0];
+            let written = &state.creates[0];
             assert_eq!(written.metadata, template.metadata);
             assert_eq!(written.type_, template.type_);
             let data = written.string_data.as_ref().unwrap();
@@ -192,10 +200,10 @@ async fn generated_shapes_preserve_templates_and_reconnects_never_rotate_credent
             "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS".into(),
             "invalid".into(),
         );
-        ensure(&api(&cluster), &template, &patch()).await.unwrap();
+        ensure(&api(&cluster), &template).await.unwrap();
         let state = cluster.lock().unwrap();
         assert_eq!(state.secret.as_ref(), Some(&persisted));
-        assert_eq!(state.patches.len(), 1);
+        assert_eq!(state.creates.len(), 1);
         assert_eq!(state.reads, 2);
     }
 }
@@ -217,9 +225,7 @@ async fn incomplete_existing_data_fails_without_writes_for_every_required_key() 
                 secret: Some(existing.clone()),
                 ..Cluster::default()
             }));
-            let error = ensure(&api(&cluster), &template, &patch())
-                .await
-                .unwrap_err();
+            let error = ensure(&api(&cluster), &template).await.unwrap_err();
             let expected = missing.map_or_else(
                 || "Secret \"credentials\" has no generated data".into(),
                 |key| format!("Secret \"credentials\" is missing key {key:?}"),
@@ -227,7 +233,7 @@ async fn incomplete_existing_data_fails_without_writes_for_every_required_key() 
             assert!(matches!(error, Error::SecretContract(message) if message == expected));
             let state = cluster.lock().unwrap();
             assert_eq!(state.secret.as_ref(), Some(&existing));
-            assert!(state.patches.is_empty());
+            assert!(state.creates.is_empty());
         }
     }
 }
@@ -245,7 +251,7 @@ async fn existing_data_and_read_errors_never_invoke_the_generator() {
             read_error,
             ..Cluster::default()
         }));
-        let result = ensure_generated_secret(&api(&cluster), &template, &patch(), &["key"], || {
+        let result = ensure_generated_secret(&api(&cluster), &template, &["key"], || {
             panic!("must not regenerate existing credentials")
         })
         .await;
@@ -256,7 +262,7 @@ async fn existing_data_and_read_errors_never_invoke_the_generator() {
         } else {
             result.unwrap();
         }
-        assert!(cluster.lock().unwrap().patches.is_empty());
+        assert!(cluster.lock().unwrap().creates.is_empty());
     }
 }
 
@@ -264,24 +270,22 @@ async fn existing_data_and_read_errors_never_invoke_the_generator() {
 async fn generation_and_apply_errors_are_returned_without_retry_or_partial_writes() {
     let (template, _) = fixtures().remove(0);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let error = ensure_generated_secret(&api(&cluster), &template, &patch(), &["key"], || {
+    let error = ensure_generated_secret(&api(&cluster), &template, &["key"], || {
         Err(Error::SecretContract("generation failed".into()))
     })
     .await
     .unwrap_err();
     assert!(matches!(error, Error::SecretContract(message) if message == "generation failed"));
-    assert!(cluster.lock().unwrap().patches.is_empty());
-    for code in [403, 409, 500] {
+    assert!(cluster.lock().unwrap().creates.is_empty());
+    for code in [403, 500] {
         let cluster = Arc::new(Mutex::new(Cluster {
-            patch_error: Some(code),
+            create_error: Some(code),
             ..Cluster::default()
         }));
-        let error = ensure(&api(&cluster), &template, &patch())
-            .await
-            .unwrap_err();
+        let error = ensure(&api(&cluster), &template).await.unwrap_err();
         assert!(matches!(error, Error::Kube(kube::Error::Api(error)) if error.code == code));
         let state = cluster.lock().unwrap();
-        assert_eq!(state.patches.len(), 1);
+        assert_eq!(state.creates.len(), 1);
         assert_eq!(state.reads, 1);
         assert!(state.secret.is_none());
     }
@@ -302,26 +306,26 @@ async fn invalid_templates_fail_before_writing() {
         template.string_data.as_mut().unwrap().remove(field);
         let cluster = Arc::new(Mutex::new(Cluster::default()));
         assert!(
-            ensure(&api(&cluster), &template, &patch())
+            ensure(&api(&cluster), &template)
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains(message)
         );
-        assert!(cluster.lock().unwrap().patches.is_empty());
+        assert!(cluster.lock().unwrap().creates.is_empty());
     }
     for index in [0, 2] {
         let (mut template, _) = fixtures().remove(index);
         template.metadata.labels = None;
         let cluster = Arc::new(Mutex::new(Cluster::default()));
         assert!(
-            ensure(&api(&cluster), &template, &patch())
+            ensure(&api(&cluster), &template)
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains("has no component identity")
         );
-        assert!(cluster.lock().unwrap().patches.is_empty());
+        assert!(cluster.lock().unwrap().creates.is_empty());
     }
     let (mut template, _) = fixtures().remove(3);
     template.string_data.as_mut().unwrap().insert(
@@ -330,11 +334,64 @@ async fn invalid_templates_fail_before_writing() {
     );
     let cluster = Arc::new(Mutex::new(Cluster::default()));
     assert!(
-        ensure(&api(&cluster), &template, &patch())
+        ensure(&api(&cluster), &template)
             .await
             .unwrap_err()
             .to_string()
             .contains("invalid OIDC token lifespan")
     );
-    assert!(cluster.lock().unwrap().patches.is_empty());
+    assert!(cluster.lock().unwrap().creates.is_empty());
+}
+
+#[tokio::test]
+async fn every_cdk_mint_receives_its_own_seeds() {
+    let (template, _) = fixtures().pop().unwrap();
+    let mut seen = BTreeSet::new();
+    for _ in 0..8 {
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        ensure(&api(&cluster), &template).await.unwrap();
+        let state = cluster.lock().unwrap();
+        let data = state.creates[0].string_data.as_ref().unwrap();
+        assert!(seen.insert(data["mint-mnemonic"].clone()));
+        assert!(seen.insert(data["wallet-mnemonic"].clone()));
+    }
+}
+
+#[tokio::test]
+async fn a_lost_create_race_keeps_the_winning_credentials() {
+    for (template, required) in fixtures() {
+        let winner = Secret {
+            string_data: None,
+            data: Some(
+                required
+                    .iter()
+                    .map(|key| ((*key).into(), ByteString(b"winner".to_vec())))
+                    .collect(),
+            ),
+            ..template.clone()
+        };
+        let cluster = Arc::new(Mutex::new(Cluster {
+            concurrent: Some(winner.clone()),
+            ..Cluster::default()
+        }));
+        ensure(&api(&cluster), &template).await.unwrap();
+        let state = cluster.lock().unwrap();
+        assert_eq!(state.secret.as_ref(), Some(&winner));
+        assert_eq!(state.creates.len(), 1);
+        assert_eq!(state.reads, 2);
+    }
+    let (template, _) = fixtures().pop().unwrap();
+    let cluster = Arc::new(Mutex::new(Cluster {
+        concurrent: Some(Secret {
+            string_data: None,
+            data: Some(BTreeMap::from([(
+                "PROOFSTORM_SECRET_KIND".into(),
+                ByteString(b"cdk-mint".to_vec()),
+            )])),
+            ..template.clone()
+        }),
+        ..Cluster::default()
+    }));
+    let error = ensure(&api(&cluster), &template).await.unwrap_err();
+    assert!(matches!(error, Error::SecretContract(message) if message.contains("missing key")));
 }
