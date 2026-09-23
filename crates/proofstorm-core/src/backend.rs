@@ -2568,7 +2568,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "mnemonic".into(),
-                string("Fixed disposable-regtest mint mnemonic", Policy),
+                string("Controller-generated mint mnemonic", Secret),
             ),
             (
                 "public_url".into(),
@@ -2607,7 +2607,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "ldk_node_mnemonic".into(),
-                string("Fixed disposable-regtest LDK seed", Policy),
+                string("Controller-generated LDK seed", Secret),
             ),
             (
                 "ldk_storage_directory".into(),
@@ -2619,7 +2619,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "mint_mnemonic".into(),
-                string("Fixed disposable-regtest mint mnemonic", Policy),
+                string("Controller-generated mint mnemonic", Secret),
             ),
             (
                 "network".into(),
@@ -2645,7 +2645,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
         "cdk-bdk" => BTreeMap::from([
             (
                 "bdk_mnemonic".into(),
-                string("Fixed disposable-regtest BDK seed", Policy),
+                string("Controller-generated BDK seed", Secret),
             ),
             (
                 "bdk_storage_directory".into(),
@@ -2673,7 +2673,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "mint_mnemonic".into(),
-                string("Fixed disposable-regtest mint mnemonic", Policy),
+                string("Controller-generated mint mnemonic", Secret),
             ),
             (
                 "network".into(),

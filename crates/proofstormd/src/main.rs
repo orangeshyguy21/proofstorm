@@ -1609,16 +1609,7 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             Some("mint-management-tls" | "payment-processor-tls") => {
                 management_tls::ensure(&secrets, resource).await?;
             }
-            Some("cdk-mint") => {
-                secrets
-                    .patch(
-                        resource.metadata.name.as_deref().unwrap_or_default(),
-                        &patch,
-                        &Patch::Apply(resource),
-                    )
-                    .await?;
-            }
-            _ => generated_secrets::ensure(&secrets, resource, &patch).await?,
+            _ => generated_secrets::ensure(&secrets, resource).await?,
         }
     }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);

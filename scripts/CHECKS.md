@@ -95,6 +95,7 @@ drift is a failure, not something the runner repairs.
 | `failed-melt` | Unroutable native payment leaves mint and wallet quotes unpaid, funds unspent and recipient empty; exported observations match |
 | `ldk-server-processor` | CDK gRPC mutual TLS, funded BOLT11 mint/melt, unpaid quote recovery after processor restart, persistent node identity and BOLT12 payment recognition |
 | `cross-implementation-wallet` | Native Nutshell wallet interaction with CDK and Nutshell mints, exact Nutshell fees, bounded CDK accounting without an unsupported fee claim, and Redis restart behavior |
+| `cdk-mint-identity` | Two CDK mints get distinct controller-generated mint and payment-wallet seeds and disjoint keysets; one wallet funds and swaps at both independently; controller and mint restarts preserve both identities |
 | `cashu-double-spend` | Real CDK/Nutshell spent-proof replay/race and exact zero-fee 64-sat accounting |
 | `channel-lifecycle` | Native Bitcoin/LND/CLN funding, peer connectivity, exact channel outpoints, circular payment balances, cooperative/force-close transactions, retry identity and exported receipts |
 | `controller-recovery` | Supervised native execution survives controller restart without replay; lost/cancelled probes and component stop/start/restart remain covered |

@@ -205,7 +205,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:6a8dae62304e619dc5e76499e9f0445a0e987731657001ead42d6e7b76bab7a2",
+    "rollout_digest": "sha256:b155a6c3208c2049b1f12fb65caedec34a842c1b0f917cd17947dd92c37d4ef4",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -281,7 +281,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:6a8dae62304e619dc5e76499e9f0445a0e987731657001ead42d6e7b76bab7a2"
+                "proofstorm.dev/rollout-digest": "sha256:b155a6c3208c2049b1f12fb65caedec34a842c1b0f917cd17947dd92c37d4ef4"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -569,9 +569,7 @@
         },
         "stringData": {
           "PROOFSTORM_SECRET_KIND": "cdk-mint",
-          "bitcoin-rpc-password": "proofstorm-regtest-only",
-          "mint-mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-          "wallet-mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow"
+          "bitcoin-rpc-password": "proofstorm-regtest-only"
         },
         "type": "Opaque"
       },

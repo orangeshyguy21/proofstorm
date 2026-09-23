@@ -3201,7 +3201,7 @@ mod tests {
         assert_embedded_ldk_support(catalog);
         assert_eq!(
             cdk.config_schema["x-proofstorm-managed-settings"]["mnemonic"]["x-proofstorm-classification"],
-            "runtime_policy"
+            "generated_instance_secret"
         );
         assert!(
             !serde_json::to_string(&catalog)
