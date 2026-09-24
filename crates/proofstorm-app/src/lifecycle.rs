@@ -225,8 +225,7 @@ async fn remove_receipts(
     let api = Api::<ConfigMap>::namespaced(runtime.client.clone(), &runtime.control_namespace);
     // Namespace deletion collects cell workloads. Snapshots normally disappear via owner GC;
     // remove only exact recorded owners, plus the controller's verified teardown receipt.
-    let maps = api.list(&ListParams::default()).await?;
-    for map in maps {
+    let removable = |map: &ConfigMap| {
         let owned = map.owner_references().iter().any(|owner| {
             owner.kind == "ProofstormCell"
                 && owner.name == instance.resource_name
@@ -238,7 +237,15 @@ async fn remove_receipts(
                     == Some(&proofstorm_kube::instance_namespace(&instance.instance_key))
                     && d.get("verifiedAbsent").is_some_and(|v| v == "true")
             });
-        if owned || receipt {
+        owned || receipt
+    };
+    let maps = api.list(&ListParams::default()).await?;
+    for mut map in maps {
+        if !removable(&map) {
+            continue;
+        }
+        let mut attempts = 0;
+        loop {
             let uid = map.uid().ok_or_else(mismatch)?;
             match api
                 .delete(
@@ -253,8 +260,17 @@ async fn remove_receipts(
                 )
                 .await
             {
-                Ok(_) => {}
-                Err(kube::Error::Api(e)) if e.code == 404 => {}
+                Ok(_) => break,
+                Err(kube::Error::Api(e)) if e.code == 404 => break,
+                // Owner GC or the controller rewrote the map after the list.
+                // Decide again from the current object instead of failing teardown.
+                Err(kube::Error::Api(e)) if e.code == 409 && attempts < 5 => {
+                    attempts += 1;
+                    match api.get_opt(&map.name_any()).await? {
+                        Some(current) if removable(&current) => map = current,
+                        _ => break,
+                    }
+                }
                 Err(e) => return Err(e.into()),
             }
         }

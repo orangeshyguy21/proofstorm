@@ -119,7 +119,10 @@ receipts from an earlier attempt intentionally cannot satisfy a newer attempt.
 Console diagnostics include a fixed setup-stage/error category, the current mint
 test stage and operation elapsed time, available memory and disk, and Linux load,
 task counts and cumulative OOM kills. Unavailable readings are null. Preservation
-failures report counts of added/removed/changed resources.
+failures report counts of added/removed/changed resources. A failed MCP tool call
+reports the tool, JSON-RPC code, the server's typed problem code and any
+Kubernetes HTTP status (for example `tool cell_remove; code runtime_failure;
+http 409`); its message and arguments stay in the private log.
 Embedded LDK also reports configuration, version, peer connection, BOLT12 quote
 and payment, and teardown stages. Its channel setup seeds both directions and
 requires observed capacity above reserves before exercising issuance and melting.

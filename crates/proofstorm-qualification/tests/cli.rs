@@ -253,6 +253,10 @@ if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
     jq '.reason="operation-container-failed" | .native=null | .operation={"reason":"operation-container-failed","code":"container_failed","phase":"failed","container":"component","exit_code":137,"termination_reason":"OOMKilled"}' "$work/gate-failure.json" > "$work/changed.json"
     mv "$work/changed.json" "$work/gate-failure.json"
   fi
+  if [[ "$QUALIFICATION_TEST_CATEGORY" == "tool-rpc-error" ]]; then
+    jq '.reason="tool-rpc-error" | .native=null | .tool={"reason":"tool-rpc-error","tool":"cell_remove","rpc_code":-32603,"code":"runtime_failure","http_status":409}' "$work/gate-failure.json" > "$work/changed.json"
+    mv "$work/changed.json" "$work/gate-failure.json"
+  fi
   exit 7
 fi
 "#;
@@ -295,6 +299,7 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
         "channel-request-rejected",
         "container-exited",
         "operation-container-failed",
+        "tool-rpc-error",
     ] {
         let fail = category != "successful";
         let directory = root.path().join(category);
@@ -359,6 +364,13 @@ fn assert_shard_log(log: &str, fail: bool, category: &str, ids: &[&String]) {
             // container limit from a component that failed on its own terms.
             assert!(summary.contains(&format!(
                 "{category}; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5; OOMKilled; exit 137"
+            )));
+        }
+        if category == "tool-rpc-error" {
+            // The failing tool and its typed code are what separate a teardown
+            // conflict from a product failure when error text stays private.
+            assert!(summary.contains(&format!(
+                "{category}; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5; tool cell_remove; code runtime_failure; http 409"
             )));
         }
         assert!(summary.contains(&format!("{}: receipt missing", ids[1])));

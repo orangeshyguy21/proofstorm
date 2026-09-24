@@ -209,6 +209,7 @@ pub(super) fn run(context: &GateContext, selection: &MintRoundtrip) -> Result<()
     context.qualification_stage("payment-after-restart")?;
     let final_balance = payment(&mut native, "after-restart", after_payment)?;
     drop(native);
+    context.qualification_stage("teardown")?;
     context.record("qualification-observations.json", &json!({"mint":selection.mint,"wallet":selection.wallet,"backend":selection.lightning,"storage":selection.storage,"issued_sat":2000,"recipient_paid_sat":200,"final_balance_sat":final_balance,"identities_preserved":true}))?;
     client.call("run_finish", json!({"run_id":RUN,"request_id":"finish"}))?;
     client.call("cell_remove", json!({"name":INSTANCE}))?;

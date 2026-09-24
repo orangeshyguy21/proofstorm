@@ -383,6 +383,14 @@ impl Runtime {
                 Err(kube::Error::Api(error)) if error.code == 404 => {
                     return self.removal_status(instance).await;
                 }
+                // The controller's status writes advance resourceVersion, so the
+                // precondition can lose to a reconcile. Nothing was deleted; the
+                // caller's poll re-reads the same incarnation and retries.
+                Err(kube::Error::Api(error)) if error.code == 409 => {
+                    status.phase = InstancePhase::Closing;
+                    status.message = Some("cell changed before deletion; retrying".into());
+                    return Ok(status);
+                }
                 result => {
                     result.map_err(kube_error)?;
                 }

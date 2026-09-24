@@ -176,11 +176,23 @@ impl Cells {
                 // A background reconciler can purge the record between polls.
                 // Keep verifying the captured incarnation, never a reused name.
                 Err(error) if error.kind == ErrorKind::Missing => {
-                    self.runtime.removal_status(instance.clone()).await?
+                    Some(self.runtime.removal_status(instance.clone()).await?)
                 }
-                result => result?,
+                // The sweeper briefly holds the lifecycle guard; poll again
+                // rather than failing a close that is still within its deadline.
+                Err(error)
+                    if error
+                        .details
+                        .as_ref()
+                        .is_some_and(|details| details["code"] == "lifecycle_busy") =>
+                {
+                    None
+                }
+                result => Some(result?),
             };
-            if status.phase == InstancePhase::Closed {
+            if let Some(status) = status
+                && status.phase == InstancePhase::Closed
+            {
                 progress("Cell cleanup verified");
                 view.cell.phase = CellHandlePhase::Closed;
                 view.runtime = Some(status);

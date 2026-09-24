@@ -3,10 +3,19 @@ use super::*;
 use std::sync::{Arc, Mutex};
 
 pub(super) fn cluster_client() -> Client {
+    conflicting_cluster_client(0, 0)
+}
+
+/// Rejects the first `cells` cell deletions and `maps` ConfigMap deletions with
+/// 409 Conflict, as when a controller status write advances resourceVersion
+/// between a precondition read and its DELETE.
+fn conflicting_cluster_client(cells: usize, maps: usize) -> Client {
     let objects = Arc::new(Mutex::new(BTreeMap::<String, serde_json::Value>::new()));
+    let conflicts = Arc::new(Mutex::new((cells, maps)));
     Client::new(
         tower::service_fn(move |request: http::Request<kube::client::Body>| {
             let objects = objects.clone();
+            let conflicts = conflicts.clone();
             async move {
                 let method = request.method().clone();
                 let mut path = request.uri().path().to_string();
@@ -50,6 +59,24 @@ pub(super) fn cluster_client() -> Client {
                         }
                         objects.insert(path, value.clone());
                         (200, value)
+                    }
+                    http::Method::DELETE
+                        if {
+                            let mut conflicts = conflicts.lock().unwrap();
+                            let budget = if path.contains("/proofstormcells/") {
+                                &mut conflicts.0
+                            } else {
+                                &mut conflicts.1
+                            };
+                            let conflict = *budget > 0 && objects.contains_key(&path);
+                            *budget -= usize::from(conflict);
+                            conflict
+                        } =>
+                    {
+                        (
+                            409,
+                            serde_json::json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"the object has been modified","code":409}),
+                        )
                     }
                     http::Method::DELETE => {
                         let value = objects.remove(&path).unwrap();
@@ -335,4 +362,44 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     assert_eq!(error.data.unwrap()["code"], "stale_incarnation");
     assert!(cli.inspect("cli-name", 0).await.unwrap().runtime.is_some());
     cli.down("cli-name", 2).await.unwrap();
+}
+
+#[tokio::test]
+async fn cell_remove_retries_deletes_that_lose_to_controller_writes() {
+    let store = tests::seeded_store();
+    proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+    for cap in [Capability::ExperimentRead, Capability::CellOperate] {
+        store.grant("alpha", "designer", cap).unwrap();
+    }
+    let mcp = ProofstormMcp::new(store.clone(), "alpha", "designer")
+        .unwrap()
+        .with_kubernetes(conflicting_cluster_client(2, 1), "system");
+    let spec: CellSpec =
+        serde_json::from_str(include_str!("../../../examples/developer-cell.json")).unwrap();
+    let instance = mcp
+        .cells()
+        .unwrap()
+        .up("conflict-cell", &spec)
+        .await
+        .unwrap()
+        .runtime
+        .unwrap()
+        .instance;
+    let closed = mcp
+        .proofstorm_cell_remove(Parameters(CellRemoveRequest {
+            name: "conflict-cell".into(),
+            expected_instance_key: instance.instance_key,
+            timeout_seconds: 5,
+        }))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(closed["complete"], true);
+    assert_eq!(closed["teardown_receipt"]["verified_absent"], true);
+    assert!(
+        store
+            .cell_handle("alpha", "designer", "conflict-cell")
+            .is_err()
+    );
 }
