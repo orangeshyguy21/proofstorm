@@ -6,7 +6,7 @@ pub(super) fn cluster_client() -> Client {
     conflicting_cluster_client(0, 0)
 }
 
-/// Rejects the first `cells` cell deletions and `maps` ConfigMap deletions with
+/// Rejects the first `cells` cell deletions and `maps` `ConfigMap` deletions with
 /// 409 Conflict, as when a controller status write advances resourceVersion
 /// between a precondition read and its DELETE.
 fn conflicting_cluster_client(cells: usize, maps: usize) -> Client {
