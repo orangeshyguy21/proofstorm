@@ -306,7 +306,6 @@ pub(super) struct Manager {
     wake: Notify,
     triggers: mpsc::Sender<ObjectRef<ProofstormCell>>,
     origin: Instant,
-    origin_unix: i64,
 }
 
 impl Manager {
@@ -323,7 +322,6 @@ impl Manager {
                 wake: Notify::new(),
                 triggers,
                 origin: Instant::now(),
-                origin_unix: super::now_unix(),
             }),
             receive,
         )
@@ -414,6 +412,7 @@ impl Manager {
     pub fn snapshot(&self, key: &str) -> Resources {
         let mut state = self.state.lock().expect("prober state lock");
         let now = self.now();
+        let now_unix = super::now_unix();
         state.refresh(&self.image, now);
         let mut resources = state.resources(key);
         if let Some((identity, _)) = state.cells.get(key).and_then(|cell| cell.worker.as_ref()) {
@@ -422,9 +421,8 @@ impl Manager {
                 .observations(identity, now)
                 .into_iter()
                 .map(|(key, observation)| {
-                    let observed_at = self.origin_unix.saturating_add(
-                        i64::try_from(observation.observed_at_millis / 1000).unwrap_or(i64::MAX),
-                    );
+                    let observed_at =
+                        observed_at_unix(now_unix, now, observation.observed_at_millis);
                     (
                         key,
                         ProbeObservation {
@@ -614,6 +612,15 @@ impl Manager {
         watches.shutdown().await;
         Ok(())
     }
+}
+
+/// Anchors a monotonic observation time to the wall clock as it is now, never to the
+/// wall clock at startup. A paused VM (host sleep) stops the monotonic clock while the
+/// wall clock resyncs on wake, so a startup anchor falls permanently behind and every
+/// observation would be stamped already expired. The age rounds up to stay conservative.
+fn observed_at_unix(now_unix: i64, now_millis: u64, observed_at_millis: u64) -> i64 {
+    let age = now_millis.saturating_sub(observed_at_millis).div_ceil(1000);
+    now_unix.saturating_sub(i64::try_from(age).unwrap_or(i64::MAX))
 }
 
 pub(super) fn signature(cell: &ProofstormCell) -> String {
