@@ -2,6 +2,11 @@ name: Catalog qualification
 
 on:
   workflow_call:
+    inputs:
+      suite:
+        description: Compatibility by default; full includes upstream stress tests
+        type: string
+        default: compatibility
 
 permissions:
   contents: read
@@ -24,14 +29,18 @@ jobs:
           REVISION: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
           ATTEMPT: ${{ github.run_attempt }}
+          SUITE: ${{ inputs.suite }}
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           cargo build --locked -p proofstorm-qualification
           qualifier=target/check/debug/proofstorm-qualification
-          mode=full
-          if [[ "$EVENT" == pull_request && "$BASE" =~ ^[a-f0-9]{40}$ && "$HEAD" =~ ^[a-f0-9]{40}$ ]]; then
+          case "$SUITE" in
+            compatibility|full) mode=$SUITE ;;
+            *) echo 'Unknown qualification suite' >&2; exit 1 ;;
+          esac
+          if [[ "$SUITE" == compatibility && "$EVENT" == pull_request && "$BASE" =~ ^[a-f0-9]{40}$ && "$HEAD" =~ ^[a-f0-9]{40}$ ]]; then
             if git diff --name-only "$BASE...$HEAD" > "$RUNNER_TEMP/changed-paths"; then
               mode=$("$qualifier" policy "$RUNNER_TEMP/changed-paths")
             fi

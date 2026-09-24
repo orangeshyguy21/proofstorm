@@ -72,7 +72,7 @@ fn synthetic_receipts(plan: &Plan) -> Vec<Receipt> {
 fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner() {
     let root = TempDir::new().unwrap();
     let mut scheduled = BTreeMap::new();
-    for mode in ["full", "documentation"] {
+    for mode in ["full", "compatibility", "documentation"] {
         let (path, plan) = planned(root.path(), mode);
         let matrix: Value = serde_json::from_slice(&successful(&["matrix", &path]).stdout).unwrap();
         let mut seen = BTreeSet::new();
@@ -116,13 +116,14 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
         assert_eq!(case, serde_json::to_value(plan.case(id).unwrap()).unwrap());
     }
     assert!(scheduled["documentation"] > 0);
-    assert!(scheduled["documentation"] < scheduled["full"]);
+    assert!(scheduled["documentation"] < scheduled["compatibility"]);
+    assert!(scheduled["compatibility"] < scheduled["full"]);
 
     let paths = root.path().join("changed-paths");
     for (contents, expected) in [
         ("README.md\ndocs/merge-qualification.md\n", "documentation"),
-        ("README.md\nCargo.toml\n", "full"),
-        ("", "full"),
+        ("README.md\nCargo.toml\n", "compatibility"),
+        ("", "compatibility"),
     ] {
         fs::write(&paths, contents).unwrap();
         let output = successful(&["policy", paths.to_str().unwrap()]);
@@ -252,6 +253,10 @@ if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
     jq '.reason="operation-container-failed" | .native=null | .operation={"reason":"operation-container-failed","code":"container_failed","phase":"failed","container":"component","exit_code":137,"termination_reason":"OOMKilled"}' "$work/gate-failure.json" > "$work/changed.json"
     mv "$work/changed.json" "$work/gate-failure.json"
   fi
+  if [[ "$QUALIFICATION_TEST_CATEGORY" == "tool-rpc-error" ]]; then
+    jq '.reason="tool-rpc-error" | .native=null | .tool={"reason":"tool-rpc-error","tool":"cell_remove","rpc_code":-32603,"code":"runtime_failure","http_status":409}' "$work/gate-failure.json" > "$work/changed.json"
+    mv "$work/changed.json" "$work/gate-failure.json"
+  fi
   exit 7
 fi
 "#;
@@ -294,6 +299,7 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
         "channel-request-rejected",
         "container-exited",
         "operation-container-failed",
+        "tool-rpc-error",
     ] {
         let fail = category != "successful";
         let directory = root.path().join(category);
@@ -360,6 +366,13 @@ fn assert_shard_log(log: &str, fail: bool, category: &str, ids: &[&String]) {
                 "{category}; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5; OOMKilled; exit 137"
             )));
         }
+        if category == "tool-rpc-error" {
+            // The failing tool and its typed code are what separate a teardown
+            // conflict from a product failure when error text stays private.
+            assert!(summary.contains(&format!(
+                "{category}; at crates/proofstorm-acceptance/src/gates/cdk_ldk.rs:400:5; tool cell_remove; code runtime_failure; http 409"
+            )));
+        }
         assert!(summary.contains(&format!("{}: receipt missing", ids[1])));
         assert!(
             !summary.contains(ids[2]),
@@ -374,4 +387,66 @@ fn assert_shard_log(log: &str, fail: bool, category: &str, ids: &[&String]) {
         assert!(log.ends_with("Qualification shard passed: 3 cases.\n"));
         assert!(!log.contains("::error::"));
     }
+}
+
+#[test]
+fn compatibility_covers_every_catalog_claim_without_adversarial_or_concurrent_gates() {
+    use proofstorm_qualification::Scenario;
+    let root = TempDir::new().unwrap();
+    let (_, compatibility) = planned(root.path(), "compatibility");
+    let (_, full) = planned(root.path(), "full");
+    let (_, documentation) = planned(root.path(), "documentation");
+    for platform in ["linux/amd64", "linux/arm64"] {
+        let selected: Vec<_> = compatibility
+            .cases
+            .iter()
+            .filter(|case| case.required && case.platform == platform)
+            .collect();
+        let covered: BTreeSet<_> = selected
+            .iter()
+            .flat_map(|case| case.claims.iter().cloned())
+            .collect();
+        assert_eq!(covered, compatibility.obligations[platform]);
+        for name in [
+            "cashu-double-spend",
+            "cdk-bdk-stress",
+            "cdk-bdk-postgres-stress",
+        ] {
+            let matching = |plan: &Plan| {
+                plan.cases.iter().filter(|case|
+                case.platform == platform && matches!(&case.scenario, Scenario::Gate {name: gate, ..} if gate == name))
+                .map(|case| case.required).collect::<Vec<_>>()
+            };
+            assert!(!matching(&full).is_empty(), "{name}");
+            assert!(matching(&full).iter().all(|required| *required));
+            assert!(matching(&compatibility).iter().all(|required| !required));
+            assert!(matching(&documentation).iter().all(|required| !required));
+        }
+        for name in [
+            "cdk-bdk",
+            "cdk-bdk-postgres",
+            "failed-melt",
+            "quote-composition",
+            "controller-recovery",
+        ] {
+            assert!(
+                selected.iter().any(
+                    |case| matches!(&case.scenario, Scenario::Gate {name: gate, ..} if gate == name)
+                ),
+                "{name}"
+            );
+        }
+    }
+    // A suite change cannot reuse receipts or silently turn off a required case.
+    let receipts = synthetic_receipts(&compatibility);
+    proofstorm_qualification::verify_receipts(&compatibility, &receipts).unwrap();
+    assert!(proofstorm_qualification::verify_receipts(&full, &receipts).is_err());
+    let mut tampered = compatibility;
+    tampered
+        .cases
+        .iter_mut()
+        .find(|case| case.required)
+        .unwrap()
+        .required = false;
+    assert!(tampered.validate().is_err());
 }

@@ -13,7 +13,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 /// Only an explicit, nonempty list of ordinary documentation paths can reduce
-/// the matrix. Unknown files and a failed/empty comparison select everything.
+/// the compatibility matrix. Unknown files and a failed/empty comparison select
+/// every compatibility case; upstream stress remains an explicit opt-in.
 #[must_use]
 pub fn documentation_only(paths: &[String]) -> bool {
     !paths.is_empty()
@@ -128,13 +129,22 @@ pub struct Case {
     pub reason: String,
 }
 
+/// Required compatibility checks are separate from opt-in upstream stress tests.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    Documentation,
+    Compatibility,
+    Full,
+}
+
 /// A complete, deterministic obligation set for both native architectures.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     pub format_version: u32,
     pub identity: Identity,
-    pub full: bool,
+    pub mode: Mode,
     pub catalog_digests: BTreeMap<String, String>,
     pub obligations: BTreeMap<String, BTreeSet<String>>,
     pub cases: Vec<Case>,
@@ -165,10 +175,10 @@ impl Plan {
     pub fn validate(&self) -> Result<()> {
         self.identity.validate()?;
         ensure!(
-            self.format_version == 1,
+            self.format_version == 2,
             "unknown qualification plan format"
         );
-        let expected = plan(self.identity.clone(), self.full)?;
+        let expected = plan(self.identity.clone(), self.mode)?;
         ensure!(
             self == &expected,
             "qualification plan differs from this source/catalog"

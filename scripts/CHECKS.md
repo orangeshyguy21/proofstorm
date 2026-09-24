@@ -8,6 +8,9 @@ The separate [merge qualification lane](../docs/merge-qualification.md) exercise
 the supported catalog on native AMD64 and ARM64. It runs within `Checks`, reports
 through `Merge qualification`, and includes exact-image receipts, payment and
 persistence scenarios, cleanup verification and documented upstream exclusions.
+Adversarial double-spend races and concurrent BDK stress are opt-in through the
+separate `Upstream behavioral qualification` workflow; required CI uses sequential
+BDK compatibility checks. The behavioral workflow cannot block release promotion.
 
 ## Prerequisites
 

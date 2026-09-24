@@ -16,6 +16,10 @@ use serde_json::{Value, json};
 /// MCP protocol revision the server implements.
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
+/// Prefix of a failed [`McpClient::call`]; the JSON after it names the tool, so
+/// public diagnostics can report which call failed without its error text.
+pub(crate) const TOOL_FAILURE: &str = "MCP tool call failed: ";
+
 /// Prevent a parent shell from choosing live state or authority for test children.
 pub fn clear_runtime_environment(command: &mut Command) {
     for (key, _) in std::env::vars_os() {
@@ -161,9 +165,16 @@ impl McpClient {
             }
             arguments["expected_instance_key"] = json!(self.incarnations[&name]);
         }
-        let result = self.request("tools/call", tool_params(tool, arguments))?;
+        let response = self.response("tools/call", tool_params(tool, arguments))?;
+        if let Some(error) = response.get("error") {
+            bail!("{TOOL_FAILURE}{}", json!({"tool":tool,"error":error}));
+        }
+        let result = response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| anyhow!("MCP tool {tool} returned no result: {response}"))?;
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
-            bail!("tool {tool} failed: {result}");
+            bail!("{TOOL_FAILURE}{}", json!({"tool":tool,"result":result}));
         }
         crate::json::within_bytes(&result, 32 * 1024, &format!("{tool} MCP result envelope"))?;
         let value = tool_content(tool, &result)?;

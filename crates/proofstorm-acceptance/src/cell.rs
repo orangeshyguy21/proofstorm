@@ -117,7 +117,13 @@ pub fn wait_closed(client: &mut McpClient, instance_id: &str) -> Result<Value> {
     // Verified close removes the named instance. Wait on the cached incarnation
     // token rather than calling cell_status for a name that may already be absent.
     let mut last = Value::Null;
-    for _ in 0..3 {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            // An unverified close is progress, not failure: the removal contract
+            // is to repeat cell_remove for the same incarnation, which also
+            // re-issues a deletion that lost a race with the controller.
+            client.call("cell_remove", json!({"name":instance_id}))?;
+        }
         last = client.call(
             "cell_wait",
             json!({"name":instance_id,"target_phase":"closed","timeout_seconds":60}),

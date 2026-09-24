@@ -142,7 +142,7 @@ mod tests {
                 run_id: "123".into(),
                 attempt: 1,
             },
-            true,
+            crate::Mode::Compatibility,
         )
         .unwrap();
         let receipts = plan

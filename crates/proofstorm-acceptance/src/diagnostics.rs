@@ -140,6 +140,33 @@ fn operation_failure(content: &Value) -> Value {
     })
 }
 
+/// Tool names and server problem codes are snake_case identifiers assigned in
+/// source, never observed data; any other shape is dropped, not republished.
+fn identifier(value: &Value) -> Option<&str> {
+    value.as_str().filter(|text| {
+        text.len() <= 64
+            && text.contains('_')
+            && text
+                .split('_')
+                .all(|word| !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_lowercase()))
+    })
+}
+
+/// Public evidence for an MCP tool call the server refused or failed. The
+/// tool, JSON-RPC code, typed problem code and Kubernetes HTTP status identify
+/// the failure class; the server's message and the call arguments stay private.
+fn tool_failure(content: &Value) -> Value {
+    let error = &content["error"];
+    json!({
+        "reason":if error.is_object() { "tool-rpc-error" } else { "tool-error-result" },
+        "tool":identifier(&content["tool"]),
+        "rpc_code":error["code"].as_i64(),
+        "code":identifier(&error["data"]["code"]),
+        "http_status":error["data"]["http_status"].as_u64()
+            .filter(|status| (100..=599).contains(status)),
+    })
+}
+
 /// Public failure evidence identifies the failing assertion and native exit
 /// status without publishing any part of an arbitrary error message.
 pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
@@ -154,6 +181,12 @@ pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
         let content = message.strip_prefix("operation reached a terminal failure: ")?;
         let content: Value = serde_json::from_str(content).ok()?;
         Some(operation_failure(&content))
+    });
+    let tool = error.chain().find_map(|cause| {
+        let message = cause.to_string();
+        let content = message.strip_prefix(crate::client::TOOL_FAILURE)?;
+        let content: Value = serde_json::from_str(content).ok()?;
+        Some(tool_failure(&content))
     });
     let reason = native
         .as_ref()
@@ -189,9 +222,12 @@ pub(crate) fn gate_failure(error: &anyhow::Error) -> Value {
                     return "native-observation-timeout";
                 }
             }
-            "gate-failed"
+            tool.as_ref()
+                .and_then(|value| value["reason"].as_str())
+                .unwrap_or("gate-failed")
         });
-    json!({"reason":reason,"locations":failure_locations(&error.backtrace().to_string()),"native":native,"operation":operation})
+    let cashu_double_spend = error.downcast_ref::<crate::gates::cashu_double_spend::Receipt>();
+    json!({"reason":reason,"locations":failure_locations(&error.backtrace().to_string()),"native":native,"operation":operation,"tool":tool,"cashu_double_spend":cashu_double_spend})
 }
 
 fn text(path: &Path) -> Option<String> {
@@ -512,6 +548,58 @@ mod tests {
         ));
         assert_eq!(summary["reason"], "native-command-failed");
         assert_eq!(summary["operation"], Value::Null);
+    }
+
+    #[test]
+    fn tool_failures_publish_the_tool_and_typed_codes_without_error_text() {
+        let failure = |content: Value| {
+            gate_failure(&anyhow::anyhow!("{}{content}", crate::client::TOOL_FAILURE))
+        };
+        let summary = failure(json!({"tool":"cell_remove","error":{
+            "code":-32603,
+            "message":"Kubernetes runtime failure: private-secret",
+            "data":{"code":"runtime_failure","http_status":409,"detail":"private-secret"}
+        }}));
+        assert_eq!(summary["reason"], "tool-rpc-error");
+        assert_eq!(
+            summary["tool"],
+            json!({"reason":"tool-rpc-error","tool":"cell_remove","rpc_code":-32603,
+                "code":"runtime_failure","http_status":409})
+        );
+        assert!(!summary.to_string().contains("private-"));
+        let summary = failure(json!({"tool":"cell_exec","result":{
+            "isError":true,"content":[{"type":"text","text":"private-secret"}]
+        }}));
+        assert_eq!(summary["reason"], "tool-error-result");
+        assert_eq!(summary["tool"]["tool"], "cell_exec");
+        assert!(!summary.to_string().contains("private-"));
+        // Values outside the identifier and status shapes are dropped.
+        for (tool, code, status) in [
+            (json!("private-secret"), json!("private secret"), json!(99)),
+            (json!("cafe"), json!("runtime_failure_0"), json!("409")),
+            (json!("Cell_remove"), json!("_private"), json!(600)),
+        ] {
+            let summary = failure(json!({"tool":tool,"error":{
+                "code":"private-secret","data":{"code":code,"http_status":status}
+            }}));
+            assert_eq!(
+                summary["tool"],
+                json!({"reason":"tool-rpc-error","tool":null,"rpc_code":null,
+                    "code":null,"http_status":null})
+            );
+        }
+        // A more specific classification still wins over the tool envelope.
+        let status = json!({"blockers":[{"reason":"container_exited"}]});
+        let summary = gate_failure(
+            &anyhow::anyhow!(
+                "{}{}",
+                crate::client::TOOL_FAILURE,
+                json!({"tool":"cell_wait"})
+            )
+            .context(format!("cell readiness blocked or superseded: {status}")),
+        );
+        assert_eq!(summary["reason"], "container-exited");
+        assert_eq!(summary["tool"]["tool"], "cell_wait");
     }
 
     #[test]

@@ -1,0 +1,15 @@
+name: Upstream behavioral qualification
+
+# Independent from Checks and release promotion; failures remain visible here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    name: Compatibility and upstream stress
+    uses: ./.github/workflows/qualification.yml
+    with:
+      suite: full

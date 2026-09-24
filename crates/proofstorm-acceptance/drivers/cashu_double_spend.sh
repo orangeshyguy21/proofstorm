@@ -43,6 +43,15 @@ spent() {
     fi
 }
 
+pending() {
+    # Only the explicit proof/token contention response, not generic failures.
+    if grep -Eiq 'proofs are pending|token pending' "$1"; then
+        printf true
+    else
+        printf false
+    fi
+}
+
 stage=balance-before
 before=$(balance /wallet/cdk)
 stage=send-for-replay
@@ -100,11 +109,23 @@ while [ ! -f "$scratch/ready-a" ] || [ ! -f "$scratch/ready-b" ]; do sleep 0.01;
 : > "$scratch/go"
 wait "$pid_a"
 wait "$pid_b"
+# The loser may have arrived while the winner held the proofs pending. After
+# both complete, an independent wallet must prove these exact proofs are spent.
+# Never retry the race or turn an arbitrary failure into a passing result.
+stage=race-final-replay
+if cli "$scratch/race-replay" receive --allow-untrusted "$token" > "$scratch/race-replay.log" 2>&1; then
+    race_replay_rc=0
+else
+    race_replay_rc=$?
+fi
+race_replay_balance=$(balance "$scratch/race-replay")
 stage=accounting
 a=$(balance "$scratch/race-a")
 b=$(balance "$scratch/race-b")
 source_after=$(balance /wallet/cdk)
-printf '{"before":%s,"first":%s,"after_replay":%s,"replay_rc":%s,"fresh_rc":%s,"fresh_spent":%s,"fresh_balance":%s,"race_rc":[%s,%s],"race_spent":[%s,%s],"race_balance":[%s,%s],"source_after":%s}\n' \
+printf '{"before":%s,"first":%s,"after_replay":%s,"replay_rc":%s,"fresh_rc":%s,"fresh_spent":%s,"fresh_balance":%s,"race_rc":[%s,%s],"race_spent":[%s,%s],"race_balance":[%s,%s],"source_after":%s,"race_pending":[%s,%s],"race_replay_rc":%s,"race_replay_spent":%s,"race_replay_balance":%s}\n' \
     "$before" "$first" "$after_replay" "$replay_rc" "$fresh_rc" "$(spent "$scratch/fresh.log")" "$fresh_balance" \
     "$(cat "$scratch/rc-a")" "$(cat "$scratch/rc-b")" "$(spent "$scratch/race-a.log")" "$(spent "$scratch/race-b.log")" \
-    "$a" "$b" "$source_after"
+    "$a" "$b" "$source_after" \
+    "$(pending "$scratch/race-a.log")" "$(pending "$scratch/race-b.log")" \
+    "$race_replay_rc" "$(spent "$scratch/race-replay.log")" "$race_replay_balance"

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use proofstorm_qualification::{Identity, Plan, Receipt};
+use proofstorm_qualification::{Identity, Mode, Plan, Receipt};
 use std::fs;
 
 fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
@@ -33,22 +33,24 @@ fn main() -> Result<()> {
                 if proofstorm_qualification::documentation_only(&paths) {
                     "documentation"
                 } else {
-                    "full"
+                    "compatibility"
                 }
             );
         }
         ["plan", revision, run_id, attempt, mode, output] => {
-            anyhow::ensure!(
-                matches!(*mode, "full" | "documentation"),
-                "unknown qualification mode"
-            );
+            let mode = match *mode {
+                "full" => Mode::Full,
+                "compatibility" => Mode::Compatibility,
+                "documentation" => Mode::Documentation,
+                _ => bail!("unknown qualification mode"),
+            };
             let plan = proofstorm_qualification::plan(
                 Identity {
                     revision: (*revision).into(),
                     run_id: (*run_id).into(),
                     attempt: attempt.parse()?,
                 },
-                *mode == "full",
+                mode,
             )?;
             fs::write(output, serde_json::to_vec_pretty(&plan)?)?;
             println!(
@@ -103,7 +105,7 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string(plan.case(id)?)?);
         }
         _ => bail!(
-            "usage: qualification plan REVISION RUN_ID ATTEMPT full|documentation OUTPUT; matrix PLAN; case PLAN ID; verify PLAN RECEIPTS; aggregate NEEDS"
+            "usage: qualification plan REVISION RUN_ID ATTEMPT compatibility|full|documentation OUTPUT; matrix PLAN; case PLAN ID; verify PLAN RECEIPTS; aggregate NEEDS"
         ),
     }
     Ok(())
