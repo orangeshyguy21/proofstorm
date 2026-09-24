@@ -137,6 +137,15 @@ fn dependencies(entry: &CatalogEntry, components: &[Component]) -> BTreeSet<Stri
         .collect()
 }
 
+/// Pull requests run Proofstorm's own runtime paths and one mint round trip per
+/// architecture. Main, weekly and release runs keep every catalog claim.
+const PULL_SMOKE: [&str; 4] = [
+    "smoke",
+    "runtime-lifecycle",
+    "native-exec",
+    "cdk-lnd-sqlite",
+];
+
 struct Builder<'a> {
     catalog: &'a CatalogResponse,
     platform: &'a str,
@@ -166,10 +175,16 @@ impl Builder<'_> {
             scenario,
             components,
             claims,
-            required: self.mode == Mode::Full
-                || (!stress && (self.mode == Mode::Compatibility || baseline)),
+            required: match self.mode {
+                Mode::Full => true,
+                Mode::Compatibility => !stress,
+                Mode::Documentation => !stress && baseline,
+                Mode::Pull => baseline && PULL_SMOKE.contains(&label),
+            },
             reason: if stress {
                 "opt-in upstream adversarial/stress scenario"
+            } else if self.mode == Mode::Pull && !PULL_SMOKE.contains(&label) {
+                "pull request: covered by the main and weekly compatibility runs"
             } else if baseline {
                 "fixed compatibility baseline"
             } else if self.mode == Mode::Documentation {
@@ -619,7 +634,7 @@ pub fn plan(identity: Identity, mode: Mode) -> Result<Plan> {
             covered.is_subset(&required),
             "qualification claims undeclared support"
         );
-        if mode != Mode::Documentation {
+        if matches!(mode, Mode::Compatibility | Mode::Full) {
             let scheduled: BTreeSet<_> = cases
                 .iter()
                 .filter(|case| case.required)

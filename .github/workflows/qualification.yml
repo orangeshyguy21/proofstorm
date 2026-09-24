@@ -153,16 +153,35 @@ jobs:
           CASES: ${{ toJSON(matrix.cases) }}
         run: |
           printf '%s\n' "$CASES" > "$RUNNER_TEMP/cases.json"
+          # Failed attempts' private logs are encrypted to the maintainers' age key.
+          recipient=$(grep -m1 -E '^age1[0-9a-z]+$' .github/qualification-logs.age.pub 2>/dev/null || true)
+          if [[ -n "$recipient" ]]; then
+            if sudo apt-get update -qq && sudo apt-get install --no-install-recommends -y age; then
+              export QUALIFICATION_LOG_RECIPIENT="$recipient"
+              export QUALIFICATION_LOG_DIR="$RUNNER_TEMP/private-logs"
+            else
+              echo '::warning::age install failed; private logs stay on the runner'
+            fi
+          fi
           bash scripts/qualification-shard.sh "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/cases.json" "$RUNNER_TEMP/cases" "$RUNNER_TEMP/receipts"
       - name: Save redacted execution receipts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qualification-receipts-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
-          # Never upload runtime homes, seeds, native output or credentials.
+          # Never upload plaintext runtime homes, seeds, native output or credentials.
           path: ${{ runner.temp }}/receipts/*.json
           if-no-files-found: error
           retention-days: 14
+      - name: Save encrypted private logs of failed attempts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-private-logs-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
+          # Only age ciphertext; decrypt with the maintainers' private key.
+          path: ${{ runner.temp }}/private-logs/*.age
+          if-no-files-found: ignore
+          retention-days: 7
 
   verify:
     if: always()
