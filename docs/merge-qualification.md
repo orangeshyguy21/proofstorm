@@ -1,7 +1,7 @@
 # Merge qualification
 
-`Checks` starts on every pull request, main push, manual run and merge-group
-event. Its stable `Merge qualification` result requires formatting, Rust tests,
+`Checks` starts on every pull request, main push, manual run, merge-group
+event and weekly schedule (Mondays 07:17 UTC). Its stable `Merge qualification` result requires formatting, Rust tests,
 the Mac installer isolation contract and native catalog compatibility to succeed.
 Every main SHA keeps its own run; only obsolete PR runs are cancelled. A failed
 qualification therefore also prevents the existing release-promotion validator
@@ -11,9 +11,14 @@ The planner reads both platform catalogs. It enumerates preferred and supported
 versions and the experimental LDK processor relationship exposed by CDK. Plans
 record exact image sources, component versions, storage/authentication choices,
 wallet pairings and coverage claims. The required compatibility suite exercises
-each supported pairing on native Linux AMD64 and ARM64. Only a nonempty diff consisting entirely of the
-explicitly allowed documentation paths may omit cases outside the fixed baseline.
-All other changes select the complete compatibility matrix. The baseline includes
+each supported pairing on native Linux AMD64 and ARM64. Main pushes, the weekly
+schedule and manual runs always select the complete compatibility matrix, and
+release promotion requires a successful main run. Pull requests select the small
+`pull` suite (smoke, runtime lifecycle, native exec and one CDK/LND/SQLite round
+trip per architecture) unless they change catalog definitions, component images
+or their Kubernetes rendering (`docker/`, `proofstorm-core` catalogs,
+`proofstorm-kube`, `scripts/catalog-image.sh`); those, and a failed or empty
+diff, select the complete compatibility matrix. The fixed baseline includes
 native image and Lightning contracts, preferred external mint/wallet payment paths
 with SQLite and PostgreSQL, Redis, Keycloak, workspace persistence and control-plane
 lifecycle checks.
@@ -30,12 +35,13 @@ BDK quote requests on both database backends to the compatibility suite. Failure
 remain failures in that workflow, but it is not a dependency of `Checks` or release
 promotion. Required BDK cases use four sequential quote requests and retain
 configuration, valid deposits, invalid-input/dust checks, restart persistence and
-cleanup. No case-level retries or `continue-on-error` hide failures.
+cleanup. No `continue-on-error` hides failures. A failed case is retried once in a
+fresh work directory; a pass on retry is listed as "Passed only on retry" with the
+first attempt's public diagnostic, so flaky cases stay visible without blocking.
 
-Plans explicitly bind their suite (`documentation`, `compatibility`, or `full`),
-so receipts cannot be reused between suites. The planner verifies every catalog
-claim is covered by scheduled cases in both compatibility and full plans.
-Documentation-only PRs retain the fixed compatibility baseline.
+Plans explicitly bind their suite (`pull`, `documentation`, `compatibility`, or
+`full`), so receipts cannot be reused between suites. The planner verifies every
+catalog claim is covered by scheduled cases in both compatibility and full plans.
 
 Qualification pulls published images anonymously by digest and records the
 selected platform manifest and config digest. A source build cannot replace a
@@ -109,8 +115,12 @@ target/check/debug/proofstorm-acceptance --checkout-home "$PWD/.proofstorm-dev/s
 ```
 
 The work directory must be new. It retains private logs and the owned runtime
-receipt for recovery. CI uploads only the plan and redacted execution receipts,
-never native command output, credentials, seeds or runtime homes. Missing
+receipt for recovery. CI uploads the plan and redacted execution receipts, never
+plaintext native command output, credentials, seeds or runtime homes. When
+`.github/qualification-logs.age.pub` holds an age public key, each failed
+attempt's `*.log` and `*.json` files are encrypted to it and uploaded as
+`qualification-private-logs-*` (7-day retention). Decrypt with the matching
+private key: `age -d -i KEY_FILE CASE-attempt-N.tar.gz.age | tar -xz`. Missing
 receipts indicate an interrupted or failed setup/execution. Local cleanup can be
 retried using `proofstorm-acceptance --cleanup WORK_DIRECTORY`; it only acts on
 that run's recorded resources. Re-run the entire hosted workflow after a failure:

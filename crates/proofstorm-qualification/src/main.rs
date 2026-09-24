@@ -30,10 +30,9 @@ fn main() -> Result<()> {
                 .collect::<Vec<_>>();
             println!(
                 "{}",
-                if proofstorm_qualification::documentation_only(&paths) {
-                    "documentation"
-                } else {
-                    "compatibility"
+                match proofstorm_qualification::pull_request_mode(&paths) {
+                    Mode::Pull => "pull",
+                    _ => "compatibility",
                 }
             );
         }
@@ -42,6 +41,7 @@ fn main() -> Result<()> {
                 "full" => Mode::Full,
                 "compatibility" => Mode::Compatibility,
                 "documentation" => Mode::Documentation,
+                "pull" => Mode::Pull,
                 _ => bail!("unknown qualification mode"),
             };
             let plan = proofstorm_qualification::plan(
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string(plan.case(id)?)?);
         }
         _ => bail!(
-            "usage: qualification plan REVISION RUN_ID ATTEMPT compatibility|full|documentation OUTPUT; matrix PLAN; case PLAN ID; verify PLAN RECEIPTS; aggregate NEEDS"
+            "usage: qualification plan REVISION RUN_ID ATTEMPT compatibility|full|documentation|pull OUTPUT; matrix PLAN; case PLAN ID; verify PLAN RECEIPTS; aggregate NEEDS"
         ),
     }
     Ok(())

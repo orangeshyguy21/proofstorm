@@ -72,7 +72,7 @@ fn synthetic_receipts(plan: &Plan) -> Vec<Receipt> {
 fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner() {
     let root = TempDir::new().unwrap();
     let mut scheduled = BTreeMap::new();
-    for mode in ["full", "compatibility", "documentation"] {
+    for mode in ["full", "compatibility", "documentation", "pull"] {
         let (path, plan) = planned(root.path(), mode);
         let matrix: Value = serde_json::from_slice(&successful(&["matrix", &path]).stdout).unwrap();
         let mut seen = BTreeSet::new();
@@ -115,14 +115,17 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
         let case: Value = serde_json::from_slice(&successful(&["case", &path, id]).stdout).unwrap();
         assert_eq!(case, serde_json::to_value(plan.case(id).unwrap()).unwrap());
     }
+    assert!(scheduled["pull"] > 0);
+    assert!(scheduled["pull"] < scheduled["documentation"]);
     assert!(scheduled["documentation"] > 0);
     assert!(scheduled["documentation"] < scheduled["compatibility"]);
     assert!(scheduled["compatibility"] < scheduled["full"]);
 
     let paths = root.path().join("changed-paths");
     for (contents, expected) in [
-        ("README.md\ndocs/merge-qualification.md\n", "documentation"),
-        ("README.md\nCargo.toml\n", "compatibility"),
+        ("README.md\ndocs/merge-qualification.md\n", "pull"),
+        ("README.md\nCargo.toml\n", "pull"),
+        ("Cargo.toml\ndocker/mint/cdk/Dockerfile\n", "compatibility"),
         ("", "compatibility"),
     ] {
         fs::write(&paths, contents).unwrap();
@@ -239,6 +242,12 @@ done
 mkdir "$work"
 printf '%s\n' "$id" >> "$QUALIFICATION_TEST_CALLS"
 printf 'private fixture output\n' > "$work/private.log"
+if [[ "$id" == "${QUALIFICATION_TEST_FLAKY:-}" && ! -e "$QUALIFICATION_TEST_CALLS.flaked" ]]; then
+  : > "$QUALIFICATION_TEST_CALLS.flaked"
+  jq '.passed=false | .stage="teardown"' "$QUALIFICATION_TEST_FIXTURES/$id.json" > "$work/qualification-receipt.json"
+  printf '%s\n' '{"reason":"tool-rpc-error","locations":["crates/proofstorm-acceptance/src/cell.rs:135:5"],"tool":{"tool":"cell_remove","code":"runtime_failure","http_status":409}}' > "$work/gate-failure.json"
+  exit 7
+fi
 [[ "$id" != "$QUALIFICATION_TEST_MISSING" ]] || exit 0
 cp "$QUALIFICATION_TEST_FIXTURES/$id.json" "$work/qualification-receipt.json"
 if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
@@ -300,8 +309,9 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
         "container-exited",
         "operation-container-failed",
         "tool-rpc-error",
+        "flaky",
     ] {
-        let fail = category != "successful";
+        let fail = !matches!(category, "successful" | "flaky");
         let directory = root.path().join(category);
         fs::create_dir(&directory).unwrap();
         let calls = directory.join("calls");
@@ -316,6 +326,10 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
             .env("QUALIFICATION_TEST_FAILED", if fail { ids[0] } else { "" })
             .env("QUALIFICATION_TEST_MISSING", if fail { ids[1] } else { "" })
             .env("QUALIFICATION_TEST_CATEGORY", category)
+            .env(
+                "QUALIFICATION_TEST_FLAKY",
+                if category == "flaky" { ids[0] } else { "" },
+            )
             .output()
             .unwrap();
         assert_eq!(output.status.success(), !fail, "{output:?}");
@@ -325,12 +339,18 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
             category,
             &ids,
         );
+        // Every failed case is retried exactly once in a fresh work directory.
+        let expected: Vec<&String> = match category {
+            "successful" => ids.clone(),
+            "flaky" => vec![ids[0], ids[0], ids[1], ids[2]],
+            _ => vec![ids[0], ids[0], ids[1], ids[1], ids[2]],
+        };
         assert_eq!(
             fs::read_to_string(calls)
                 .unwrap()
                 .lines()
                 .collect::<Vec<_>>(),
-            ids
+            expected
         );
         let files: Vec<_> = fs::read_dir(directory.join("receipts"))
             .unwrap()
@@ -383,9 +403,23 @@ fn assert_shard_log(log: &str, fail: bool, category: &str, ids: &[&String]) {
                 < log.find("Qualification shard failed:").unwrap(),
             "the failure summary must remain visible after the final passing case"
         );
+        for id in [ids[0], ids[1]] {
+            assert!(log.contains(&format!("::warning::Qualification {id} attempt 1: ")));
+        }
     } else {
         assert!(log.ends_with("Qualification shard passed: 3 cases.\n"));
         assert!(!log.contains("::error::"));
+        if category == "flaky" {
+            // A retry pass is visible, with the first attempt's public diagnostic.
+            let first = format!(
+                "{}: acceptance exited 7; tool-rpc-error; at crates/proofstorm-acceptance/src/cell.rs:135:5; tool cell_remove; code runtime_failure; http 409; stage=teardown",
+                ids[0]
+            );
+            assert!(log.contains(&format!("::warning::Qualification {} attempt 1: ", ids[0])));
+            assert!(log.contains(&format!("Passed only on retry (1):\n - {first}\n")));
+        } else {
+            assert!(!log.contains("::warning::"));
+        }
     }
 }
 

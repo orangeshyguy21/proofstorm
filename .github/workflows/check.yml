@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
   merge_group:
+  # Pull requests run a small native subset; main and a weekly run cover every claim.
+  schedule:
+    - cron: '17 7 * * 1'
 
 permissions:
   contents: read

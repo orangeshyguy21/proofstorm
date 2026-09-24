@@ -306,3 +306,23 @@ async fn stable_results_coalesce_but_expiry_and_resource_changes_notify() {
         "expiry removes success"
     );
 }
+
+#[test]
+fn observation_wall_time_follows_the_current_wall_clock() {
+    let ttl = i64::try_from(OBSERVATION_TTL_MILLIS / 1000).unwrap();
+    // Checked 1.2s ago in monotonic time: stamped at least that old, never in the future.
+    assert_eq!(observed_at_unix(1_000_000, 50_000, 48_800), 999_998);
+    assert_eq!(observed_at_unix(1_000_000, 50_000, 50_000), 1_000_000);
+    // After a host sleep the wall clock jumps an hour while the monotonic clock does not.
+    // A fresh check must still read as fresh against the wall clock readiness uses.
+    let (now_unix, now_millis) = (1_000_000 + 3_600, 50_000 + 1_000);
+    let observed = observed_at_unix(now_unix, now_millis, now_millis - 500);
+    assert!(
+        ProtocolObservation {
+            observed_at_unix: observed,
+            expires_at_unix: observed + ttl,
+            elapsed_micros: 0,
+        }
+        .is_fresh(now_unix)
+    );
+}

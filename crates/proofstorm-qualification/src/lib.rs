@@ -12,40 +12,54 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-/// Only an explicit, nonempty list of ordinary documentation paths can reduce
-/// the compatibility matrix. Unknown files and a failed/empty comparison select
-/// every compatibility case; upstream stress remains an explicit opt-in.
+/// Pull requests run the small [`Mode::Pull`] suite unless they change what the
+/// catalog claims or how its components are built and rendered. Main, weekly
+/// and release runs always cover every claim. A failed/empty comparison is
+/// treated as a catalog change.
 #[must_use]
-pub fn documentation_only(paths: &[String]) -> bool {
-    !paths.is_empty()
-        && paths.iter().all(|path| {
-            matches!(
-                path.as_str(),
-                "README.md" | "CHANGELOG.md" | "CONTRIBUTING.md" | "scripts/CHECKS.md"
-            ) || (path.starts_with("docs/")
-                && std::path::Path::new(path)
-                    .extension()
-                    .is_some_and(|ext| ext == "md")
-                && !path.contains(".."))
+pub fn pull_request_mode(paths: &[String]) -> Mode {
+    const CATALOG: [&str; 5] = [
+        "docker/",
+        "crates/proofstorm-core/src/catalog.rs",
+        "crates/proofstorm-core/src/processor_catalog.rs",
+        "crates/proofstorm-kube/",
+        "scripts/catalog-image.sh",
+    ];
+    if paths.is_empty()
+        || paths.iter().any(|path| {
+            path.contains("..") || CATALOG.iter().any(|prefix| path.starts_with(prefix))
         })
+    {
+        Mode::Compatibility
+    } else {
+        Mode::Pull
+    }
 }
 
 #[cfg(test)]
 mod policy_tests {
-    use super::documentation_only;
+    use super::{Mode, pull_request_mode};
     #[test]
-    fn omissions_require_an_explicit_documentation_only_comparison() {
-        assert!(documentation_only(&[
-            "README.md".into(),
-            "docs/usage.md".into()
-        ]));
+    fn catalog_changes_and_failed_comparisons_keep_full_compatibility() {
+        for paths in [
+            vec!["README.md".into(), "docs/usage.md".into()],
+            vec!["crates/proofstorm-app/src/runtime.rs".into()],
+            vec!["scripts/qualification-shard.sh".into(), "Cargo.toml".into()],
+            vec!["crates/proofstorm-qualification/src/planner.rs".into()],
+        ] {
+            assert_eq!(pull_request_mode(&paths), Mode::Pull);
+        }
         for paths in [
             vec![],
-            vec!["docs/app.js".into()],
-            vec!["README.md".into(), "Cargo.toml".into()],
-            vec!["unknown.md".into()],
+            vec!["docker/mint/cdk/Dockerfile".into()],
+            vec![
+                "README.md".into(),
+                "crates/proofstorm-core/src/catalog.rs".into(),
+            ],
+            vec!["crates/proofstorm-kube/src/adapter.rs".into()],
+            vec!["docs/../docker/x".into()],
         ] {
-            assert!(!documentation_only(&paths));
+            assert_eq!(pull_request_mode(&paths), Mode::Compatibility);
         }
     }
 }
@@ -133,6 +147,8 @@ pub struct Case {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    /// Proofstorm's own runtime paths plus one mint round trip per architecture.
+    Pull,
     Documentation,
     Compatibility,
     Full,
