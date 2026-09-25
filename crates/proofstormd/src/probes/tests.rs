@@ -254,6 +254,7 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
     let context = Arc::new(crate::Context {
         client,
         probes: manager.clone(),
+        retries: Arc::default(),
     });
     crate::reconcile(Arc::new(cell.clone()), context.clone())
         .await

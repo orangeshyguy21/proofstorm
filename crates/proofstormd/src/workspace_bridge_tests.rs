@@ -179,6 +179,7 @@ fn fixture() -> (ProofstormCellAction, Arc<Mutex<Cluster>>, Context, Mailbox) {
     let context = Context {
         probes: crate::probes::Manager::new(client.clone(), "fixture".into()).0,
         client,
+        retries: std::sync::Arc::default(),
     };
     (parent, cluster, context, mailbox)
 }

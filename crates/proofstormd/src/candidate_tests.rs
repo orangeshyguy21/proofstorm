@@ -105,6 +105,7 @@ fn fixture(cancel: bool) -> (Arc<Mutex<Cluster>>, Arc<Context>) {
     let context = Arc::new(Context {
         probes: probes::Manager::new(client.clone(), "candidate-fixture".into()).0,
         client,
+        retries: std::sync::Arc::default(),
     });
     (cluster, context)
 }
