@@ -1,6 +1,7 @@
 //! Native component integration code, independent of the component's implementation language.
 #[cfg(feature = "runtime")]
 pub mod authentication;
+pub mod authentication_profile;
 #[cfg(all(unix, feature = "runtime"))]
 pub mod cln;
 #[cfg(feature = "runtime")]

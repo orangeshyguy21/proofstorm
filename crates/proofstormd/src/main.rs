@@ -2156,11 +2156,10 @@ fn validate_authentication_conformance_result(
     implementation: &str,
     message: &str,
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
-    let (clear_code, blind_code, bat_maximum, rate_limit) = match implementation {
-        "nutshell" => (30_002, 31_002, 31_003, Some(31_004)),
-        "cdk" => (30_002, 10_001, 11_006, None),
-        _ => return None,
-    };
+    let profile =
+        proofstorm_driver::authentication_profile::AuthenticationProfile::for_implementation(
+            implementation,
+        )?;
     let result = serde_json::from_str::<AuthenticationConformanceResult>(message).ok()?;
     if result.contract != "proofstorm/authentication-conformance/v1"
         || result.mint != request.mint
@@ -2170,16 +2169,16 @@ fn validate_authentication_conformance_result(
                 || !result.advertised_nut22
                 || !result.invalid_oidc_password_rejected
                 || !result.missing_cat_rejected
-                || result.invalid_cat_code != Some(clear_code)
+                || result.invalid_cat_code != Some(profile.invalid_cat)
                 || !result.missing_bat_rejected
-                || result.invalid_bat_code != Some(blind_code)
+                || result.invalid_bat_code != Some(profile.invalid_bat)
                 || !result.oidc_login
                 || !result.claims_match
                 || !result.mint_accepted_cat
                 || !result.bat_issued
                 || !result.bat_dleq
-                || result.bat_max_code != Some(bat_maximum)
-                || result.rate_limit_code != rate_limit
+                || result.bat_max_code != Some(profile.bat_maximum)
+                || result.rate_limit_code != profile.cat_rate_limit
                 || result.failure_stage.is_some()
                 || result.failure_status.is_some()
                 || result.failure_protocol_code.is_some()))
@@ -2368,18 +2367,17 @@ fn validate_authentication_replay_result(
     implementation: &str,
     message: &str,
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
-    let spent_bat = match implementation {
-        "nutshell" => 31_002,
-        "cdk" => 11_001,
-        _ => return None,
-    };
+    let profile =
+        proofstorm_driver::authentication_profile::AuthenticationProfile::for_implementation(
+            implementation,
+        )?;
     let result = serde_json::from_str::<AuthenticationReplayResult>(message).ok()?;
     if result.contract != "proofstorm/authentication-replay/v1"
         || result.mint != request.mint
         || result.identity_provider != request.identity_provider
         || result.source_operation_id != request.source_operation_id
         || (result.conformant
-            && (result.spent_bat_replay_code != Some(spent_bat)
+            && (result.spent_bat_replay_code != Some(profile.spent_bat)
                 || result.fresh_bat_count != 3
                 || !result.fresh_bat_dleq
                 || !result.protected_request

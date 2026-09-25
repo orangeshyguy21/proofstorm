@@ -1,5 +1,5 @@
 //! NUT-21/22 conformance and replay checks through native HTTP and Cashu crypto.
-use crate::http;
+use crate::{authentication_profile::AuthenticationProfile as Profile, http};
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cashu::{BlindSignature, BlindedMessage, Id, Keys, PublicKey, SecretKey, dhke, secret::Secret};
@@ -34,40 +34,6 @@ impl Config {
         })
     }
 }
-/// Protocol error codes and optional limits differ by mint implementation.
-/// Nutshell 0.21 uses the NUT-21/22 codes; CDK uses the NUT-21 clear-auth code,
-/// a generic proof-verification error for invalid BAT signatures, and a generic
-/// amount-range error for over-limit BAT requests.
-struct Profile {
-    invalid_bat: i64,
-    invalid_cat: i64,
-    bat_maximum: i64,
-    spent_bat: i64,
-    cat_rate_limit: Option<i64>,
-}
-
-impl Profile {
-    fn of(implementation: &str) -> Result<Self> {
-        match implementation {
-            "nutshell" => Ok(Self {
-                invalid_bat: 31002,
-                invalid_cat: 30002,
-                bat_maximum: 31003,
-                spent_bat: 31002,
-                cat_rate_limit: Some(31004),
-            }),
-            "cdk" => Ok(Self {
-                invalid_bat: 10001,
-                invalid_cat: 30002,
-                bat_maximum: 11006,
-                spent_bat: 11001,
-                cat_rate_limit: None,
-            }),
-            _ => bail!("unsupported mint implementation"),
-        }
-    }
-}
-
 /// A blind-auth protected request that is valid without funds. Each mint keeps
 /// its upstream default protection, so choose from what the mint advertises.
 struct Probe {
@@ -76,24 +42,65 @@ struct Probe {
 }
 
 impl Probe {
-    fn select(info: &Value, config: &Config, keys: &AuthKeys) -> Option<Self> {
-        let protected = info["nuts"]["22"]["protected_endpoints"].as_array()?;
-        [
-            ("/v1/mint/quote/bolt11", json!({"amount":1,"unit":"sat"})),
-            // CDK's SQL restore path rejects an empty list. A fresh, unknown
-            // blinded point performs a valid read without minting any ecash.
-            ("/v1/restore", json!({"outputs":[{"amount":1,"id":keys.id,"B_":SecretKey::generate().public_key()}]})),
-        ]
-        .into_iter()
-        .find(|(path, _)| {
-            protected
-                .iter()
-                .any(|endpoint| endpoint["method"] == "POST" && endpoint["path"] == *path)
-        })
-        .map(|(path, body)| Self {
+    async fn select(info: &Value, config: &Config, client: &Client) -> Result<Option<Self>> {
+        let Some(protected) = info["nuts"]["22"]["protected_endpoints"].as_array() else {
+            return Ok(None);
+        };
+        let Some(path) = ["/v1/mint/quote/bolt11", "/v1/restore"]
+            .into_iter()
+            .find(|path| {
+                protected
+                    .iter()
+                    .any(|endpoint| endpoint["method"] == "POST" && endpoint["path"] == *path)
+            })
+        else {
+            return Ok(None);
+        };
+        let body = if path == "/v1/restore" {
+            // The protected restore belongs to the main mint, not its auth ledger.
+            let keysets = send(client.get(format!("{}/v1/keysets", config.url))).await?;
+            ensure!(keysets.ok(), "mint keysets unavailable");
+            let id = Self::restore_keyset(&keysets.value)?;
+            let keys = send(client.get(format!("{}/v1/keys/{id}", config.url))).await?;
+            ensure!(keys.ok(), "mint keys unavailable");
+            Self::restore_body(id, &keys.value)?
+        } else {
+            json!({"amount":1,"unit":"sat"})
+        };
+        Ok(Some(Self {
             url: format!("{}{path}", config.url),
             body,
-        })
+        }))
+    }
+
+    fn restore_keyset(value: &Value) -> Result<Id> {
+        value["keysets"]
+            .as_array()
+            .context("mint keysets missing")?
+            .iter()
+            .find(|keyset| keyset["unit"] == "sat" && keyset["active"] == true)
+            .and_then(|keyset| keyset["id"].as_str())
+            .context("active sat mint keyset missing")?
+            .parse()
+            .map_err(Into::into)
+    }
+
+    fn restore_body(id: Id, value: &Value) -> Result<Value> {
+        let keyset = value["keysets"]
+            .as_array()
+            .context("mint keys missing")?
+            .iter()
+            .find(|keyset| keyset["unit"] == "sat" && keyset["id"] == json!(id))
+            .context("selected mint keyset missing")?;
+        let keys: Keys = serde_json::from_value(keyset["keys"].clone())?;
+        ensure!(
+            keys.amount_key(1_u64.into()).is_some(),
+            "mint denomination missing"
+        );
+        // A normal blinded message for a fresh secret yields an empty restore
+        // result without the invalid empty-input request that CDK rejects.
+        let (point, _) = dhke::blind_message(Secret::generate().as_bytes(), None)?;
+        Ok(json!({"outputs":[BlindedMessage::new(1_u64.into(), id, point)]}))
     }
 
     /// A protected request succeeded with a BAT and returned its normal body.
@@ -117,8 +124,10 @@ impl Reply {
     fn ok(&self) -> bool {
         self.status.is_success()
     }
-    fn code(&self) -> Option<i64> {
-        self.value["code"].as_i64()
+    fn code(&self) -> Option<u32> {
+        self.value["code"]
+            .as_u64()
+            .and_then(|code| u32::try_from(code).ok())
     }
 }
 async fn send(request: reqwest::RequestBuilder) -> Result<Reply> {
@@ -320,7 +329,8 @@ async fn conformance(config: &Config) -> Result<Value> {
         "missing_cat_rejected":false,"invalid_cat_code":null,"missing_bat_rejected":false,"invalid_bat_code":null,
         "oidc_login":false,"claims_match":false,"mint_accepted_cat":false,"bat_issued":false,"bat_dleq":false,
         "bat_max_code":null,"rate_limit_code":null,"conformant":false,"failure_stage":null,"failure_status":null,"failure_protocol_code":null});
-    let profile = Profile::of(&config.implementation)?;
+    let profile = Profile::for_implementation(&config.implementation)
+        .context("unsupported mint implementation")?;
     let client = http::client(Duration::from_secs(30))?;
     let info = send(client.get(format!("{}/v1/info", config.url))).await?;
     if !info.ok() {
@@ -345,7 +355,7 @@ async fn conformance(config: &Config) -> Result<Value> {
         return Ok(finding(&mut result, "invalid_oidc_password", None));
     }
     let keys = AuthKeys::load(&client, config).await?;
-    let Some(probe) = Probe::select(&info.value, config, &keys) else {
+    let Some(probe) = Probe::select(&info.value, config, &client).await? else {
         return Ok(finding(&mut result, "protected_endpoint", None));
     };
     let invalid_bat = invalid_token(&keys)?;
@@ -450,14 +460,15 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
             "bat_count":0,"bat_dleq":false,"spent_bat":null})
     };
     result.as_object_mut().context("invalid result")?.extend(json!({"protected_request":false,"conformant":false,"failure_stage":null,"failure_status":null,"failure_protocol_code":null}).as_object().context("invalid fields")?.clone());
-    let profile = Profile::of(&config.implementation)?;
+    let profile = Profile::for_implementation(&config.implementation)
+        .context("unsupported mint implementation")?;
     let client = http::client(Duration::from_secs(30))?;
     let info = send(client.get(format!("{}/v1/info", config.url))).await?;
     if !info.ok() {
         return Ok(finding(&mut result, "mint_info", Some(&info)));
     }
     let keys = AuthKeys::load(&client, config).await?;
-    let Some(probe) = Probe::select(&info.value, config, &keys) else {
+    let Some(probe) = Probe::select(&info.value, config, &client).await? else {
         return Ok(finding(&mut result, "protected_endpoint", None));
     };
     if is_replay {
@@ -577,44 +588,92 @@ mod tests {
         }
     }
 
-    #[test]
-    fn protected_probe_follows_each_mints_advertised_default_policy() {
+    #[tokio::test]
+    async fn protected_probe_uses_main_mint_keys_and_advertised_endpoints() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let auth = keyset().0;
+        let mut mint = keyset().0;
+        mint.id = "0099887766554433".parse().unwrap();
+        assert_ne!(mint.id, auth.id);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = config("cdk");
+        config.url = format!("http://{}", listener.local_addr().unwrap());
+        let main_id = mint.id;
+        let responses = [
+            (
+                "/v1/keysets".to_owned(),
+                json!({"keysets":[{"id":auth.id,"unit":"auth","active":true},{"id":mint.id,"unit":"sat","active":true}]}),
+            ),
+            (
+                format!("/v1/keys/{}", mint.id),
+                json!({"keysets":[{"id":mint.id,"unit":"sat","keys":mint.keys}]}),
+            ),
+        ];
+        let server = tokio::spawn(async move {
+            for (path, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![0; 4096];
+                let size = stream.read(&mut bytes).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&bytes[..size])
+                        .starts_with(&format!("GET {path} HTTP/1.1\r\n"))
+                );
+                let body = body.to_string();
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
         let info = |paths: &[&str]| json!({"nuts":{"22":{"protected_endpoints":paths.iter().map(|path| json!({"method":"POST","path":path})).collect::<Vec<_>>()}}});
-        // Nutshell protects mint quotes; CDK leaves them open but protects restore.
-        let nutshell = Probe::select(
-            &info(&["/v1/swap", "/v1/mint/quote/bolt11"]),
-            &config("nutshell"),
-            &keyset().0,
-        )
-        .unwrap();
-        assert_eq!(nutshell.url, "http://mint:3338/v1/mint/quote/bolt11");
-        let cdk = Probe::select(
-            &info(&["/v1/swap", "/v1/restore"]),
-            &config("cdk"),
-            &keyset().0,
-        )
-        .unwrap();
-        assert_eq!(cdk.url, "http://mint:3338/v1/restore");
-        assert!(Probe::select(&info(&["/v1/swap"]), &config("cdk"), &keyset().0).is_none());
+        let client = http::client(Duration::from_secs(5)).unwrap();
+        let cdk = Probe::select(&info(&["/v1/swap", "/v1/restore"]), &config, &client)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        let restore: cashu::nuts::nut09::RestoreRequest =
+            serde_json::from_value(cdk.body.clone()).unwrap();
+        assert_eq!(restore.outputs.len(), 1);
+        assert_eq!(restore.outputs[0].keyset_id, main_id);
+        assert_ne!(restore.outputs[0].keyset_id, auth.id);
+        assert_eq!(restore.outputs[0].amount, 1_u64.into());
+        // Quote-only and unsupported policies must not need mint-key requests.
+        let nutshell = Probe::select(&info(&["/v1/mint/quote/bolt11"]), &config, &client)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(nutshell.url.ends_with("/v1/mint/quote/bolt11"));
+        assert!(
+            Probe::select(&info(&["/v1/swap"]), &config, &client)
+                .await
+                .unwrap()
+                .is_none()
+        );
         let reply = |value| Reply {
             status: StatusCode::OK,
             value,
         };
         assert!(cdk.accepted(&reply(json!({"outputs":[],"signatures":[]}))));
-        let restore: cashu::nuts::nut09::RestoreRequest =
-            serde_json::from_value(cdk.body.clone()).unwrap();
-        assert_eq!(restore.outputs.len(), 1);
         assert!(!cdk.accepted(&reply(json!({}))));
         assert!(nutshell.accepted(&reply(json!({"quote":"q"}))));
     }
 
     #[test]
-    fn protocol_profiles_are_explicit_per_implementation() {
-        assert_eq!(Profile::of("nutshell").unwrap().cat_rate_limit, Some(31004));
-        let cdk = Profile::of("cdk").unwrap();
-        assert_eq!((cdk.invalid_bat, cdk.invalid_cat), (10001, 30002));
-        assert!(cdk.cat_rate_limit.is_none());
-        assert!(Profile::of("other").is_err());
+    fn restore_probe_rejects_auth_inactive_and_mismatched_mint_keys() {
+        let keys = keyset().0;
+        for (unit, active) in [("auth", true), ("sat", false)] {
+            assert!(
+                Probe::restore_keyset(
+                    &json!({"keysets":[{"id":keys.id,"unit":unit,"active":active}]})
+                )
+                .is_err()
+            );
+        }
+        for value in [
+            json!({"keysets":[{"id":keys.id,"unit":"auth","keys":keys.keys}]}),
+            json!({"keysets":[{"id":"0099887766554433","unit":"sat","keys":keys.keys}]}),
+            json!({"keysets":[{"id":keys.id,"unit":"sat","keys":{}}]}),
+        ] {
+            assert!(Probe::restore_body(keys.id, &value).is_err());
+        }
     }
 
     #[test]

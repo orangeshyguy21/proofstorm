@@ -7,6 +7,7 @@ use crate::GateContext;
 pub mod agents;
 mod authentication;
 mod candidate_isolation;
+mod candidate_source;
 pub mod candidates;
 mod candidates_nutshell;
 pub mod cashu_double_spend;

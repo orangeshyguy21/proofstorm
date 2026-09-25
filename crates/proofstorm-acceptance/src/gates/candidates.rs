@@ -5,8 +5,6 @@ use serde_json::{Value, json};
 use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const CDK: &str = "d3dec24c784e8fec1fd65f853241c7a2261c7abd";
-// Package version at the pinned source commit, independent of the catalog base.
-const CDK_SOURCE_VERSION: &str = "0.18.0";
 pub(super) const COCO: &str = "44e5101cbea370132af6e68f88e01b47e39431c4";
 const NUTSHELL: &str = "18539020b4fa473ad8ad440e210720d2aaf8401a";
 const COCO_PR: &str = "https://github.com/cashubtc/coco/pull/460";
@@ -516,9 +514,15 @@ pub fn run_cdk_modes(context: &GateContext) -> Result<()> {
         "expected one CDK build record"
     );
     context.record("candidate-cdk-shared-build.json", &builds)?;
+    let record = resource(
+        &mut client,
+        expect::string(&receipt, "/record_resource_uri")?,
+    )?;
+    let source_version = super::candidate_source::cdk_version(&record, &receipt)?;
+    context.record("candidate-cdk-source-version.json", &json!({"repository":record["repository"], "commit_sha":record["commit_sha"], "version":source_version}))?;
     wallet_cell(context, &mut client, &receipt)?;
-    super::cdk_ldk::run_candidate(context, client, &receipt, CDK_SOURCE_VERSION)?;
+    super::cdk_ldk::run_candidate(context, client, &receipt, &source_version)?;
     let client = context.managed_session("candidate-cdk-modes")?;
-    super::cdk_bdk_stress::run_candidate(context, client, &receipt, CDK_SOURCE_VERSION)?;
+    super::cdk_bdk_stress::run_candidate(context, client, &receipt, &source_version)?;
     context.record("candidate-cdk-modes-outcome.json", &json!({"passed":true,"build_count":1,"image":receipt["image"],"modes":["linked-lightning","embedded-ldk","embedded-bdk"]}))
 }
