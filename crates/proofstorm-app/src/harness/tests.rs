@@ -411,7 +411,7 @@ fn desktop_detection_requires_identity_scheme_and_tested_version() {
             Harness::Claude,
             "com.anthropic.claudefordesktop",
             "claude",
-            "1.40609.1",
+            "2.7032.0",
         ),
     ] {
         let info = json!({"CFBundleIdentifier":bundle,"CFBundleURLTypes":[{"CFBundleURLSchemes":[scheme]}],"CFBundleShortVersionString":version});
@@ -421,6 +421,7 @@ fn desktop_detection_requires_identity_scheme_and_tested_version() {
             ("CFBundleURLTypes", json!([])),
             ("CFBundleShortVersionString", json!("1.0.0")),
             ("CFBundleShortVersionString", json!("2.0.0")),
+            ("CFBundleShortVersionString", json!("3.0.0")),
             ("CFBundleShortVersionString", json!("1.beta.0")),
         ] {
             let mut bad = info.clone();

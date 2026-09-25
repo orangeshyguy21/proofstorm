@@ -60,7 +60,7 @@ Multiple duplicates and inherited/global connections still require manual review
 | --- | --- | --- |
 | Codex | `.codex/config.toml` | Terminal by default; `--desktop` for native app |
 | OpenCode 1.x | Existing `opencode.jsonc`, otherwise `opencode.json` | Terminal by default; `--desktop` for native OpenCode 1.18.30+ (1.x), with limitation below |
-| Claude Code 2.x | `.mcp.json` | Terminal by default; `--desktop` for native Claude 1.40609.1+ (1.x) |
+| Claude Code 2.x | `.mcp.json` | Terminal by default; `--desktop` for native Claude 2.7032.0+ (2.x) |
 
 GUI launch buttons always request the native app, independently of the CLI default.
 OpenCode 1.18.30's new layout ignores project links: the app opens, but the folder

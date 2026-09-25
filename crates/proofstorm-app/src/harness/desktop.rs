@@ -22,7 +22,7 @@ fn identity(harness: Harness) -> (&'static str, &'static str, &'static str, [u64
             "Claude.app",
             "com.anthropic.claudefordesktop",
             "claude",
-            [1, 40609, 1],
+            [2, 7032, 0],
         ),
         Harness::Codex => unreachable!("Codex uses its bundled project launcher"),
     }
@@ -49,6 +49,13 @@ pub(super) fn validate(harness: Harness, info: &Value) -> Result<String> {
         .split('.')
         .map(str::parse::<u64>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    ensure!(
+        numbers.len() != 3 || numbers[0] <= minimum[0],
+        "{} desktop {version} is newer than this alpha's verified project-link version; update {} or run {} agent open without --desktop in a terminal",
+        harness.name(),
+        crate::command_name(),
+        crate::command_name()
+    );
     ensure!(
         numbers.len() == 3 && numbers[0] == minimum[0] && numbers.as_slice() >= minimum.as_slice(),
         "update {} desktop before opening a project; this alpha requires a verified project-link version",
