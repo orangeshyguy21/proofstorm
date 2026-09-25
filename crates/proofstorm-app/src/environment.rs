@@ -462,12 +462,11 @@ fn component_views(
                         });
                     ComponentView {
                         protocol_observation: status.and_then(|s| s.protocol_observation.clone()),
-                        details: r
-                            .lock
-                            .entries
-                            .iter()
-                            .find(|e| e.component_id == c.id)
-                            .map(|entry| component_details(entry, status.is_some_and(|s| s.ready))),
+                        details: r.lock.entries.iter().find(|e| e.component_id == c.id).map(
+                            |entry| {
+                                component_details(entry, &c.config, status.is_some_and(|s| s.ready))
+                            },
+                        ),
                         id: c.id.clone(),
                         kind: c.kind,
                         implementation: c.implementation.clone(),
@@ -539,7 +538,13 @@ fn empty_runtime(state: ObservationState, error: Option<&str>) -> RuntimeObserva
     }
 }
 
-fn component_details(entry: &proofstorm_core::LockEntry, observed: bool) -> ComponentDetails {
+/// Embedded resources follow the component's authored configuration; their
+/// defaults are disabled, so an omitted field never shows an embedded backend.
+fn component_details(
+    entry: &proofstorm_core::LockEntry,
+    config: &std::collections::BTreeMap<String, serde_json::Value>,
+    observed: bool,
+) -> ComponentDetails {
     let embedded = proofstorm_core::default_catalog()
         .entries
         .iter()
@@ -548,7 +553,7 @@ fn component_details(entry: &proofstorm_core::LockEntry, observed: bool) -> Comp
             catalog
                 .runtime_endpoints
                 .iter()
-                .filter(|endpoint| endpoint.id != "component")
+                .filter(|endpoint| endpoint.id != "component" && endpoint.applies_to(config))
                 .map(|endpoint| {
                     let (name, kind) = match endpoint.id.as_str() {
                         "ldk-node" => (
@@ -613,11 +618,19 @@ mod canvas_tests {
 
     #[test]
     fn embedded_versions_never_inherit_parent_version() {
-        for (catalog, id, kind) in [
-            ("cdk-ldk", "ldk-node", ComponentKind::Lightning),
-            ("cdk-bdk", "bdk", ComponentKind::Wallet),
+        let config = |field: &str, value: &str| {
+            std::collections::BTreeMap::from([(field.to_owned(), serde_json::json!(value))])
+        };
+        for (field, value, id, kind) in [
+            (
+                "embedded_lightning",
+                "ldk-node",
+                "ldk-node",
+                ComponentKind::Lightning,
+            ),
+            ("embedded_onchain", "bdk", "bdk", ComponentKind::Wallet),
         ] {
-            let details = component_details(&lock(catalog), true);
+            let details = component_details(&lock("cdk"), &config(field, value), true);
             assert_eq!(details.resolved_version, "0.18.1");
             assert_eq!(details.observed_version.as_deref(), Some("0.18.1"));
             assert_eq!(details.embedded.len(), 1);
@@ -626,10 +639,15 @@ mod canvas_tests {
             assert_eq!(details.embedded[0].version, None);
         }
         assert_eq!(
-            component_details(&lock("cdk-bdk"), false).observed_version,
+            component_details(&lock("cdk"), &config("embedded_onchain", "bdk"), false)
+                .observed_version,
             None
         );
-        assert!(component_details(&lock("cdk"), true).embedded.is_empty());
+        assert!(
+            component_details(&lock("cdk"), &std::collections::BTreeMap::new(), true)
+                .embedded
+                .is_empty()
+        );
     }
 
     #[test]

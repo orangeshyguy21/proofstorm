@@ -76,14 +76,22 @@ Failed, missing, duplicate, skipped or stale evidence cannot qualify a merge.
   handling, sequential quote addresses and persistent settled quotes. Concurrent
   quote generation is reserved for the opt-in behavioral suite. Its catalog no
   longer advertises the BOLT11-only Nutshell wallet as an on-chain wallet pairing.
-- Nutshell 0.20.3 and 0.21.0 NUT-21/NUT-22 integrations are excluded from supported
-  claims. Both shipped upstream authentication schemas lack columns used by the
-  shared ledger's blind-auth issuance query (`mint_quote`, `melt_quote`, `swap_id`,
-  and `order_index`). The 0.20.3 live conformance test also fails blind-auth issuance.
-  Restore authenticated support only with a qualifying upstream artifact and
-  passing positive, negative and replay/persistence tests; do not patch around it
-  in CI. Keycloak remains independently qualified for discovery, valid/invalid
-  logins, generated credentials, signing keys and persistence after restart.
+- The unified `cdk` entry covers linked Lightning, embedded LDK, embedded BDK,
+  and linked LND with embedded BDK. The `cdk-oidc` gate exercises NUT-21/22 on
+  both SQLite and PostgreSQL auth stores in one cell. The PostgreSQL mint's
+  primary and auth databases share a server with Keycloak. Each mint must pass
+  valid/invalid CAT and BAT checks, BAT issuance and DLEQ verification, the
+  issuance limit, a protected request, and spent-token rejection after restart.
+  Controller restart must preserve generated identity/database credentials.
+- Nutshell 0.21.0 auth is covered by `nutshell-oidc`, using SQLite primary
+  storage and both SQLite and PostgreSQL auth stores. It verifies the upstream
+  NUT-21/22 error codes and CAT rate limit in addition to issuance, DLEQ,
+  protected requests and spent-token rejection across restart. The retained
+  0.20.3 release remains unauthenticated because its recorded live run fails
+  blind-auth issuance. No local schema workaround or candidate image substitutes
+  for released-image qualification. Keycloak also remains independently
+  qualified for discovery, valid/invalid logins, generated credentials, signing
+  keys and restart persistence.
 - CLN uses the corrected 26.06.7 digest published in the
   [upstream release notes](https://github.com/ElementsProject/lightning/releases/tag/v26.06.7).
   The previous image reported the same version without the release fixes.

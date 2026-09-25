@@ -43,8 +43,6 @@ fn component(
             "lnd" => "lnd/0.20/v1",
             "cln" => "cln/26.06/v1",
             "cdk" => "cdk-mintd/0.18/v1",
-            "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
-            "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
             "nutshell" => "nutshell-mint/0.20/v1",
             "postgresql" => "postgresql/17/v1",
             "redis" => "redis/8.10/v1",
@@ -104,6 +102,7 @@ fn database_link(from: &str, to: &str) -> LinkSpec {
         to: to.into(),
         binding: Some(DependencyBinding::Database {
             role: DatabaseRole::Primary,
+            database: None,
         }),
     }
 }
@@ -116,6 +115,7 @@ fn cache_link(from: &str, to: &str) -> LinkSpec {
         to: to.into(),
         binding: Some(DependencyBinding::Database {
             role: DatabaseRole::Cache,
+            database: None,
         }),
     }
 }
@@ -205,8 +205,15 @@ fn backend_cell(backend_id: &str) -> (CellSpec, &'static str) {
             ),
             "mint",
         ),
-        "cdk-ldk" => cdk_ldk_backend_cell(),
-        "cdk-bdk" => cdk_bdk_backend_cell(),
+        "cdk-ldk" => cdk_embedded_cell(
+            "golden-cdk-ldk",
+            &[("embedded_lightning", "ldk-node")],
+            false,
+        ),
+        "cdk-bdk" => cdk_embedded_cell("golden-cdk-bdk", &[("embedded_onchain", "bdk")], false),
+        "cdk-lnd-bdk" => {
+            cdk_embedded_cell("golden-cdk-lnd-bdk", &[("embedded_onchain", "bdk")], true)
+        }
         "nutshell" => (
             cell(
                 "golden-nutshell",
@@ -314,43 +321,41 @@ fn backend_cell(backend_id: &str) -> (CellSpec, &'static str) {
     }
 }
 
-fn cdk_ldk_backend_cell() -> (CellSpec, &'static str) {
-    (
-        cell(
-            "golden-cdk-ldk",
-            vec![
-                component(
-                    "chain",
-                    ComponentKind::Bitcoin,
-                    "bitcoin-core",
-                    ControlClass::Cell,
-                ),
-                component("mint", ComponentKind::Mint, "cdk-ldk", ControlClass::Target),
-            ],
-            vec![chain_link("mint", "chain")],
+/// One CDK mint with embedded backends selected by configuration, optionally
+/// alongside a linked LND node.
+fn cdk_embedded_cell(
+    name: &str,
+    config: &[(&str, &str)],
+    with_lnd: bool,
+) -> (CellSpec, &'static str) {
+    let mut mint = component("mint", ComponentKind::Mint, "cdk", ControlClass::Target);
+    for (field, value) in config {
+        mint.config.insert((*field).into(), json!(value));
+    }
+    let mut components = vec![
+        component(
+            "chain",
+            ComponentKind::Bitcoin,
+            "bitcoin-core",
+            ControlClass::Cell,
         ),
-        "mint",
-    )
+        mint,
+    ];
+    let mut links = vec![chain_link("mint", "chain")];
+    if with_lnd {
+        components.push(component(
+            "lightning",
+            ComponentKind::Lightning,
+            "lnd",
+            ControlClass::Cell,
+        ));
+        links.push(chain_link("lightning", "chain"));
+        links.push(lightning_link("mint", "lightning"));
+    }
+    (cell(name, components, links), "mint")
 }
 
-fn cdk_bdk_backend_cell() -> (CellSpec, &'static str) {
-    (
-        cell(
-            "golden-cdk-bdk",
-            vec![
-                component(
-                    "chain",
-                    ComponentKind::Bitcoin,
-                    "bitcoin-core",
-                    ControlClass::Cell,
-                ),
-                component("mint", ComponentKind::Mint, "cdk-bdk", ControlClass::Target),
-            ],
-            vec![chain_link("mint", "chain")],
-        ),
-        "mint",
-    )
-}
+const CDK_EMBEDDED_SCENARIOS: [&str; 3] = ["cdk-bdk", "cdk-ldk", "cdk-lnd-bdk"];
 
 fn render_backend(backend_id: &str) -> Value {
     render_backend_with_catalog(backend_id, default_catalog())
@@ -371,7 +376,7 @@ fn render_backend_with_catalog(backend_id: &str, catalog: &CatalogResponse) -> V
         "cln" => render_cln_component(plan),
         "ldk-server" => proofstorm_kube::render_ldk_server_component(plan),
         "cdk-ldk-server-processor" => proofstorm_kube::render_ldk_server_processor_component(plan),
-        "cdk" | "cdk-ldk" | "cdk-bdk" => render_cdk_component(plan),
+        "cdk" | "cdk-ldk" | "cdk-bdk" | "cdk-lnd-bdk" => render_cdk_component(plan),
         "nutshell" => render_nutshell_mint_component(plan),
         "nutshell-wallet" => render_wallet_component(plan),
         "cdk-cli-wallet" => proofstorm_kube::render_cdk_wallet_component(plan),
@@ -548,17 +553,45 @@ fn nutshell_cln_cell() -> CellSpec {
     )
 }
 
+fn assert_ensure_database_credential(container: &k8s_openapi::api::core::v1::Container) {
+    let env = container.env.as_ref().expect("owner password environment");
+    assert_eq!(env.len(), 1);
+    assert_eq!(env[0].name, "PROOFSTORM_POSTGRES_PASSWORD");
+    let reference = env[0]
+        .value_from
+        .as_ref()
+        .and_then(|source| source.secret_key_ref.as_ref())
+        .expect("secret-backed owner password");
+    assert_eq!(reference.key, "POSTGRES_PASSWORD");
+    assert!(
+        container
+            .image
+            .as_deref()
+            .is_some_and(|image| image.contains("/postgres@sha256:"))
+    );
+}
+
 fn assert_postgres_bootstrap_env(container: &Value) {
     let environment = container["env"]
         .as_array()
         .expect("CDK container environment");
-    let postgres_url = environment
-        .iter()
-        .find(|entry| entry["name"] == "CDK_MINTD_POSTGRES_URL")
-        .expect("PostgreSQL bootstrap URL");
+    let position = |name: &str| {
+        environment
+            .iter()
+            .position(|entry| entry["name"] == name)
+            .expect("PostgreSQL URL environment")
+    };
+    // The owner password precedes the URL that expands it.
+    let password = position("CDK_MINTD_POSTGRES_URL_PASSWORD");
+    let url = position("CDK_MINTD_POSTGRES_URL");
+    assert!(password < url);
     assert_eq!(
-        postgres_url["valueFrom"]["secretKeyRef"],
-        json!({"name": "database-credentials", "key": "DATABASE_URL"})
+        environment[password]["valueFrom"]["secretKeyRef"],
+        json!({"name": "database-credentials", "key": "POSTGRES_PASSWORD"})
+    );
+    assert_eq!(
+        environment[url]["value"],
+        "postgresql://proofstorm:$(CDK_MINTD_POSTGRES_URL_PASSWORD)@database:5432/mint_primary"
     );
 }
 
@@ -643,12 +676,12 @@ fn keycloak_waits_for_its_actual_database_service_without_database_credentials()
             .unwrap();
         let init = pod.init_containers.as_ref().unwrap();
         assert_eq!(init.len(), 1);
-        assert_eq!(init[0].name, "wait-for-database");
+        assert_eq!(init[0].name, "ensure-database");
         assert_eq!(
             &init[0].command.as_ref().unwrap()[4..],
-            ["identity-storage", "5432"]
+            ["identity-storage", "5432", "identity_primary"]
         );
-        assert!(init[0].env.is_none());
+        assert_ensure_database_credential(&init[0]);
         assert!(init[0].volume_mounts.is_none());
         let database = plans
             .iter()
@@ -753,18 +786,18 @@ fn every_cdk_backend_waits_for_its_linked_postgres_before_initialization() {
                     .as_ref()
                     .unwrap();
                 let init = pod.init_containers.as_ref().unwrap();
-                let wait = init.iter().position(|c| c.name == "wait-for-database");
+                let wait = init.iter().position(|c| c.name == "ensure-database");
                 if postgres {
-                    let wait = wait.expect("PostgreSQL must precede CDK config access");
+                    let wait = wait.expect("the mint database must exist before CDK config access");
                     let initialize = init
                         .iter()
                         .position(|c| c.name == "initialize-config")
                         .unwrap();
                     assert!(wait < initialize);
                     let command = init[wait].command.as_ref().unwrap();
-                    assert_eq!(&command[4..], ["mint-storage", "5432"]);
-                    // Waiting needs connectivity, not the database credential.
-                    assert!(init[wait].env.is_none());
+                    assert_eq!(&command[4..], ["mint-storage", "5432", "mint_primary"]);
+                    // Creating the database needs only the owner password.
+                    assert_ensure_database_credential(&init[wait]);
                     assert!(init[wait].volume_mounts.is_none());
                     let database = plans
                         .iter()
@@ -837,9 +870,10 @@ fn cdk_postgres_binding_materializes_secret_backed_native_configuration() {
         .iter()
         .find(|secret| secret.metadata.name.as_deref() == Some("database-credentials"))
         .expect("database credential template");
+    // Only the maintenance database; the mint creates its own.
     assert_eq!(
         secret.string_data.as_ref().unwrap()["POSTGRES_DB"],
-        "cdk_mint"
+        "postgres"
     );
     assert!(
         !secret
@@ -1030,9 +1064,14 @@ fn nutshell_postgres_binding_keeps_database_and_mint_secrets_out_of_public_confi
         .and_then(Value::as_array)
         .expect("secret-backed environment");
     assert!(env.iter().any(|entry| {
-        entry["name"] == "MINT_DATABASE"
+        entry["name"] == "MINT_DATABASE_PASSWORD"
             && entry["valueFrom"]["secretKeyRef"]["name"] == "database-credentials"
-            && entry["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_URL"
+            && entry["valueFrom"]["secretKeyRef"]["key"] == "POSTGRES_PASSWORD"
+    }));
+    assert!(env.iter().any(|entry| {
+        entry["name"] == "MINT_DATABASE"
+            && entry["value"]
+                == "postgresql://proofstorm:$(MINT_DATABASE_PASSWORD)@database:5432/mint_primary"
     }));
     assert!(
         !env.iter()
@@ -1178,17 +1217,23 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
         .version = Some("0.20.3".into());
     let mut catalog = default_catalog().clone();
     assert!(resolve_lock(&spec, &catalog).is_err());
-    catalog
+    let nutshell = catalog
         .entries
         .iter_mut()
         .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
-        .unwrap()
+        .unwrap();
+    nutshell
         .compatible_dependencies
         .push(proofstorm_core::CatalogDependencySupport {
             link_kind: LinkKind::AuthenticationBackend,
             implementation: "keycloak".into(),
             versions: ["25.0.6".into()].into(),
         });
+    // Authentication links need a declared mode, not only a dependency.
+    nutshell
+        .support_matrix
+        .authentication
+        .insert(proofstorm_core::AuthenticationMode::Nut22Blind);
     let lock = resolve_lock(&spec, &catalog).expect("synthetic Nutshell Keycloak lock");
     let rendered =
         render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).expect("Nutshell Keycloak render");
@@ -1371,7 +1416,7 @@ fn nutshell_redis_binding_is_private_typed_and_independent_of_primary_storage() 
         .and_then(Value::as_array)
         .expect("secret-backed environment");
     assert!(env.iter().any(|entry| {
-        entry["name"] == "MINT_DATABASE"
+        entry["name"] == "MINT_DATABASE_PASSWORD"
             && entry["valueFrom"]["secretKeyRef"]["name"] == "database-credentials"
     }));
     assert!(env.iter().any(|entry| {
@@ -1566,9 +1611,7 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
     let characterized = [
         "bitcoin-core",
         "cdk",
-        "cdk-bdk",
         "cdk-cli-wallet",
-        "cdk-ldk",
         "cdk-ldk-server-processor",
         "cln",
         "cocod-wallet",
@@ -1586,7 +1629,8 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
         characterized
     );
     let catalog = catalog_for_platform(platform);
-    for backend_id in characterized {
+    // Embedded CDK backends are configuration of the one CDK backend.
+    for backend_id in characterized.into_iter().chain(CDK_EMBEDDED_SCENARIOS) {
         // These packaged components have architecture-specific images. Every other
         // backend must match the same full contract on both platforms.
         let golden_name = match (platform, backend_id) {
@@ -1831,4 +1875,205 @@ fn nutshell_cln_cell_uses_restricted_runtime_rune_contract() {
             },
         }),
     );
+}
+
+#[test]
+fn one_postgres_server_hosts_a_database_per_linked_component() {
+    let mut spec = cell(
+        "golden-shared-postgres",
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Cell,
+            ),
+            component(
+                "lightning",
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Cell,
+            ),
+            component(
+                "database",
+                ComponentKind::Database,
+                "postgresql",
+                ControlClass::Cell,
+            ),
+            component(
+                "identity",
+                ComponentKind::IdentityProvider,
+                "keycloak",
+                ControlClass::Cell,
+            ),
+            component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
+        ],
+        vec![
+            chain_link("lightning", "chain"),
+            lightning_link("mint", "lightning"),
+            database_link("mint", "database"),
+            database_link("identity", "database"),
+        ],
+    );
+    let lock = resolve_lock(&spec, default_catalog()).expect("shared server lock");
+    let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock)
+        .expect("shared server plans");
+    let ensure = |component: &str| {
+        let plan = plans
+            .iter()
+            .find(|plan| plan.component_id == component)
+            .unwrap();
+        let rendered = if component == "mint" {
+            render_cdk_component(plan)
+        } else {
+            render_keycloak_component(plan)
+        }
+        .unwrap();
+        let pod = rendered.deployments[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .clone()
+            .unwrap();
+        pod.init_containers
+            .unwrap()
+            .into_iter()
+            .find(|container| container.name == "ensure-database")
+            .and_then(|container| container.command)
+            .unwrap()
+    };
+    assert_eq!(&ensure("mint")[4..], ["database", "5432", "mint_primary"]);
+    assert_eq!(
+        &ensure("identity")[4..],
+        ["database", "5432", "identity_primary"]
+    );
+
+    // Two bindings can never own the same database on one server.
+    for link in &mut spec.links {
+        if link.kind == LinkKind::DatabaseBackend {
+            link.binding = Some(DependencyBinding::Database {
+                role: DatabaseRole::Primary,
+                database: Some("shared".into()),
+            });
+        }
+    }
+    let error = resolve_lock(&spec, default_catalog()).expect_err("duplicate database name");
+    assert!(error.contains("duplicate_database_name"));
+}
+
+fn cdk_auth_fixture(name: &str) -> CellSpec {
+    let identity_links = || {
+        vec![
+            chain_link("lightning", "chain"),
+            lightning_link("mint", "lightning"),
+            database_link("identity", "database"),
+            authentication_link("mint", "identity"),
+        ]
+    };
+    let components = || {
+        vec![
+            component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Cell,
+            ),
+            component(
+                "lightning",
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Cell,
+            ),
+            component(
+                "database",
+                ComponentKind::Database,
+                "postgresql",
+                ControlClass::Cell,
+            ),
+            component(
+                "identity",
+                ComponentKind::IdentityProvider,
+                "keycloak",
+                ControlClass::Cell,
+            ),
+            component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
+        ]
+    };
+    cell(name, components(), identity_links())
+}
+
+fn render_cdk_auth_mint(spec: &CellSpec) -> (String, Value) {
+    let lock = resolve_lock(spec, default_catalog()).expect("CDK auth lock");
+    let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, spec, &lock)
+        .expect("CDK auth plans");
+    let plan = plans
+        .iter()
+        .find(|plan| plan.component_id == "mint")
+        .unwrap();
+    let rendered = render_cdk_component(plan).expect("CDK auth render");
+    let config = rendered.config_maps[0].data.as_ref().unwrap()["config.toml"].clone();
+    let pod =
+        serde_json::to_value(&rendered.deployments[0]).unwrap()["spec"]["template"]["spec"].clone();
+    (config, pod)
+}
+
+fn cdk_auth_init_names(pod: &Value) -> Vec<String> {
+    pod["initContainers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|container| container["name"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>()
+}
+
+#[test]
+fn cdk_sqlite_auth_keeps_upstream_endpoint_defaults() {
+    let sqlite = cdk_auth_fixture("golden-cdk-auth");
+    let (config, pod) = render_cdk_auth_mint(&sqlite);
+    for fragment in [
+        "[auth]\nauth_enabled = true",
+        "openid_discovery = \"http://identity:8080/realms/proofstorm/.well-known/openid-configuration\"",
+        "openid_client_id = \"cashu-client\"",
+        "mint_max_bat = 50",
+    ] {
+        assert!(config.contains(fragment), "missing {fragment:?}");
+    }
+    // Upstream decides which endpoints are protected.
+    for absent in ["[auth_database", "get_mint_quote", "swap =", "restore ="] {
+        assert!(!config.contains(absent), "unexpected {absent:?}");
+    }
+    assert!(cdk_auth_init_names(&pod).contains(&"wait-for-oidc".to_owned()));
+}
+
+#[test]
+fn cdk_postgres_auth_requires_a_separate_database_on_the_same_server() {
+    let mut postgres = cdk_auth_fixture("golden-cdk-auth-postgres");
+    postgres.links.push(database_link("mint", "database"));
+    assert!(
+        resolve_lock(&postgres, default_catalog())
+            .unwrap_err()
+            .contains("cdk_authentication_database_required")
+    );
+    postgres.links.push(LinkSpec {
+        id: "mint-database-authentication".into(),
+        kind: LinkKind::DatabaseBackend,
+        from: "mint".into(),
+        to: "database".into(),
+        binding: Some(DependencyBinding::Database {
+            role: DatabaseRole::Authentication,
+            database: None,
+        }),
+    });
+    let (config, pod) = render_cdk_auth_mint(&postgres);
+    assert!(config.contains("[auth_database.postgres]\nurl = \"env:CDK_MINTD_AUTH_POSTGRES_URL\""));
+    let names = cdk_auth_init_names(&pod);
+    for name in ["ensure-database", "ensure-auth-database", "wait-for-oidc"] {
+        assert!(names.contains(&name.to_owned()), "missing {name}");
+    }
+    let env = pod["containers"][0]["env"].as_array().unwrap();
+    assert!(env.iter().any(|entry| entry["name"] == "CDK_MINTD_AUTH_POSTGRES_URL"
+        && entry["value"]
+            == "postgresql://proofstorm:$(CDK_MINTD_AUTH_POSTGRES_URL_PASSWORD)@database:5432/mint_authentication"));
 }

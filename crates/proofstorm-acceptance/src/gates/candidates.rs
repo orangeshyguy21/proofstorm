@@ -486,10 +486,6 @@ pub fn run(context: &GateContext, implementation: &str) -> Result<()> {
     );
     if payment {
         wallet_cell(context, &mut client, &receipt)?;
-    } else if implementation == "cdk-ldk" {
-        super::cdk_ldk::run_candidate(context, client, &receipt)?;
-    } else if implementation == "cdk-bdk" {
-        super::cdk_bdk_stress::run_candidate(context, client, &receipt)?;
     }
     context.record(
         &format!("acceptance-{implementation}-outcome.json"),
@@ -498,45 +494,35 @@ pub fn run(context: &GateContext, implementation: &str) -> Result<()> {
     )
 }
 
-/// One real source build, three independently exercised runtime presets.
+/// One real source build, exercised through linked Lightning, embedded LDK
+/// and embedded BDK configurations of the one CDK entry.
 pub fn run_cdk_modes(context: &GateContext) -> Result<()> {
     let mut client = context.managed_session("candidate-cdk-modes")?;
     let receipt = build(context, &mut client, "cdk")?;
     ensure!(
-        expect::array(&receipt, "/catalog_entries")?.len() == 3,
-        "shared build did not advertise three presets"
+        expect::array(&receipt, "/catalog_entries")?.len() == 1,
+        "the CDK build must publish exactly one catalog entry"
     );
-    for implementation in ["cdk", "cdk-bdk", "cdk-ldk"] {
-        let entry = client.call(
-            "catalog_entry_read",
-            json!({"id":implementation,"version":receipt["catalog_entry"]["version"]}),
-        )?;
-        context.record(
-            &format!("candidate-cdk-shared-{implementation}.json"),
-            &entry,
-        )?;
-        // The full entry resource preserves the image and frozen source for each preset.
-        let catalog = client.call(
-            "catalog_list",
-            json!({"implementations":[implementation],"origins":["candidate"]}),
-        )?;
-        ensure!(
-            expect::array(&catalog, "/items")?
-                .iter()
-                .any(|entry| entry["image"] == receipt["image"]
-                    && entry["candidate_id"] == receipt["candidate_id"]),
-            "preset does not reuse the shared image"
-        );
-    }
+    let entry = client.call(
+        "catalog_entry_read",
+        json!({"id":"cdk","version":receipt["catalog_entry"]["version"]}),
+    )?;
+    context.record("candidate-cdk-shared-cdk.json", &entry)?;
     let builds = client.call("candidate_list", json!({"id":"acceptance-cdk"}))?;
     ensure!(
         expect::array(&builds, "/items")?.len() == 1,
         "expected one CDK build record"
     );
     context.record("candidate-cdk-shared-build.json", &builds)?;
+    let record = resource(
+        &mut client,
+        expect::string(&receipt, "/record_resource_uri")?,
+    )?;
+    let source_version = super::candidate_source::cdk_version(&record, &receipt)?;
+    context.record("candidate-cdk-source-version.json", &json!({"repository":record["repository"], "commit_sha":record["commit_sha"], "version":source_version}))?;
     wallet_cell(context, &mut client, &receipt)?;
-    super::cdk_ldk::run_candidate(context, client, &receipt)?;
+    super::cdk_ldk::run_candidate(context, client, &receipt, &source_version)?;
     let client = context.managed_session("candidate-cdk-modes")?;
-    super::cdk_bdk_stress::run_candidate(context, client, &receipt)?;
-    context.record("candidate-cdk-modes-outcome.json", &json!({"passed":true,"build_count":1,"image":receipt["image"],"presets":["cdk","cdk-ldk","cdk-bdk"]}))
+    super::cdk_bdk_stress::run_candidate(context, client, &receipt, &source_version)?;
+    context.record("candidate-cdk-modes-outcome.json", &json!({"passed":true,"build_count":1,"image":receipt["image"],"modes":["linked-lightning","embedded-ldk","embedded-bdk"]}))
 }

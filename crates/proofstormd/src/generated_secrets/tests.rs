@@ -88,11 +88,11 @@ fn api(cluster: &Arc<Mutex<Cluster>>) -> Api<Secret> {
 
 fn fixtures() -> Vec<(Secret, Vec<&'static str>)> {
     [
-        (json!({"POSTGRES_USER":"proofstorm", "POSTGRES_DB":"mint"}), vec!["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DATABASE_URL", "database.toml"]),
+        (json!({"POSTGRES_USER":"proofstorm", "POSTGRES_DB":"postgres"}), vec!["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"]),
         (json!({"PROOFSTORM_SECRET_KIND":"nutshell-mint"}), vec!["PROOFSTORM_SECRET_KIND", "MINT_PRIVATE_KEY"]),
         (json!({"PROOFSTORM_SECRET_KIND":"redis-cache"}), vec!["PROOFSTORM_SECRET_KIND", "REDIS_PASSWORD", "REDIS_URL"]),
         (json!({"PROOFSTORM_SECRET_KIND":"keycloak-oidc", "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS":"300"}), vec!["PROOFSTORM_SECRET_KIND", "KEYCLOAK_ADMIN_PASSWORD", "OIDC_TEST_USERNAME", "OIDC_TEST_PASSWORD", "realm.json"]),
-        (json!({"PROOFSTORM_SECRET_KIND":"cdk-mint", "bitcoin-rpc-password":"regtest"}), vec!["PROOFSTORM_SECRET_KIND", "mint-mnemonic", "wallet-mnemonic", "bitcoin-rpc-password"]),
+        (json!({"PROOFSTORM_SECRET_KIND":"cdk-mint", "bitcoin-rpc-password":"regtest"}), vec!["PROOFSTORM_SECRET_KIND", "mint-mnemonic", "ldk-mnemonic", "bdk-mnemonic", "bitcoin-rpc-password"]),
     ].into_iter().map(|(data, required)| {
         let mut template: Secret = serde_json::from_value(json!({
             "apiVersion":"v1", "kind":"Secret", "type":"Opaque",
@@ -122,26 +122,16 @@ fn assert_generated_contract(data: &BTreeMap<String, String>) {
     match data.get("PROOFSTORM_SECRET_KIND").map(String::as_str) {
         None => {
             is_random_hex(&data["POSTGRES_PASSWORD"]);
-            assert_eq!(
-                data["DATABASE_URL"],
-                format!(
-                    "postgresql://proofstorm:{}@backend:5432/mint",
-                    data["POSTGRES_PASSWORD"]
-                )
-            );
-            assert_eq!(
-                data["database.toml"],
-                format!(
-                    "\n[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = {:?}\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n",
-                    data["DATABASE_URL"]
-                )
-            );
+            // Linked components compose their own URLs; none is pre-built.
+            assert!(!data.contains_key("DATABASE_URL"));
         }
         Some("nutshell-mint") => is_random_hex(&data["MINT_PRIVATE_KEY"]),
         Some("cdk-mint") => {
-            is_mnemonic(&data["mint-mnemonic"]);
-            is_mnemonic(&data["wallet-mnemonic"]);
-            assert_ne!(data["mint-mnemonic"], data["wallet-mnemonic"]);
+            for seed in ["mint-mnemonic", "ldk-mnemonic", "bdk-mnemonic"] {
+                is_mnemonic(&data[seed]);
+            }
+            assert_ne!(data["mint-mnemonic"], data["ldk-mnemonic"]);
+            assert_ne!(data["ldk-mnemonic"], data["bdk-mnemonic"]);
         }
         Some("redis-cache") => {
             is_random_hex(&data["REDIS_PASSWORD"]);
@@ -352,8 +342,9 @@ async fn every_cdk_mint_receives_its_own_seeds() {
         ensure(&api(&cluster), &template).await.unwrap();
         let state = cluster.lock().unwrap();
         let data = state.creates[0].string_data.as_ref().unwrap();
-        assert!(seen.insert(data["mint-mnemonic"].clone()));
-        assert!(seen.insert(data["wallet-mnemonic"].clone()));
+        for seed in ["mint-mnemonic", "ldk-mnemonic", "bdk-mnemonic"] {
+            assert!(seen.insert(data[seed].clone()));
+        }
     }
 }
 

@@ -217,10 +217,23 @@ pub enum BitcoinNetwork {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DependencyBinding {
-    Chain { network: BitcoinNetwork },
-    Payment { method: PaymentMethod, unit: String },
-    Database { role: DatabaseRole },
-    Authentication { protocol: AuthenticationProtocol },
+    Chain {
+        network: BitcoinNetwork,
+    },
+    Payment {
+        method: PaymentMethod,
+        unit: String,
+    },
+    Database {
+        role: DatabaseRole,
+        /// Database created for this binding on the target server. Defaults to
+        /// `<from>_<role>` with `-` replaced by `_`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        database: Option<String>,
+    },
+    Authentication {
+        protocol: AuthenticationProtocol,
+    },
 }
 
 // Kubernetes structural schemas cannot merge internally tagged enum branches
@@ -239,7 +252,7 @@ impl JsonSchema for DependencyBinding {
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "object",
-            "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+            "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
             "required": ["type"],
             "properties": {
                 "type": {
@@ -250,6 +263,12 @@ impl JsonSchema for DependencyBinding {
                 "network": BitcoinNetwork::json_schema(generator),
                 "method": PaymentMethod::json_schema(generator),
                 "role": DatabaseRole::json_schema(generator),
+                "database": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 63,
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                },
                 "unit": {
                     "type": "string",
                     "minLength": 1,
@@ -260,8 +279,8 @@ impl JsonSchema for DependencyBinding {
             "additionalProperties": false,
             "x-kubernetes-validations": [
                 {
-                    "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))",
-                    "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol"
+                    "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))",
+                    "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol"
                 }
             ]
         })
@@ -284,6 +303,25 @@ pub struct LinkSpec {
     pub to: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<DependencyBinding>,
+}
+
+impl LinkSpec {
+    /// Database this binding owns on its target server: the authored name, or
+    /// `<from>_<role>` with `-` replaced by `_`. `None` for non-database links.
+    #[must_use]
+    pub fn database_name(&self) -> Option<String> {
+        let Some(DependencyBinding::Database { role, database }) = &self.binding else {
+            return None;
+        };
+        Some(database.clone().unwrap_or_else(|| {
+            let role = match role {
+                DatabaseRole::Primary => "primary",
+                DatabaseRole::Cache => "cache",
+                DatabaseRole::Authentication => "authentication",
+            };
+            format!("{}_{role}", self.from.replace('-', "_"))
+        }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]

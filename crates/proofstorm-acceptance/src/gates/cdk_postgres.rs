@@ -21,13 +21,13 @@ fn cell_document() -> Value {
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
             {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-postgres-lnd"}},
-            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"database_name": "proofstorm_mint", "storage_size": "2Gi"}},
+            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"storage_size": "2Gi"}},
             {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK PostgreSQL", "description": "Secret-backed PostgreSQL persistence acceptance", "mint_quote_ttl_seconds": 601, "melt_quote_ttl_seconds": 121}}
         ],
         "links": [
             {"id": "lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
             {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "mint-lnd", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}},
-            {"id": "mint-database", "kind": "database_backend", "from": "mint", "to": "database", "binding": {"type": "database", "role": "primary"}}
+            {"id": "mint-database", "kind": "database_backend", "from": "mint", "to": "database", "binding": {"type": "database", "role": "primary", "database": "proofstorm_mint"}}
         ],
         "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
     })
@@ -141,23 +141,23 @@ pub fn run(context: &GateContext) -> Result<()> {
             .iter()
             .find(|container| container["name"] == name)
             .ok_or_else(|| anyhow::anyhow!("{name} is missing from {group}"))?;
-        let url = container
+        let env = container
             .get("env")
             .and_then(Value::as_array)
-            .and_then(|env| {
-                env.iter().find(|entry| {
-                    entry.get("name").and_then(Value::as_str) == Some("CDK_MINTD_POSTGRES_URL")
-                })
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{group} does not receive the secret-backed PostgreSQL bootstrap URL"
-                )
-            })?;
-        if url.pointer("/valueFrom/secretKeyRef")
-            != Some(&json!({"name": "database-credentials", "key": "DATABASE_URL"}))
-        {
-            bail!("{group} does not receive the secret-backed PostgreSQL bootstrap URL");
+            .ok_or_else(|| anyhow::anyhow!("{group} has no environment"))?;
+        let value = |name: &str| {
+            env.iter()
+                .find(|entry| entry.get("name").and_then(Value::as_str) == Some(name))
+        };
+        let composed = value("CDK_MINTD_POSTGRES_URL_PASSWORD")
+            .and_then(|entry| entry.pointer("/valueFrom/secretKeyRef"))
+            == Some(&json!({"name": "database-credentials", "key": "POSTGRES_PASSWORD"}))
+            && value("CDK_MINTD_POSTGRES_URL").map(|entry| &entry["value"])
+                == Some(&json!(
+                    "postgresql://proofstorm:$(CDK_MINTD_POSTGRES_URL_PASSWORD)@database:5432/proofstorm_mint"
+                ));
+        if !composed {
+            bail!("{group} does not compose its own database URL from the owner secret");
         }
     }
 
@@ -179,20 +179,12 @@ pub fn run(context: &GateContext) -> Result<()> {
         .map(String::as_str)
         .collect();
     keys.sort_unstable();
-    if keys
-        != [
-            "DATABASE_URL",
-            "POSTGRES_DB",
-            "POSTGRES_PASSWORD",
-            "POSTGRES_USER",
-            "database.toml",
-        ]
-    {
+    if keys != ["POSTGRES_DB", "POSTGRES_PASSWORD", "POSTGRES_USER"] {
         bail!("generated database Secret has an unexpected key contract: {keys:?}");
     }
 
     postgres::seed_sentinel(true, &context.kubectl, namespace, MARKER)?;
-    let tables = postgres::schema_table_count(&context.kubectl, namespace)?;
+    let tables = postgres::schema_table_count(&context.kubectl, namespace, "proofstorm_mint")?;
     if tables < 2 {
         bail!("CDK did not initialize its PostgreSQL schema: only {tables} public tables");
     }

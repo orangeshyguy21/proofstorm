@@ -10,10 +10,7 @@ const PROJECTS: &[(&str, &[&str])] = &[
     ("ElementsProject/lightning", &["cln"]),
     ("lightningnetwork/lnd", &["lnd"]),
     ("cashubtc/nutshell", &["nutshell", "nutshell-wallet"]),
-    (
-        "cashubtc/cdk",
-        &["cdk", "cdk-ldk", "cdk-bdk", "cdk-cli-wallet"],
-    ),
+    ("cashubtc/cdk", &["cdk", "cdk-cli-wallet"]),
 ];
 
 #[derive(Deserialize)]
@@ -128,7 +125,7 @@ mod tests {
             {"tag_name":"v0.18.1","draft":false,"prerelease":false}
         ]))
         .unwrap();
-        for implementation in ["cdk", "cdk-ldk", "cdk-bdk", "cdk-cli-wallet"] {
+        for implementation in ["cdk", "cdk-cli-wallet"] {
             let result = proposal(implementation, &releases, default_catalog());
             assert_eq!(result["minimum_release"], "0.18.0");
             assert_eq!(result["family_limit"], 2);

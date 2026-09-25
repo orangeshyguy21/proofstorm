@@ -2720,10 +2720,7 @@ fn candidate_build_resource(
                 .as_ref()
                 .map_or_else(
                     || match candidate.implementation.as_str() {
-                        "cdk" | "cdk-bdk" | "nutshell" | "nutshell-wallet" => {
-                            Some("Dockerfile".into())
-                        }
-                        "cdk-ldk" => Some("Dockerfile.ldk-node".into()),
+                        "cdk" | "nutshell" | "nutshell-wallet" => Some("Dockerfile".into()),
                         _ => None,
                     },
                     |p| Some(p.profile.dockerfile.clone()),
@@ -3142,13 +3139,13 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 23);
+        assert_eq!(catalog.entries.len(), 18);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 16);
+        assert_eq!(catalog.implementations.len(), 14);
         assert_support_defaults(catalog);
         let cdk = catalog
             .entries
@@ -3169,13 +3166,16 @@ mod tests {
             [
                 proofstorm_core::PaymentMethod::Bolt11,
                 proofstorm_core::PaymentMethod::Bolt12,
+                proofstorm_core::PaymentMethod::Onchain,
             ]
             .into()
         );
         assert_eq!(
             cdk.support_matrix.payment_backends,
             [
+                "bdk".into(),
                 "cln".into(),
+                "ldk-node".into(),
                 "lnd".into(),
                 "cdk-ldk-server-processor".into()
             ]
@@ -3197,10 +3197,14 @@ mod tests {
                 .versions
                 .contains("0.20.3")
         );
-        assert!(cdk.config_schema["properties"].get("mnemonic").is_none());
+        assert!(
+            cdk.config_schema["properties"]
+                .get("mint_mnemonic")
+                .is_none()
+        );
         assert_embedded_ldk_support(catalog);
         assert_eq!(
-            cdk.config_schema["x-proofstorm-managed-settings"]["mnemonic"]["x-proofstorm-classification"],
+            cdk.config_schema["x-proofstorm-managed-settings"]["mint_mnemonic"]["x-proofstorm-classification"],
             "generated_instance_secret"
         );
         assert!(
@@ -3234,21 +3238,19 @@ mod tests {
     }
 
     fn assert_embedded_ldk_support(catalog: &proofstorm_core::CatalogResponse) {
-        let cdk_ldk = catalog
+        let cdk = catalog
             .entries
             .iter()
-            .find(|entry| entry.id == "cdk-ldk")
-            .expect("embedded LDK support contract");
-        assert_eq!(cdk_ldk.config_version, "cdk-mintd-ldk/0.18/v1");
-        assert_eq!(cdk_ldk.support_matrix.embedded_payment_bindings.len(), 2);
+            .find(|entry| entry.id == "cdk")
+            .expect("CDK support contract");
+        assert_eq!(cdk.config_version, "cdk-mintd/0.18/v1");
+        assert_eq!(cdk.support_matrix.embedded_payment_bindings.len(), 3);
         assert!(
-            cdk_ldk
-                .support_matrix
+            cdk.support_matrix
                 .payment_methods
                 .contains(&proofstorm_core::PaymentMethod::Bolt12)
         );
-        assert!(cdk_ldk.support_matrix.payment_bindings.is_empty());
-        let embedded = cdk_ldk
+        let embedded = cdk
             .runtime_endpoints
             .iter()
             .find(|endpoint| endpoint.id == "ldk-node")
@@ -3256,6 +3258,13 @@ mod tests {
         assert_eq!(embedded.kind, "lightning");
         assert!(embedded.controls.is_empty());
         assert!(!embedded.limitations.is_empty());
+        assert_eq!(
+            embedded
+                .requires
+                .as_ref()
+                .map(|condition| condition.config_field.as_str()),
+            Some("embedded_lightning")
+        );
     }
 
     #[test]
@@ -3284,7 +3293,7 @@ mod tests {
         page.items = items;
         let page: CatalogListResponse =
             serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
-        assert_eq!(page.items.len(), 19);
+        assert_eq!(page.items.len(), 17);
         assert!(page.next_cursor.is_none());
         assert!(read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
         assert!(page.items.iter().all(|entry| {
@@ -4001,8 +4010,6 @@ mod tests {
     fn candidate_build_surface_covers_all_cashu_profiles_and_bounded_waits() {
         for implementation in [
             "cdk",
-            "cdk-bdk",
-            "cdk-ldk",
             "nutshell",
             "nutshell-wallet",
             "cdk-cli-wallet",

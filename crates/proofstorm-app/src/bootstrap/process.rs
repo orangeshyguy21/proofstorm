@@ -9,8 +9,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
+/// Cluster-wide list reads grow with retained runtime objects (cell actions).
+const LIST_OUTPUT_LIMIT: u64 = 128 * 1024 * 1024;
+
 pub(super) fn run(home: &Path, program: &Path, args: &[&str], seconds: u64) -> Result<String> {
-    run_inner(home, program, args, seconds, None)
+    run_inner(home, program, args, seconds, None, OUTPUT_LIMIT)
+}
+
+pub(super) fn run_list(home: &Path, program: &Path, args: &[&str], seconds: u64) -> Result<String> {
+    run_inner(home, program, args, seconds, None, LIST_OUTPUT_LIMIT)
 }
 
 pub(super) fn controller_build(home: &Path, args: &[&str]) -> Result<String> {
@@ -20,6 +28,7 @@ pub(super) fn controller_build(home: &Path, args: &[&str]) -> Result<String> {
         args,
         3600,
         Some(&home.join("controller-build.log")),
+        OUTPUT_LIMIT,
     )
 }
 
@@ -29,7 +38,7 @@ fn build_log(log: Option<&Path>, out: &fs::File, err: &fs::File) -> Result<()> {
         for file in [out, err] {
             let mut file = file.try_clone()?;
             file.seek(SeekFrom::Start(0))?;
-            file.take(8 * 1024 * 1024).read_to_end(&mut bytes)?;
+            file.take(OUTPUT_LIMIT).read_to_end(&mut bytes)?;
         }
         save(path, &bytes)?;
     }
@@ -42,6 +51,7 @@ fn run_inner(
     args: &[&str],
     seconds: u64,
     log: Option<&Path>,
+    limit: u64,
 ) -> Result<String> {
     let out = tempfile::tempfile()?;
     let err = tempfile::tempfile()?;
@@ -68,8 +78,8 @@ fn run_inner(
             break status;
         }
         if start.elapsed() >= Duration::from_secs(seconds)
-            || out.metadata()?.len() > 8 * 1024 * 1024
-            || err.metadata()?.len() > 8 * 1024 * 1024
+            || out.metadata()?.len() > limit
+            || err.metadata()?.len() > OUTPUT_LIMIT
         {
             let _ = child.kill();
             let _ = child.wait();
@@ -97,10 +107,16 @@ fn run_inner(
         program.display(),
         status
     );
+    // A fast exit can outrun the poll above; never hand back truncated output.
+    ensure!(
+        out.metadata()?.len() <= limit,
+        "{} exceeded its output limit; retry the current setup stage",
+        program.display()
+    );
     let mut out = out;
     out.seek(SeekFrom::Start(0))?;
     let mut result = String::new();
-    out.take(8 * 1024 * 1024).read_to_string(&mut result)?;
+    out.read_to_string(&mut result)?;
     Ok(result)
 }
 
@@ -122,6 +138,15 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     #[test]
+    fn oversized_output_is_an_error_not_truncated_json() {
+        let root = tempfile::tempdir().unwrap();
+        let args = ["-c", "head -c 4096 /dev/zero"];
+        let error = run_inner(root.path(), Path::new("/bin/sh"), &args, 5, None, 1024);
+        assert!(error.unwrap_err().to_string().contains("output limit"));
+        let output = run_inner(root.path(), Path::new("/bin/sh"), &args, 5, None, 4096).unwrap();
+        assert_eq!(output.len(), 4096);
+    }
+    #[test]
     fn failed_build_diagnostics_stay_private_and_out_of_error_text() {
         let root = tempfile::tempdir().unwrap();
         let log = root.path().join("controller-build.log");
@@ -131,6 +156,7 @@ mod tests {
             &["-c", "printf 'private-build-output' >&2; exit 1"],
             5,
             Some(&log),
+            OUTPUT_LIMIT,
         )
         .unwrap_err();
         assert!(!error.to_string().contains("private-build-output"));

@@ -135,7 +135,7 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
 }
 
 #[test]
-fn unsupported_mint_auth_does_not_remove_identity_provider_coverage() {
+fn mint_auth_is_qualified_only_where_declared_and_keeps_identity_provider_coverage() {
     let root = TempDir::new().unwrap();
     let (_, plan) = planned(root.path(), "full");
     let cases = serde_json::to_value(&plan.cases).unwrap();
@@ -151,9 +151,29 @@ fn unsupported_mint_auth_does_not_remove_identity_provider_coverage() {
                     .any(|entry| entry["implementation"] == "postgresql")
         }));
     }
-    assert!(!cases.to_string().contains("nutshell-oidc"));
-    assert!(!cases.to_string().contains("nut21_clear"));
-    assert!(!cases.to_string().contains("nut22_blind"));
+    // Auth qualification is explicit for both current mints on both platforms.
+    for platform in ["linux/amd64", "linux/arm64"] {
+        for (implementation, gate) in [("cdk", "cdk-oidc"), ("nutshell", "nutshell-oidc")] {
+            let auth = cases
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|case| case["platform"] == platform && case["scenario"]["name"] == gate)
+                .collect::<Vec<_>>();
+            assert_eq!(auth.len(), 1, "{platform}: {gate}");
+            let claims = auth[0]["claims"].to_string();
+            assert!(claims.contains("nut21_clear") && claims.contains("nut22_blind"));
+            let mint = auth[0]["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|component| component["implementation"] == implementation)
+                .unwrap();
+            if implementation == "nutshell" {
+                assert_eq!(mint["version"], "0.21.0");
+            }
+        }
+    }
 }
 
 #[test]

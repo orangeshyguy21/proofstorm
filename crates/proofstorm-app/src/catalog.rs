@@ -254,24 +254,15 @@ pub fn summary(entry: &CatalogEntry, preferred: bool, platform: &str) -> Value {
     } else {
         None
     };
-    let shared_image_implementations = entry.source.as_ref().map_or_else(
-        || {
-            if entry.image == proofstorm_core::CDK_MINT_IMAGE {
-                vec!["cdk", "cdk-bdk", "cdk-ldk"]
-            } else {
-                Vec::new()
-            }
-        },
-        |source| {
-            source.provenance.as_ref().map_or_else(Vec::new, |p| {
-                p.profile
-                    .catalog_implementations
-                    .iter()
-                    .map(String::as_str)
-                    .collect()
-            })
-        },
-    );
+    let shared_image_implementations = entry.source.as_ref().map_or_else(Vec::new, |source| {
+        source.provenance.as_ref().map_or_else(Vec::new, |p| {
+            p.profile
+                .catalog_implementations
+                .iter()
+                .map(String::as_str)
+                .collect()
+        })
+    });
     let control = [
         ControlClass::Target,
         ControlClass::Cell,
@@ -434,12 +425,12 @@ mod tests {
     #[test]
     fn family_kind_origin_and_exact_filters_intersect() {
         let family = page(json!({"query":"CDK"}));
-        assert_eq!(family.matched_count, 5);
+        assert_eq!(family.matched_count, 3);
         assert_eq!(
             page(json!({"query":"cdk","kinds":["mint"]})).matched_count,
-            3
+            1
         );
-        assert_eq!(page(json!({"kinds":["mint"]})).matched_count, 5);
+        assert_eq!(page(json!({"kinds":["mint"]})).matched_count, 3);
         assert_eq!(page(json!({"implementations":["cdk"]})).matched_count, 1);
         let wallets = page(json!({"kinds":["wallet"],"origins":["built_in"]}));
         assert_eq!(wallets.matched_count, 4);
@@ -456,7 +447,7 @@ mod tests {
         );
         assert_eq!(
             page(json!({"query":"^cdk-","regex":true,"kinds":["mint"]})).matched_count,
-            2
+            0
         );
     }
 
@@ -475,10 +466,10 @@ mod tests {
             changed.origins.insert(CatalogOrigin::Candidate);
             assert!(list(default_catalog(), &changed, "linux/arm64", 24 * 1024).is_err());
         }
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), 3);
         assert_eq!(
             ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
-            4
+            2
         );
         assert!(
             list(

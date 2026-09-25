@@ -3,13 +3,14 @@
     "applicable_conditions": [
       "workload_ready",
       "storage_ready",
+      "credentials_ready",
       "service_ready",
       "protocol_ready",
       "dependencies_ready",
       "component_ready",
       "experiment_controllable"
     ],
-    "backend_id": "cdk-ldk",
+    "backend_id": "cdk",
     "component_id": "mint",
     "condition_aggregation": [
       {
@@ -29,6 +30,11 @@
         "component_operational",
         "component_not_operational",
         "intentionally_stopped"
+      ],
+      "credentials_ready": [
+        "not_observed",
+        "credentials_projected",
+        "credentials_missing"
       ],
       "dependencies_ready": [
         "not_observed",
@@ -74,10 +80,13 @@
     "credentials": [],
     "effective_config": {
       "config": {
+        "auth_max_blind_tokens": 50,
         "contact_email": "",
         "contact_nostr_public_key": "",
-        "description": "Proofstorm regtest CDK LDK mint",
+        "description": "Proofstorm regtest CDK mint",
         "description_long": "",
+        "embedded_lightning": "ldk-node",
+        "embedded_onchain": "none",
         "enable_info_page": false,
         "http_cache_tti_seconds": 60,
         "http_cache_ttl_seconds": 60,
@@ -92,11 +101,15 @@
         "min_mint_sat": 1,
         "mint_quote_ttl_seconds": 600,
         "motd": "",
-        "name": "Proofstorm CDK LDK mint",
+        "name": "Proofstorm CDK mint",
+        "onchain_max_melt_sat": 1000000,
+        "onchain_max_mint_sat": 1000000,
+        "onchain_min_melt_sat": 1000,
+        "onchain_min_mint_sat": 1000,
         "tos_url": "",
         "use_keyset_v2": true
       },
-      "implementation": "cdk-ldk"
+      "implementation": "cdk"
     },
     "execution_context": {
       "component_id": "mint",
@@ -123,7 +136,7 @@
           }
         }
       ],
-      "state_contract": "proofstorm/cdk-mint-ldk-state/v1"
+      "state_contract": "proofstorm/cdk-mint-state/v1"
     },
     "instance_key": "i-golden-b2",
     "kind": "mint",
@@ -205,14 +218,14 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:bafcb12ff286ae33507c4c379e36968983f0c20e56eb4ed7625ccb81a42915f6",
+    "rollout_digest": "sha256:25e4a84f84391283d81ab753ae69acb9c9d2b4040b77c6f258b31f9d185b3430",
     "storage": [
       {
         "claim_name": "mint-data"
       }
     ],
     "target_descriptor": {
-      "backend_id": "cdk-ldk",
+      "backend_id": "cdk",
       "component_id": "mint",
       "kind": "mint",
       "ports": {
@@ -232,7 +245,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK LDK mint\"\ndescription = \"Proofstorm regtest CDK LDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = 9735\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/wallet-mnemonic\"\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = 9735\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/ldk-mnemonic\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -253,8 +266,8 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/backend-id": "cdk-ldk",
-            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-mint-ldk-state/v1",
+            "proofstorm.dev/backend-id": "cdk",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-mint-state/v1",
             "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
           },
           "labels": {
@@ -282,7 +295,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:bafcb12ff286ae33507c4c379e36968983f0c20e56eb4ed7625ccb81a42915f6"
+                "proofstorm.dev/rollout-digest": "sha256:25e4a84f84391283d81ab753ae69acb9c9d2b4040b77c6f258b31f9d185b3430"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

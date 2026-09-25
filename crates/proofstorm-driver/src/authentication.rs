@@ -1,5 +1,5 @@
 //! NUT-21/22 conformance and replay checks through native HTTP and Cashu crypto.
-use crate::http;
+use crate::{authentication_profile::AuthenticationProfile as Profile, http};
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cashu::{BlindSignature, BlindedMessage, Id, Keys, PublicKey, SecretKey, dhke, secret::Secret};
@@ -9,6 +9,7 @@ use std::time::Duration;
 
 pub struct Config {
     pub mint: String,
+    pub implementation: String,
     pub identity: String,
     pub url: String,
     pub username: String,
@@ -23,6 +24,7 @@ impl Config {
     pub fn environment() -> Result<Self> {
         Ok(Self {
             mint: http::required("PROOFSTORM_MINT")?,
+            implementation: http::required("PROOFSTORM_MINT_IMPLEMENTATION")?,
             identity: http::required("PROOFSTORM_IDENTITY_PROVIDER")?,
             url: http::required("PROOFSTORM_MINT_URL")?,
             username: http::required("OIDC_TEST_USERNAME")?,
@@ -32,6 +34,88 @@ impl Config {
         })
     }
 }
+/// A blind-auth protected request that is valid without funds. Each mint keeps
+/// its upstream default protection, so choose from what the mint advertises.
+struct Probe {
+    url: String,
+    body: Value,
+}
+
+impl Probe {
+    async fn select(info: &Value, config: &Config, client: &Client) -> Result<Option<Self>> {
+        let Some(protected) = info["nuts"]["22"]["protected_endpoints"].as_array() else {
+            return Ok(None);
+        };
+        let Some(path) = ["/v1/mint/quote/bolt11", "/v1/restore"]
+            .into_iter()
+            .find(|path| {
+                protected
+                    .iter()
+                    .any(|endpoint| endpoint["method"] == "POST" && endpoint["path"] == *path)
+            })
+        else {
+            return Ok(None);
+        };
+        let body = if path == "/v1/restore" {
+            // The protected restore belongs to the main mint, not its auth ledger.
+            let keysets = send(client.get(format!("{}/v1/keysets", config.url))).await?;
+            ensure!(keysets.ok(), "mint keysets unavailable");
+            let id = Self::restore_keyset(&keysets.value)?;
+            let keys = send(client.get(format!("{}/v1/keys/{id}", config.url))).await?;
+            ensure!(keys.ok(), "mint keys unavailable");
+            Self::restore_body(id, &keys.value)?
+        } else {
+            json!({"amount":1,"unit":"sat"})
+        };
+        Ok(Some(Self {
+            url: format!("{}{path}", config.url),
+            body,
+        }))
+    }
+
+    fn restore_keyset(value: &Value) -> Result<Id> {
+        value["keysets"]
+            .as_array()
+            .context("mint keysets missing")?
+            .iter()
+            .find(|keyset| keyset["unit"] == "sat" && keyset["active"] == true)
+            .and_then(|keyset| keyset["id"].as_str())
+            .context("active sat mint keyset missing")?
+            .parse()
+            .map_err(Into::into)
+    }
+
+    fn restore_body(id: Id, value: &Value) -> Result<Value> {
+        let keyset = value["keysets"]
+            .as_array()
+            .context("mint keys missing")?
+            .iter()
+            .find(|keyset| keyset["unit"] == "sat" && keyset["id"] == json!(id))
+            .context("selected mint keyset missing")?;
+        let keys: Keys = serde_json::from_value(keyset["keys"].clone())?;
+        ensure!(
+            keys.amount_key(1_u64.into()).is_some(),
+            "mint denomination missing"
+        );
+        // A normal blinded message for a fresh secret yields an empty restore
+        // result without the invalid empty-input request that CDK rejects.
+        let (point, _) = dhke::blind_message(Secret::generate().as_bytes(), None)?;
+        Ok(json!({"outputs":[BlindedMessage::new(1_u64.into(), id, point)]}))
+    }
+
+    /// A protected request succeeded with a BAT and returned its normal body.
+    fn accepted(&self, reply: &Reply) -> bool {
+        reply.ok()
+            && if self.url.ends_with("/v1/restore") {
+                reply.value["signatures"].is_array()
+            } else {
+                reply.value["quote"]
+                    .as_str()
+                    .is_some_and(|quote| !quote.is_empty())
+            }
+    }
+}
+
 struct Reply {
     status: StatusCode,
     value: Value,
@@ -40,8 +124,10 @@ impl Reply {
     fn ok(&self) -> bool {
         self.status.is_success()
     }
-    fn code(&self) -> Option<i64> {
-        self.value["code"].as_i64()
+    fn code(&self) -> Option<u32> {
+        self.value["code"]
+            .as_u64()
+            .and_then(|code| u32::try_from(code).ok())
     }
 }
 async fn send(request: reqwest::RequestBuilder) -> Result<Reply> {
@@ -193,6 +279,15 @@ fn outputs(keys: &AuthKeys, count: usize) -> Result<Vec<Output>> {
         })
         .collect()
 }
+// A syntactically valid BAT with an invalid signature reaches the protocol
+// verifier. Malformed base64 is rejected by CDK's HTTP extractor as plain text,
+// before it can return a NUT-22 error code.
+fn invalid_token(keys: &AuthKeys) -> Result<String> {
+    let body =
+        serde_json::to_vec(&json!({"id": keys.id, "secret": Secret::generate(), "C": keys.one}))?;
+    Ok(format!("authA{}", URL_SAFE_NO_PAD.encode(body)))
+}
+
 fn tokens(keys: &AuthKeys, outputs: Vec<Output>, value: &Value) -> Result<Vec<String>> {
     let signatures: Vec<BlindSignature> = serde_json::from_value(value["signatures"].clone())?;
     ensure!(
@@ -234,6 +329,8 @@ async fn conformance(config: &Config) -> Result<Value> {
         "missing_cat_rejected":false,"invalid_cat_code":null,"missing_bat_rejected":false,"invalid_bat_code":null,
         "oidc_login":false,"claims_match":false,"mint_accepted_cat":false,"bat_issued":false,"bat_dleq":false,
         "bat_max_code":null,"rate_limit_code":null,"conformant":false,"failure_stage":null,"failure_status":null,"failure_protocol_code":null});
+    let profile = Profile::for_implementation(&config.implementation)
+        .context("unsupported mint implementation")?;
     let client = http::client(Duration::from_secs(30))?;
     let info = send(client.get(format!("{}/v1/info", config.url))).await?;
     if !info.ok() {
@@ -257,24 +354,28 @@ async fn conformance(config: &Config) -> Result<Value> {
     if rejected.ok() {
         return Ok(finding(&mut result, "invalid_oidc_password", None));
     }
-    let quote = format!("{}/v1/mint/quote/bolt11", config.url);
+    let keys = AuthKeys::load(&client, config).await?;
+    let Some(probe) = Probe::select(&info.value, config, &client).await? else {
+        return Ok(finding(&mut result, "protected_endpoint", None));
+    };
+    let invalid_bat = invalid_token(&keys)?;
     let auth = format!("{}/v1/auth/blind/mint", config.url);
     for (field, stage, url, payload, header, expected) in [
         (
             "missing_bat_rejected",
             "missing_bat",
-            quote.as_str(),
-            json!({"amount":1,"unit":"sat"}),
+            probe.url.as_str(),
+            probe.body.clone(),
             None,
             None,
         ),
         (
             "invalid_bat_code",
             "invalid_bat",
-            quote.as_str(),
-            json!({"amount":1,"unit":"sat"}),
-            Some(("Blind-auth", "authAinvalid")),
-            Some(81002),
+            probe.url.as_str(),
+            probe.body.clone(),
+            Some(("Blind-auth", invalid_bat.as_str())),
+            Some(profile.invalid_bat),
         ),
         (
             "missing_cat_rejected",
@@ -290,7 +391,7 @@ async fn conformance(config: &Config) -> Result<Value> {
             auth.as_str(),
             json!({"outputs":[]}),
             Some(("Clear-auth", "not-a-jwt")),
-            Some(80002),
+            Some(profile.invalid_cat),
         ),
     ] {
         let mut request = client.post(url).json(&payload);
@@ -315,16 +416,17 @@ async fn conformance(config: &Config) -> Result<Value> {
     if result["claims_match"] != true {
         return Ok(finding(&mut result, "oidc_claims", None));
     }
-    let keys = AuthKeys::load(&client, config).await?;
     let excessive = session.mint(config, &outputs(&keys, 4)?).await?;
     result["bat_max_code"] = json!(excessive.code());
-    if excessive.ok() || excessive.code() != Some(81003) {
+    if excessive.ok() || excessive.code() != Some(profile.bat_maximum) {
         return Ok(finding(&mut result, "bat_maximum", Some(&excessive)));
     }
     let pending = outputs(&keys, 1)?;
     let accepted = session.mint(config, &pending).await?;
-    result["mint_accepted_cat"] =
-        json!(!matches!(accepted.status.as_u16(), 401 | 403) && accepted.code() != Some(80002));
+    result["mint_accepted_cat"] = json!(
+        !matches!(accepted.status.as_u16(), 401 | 403)
+            && accepted.code() != Some(profile.invalid_cat)
+    );
     if !accepted.ok() {
         return Ok(finding(&mut result, "bat_issuance", Some(&accepted)));
     }
@@ -337,10 +439,13 @@ async fn conformance(config: &Config) -> Result<Value> {
     if result["bat_issued"] != true || result["bat_dleq"] != true {
         return Ok(finding(&mut result, "bat_signature", None));
     }
-    let limited = session.mint(config, &outputs(&keys, 1)?).await?;
-    result["rate_limit_code"] = json!(limited.code());
-    if limited.ok() || limited.code() != Some(81004) {
-        return Ok(finding(&mut result, "cat_rate_limit", Some(&limited)));
+    // Only mints with a CAT rate limit are expected to refuse a second login.
+    if let Some(code) = profile.cat_rate_limit {
+        let limited = session.mint(config, &outputs(&keys, 1)?).await?;
+        result["rate_limit_code"] = json!(limited.code());
+        if limited.ok() || limited.code() != Some(code) {
+            return Ok(finding(&mut result, "cat_rate_limit", Some(&limited)));
+        }
     }
     result["conformant"] = json!(true);
     Ok(result)
@@ -355,27 +460,27 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
             "bat_count":0,"bat_dleq":false,"spent_bat":null})
     };
     result.as_object_mut().context("invalid result")?.extend(json!({"protected_request":false,"conformant":false,"failure_stage":null,"failure_status":null,"failure_protocol_code":null}).as_object().context("invalid fields")?.clone());
+    let profile = Profile::for_implementation(&config.implementation)
+        .context("unsupported mint implementation")?;
     let client = http::client(Duration::from_secs(30))?;
-    let quote = format!("{}/v1/mint/quote/bolt11", config.url);
-    if is_replay {
-        let reply = send(
-            client
-                .post(&quote)
-                .json(&json!({"amount":1,"unit":"sat"}))
-                .header(
-                    "Blind-auth",
-                    config.spent_bat.as_ref().context("spent BAT missing")?,
-                ),
-        )
-        .await?;
-        result["spent_bat_replay_code"] = json!(reply.code());
-        if reply.ok() || reply.code() != Some(81002) {
-            return Ok(finding(&mut result, "spent_bat_replay", Some(&reply)));
-        }
-    }
     let info = send(client.get(format!("{}/v1/info", config.url))).await?;
     if !info.ok() {
         return Ok(finding(&mut result, "mint_info", Some(&info)));
+    }
+    let keys = AuthKeys::load(&client, config).await?;
+    let Some(probe) = Probe::select(&info.value, config, &client).await? else {
+        return Ok(finding(&mut result, "protected_endpoint", None));
+    };
+    if is_replay {
+        let reply = send(client.post(&probe.url).json(&probe.body).header(
+            "Blind-auth",
+            config.spent_bat.as_ref().context("spent BAT missing")?,
+        ))
+        .await?;
+        result["spent_bat_replay_code"] = json!(reply.code());
+        if reply.ok() || reply.code() != Some(profile.spent_bat) {
+            return Ok(finding(&mut result, "spent_bat_replay", Some(&reply)));
+        }
     }
     let Ok(mut session) = Session::discover(&info.value).await else {
         return Ok(finding(&mut result, "oidc_discovery", None));
@@ -383,7 +488,6 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
     if session.authenticate(config).await.is_err() {
         return Ok(finding(&mut result, "oidc_login", None));
     }
-    let keys = AuthKeys::load(&client, config).await?;
     let pending = outputs(&keys, 3)?;
     let issued = session.mint(config, &pending).await?;
     let count = issued.value["signatures"].as_array().map_or(0, Vec::len);
@@ -406,17 +510,12 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
     let spent = &proofs[0];
     let reply = send(
         client
-            .post(&quote)
-            .json(&json!({"amount":1,"unit":"sat"}))
+            .post(&probe.url)
+            .json(&probe.body)
             .header("Blind-auth", spent),
     )
     .await?;
-    result["protected_request"] = json!(
-        reply.ok()
-            && reply.value["quote"]
-                .as_str()
-                .is_some_and(|quote| !quote.is_empty())
-    );
+    result["protected_request"] = json!(probe.accepted(&reply));
     if result["protected_request"] != true {
         return Ok(finding(&mut result, "protected_request", Some(&reply)));
     }
@@ -456,9 +555,127 @@ mod tests {
             secret,
         )
     }
+    #[test]
+    fn invalid_bat_parses_but_cannot_verify_as_a_signed_proof() {
+        let (keys, signing_key) = keyset();
+        let token = invalid_token(&keys).unwrap();
+        let _: cashu::nuts::nut22::BlindAuthToken = token.parse().unwrap();
+        let body: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(token.strip_prefix("authA").unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["id"], json!(keys.id));
+        let secret = body["secret"].as_str().unwrap();
+        let signature: PublicKey = serde_json::from_value(body["C"].clone()).unwrap();
+        assert!(dhke::verify_message(&signing_key, signature, secret.as_bytes()).is_err());
+    }
+
     fn issue(keys: &AuthKeys, secret: &SecretKey, outputs: &[Output]) -> Value {
         json!({"signatures":outputs.iter().map(|output| BlindSignature::new(1_u64.into(),dhke::sign_message(secret,&output.message.blinded_secret).unwrap(),keys.id,&output.message.blinded_secret,secret).unwrap()).collect::<Vec<_>>()})
     }
+    fn config(implementation: &str) -> Config {
+        Config {
+            mint: "mint".into(),
+            implementation: implementation.into(),
+            identity: "identity".into(),
+            url: "http://mint:3338".into(),
+            username: String::new(),
+            password: String::new(),
+            source: None,
+            spent_bat: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_probe_uses_main_mint_keys_and_advertised_endpoints() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let auth = keyset().0;
+        let mut mint = keyset().0;
+        mint.id = "0099887766554433".parse().unwrap();
+        assert_ne!(mint.id, auth.id);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = config("cdk");
+        config.url = format!("http://{}", listener.local_addr().unwrap());
+        let main_id = mint.id;
+        let responses = [
+            (
+                "/v1/keysets".to_owned(),
+                json!({"keysets":[{"id":auth.id,"unit":"auth","active":true},{"id":mint.id,"unit":"sat","active":true}]}),
+            ),
+            (
+                format!("/v1/keys/{}", mint.id),
+                json!({"keysets":[{"id":mint.id,"unit":"sat","keys":mint.keys}]}),
+            ),
+        ];
+        let server = tokio::spawn(async move {
+            for (path, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![0; 4096];
+                let size = stream.read(&mut bytes).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&bytes[..size])
+                        .starts_with(&format!("GET {path} HTTP/1.1\r\n"))
+                );
+                let body = body.to_string();
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let info = |paths: &[&str]| json!({"nuts":{"22":{"protected_endpoints":paths.iter().map(|path| json!({"method":"POST","path":path})).collect::<Vec<_>>()}}});
+        let client = http::client(Duration::from_secs(5)).unwrap();
+        let cdk = Probe::select(&info(&["/v1/swap", "/v1/restore"]), &config, &client)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        let restore: cashu::nuts::nut09::RestoreRequest =
+            serde_json::from_value(cdk.body.clone()).unwrap();
+        assert_eq!(restore.outputs.len(), 1);
+        assert_eq!(restore.outputs[0].keyset_id, main_id);
+        assert_ne!(restore.outputs[0].keyset_id, auth.id);
+        assert_eq!(restore.outputs[0].amount, 1_u64.into());
+        // Quote-only and unsupported policies must not need mint-key requests.
+        let nutshell = Probe::select(&info(&["/v1/mint/quote/bolt11"]), &config, &client)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(nutshell.url.ends_with("/v1/mint/quote/bolt11"));
+        assert!(
+            Probe::select(&info(&["/v1/swap"]), &config, &client)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let reply = |value| Reply {
+            status: StatusCode::OK,
+            value,
+        };
+        assert!(cdk.accepted(&reply(json!({"outputs":[],"signatures":[]}))));
+        assert!(!cdk.accepted(&reply(json!({}))));
+        assert!(nutshell.accepted(&reply(json!({"quote":"q"}))));
+    }
+
+    #[test]
+    fn restore_probe_rejects_auth_inactive_and_mismatched_mint_keys() {
+        let keys = keyset().0;
+        for (unit, active) in [("auth", true), ("sat", false)] {
+            assert!(
+                Probe::restore_keyset(
+                    &json!({"keysets":[{"id":keys.id,"unit":unit,"active":active}]})
+                )
+                .is_err()
+            );
+        }
+        for value in [
+            json!({"keysets":[{"id":keys.id,"unit":"auth","keys":keys.keys}]}),
+            json!({"keysets":[{"id":"0099887766554433","unit":"sat","keys":keys.keys}]}),
+            json!({"keysets":[{"id":keys.id,"unit":"sat","keys":{}}]}),
+        ] {
+            assert!(Probe::restore_body(keys.id, &value).is_err());
+        }
+    }
+
     #[test]
     fn blind_auth_verifies_crypto_and_never_transmits_dleq_or_blinding_material() {
         let (keys, secret) = keyset();

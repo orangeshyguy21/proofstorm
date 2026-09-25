@@ -34,7 +34,7 @@ pub fn release_policy(implementation: &str) -> Option<ReleasePolicy> {
         "cln" => (3, Scheme::Calendar, None),
         "lnd" => (3, Scheme::Lnd, None),
         "nutshell" | "nutshell-wallet" => (2, Scheme::PreOne, None),
-        "cdk" | "cdk-ldk" | "cdk-bdk" | "cdk-cli-wallet" => (
+        "cdk" | "cdk-cli-wallet" => (
             2,
             Scheme::PreOne,
             Some(ReleaseVersion {
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn cdk_starts_at_eighteen_then_rolls_over_two_families() {
-        for implementation in ["cdk", "cdk-ldk", "cdk-bdk", "cdk-cli-wallet"] {
+        for implementation in ["cdk", "cdk-cli-wallet"] {
             let policy = release_policy(implementation).unwrap();
             let historical = policy.parse("v0.17.7").unwrap();
             assert!(!policy.is_eligible(historical));

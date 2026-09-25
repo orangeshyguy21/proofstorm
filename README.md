@@ -81,11 +81,9 @@ compatibility details.
 | LND | `lnd` | Lightning, BOLT11 |
 | Core Lightning | `cln` | Lightning, BOLT11 |
 | LDK Server | `ldk-server` | Experimental standalone Lightning node and native CLI |
-| CDK mint | `cdk` | LND / CLN / gRPC processor; SQLite / PostgreSQL |
-| CDK + LDK mint | `cdk-ldk` | Embedded Lightning; BOLT11 / BOLT12 |
-| CDK + BDK mint | `cdk-bdk` | On-chain payments; Bitcoin regtest |
+| CDK mint | `cdk` | Linked LND / CLN / gRPC processor or embedded LDK Node (BOLT11 / BOLT12), optional embedded BDK on-chain; SQLite / PostgreSQL; optional NUT-21 / NUT-22 auth |
 | CDK LDK Server processor | `cdk-ldk-server-processor` | Experimental gRPC BOLT11 / BOLT12 backend for CDK |
-| Nutshell mint | `nutshell` | LND / CLN; optional NUT-21 / NUT-22 auth |
+| Nutshell mint | `nutshell` | LND / CLN; Redis cache; 0.21.0 supports NUT-21 / NUT-22 auth |
 | Nutshell wallet | `nutshell-wallet` | Persistent Cashu wallet |
 | CDK CLI wallet | `cdk-cli-wallet` | Cashu wallet CLI |
 | Coco daemon | `cocod-wallet` | Experimental Cashu wallet |
@@ -94,6 +92,32 @@ compatibility details.
 | Keycloak | `keycloak` | Test OIDC provider |
 | Workspace | `workspace` | Custom scripts, files and services |
 
+
+### Mint authentication
+
+Enable CDK NUT-21/22 authentication with an `authentication_backend` link from
+`cdk` to `keycloak` (binding `type: authentication`, `protocol: oidc`). Keycloak
+needs a primary `database_backend` link to PostgreSQL. Set
+`auth_max_blind_tokens` on the mint to limit each blind-token issuance request
+(default 50). Endpoint protection follows CDK's upstream defaults.
+
+With SQLite primary storage, CDK stores authentication locally too; omit an
+authentication database link. With PostgreSQL primary storage, add a second
+`database_backend` link with `role: authentication`. Both links can target the
+same PostgreSQL component: Proofstorm creates separate databases, named from
+the mint component ID and link role. An optional `database` binding field
+chooses an explicit database name. SQLite primary storage with a PostgreSQL auth
+link is rejected because CDK ignores that combination.
+
+Use native `cdk-cli` login and blind-auth commands through component execution
+for wallet testing. Typed wallet operations against protected mints are not yet
+supported.
+
+Nutshell 0.21.0 uses the same Keycloak link. Its auth store defaults to SQLite;
+an optional `database_backend` link with `role: authentication` selects
+PostgreSQL independently of primary storage. Its issuance settings are
+`auth_max_blind_tokens` (default 100) and `auth_rate_limit_per_minute` (default
+5). Nutshell 0.20.3 authentication remains unsupported.
 
 ## Updates
 

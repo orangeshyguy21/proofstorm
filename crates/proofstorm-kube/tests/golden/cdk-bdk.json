@@ -3,13 +3,14 @@
     "applicable_conditions": [
       "workload_ready",
       "storage_ready",
+      "credentials_ready",
       "service_ready",
       "protocol_ready",
       "dependencies_ready",
       "component_ready",
       "experiment_controllable"
     ],
-    "backend_id": "cdk-bdk",
+    "backend_id": "cdk",
     "component_id": "mint",
     "condition_aggregation": [
       {
@@ -29,6 +30,11 @@
         "component_operational",
         "component_not_operational",
         "intentionally_stopped"
+      ],
+      "credentials_ready": [
+        "not_observed",
+        "credentials_projected",
+        "credentials_missing"
       ],
       "dependencies_ready": [
         "not_observed",
@@ -74,29 +80,36 @@
     "credentials": [],
     "effective_config": {
       "config": {
+        "auth_max_blind_tokens": 50,
         "contact_email": "",
         "contact_nostr_public_key": "",
-        "description": "Proofstorm regtest CDK BDK mint",
+        "description": "Proofstorm regtest CDK mint",
         "description_long": "",
+        "embedded_lightning": "none",
+        "embedded_onchain": "bdk",
         "enable_info_page": false,
         "http_cache_tti_seconds": 60,
         "http_cache_ttl_seconds": 60,
         "icon_url": "",
         "input_fee_ppk": 100,
         "max_inputs": 1000,
-        "max_melt_sat": 1000000,
-        "max_mint_sat": 1000000,
+        "max_melt_sat": 500000,
+        "max_mint_sat": 500000,
         "max_outputs": 1000,
         "melt_quote_ttl_seconds": 120,
-        "min_melt_sat": 1000,
-        "min_mint_sat": 1000,
+        "min_melt_sat": 1,
+        "min_mint_sat": 1,
         "mint_quote_ttl_seconds": 600,
         "motd": "",
-        "name": "Proofstorm CDK BDK mint",
+        "name": "Proofstorm CDK mint",
+        "onchain_max_melt_sat": 1000000,
+        "onchain_max_mint_sat": 1000000,
+        "onchain_min_melt_sat": 1000,
+        "onchain_min_mint_sat": 1000,
         "tos_url": "",
         "use_keyset_v2": true
       },
-      "implementation": "cdk-bdk"
+      "implementation": "cdk"
     },
     "execution_context": {
       "component_id": "mint",
@@ -123,7 +136,7 @@
           }
         }
       ],
-      "state_contract": "proofstorm/cdk-mint-bdk-state/v1"
+      "state_contract": "proofstorm/cdk-mint-state/v1"
     },
     "instance_key": "i-golden-b2",
     "kind": "mint",
@@ -205,14 +218,14 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:b155a6c3208c2049b1f12fb65caedec34a842c1b0f917cd17947dd92c37d4ef4",
+    "rollout_digest": "sha256:e133f370755b7f93a997e3b94c7c042f106bb48c79efd72f37f1a15ffa1cd53b",
     "storage": [
       {
         "claim_name": "mint-data"
       }
     ],
     "target_descriptor": {
-      "backend_id": "cdk-bdk",
+      "backend_id": "cdk",
       "component_id": "mint",
       "kind": "mint",
       "ports": {
@@ -231,7 +244,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK BDK mint\"\ndescription = \"Proofstorm regtest CDK BDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"none\"\nunit = \"sat\"\nmin_mint = 1000\nmax_mint = 1000000\nmin_melt = 1000\nmax_melt = 1000000\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = 1000\nmax_mint = 1000000\nmin_melt = 1000\nmax_melt = 1000000\n\n[bdk]\nmnemonic = \"file:/mint-secrets/wallet-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = 1000\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"none\"\nunit = \"sat\"\nmin_mint = 1000\nmax_mint = 1000000\nmin_melt = 1000\nmax_melt = 1000000\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = 1000\nmax_mint = 1000000\nmin_melt = 1000\nmax_melt = 1000000\n\n[bdk]\nmnemonic = \"file:/mint-secrets/bdk-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = 1000\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -252,8 +265,8 @@
         "kind": "Deployment",
         "metadata": {
           "annotations": {
-            "proofstorm.dev/backend-id": "cdk-bdk",
-            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-mint-bdk-state/v1",
+            "proofstorm.dev/backend-id": "cdk",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-mint-state/v1",
             "proofstorm.dev/revision-digest": "sha256:b2-golden-revision"
           },
           "labels": {
@@ -281,7 +294,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:b155a6c3208c2049b1f12fb65caedec34a842c1b0f917cd17947dd92c37d4ef4"
+                "proofstorm.dev/rollout-digest": "sha256:e133f370755b7f93a997e3b94c7c042f106bb48c79efd72f37f1a15ffa1cd53b"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

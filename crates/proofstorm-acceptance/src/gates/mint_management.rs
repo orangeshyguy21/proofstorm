@@ -17,23 +17,23 @@ fn document() -> Value {
     let mut links = vec![
         json!({"id":"lightning-chain","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}),
     ];
-    for implementation in MINTS {
-        let version = if *implementation == "nutshell" {
-            "0.21.0"
+    // Component IDs name the payment path; every CDK mint is the one CDK entry.
+    for id in MINTS {
+        let (implementation, version, config_version) = if *id == "nutshell" {
+            ("nutshell", "0.21.0", "nutshell-mint/0.20/v1")
         } else {
-            "0.18.1"
+            ("cdk", "0.18.1", "cdk-mintd/0.18/v1")
         };
-        let config_version = match *implementation {
-            "cdk" => "cdk-mintd/0.18/v1",
-            "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
-            "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
-            _ => "nutshell-mint/0.20/v1",
+        let config = match *id {
+            "cdk-ldk" => json!({"motd":"authored-management-motd","embedded_lightning":"ldk-node"}),
+            "cdk-bdk" => json!({"motd":"authored-management-motd","embedded_onchain":"bdk"}),
+            _ => json!({"motd":"authored-management-motd"}),
         };
-        components.push(json!({"id":implementation,"kind":"mint","implementation":implementation,"version":version,"config_version":config_version,"control":"target","config":{"motd":"authored-management-motd"}}));
-        let binding = if matches!(*implementation, "cdk-ldk" | "cdk-bdk") {
-            json!({"id":format!("{implementation}-chain"),"kind":"chain_backend","from":implementation,"to":"chain","binding":{"type":"chain","network":"regtest"}})
+        components.push(json!({"id":id,"kind":"mint","implementation":implementation,"version":version,"config_version":config_version,"control":"target","config":config}));
+        let binding = if matches!(*id, "cdk-ldk" | "cdk-bdk") {
+            json!({"id":format!("{id}-chain"),"kind":"chain_backend","from":id,"to":"chain","binding":{"type":"chain","network":"regtest"}})
         } else {
-            json!({"id":format!("{implementation}-lightning"),"kind":"payment_backend","from":implementation,"to":"lightning","binding":{"type":"payment","method":"bolt11","unit":"sat"}})
+            json!({"id":format!("{id}-lightning"),"kind":"payment_backend","from":id,"to":"lightning","binding":{"type":"payment","method":"bolt11","unit":"sat"}})
         };
         links.push(binding);
     }

@@ -15,9 +15,9 @@ public_image() {
   printf '%s/%s\n' "$namespace" "${logical#proofstorm-registry.localhost:5000/}"
 }
 STANDARD_IMAGE=$(public_image cdk)
-for golden in cdk cdk-cln-cell cdk-bdk cdk-postgres-cell cdk-ldk cdk-grpc-processor; do
+for golden in cdk cdk-cln-cell cdk-bdk cdk-lnd-bdk cdk-postgres-cell cdk-ldk cdk-grpc-processor; do
   if [[ "$(public_image "$golden")" != "$STANDARD_IMAGE" ]]; then
-    echo "CDK preset $golden does not use the shared mint image" >&2
+    echo "CDK rendering $golden does not use the CDK mint image" >&2
     exit 1
   fi
 done
@@ -47,7 +47,7 @@ validate_config() {
   echo "validated CDK 0.18 configuration: ${label}"
 }
 
-for golden in cdk cdk-cln-cell cdk-bdk cdk-postgres-cell cdk-grpc-processor; do
+for golden in cdk cdk-cln-cell cdk-bdk cdk-lnd-bdk cdk-postgres-cell cdk-grpc-processor; do
   config="${TMP_DIR}/${golden}.toml"
   extract_golden_config "${golden}" "${config}"
   image=$(public_image "$golden")

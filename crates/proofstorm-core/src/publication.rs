@@ -217,6 +217,15 @@ fn is_rollout_relevant_link(kind: LinkKind) -> bool {
     )
 }
 
+/// Whether this catalog entry declares any NUT-21/22 authentication mode.
+fn supports_authentication(entry: &CatalogEntry) -> bool {
+    entry
+        .support_matrix
+        .authentication
+        .iter()
+        .any(|mode| *mode != crate::AuthenticationMode::Unauthenticated)
+}
+
 fn require_compatible_dependency(
     component_id: &str,
     entry: &CatalogEntry,
@@ -259,7 +268,7 @@ fn require_compatible_dependency(
         }
     }
     if link.kind == LinkKind::DatabaseBackend {
-        let Some(DependencyBinding::Database { role }) = link.binding else {
+        let Some(DependencyBinding::Database { role, .. }) = link.binding.clone() else {
             return Err(format!(
                 "component {component_id:?} binding {:?} lacks a typed database role",
                 link.id
@@ -268,7 +277,9 @@ fn require_compatible_dependency(
         let supported = match role {
             DatabaseRole::Primary => target.id == "postgresql",
             DatabaseRole::Cache => entry.id == "nutshell" && target.id == "redis",
-            DatabaseRole::Authentication => false,
+            DatabaseRole::Authentication => {
+                supports_authentication(entry) && target.id == "postgresql"
+            }
         };
         if !supported {
             return Err(format!(
@@ -284,7 +295,7 @@ fn require_compatible_dependency(
                 link.id
             ));
         };
-        if entry.id != "nutshell"
+        if !supports_authentication(entry)
             || target.id != "keycloak"
             || protocol != crate::AuthenticationProtocol::Oidc
         {
@@ -471,6 +482,7 @@ mod tests {
                 to: "cache".into(),
                 binding: Some(DependencyBinding::Database {
                     role: DatabaseRole::Cache,
+                    database: None,
                 }),
             }],
             policy: CellPolicy::default(),
@@ -479,6 +491,7 @@ mod tests {
 
         cell.links[0].binding = Some(DependencyBinding::Database {
             role: DatabaseRole::Primary,
+            database: None,
         });
         let error = resolve_lock(&cell, default_catalog()).expect_err("Redis cannot be primary");
         assert!(error.contains("does not support database role Primary"));
@@ -491,6 +504,7 @@ mod tests {
         );
         cell.links[0].binding = Some(DependencyBinding::Database {
             role: DatabaseRole::Cache,
+            database: None,
         });
         let error = resolve_lock(&cell, default_catalog()).expect_err("PostgreSQL cannot be cache");
         assert!(error.contains("does not support database role Cache"));

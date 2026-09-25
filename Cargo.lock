@@ -2856,11 +2856,13 @@ dependencies = [
  "proofstorm-qualification",
  "proofstorm-store",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "toml_edit",
 ]
 
 [[package]]
@@ -3103,6 +3105,7 @@ dependencies = [
  "kube",
  "kube-runtime",
  "proofstorm-core",
+ "proofstorm-driver",
  "proofstorm-kube",
  "proofstorm-prober",
  "proofstorm-transfer",

@@ -64,7 +64,7 @@ fn secret_args(mint: &str, namespace: &str) -> [String; 6] {
 }
 
 /// Secret digests and base64 seed values, compared but never printed.
-fn seeds(context: &GateContext, namespace: &str, mint: &str) -> Result<(String, [String; 2])> {
+fn seeds(context: &GateContext, namespace: &str, mint: &str) -> Result<(String, [String; 3])> {
     let args = secret_args(mint, namespace);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let secret = context.kubectl.get_json(&args[..4])?;
@@ -74,9 +74,10 @@ fn seeds(context: &GateContext, namespace: &str, mint: &str) -> Result<(String, 
     if keys
         != [
             "PROOFSTORM_SECRET_KIND",
+            "bdk-mnemonic",
             "bitcoin-rpc-password",
+            "ldk-mnemonic",
             "mint-mnemonic",
-            "wallet-mnemonic",
         ]
     {
         bail!("{mint} Secret has an unexpected key contract: {keys:?}");
@@ -85,7 +86,8 @@ fn seeds(context: &GateContext, namespace: &str, mint: &str) -> Result<(String, 
         context.kubectl.digest(&args)?,
         [
             expect::string(&secret, "/data/mint-mnemonic")?.to_owned(),
-            expect::string(&secret, "/data/wallet-mnemonic")?.to_owned(),
+            expect::string(&secret, "/data/ldk-mnemonic")?.to_owned(),
+            expect::string(&secret, "/data/bdk-mnemonic")?.to_owned(),
         ],
     ))
 }
@@ -129,7 +131,7 @@ fn exercise(context: &GateContext) -> Result<()> {
     let (digest_b, seeds_b) = seeds(context, namespace, MINTS[1])?;
     let distinct: BTreeSet<&String> = seeds_a.iter().chain(&seeds_b).collect();
     ensure!(
-        distinct.len() == 4,
+        distinct.len() == 6,
         "CDK mints share a mint or payment-wallet seed"
     );
     let keysets_a = keysets(context, namespace, MINTS[0])?;

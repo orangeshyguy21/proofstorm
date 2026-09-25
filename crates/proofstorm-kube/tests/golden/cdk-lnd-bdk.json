@@ -77,7 +77,17 @@
         "intentionally_stopped"
       ]
     },
-    "credentials": [],
+    "credentials": [
+      {
+        "claim_name": "data-lightning-0",
+        "identity": "lnd:mint-lightning-lightning:lightning:data-lightning-0",
+        "mount_name": "lnd",
+        "mount_path": "/lnd",
+        "read_only": true,
+        "source_component_id": "lightning",
+        "source_state_contract": "proofstorm/lnd-state/v1"
+      }
+    ],
     "effective_config": {
       "config": {
         "auth_max_blind_tokens": 50,
@@ -86,12 +96,12 @@
         "description": "Proofstorm regtest CDK mint",
         "description_long": "",
         "embedded_lightning": "none",
-        "embedded_onchain": "none",
+        "embedded_onchain": "bdk",
         "enable_info_page": false,
         "http_cache_tti_seconds": 60,
         "http_cache_ttl_seconds": 60,
         "icon_url": "",
-        "input_fee_ppk": 0,
+        "input_fee_ppk": 100,
         "max_inputs": 1000,
         "max_melt_sat": 500000,
         "max_mint_sat": 500000,
@@ -134,6 +144,15 @@
           "source": {
             "source": "component_persistent_data"
           }
+        },
+        {
+          "mount_path": "/lnd",
+          "name": "lnd",
+          "read_only": true,
+          "source": {
+            "link_id": "mint-lightning-lightning",
+            "source": "linked_stateful_data"
+          }
         }
       ],
       "state_contract": "proofstorm/cdk-mint-state/v1"
@@ -141,23 +160,28 @@
     "instance_key": "i-golden-b2",
     "kind": "mint",
     "linked_targets": {
-      "mint-bolt11": {
-        "backend_id": "cdk-ldk-server-processor",
-        "component_id": "processor",
-        "kind": "payment_processor",
+      "mint-chain-chain": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
         "ports": {
-          "grpc": 50051
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
         },
-        "version": "0.1.0-fe468ca"
+        "version": "31.1"
       },
-      "mint-bolt12": {
-        "backend_id": "cdk-ldk-server-processor",
-        "component_id": "processor",
-        "kind": "payment_processor",
+      "mint-lightning-lightning": {
+        "backend_id": "lnd",
+        "component_id": "lightning",
+        "kind": "lightning",
         "ports": {
-          "grpc": 50051
+          "p2p": 9735,
+          "rest": 8080,
+          "rpc": 10009
         },
-        "version": "0.1.0-fe468ca"
+        "version": "0.21.3-beta"
       }
     },
     "operation_admission": [
@@ -214,29 +238,28 @@
     "relevant_links": [
       {
         "binding": {
+          "network": "regtest",
+          "type": "chain"
+        },
+        "from": "mint",
+        "id": "mint-chain-chain",
+        "kind": "chain_backend",
+        "to": "chain"
+      },
+      {
+        "binding": {
           "method": "bolt11",
           "type": "payment",
           "unit": "sat"
         },
         "from": "mint",
-        "id": "mint-bolt11",
+        "id": "mint-lightning-lightning",
         "kind": "payment_backend",
-        "to": "processor"
-      },
-      {
-        "binding": {
-          "method": "bolt12",
-          "type": "payment",
-          "unit": "sat"
-        },
-        "from": "mint",
-        "id": "mint-bolt12",
-        "kind": "payment_backend",
-        "to": "processor"
+        "to": "lightning"
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:72ce5fe8632918f18a40f5c8a6c935a78537d99cbc14c133f17cdf796ebe95fa",
+    "rollout_digest": "sha256:2db0448d06eed4ddf861d3b349eaa0695effad34c50e8c4630eb547d4eba6807",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -262,7 +285,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 0\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[grpc_processor]\nsupported_units = [\"sat\"]\naddress = \"processor\"\nport = 50051\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = 1000\nmax_mint = 1000000\nmin_melt = 1000\nmax_melt = 1000000\n\n[bdk]\nmnemonic = \"file:/mint-secrets/bdk-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = 1000\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -312,7 +335,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:72ce5fe8632918f18a40f5c8a6c935a78537d99cbc14c133f17cdf796ebe95fa"
+                "proofstorm.dev/rollout-digest": "sha256:2db0448d06eed4ddf861d3b349eaa0695effad34c50e8c4630eb547d4eba6807"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -397,8 +420,8 @@
                       "name": "data"
                     },
                     {
-                      "mountPath": "/payment-processor/tls",
-                      "name": "payment-processor",
+                      "mountPath": "/lnd",
+                      "name": "lnd",
                       "readOnly": true
                     },
                     {
@@ -410,11 +433,6 @@
                       "mountPath": "/management-client/tls",
                       "name": "management-client",
                       "readOnly": true
-                    },
-                    {
-                      "mountPath": "/opt/proofstorm",
-                      "name": "proofstorm-driver",
-                      "readOnly": true
                     }
                   ]
                 }
@@ -423,47 +441,34 @@
               "initContainers": [
                 {
                   "command": [
-                    "/usr/local/lib/proofstorm-driver",
-                    "install"
+                    "sh",
+                    "-ec",
+                    "# Service endpoints are published after the native node's readiness check.\n# That also establishes the credentials/socket shared with the CDK mint.\nfor attempt in $(seq 1 120); do\n    if nc -z -w 2 \"$1\" \"$2\"; then\n        exit 0\n    fi\n    sleep 1\ndone\necho 'Lightning backend did not become ready before mint startup' >&2\nexit 1\n",
+                    "wait-for-lightning",
+                    "lightning",
+                    "10009"
                   ],
-                  "image": "proofstorm-controller:driver-image-required",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
-                  "name": "proofstorm-driver",
-                  "resources": {
-                    "limits": {
-                      "cpu": "200m",
-                      "memory": "128Mi"
-                    },
-                    "requests": {
-                      "cpu": "10m",
-                      "memory": "16Mi"
-                    }
-                  },
+                  "name": "wait-for-lightning",
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
                       "drop": [
                         "ALL"
                       ]
-                    },
-                    "readOnlyRootFilesystem": true,
-                    "runAsNonRoot": true
-                  },
-                  "volumeMounts": [
-                    {
-                      "mountPath": "/opt/proofstorm",
-                      "name": "proofstorm-driver"
                     }
-                  ]
+                  }
                 },
                 {
                   "command": [
                     "sh",
                     "-ec",
-                    "for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://processor:50051 /payment-processor/tls; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1"
+                    "auth=$(printf 'proofstorm:%s' \"$(cat /mint-secrets/bitcoin-rpc-password)\" | base64); for attempt in $(seq 1 120); do response=$(wget -q -T 2 -O - --header \"Authorization: Basic $auth\" --header 'Content-Type: application/json' --post-data '{\"jsonrpc\":\"1.0\",\"id\":\"proofstorm-readiness\",\"method\":\"getblockchaininfo\",\"params\":[]}' http://chain:18443/ 2>/dev/null) || true; if printf '%s' \"$response\" | grep -q '\"error\":[[:space:]]*null'; then exit 0; fi; sleep 1; done; echo 'Bitcoin RPC dependency did not become ready before CDK wallet initialization' >&2; exit 1"
                   ],
                   "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
-                  "name": "wait-for-payment-processor",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "wait-for-chain",
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -474,13 +479,8 @@
                   },
                   "volumeMounts": [
                     {
-                      "mountPath": "/payment-processor/tls",
-                      "name": "payment-processor",
-                      "readOnly": true
-                    },
-                    {
-                      "mountPath": "/opt/proofstorm",
-                      "name": "proofstorm-driver",
+                      "mountPath": "/mint-secrets",
+                      "name": "mint-secrets",
                       "readOnly": true
                     }
                   ]
@@ -528,8 +528,8 @@
                       "name": "data"
                     },
                     {
-                      "mountPath": "/payment-processor/tls",
-                      "name": "payment-processor",
+                      "mountPath": "/lnd",
+                      "name": "lnd",
                       "readOnly": true
                     }
                   ]
@@ -565,24 +565,9 @@
                   }
                 },
                 {
-                  "name": "payment-processor",
-                  "secret": {
-                    "defaultMode": 288,
-                    "items": [
-                      {
-                        "key": "ca.pem",
-                        "path": "ca.pem"
-                      },
-                      {
-                        "key": "client.pem",
-                        "path": "client.pem"
-                      },
-                      {
-                        "key": "client.key",
-                        "path": "client.key"
-                      }
-                    ],
-                    "secretName": "processor-payment-tls"
+                  "name": "lnd",
+                  "persistentVolumeClaim": {
+                    "claimName": "data-lightning-0"
                   }
                 },
                 {
@@ -626,10 +611,6 @@
                     ],
                     "secretName": "mint-management-tls"
                   }
-                },
-                {
-                  "emptyDir": {},
-                  "name": "proofstorm-driver"
                 }
               ]
             }

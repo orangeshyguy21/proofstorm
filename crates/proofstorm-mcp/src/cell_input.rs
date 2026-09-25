@@ -43,6 +43,9 @@ pub enum AddLinkInput {
         from: String,
         to: String,
         role: DatabaseRole,
+        /// Database to create on the target server; defaults to `<from>_<role>`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        database: Option<String>,
     },
     AuthenticationBackend {
         id: String,
@@ -101,12 +104,18 @@ impl TryFrom<AddLinkInput> for LinkSpec {
                 to,
                 binding: Some(DependencyBinding::Payment { method, unit }),
             },
-            AddLinkInput::DatabaseBackend { id, from, to, role } => Self {
+            AddLinkInput::DatabaseBackend {
+                id,
+                from,
+                to,
+                role,
+                database,
+            } => Self {
                 id,
                 kind: LinkKind::DatabaseBackend,
                 from,
                 to,
-                binding: Some(DependencyBinding::Database { role }),
+                binding: Some(DependencyBinding::Database { role, database }),
             },
             AddLinkInput::AuthenticationBackend {
                 id,
@@ -163,8 +172,14 @@ impl TryFrom<LinkSpec> for AddLinkInput {
                     unit,
                 })
             }
-            (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { role })) => {
-                Ok(Self::DatabaseBackend { id, from, to, role })
+            (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { role, database })) => {
+                Ok(Self::DatabaseBackend {
+                    id,
+                    from,
+                    to,
+                    role,
+                    database,
+                })
             }
             (
                 LinkKind::AuthenticationBackend,

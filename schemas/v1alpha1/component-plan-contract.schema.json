@@ -17,9 +17,31 @@
       ],
       "type": "object"
     },
+    "CdkEmbeddedLightning": {
+      "description": "Lightning backend compiled into the CDK daemon itself. External Lightning\nis selected by `payment_backend` links instead.",
+      "enum": [
+        "none",
+        "ldk-node"
+      ],
+      "type": "string"
+    },
+    "CdkEmbeddedOnchain": {
+      "description": "On-chain backend compiled into the CDK daemon itself.",
+      "enum": [
+        "none",
+        "bdk"
+      ],
+      "type": "string"
+    },
     "CdkMintConfig": {
       "additionalProperties": false,
       "properties": {
+        "auth_max_blind_tokens": {
+          "description": "Upstream `mint_max_bat`; its code default of 0 refuses every BAT mint.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "contact_email": {
           "type": "string"
         },
@@ -31,6 +53,12 @@
         },
         "description_long": {
           "type": "string"
+        },
+        "embedded_lightning": {
+          "$ref": "#/$defs/CdkEmbeddedLightning"
+        },
+        "embedded_onchain": {
+          "$ref": "#/$defs/CdkEmbeddedOnchain"
         },
         "enable_info_page": {
           "type": "boolean"
@@ -99,6 +127,26 @@
         "name": {
           "type": "string"
         },
+        "onchain_max_melt_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "onchain_max_mint_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "onchain_min_melt_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "onchain_min_mint_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "tos_url": {
           "type": "string"
         },
@@ -127,7 +175,14 @@
         "min_mint_sat",
         "max_mint_sat",
         "min_melt_sat",
-        "max_melt_sat"
+        "max_melt_sat",
+        "embedded_lightning",
+        "embedded_onchain",
+        "onchain_min_mint_sat",
+        "onchain_max_mint_sat",
+        "onchain_min_melt_sat",
+        "onchain_max_melt_sat",
+        "auth_max_blind_tokens"
       ],
       "type": "object"
     },
@@ -263,8 +318,14 @@
     },
     "DependencyBinding": {
       "additionalProperties": false,
-      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
       "properties": {
+        "database": {
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
         "method": {
           "enum": [
             "bolt11",
@@ -315,8 +376,8 @@
       "type": "object",
       "x-kubernetes-validations": [
         {
-          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require only role; authentication bindings require only protocol",
-          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role)))"
+          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol",
+          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))"
         }
       ]
     },
@@ -409,38 +470,6 @@
             },
             "implementation": {
               "const": "cdk",
-              "type": "string"
-            }
-          },
-          "required": [
-            "implementation",
-            "config"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "config": {
-              "$ref": "#/$defs/CdkMintConfig"
-            },
-            "implementation": {
-              "const": "cdk-ldk",
-              "type": "string"
-            }
-          },
-          "required": [
-            "implementation",
-            "config"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "config": {
-              "$ref": "#/$defs/CdkMintConfig"
-            },
-            "implementation": {
-              "const": "cdk-bdk",
               "type": "string"
             }
           },
@@ -1023,16 +1052,13 @@
     },
     "PostgresConfig": {
       "additionalProperties": false,
+      "description": "One `PostgreSQL` server. Its databases are created by the components linked to\nit, one per `database_backend` binding (see `LinkSpec::database_name`).",
       "properties": {
-        "database_name": {
-          "type": "string"
-        },
         "storage_size": {
           "type": "string"
         }
       },
       "required": [
-        "database_name",
         "storage_size"
       ],
       "type": "object"

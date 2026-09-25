@@ -22,7 +22,7 @@ pub(super) async fn sample(
             .iter()
             .filter(|c| {
                 matches!(
-                    c.implementation.as_str(),
+                    observation_kind(c),
                     "bitcoin-core"
                         | "lnd"
                         | "cln"
@@ -73,7 +73,7 @@ pub(super) async fn sample(
             amounts: vec![],
             block_height: None,
             lightning: matches!(
-                component.implementation.as_str(),
+                observation_kind(&component),
                 "lnd" | "cln" | "cdk-ldk" | "ldk-server"
             )
             .then(|| LightningObservation {
@@ -94,7 +94,7 @@ pub(super) async fn sample(
                 pods,
                 &pod.name_any(),
                 inventory,
-                &component.implementation,
+                observation_kind(&component),
                 &mut result,
             )
             .await;
@@ -105,6 +105,22 @@ pub(super) async fn sample(
     .collect()
     .await
 }
+/// Embedded LDK Node is observed through its dashboard inside the CDK mint pod;
+/// every other component is observed by its own implementation.
+fn observation_kind(component: &proofstorm_core::ComponentSpec) -> &str {
+    if component.implementation == "cdk"
+        && component
+            .config
+            .get("embedded_lightning")
+            .and_then(serde_json::Value::as_str)
+            == Some("ldk-node")
+    {
+        "cdk-ldk"
+    } else {
+        component.implementation.as_str()
+    }
+}
+
 fn matches_adapter(implementation: &str, version: Option<&str>) -> bool {
     match implementation {
         "cdk-cli-wallet" => version == Some("cdk-cli/0.18/observations/v1"),

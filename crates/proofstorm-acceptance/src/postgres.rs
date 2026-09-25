@@ -37,7 +37,7 @@ pub fn augment_cell(enabled: bool, cell: &mut Value, database_name: &str) {
             "version": "17.11",
             "config_version": "postgresql/17/v1",
             "control": "cell",
-            "config": {"database_name": database_name, "storage_size": "2Gi"}
+            "config": {"storage_size": "2Gi"}
         }));
     }
     if let Some(links) = cell.get_mut("links").and_then(Value::as_array_mut) {
@@ -46,7 +46,7 @@ pub fn augment_cell(enabled: bool, cell: &mut Value, database_name: &str) {
             "kind": "database_backend",
             "from": "mint",
             "to": "database",
-            "binding": {"type": "database", "role": "primary"}
+            "binding": {"type": "database", "role": "primary", "database": database_name}
         }));
     }
 }
@@ -104,25 +104,18 @@ pub fn assert_materialized(
         .map(String::as_str)
         .collect();
     keys.sort_unstable();
-    if keys
-        != [
-            "DATABASE_URL",
-            "POSTGRES_DB",
-            "POSTGRES_PASSWORD",
-            "POSTGRES_USER",
-            "database.toml",
-        ]
-    {
+    if keys != ["POSTGRES_DB", "POSTGRES_PASSWORD", "POSTGRES_USER"] {
         bail!("generated PostgreSQL Secret has an unexpected key contract: {keys:?}");
     }
 
-    let database_url = decode_base64(expect::string(&secret, "/data/DATABASE_URL")?)
-        .context("decode the generated database URL")?;
-    if !database_url.contains(&format!("@database:5432/{database_name}")) {
-        bail!("private PostgreSQL URL does not target the selected database");
-    }
-
     let deployment = kubectl.get_json(&["get", "deployment/mint", "-n", namespace])?;
+    let init = expect::array(&deployment, "/spec/template/spec/initContainers")?;
+    if !init
+        .iter()
+        .any(|entry| entry.get("name").and_then(Value::as_str) == Some("ensure-database"))
+    {
+        bail!("mint does not create its own PostgreSQL database before initialization");
+    }
     for group in ["initContainers", "containers"] {
         let containers = expect::array(&deployment, &format!("/spec/template/spec/{group}"))?;
         let container = containers
@@ -134,41 +127,57 @@ pub fn assert_materialized(
                 )
             })
             .ok_or_else(|| anyhow::anyhow!("no configuration container in {group}"))?;
-        let url = container
+        let env = container
             .get("env")
             .and_then(Value::as_array)
-            .and_then(|env| {
-                env.iter().find(|entry| {
-                    entry.get("name").and_then(Value::as_str) == Some("CDK_MINTD_POSTGRES_URL")
-                })
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{} does not receive the secret-backed PostgreSQL URL",
-                    container["name"]
-                )
-            })?;
-        let reference = url.pointer("/valueFrom/secretKeyRef");
-        if reference != Some(&json!({"name": "database-credentials", "key": "DATABASE_URL"})) {
+            .ok_or_else(|| anyhow::anyhow!("{} has no environment", container["name"]))?;
+        let named = |name: &str| {
+            env.iter()
+                .position(|entry| entry.get("name").and_then(Value::as_str) == Some(name))
+        };
+        // The password is secret-backed and declared before the URL expanding it.
+        let (Some(password), Some(url)) = (
+            named("CDK_MINTD_POSTGRES_URL_PASSWORD"),
+            named("CDK_MINTD_POSTGRES_URL"),
+        ) else {
             bail!(
                 "{} does not receive the secret-backed PostgreSQL URL",
+                container["name"]
+            );
+        };
+        if password > url
+            || env[password].pointer("/valueFrom/secretKeyRef")
+                != Some(&json!({"name": "database-credentials", "key": "POSTGRES_PASSWORD"}))
+            || env[url]["value"]
+                != format!(
+                    "postgresql://proofstorm:$(CDK_MINTD_POSTGRES_URL_PASSWORD)@database:5432/{database_name}"
+                )
+        {
+            bail!(
+                "{} does not compose its own database URL from the owner secret",
                 container["name"]
             );
         }
     }
 
-    let tables = schema_table_count(kubectl, namespace)?;
+    let tables = schema_table_count(kubectl, namespace, database_name)?;
     if tables < MINIMUM_TABLES {
         bail!("CDK initialized only {tables} PostgreSQL schema tables");
     }
     Ok(tables)
 }
 
-/// Count public schema tables; each gate chooses its own initialization threshold.
-pub(crate) fn schema_table_count(kubectl: &Kubectl, namespace: &str) -> Result<u64> {
+/// Count public schema tables in one component's database; each gate chooses
+/// its own initialization threshold.
+pub(crate) fn schema_table_count(
+    kubectl: &Kubectl,
+    namespace: &str,
+    database: &str,
+) -> Result<u64> {
     psql(
         kubectl,
         namespace,
+        database,
         "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';",
     )?
     .trim()
@@ -218,6 +227,7 @@ pub fn verify_sentinel(
     let persisted = psql(
         kubectl,
         namespace,
+        "postgres",
         "SELECT marker FROM proofstorm_acceptance WHERE id = 1;",
     )?;
     if persisted.trim() != marker {
@@ -229,9 +239,9 @@ pub fn verify_sentinel(
     Ok(())
 }
 
-fn psql(kubectl: &Kubectl, namespace: &str, statement: &str) -> Result<String> {
+fn psql(kubectl: &Kubectl, namespace: &str, database: &str, statement: &str) -> Result<String> {
     let script = format!(
-        "PGPASSWORD=\"$POSTGRES_PASSWORD\" psql -At -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -c \"{statement}\""
+        "PGPASSWORD=\"$POSTGRES_PASSWORD\" psql -At -U \"$POSTGRES_USER\" -d \"{database}\" -c \"{statement}\""
     );
     kubectl.exec(namespace, "statefulset/database", &["sh", "-c", &script])
 }

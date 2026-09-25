@@ -20,13 +20,13 @@ fn cell_document() -> Value {
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
             {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-nutshell-postgres"}},
-            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"database_name": "nutshell_mint", "storage_size": "2Gi"}},
+            {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"storage_size": "2Gi"}},
             {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.21.0", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Nutshell PostgreSQL", "description": "Secret-backed persistence acceptance", "mint_quote_ttl_seconds": 701, "melt_quote_ttl_seconds": 131}}
         ],
         "links": [
             {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
             {"id": "mint-bolt11", "kind": "payment_backend", "from": "mint", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}},
-            {"id": "mint-database", "kind": "database_backend", "from": "mint", "to": "database", "binding": {"type": "database", "role": "primary"}}
+            {"id": "mint-database", "kind": "database_backend", "from": "mint", "to": "database", "binding": {"type": "database", "role": "primary", "database": "nutshell_mint"}}
         ],
         "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
     })
@@ -89,15 +89,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         .map(String::as_str)
         .collect();
     database_keys.sort_unstable();
-    if database_keys
-        != [
-            "DATABASE_URL",
-            "POSTGRES_DB",
-            "POSTGRES_PASSWORD",
-            "POSTGRES_USER",
-            "database.toml",
-        ]
-    {
+    if database_keys != ["POSTGRES_DB", "POSTGRES_PASSWORD", "POSTGRES_USER"] {
         bail!("generated PostgreSQL Secret has an unexpected key contract: {database_keys:?}");
     }
 
@@ -132,7 +124,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     }
 
     postgres::seed_sentinel(true, &context.kubectl, namespace, MARKER)?;
-    let tables = postgres::schema_table_count(&context.kubectl, namespace)?;
+    let tables = postgres::schema_table_count(&context.kubectl, namespace, "nutshell_mint")?;
     if tables < 2 {
         bail!("Nutshell did not initialize its PostgreSQL schema: {tables} tables");
     }

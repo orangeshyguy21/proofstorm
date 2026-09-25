@@ -1,6 +1,6 @@
-//! Nutshell 0.21.0 + Keycloak 25.0.6: NUT-21 and NUT-22 with Nutshell's upstream default
-//! endpoint protection and SQLite primary storage. Auth stores use SQLite and
-//! PostgreSQL (shared with Keycloak), spent-token replay persistence, restart recovery,
+//! CDK 0.18.1 + Keycloak 25.0.6: NUT-21 and NUT-22 with CDK's upstream default
+//! endpoint protection, SQLite and a separate auth database on the mint's
+//! shared PostgreSQL server, spent-token replay persistence, restart recovery,
 //! and teardown.
 
 use std::{thread::sleep, time::Duration};
@@ -10,72 +10,69 @@ use serde_json::{Value, json};
 
 use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
-const INSTANCE: &str = "nutshell-oidc-instance";
-const EXPERIMENT: &str = "nutshell-oidc-experiment";
-const MINTS: &[&str] = &["mint", "mint-pg"];
+const INSTANCE: &str = "cdk-oidc-instance";
+const EXPERIMENT: &str = "cdk-oidc-experiment";
+const MINTS: &[&str] = &["mint", "mint-sqlite"];
 
 fn cell_document() -> Value {
     let mut document = json!({
         "api_version": "proofstorm/v1alpha1",
-        "name": "nutshell-oidc-live-cell",
+        "name": "cdk-oidc-live-cell",
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
-            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-nutshell-oidc"}},
+            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cdk-oidc"}},
             {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"storage_size": "2Gi"}},
             {"id": "identity", "kind": "identity_provider", "implementation": "keycloak", "version": "25.0.6", "config_version": "keycloak/25/v1", "control": "cell", "config": {"access_token_lifespan_seconds": 600}},
-            {"id": "mint", "kind": "mint", "implementation": "nutshell", "version": "0.21.0", "config_version": "nutshell-mint/0.20/v1", "control": "target", "config": {"name": "Proofstorm Authenticated Nutshell", "description": "Live NUT-21 and NUT-22 acceptance", "auth_max_blind_tokens": 3, "auth_rate_limit_per_minute": 2}}
+            {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm Authenticated CDK", "description": "Live NUT-21 and NUT-22 acceptance", "auth_max_blind_tokens": 3}}
         ],
         "links": [
             {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
             {"id": "mint-lightning", "kind": "payment_backend", "from": "mint", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}},
+            {"id": "mint-database", "kind": "database_backend", "from": "mint", "to": "database", "binding": {"type": "database", "role": "primary"}},
+            {"id": "mint-auth-database", "kind": "database_backend", "from": "mint", "to": "database", "binding": {"type": "database", "role": "authentication"}},
             {"id": "identity-database", "kind": "database_backend", "from": "identity", "to": "database", "binding": {"type": "database", "role": "primary"}},
             {"id": "mint-identity", "kind": "authentication_backend", "from": "mint", "to": "identity", "binding": {"type": "authentication", "protocol": "oidc"}}
         ],
         "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
     });
-    let mut postgres = document["components"][4].clone();
-    postgres["id"] = json!("mint-pg");
+    let mut sqlite = document["components"][4].clone();
+    sqlite["id"] = json!("mint-sqlite");
     document["components"]
         .as_array_mut()
         .expect("fixture array")
-        .push(postgres);
+        .push(sqlite);
     document["links"].as_array_mut().expect("fixture array").extend([
-        json!({"id": "postgres-lightning", "kind": "payment_backend", "from": "mint-pg", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}}),
-        json!({"id": "postgres-identity", "kind": "authentication_backend", "from": "mint-pg", "to": "identity", "binding": {"type": "authentication", "protocol": "oidc"}}),
+        json!({"id": "sqlite-lightning", "kind": "payment_backend", "from": "mint-sqlite", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}}),
+        json!({"id": "sqlite-identity", "kind": "authentication_backend", "from": "mint-sqlite", "to": "identity", "binding": {"type": "authentication", "protocol": "oidc"}}),
     ]);
-    document["links"].as_array_mut().expect("fixture links").push(json!({"id":"mint-auth-database","kind":"database_backend","from":"mint-pg","to":"database","binding":{"type":"database","role":"authentication"}}));
     document
 }
 
-fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result<String> {
-    let mut argv = vec![
-        "bitcoin-cli",
-        "-regtest",
-        "-rpcuser=proofstorm",
-        "-rpcpassword=proofstorm-regtest-only",
-    ];
-    argv.extend_from_slice(arguments);
-    context.kubectl.exec(namespace, "statefulset/chain", &argv)
-}
+const CONFIG_FRAGMENTS: &[&str] = &[
+    "[auth]\nauth_enabled = true",
+    "openid_discovery = \"http://identity:8080/realms/proofstorm/.well-known/openid-configuration\"",
+    "openid_client_id = \"cashu-client\"",
+    "mint_max_bat = 3",
+];
 
 fn finding(client: &mut crate::McpClient, what: &str, result: &Value) -> Result<()> {
     client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_phase(client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
-    bail!("Nutshell OIDC {what} reported a conformance finding: {result}");
+    bail!("CDK OIDC {what} reported a conformance finding: {result}");
 }
 
 pub fn run(context: &GateContext) -> Result<()> {
     context.qualification_stage("materialize")?;
-    let mut client = context.default_session("nutshell-oidc-live", "designer")?;
+    let mut client = context.default_session("cdk-oidc-live", "designer")?;
     let kubectl = &context.kubectl;
 
     let preview = client.call(
         "cell_plan",
-        json!({"name":INSTANCE,"cell":context.document(cell_document())?,"request_id":"create-nutshell-oidc"}),
+        json!({"name":INSTANCE,"cell":context.document(cell_document())?,"request_id":"create-cdk-oidc"}),
     )?;
     let published = cell::review(&mut client, &preview)?;
     for (catalog_id, version, config_version) in [
-        ("nutshell", "0.21.0", "nutshell-mint/0.20/v1"),
+        ("cdk", "0.18.1", "cdk-mintd/0.18/v1"),
         ("keycloak", "25.0.6", "keycloak/25/v1"),
         ("postgresql", "17.11", "postgresql/17/v1"),
     ] {
@@ -91,68 +88,22 @@ pub fn run(context: &GateContext) -> Result<()> {
     let status = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
-    context.qualification_stage("funding")?;
-    bitcoin(context, &namespace, &["createwallet", "default"])?;
-    let miner = bitcoin(
-        context,
-        &namespace,
-        &["-rpcwallet=default", "getnewaddress"],
-    )?;
-    bitcoin(
-        context,
-        &namespace,
-        &["-rpcwallet=default", "generatetoaddress", "101", &miner],
-    )?;
-
-    let mut synced = false;
-    for _ in 0..60 {
-        let raw = kubectl.exec(
-            &namespace,
-            "statefulset/lightning",
-            &[
-                "lncli",
-                "--lnddir=/home/lnd/.lnd",
-                "--network=regtest",
-                "getinfo",
-            ],
-        )?;
-        let info: Value = serde_json::from_str(&raw)?;
-        if info.get("synced_to_chain").and_then(Value::as_bool) == Some(true)
-            && info
-                .get("block_height")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                >= 101
-        {
-            synced = true;
-            break;
-        }
-        sleep(Duration::from_secs(1));
-    }
-    if !synced {
-        bail!("LND did not synchronize to the acceptance chain");
-    }
-
     context.qualification_stage("configuration")?;
     for mint in MINTS {
-        let config =
-            kubectl.get_json(&["get", &format!("configmap/{mint}-config"), "-n", &namespace])?;
-        for (key, wanted) in [
-            ("MINT_REQUIRE_AUTH", "TRUE"),
-            ("MINT_AUTH_OICD_CLIENT_ID", "cashu-client"),
-            (
-                "MINT_AUTH_OICD_DISCOVERY_URL",
-                "http://identity:8080/realms/proofstorm/.well-known/openid-configuration",
-            ),
-            ("MINT_AUTH_RATE_LIMIT_PER_MINUTE", "2"),
-            ("MINT_AUTH_MAX_BLIND_TOKENS", "3"),
-        ] {
-            expect::equals(&config, &format!("/data/{key}"), &json!(wanted))?;
+        let config = kubectl.exec(
+            &namespace,
+            &format!("deployment/{mint}"),
+            &["cat", "/config/config.toml"],
+        )?;
+        for fragment in CONFIG_FRAGMENTS {
+            if !config.contains(fragment) {
+                bail!("{mint} configuration is missing {fragment:?}");
+            }
         }
-        if *mint == "mint" {
-            expect::equals(&config, "/data/MINT_AUTH_DATABASE", &json!("/app/data"))?;
-        } else if !config["data"]["MINT_AUTH_DATABASE"].is_null() {
-            bail!("PostgreSQL auth URL must come from the credential-backed environment");
+        let postgres_auth =
+            config.contains("[auth_database.postgres]\nurl = \"env:CDK_MINTD_AUTH_POSTGRES_URL\"");
+        if postgres_auth != (*mint == "mint") {
+            bail!("{mint} has the wrong authentication database configuration");
         }
     }
     let databases = kubectl.exec(
@@ -164,7 +115,7 @@ pub fn run(context: &GateContext) -> Result<()> {
             "PGPASSWORD=\"$POSTGRES_PASSWORD\" psql -At -U proofstorm -d postgres -c \"SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1\"",
         ],
     )?;
-    for database in ["identity_primary", "mint_pg_authentication"] {
+    for database in ["identity_primary", "mint_authentication", "mint_primary"] {
         if !databases.lines().any(|line| line.trim() == database) {
             bail!("shared PostgreSQL server is missing {database}: {databases}");
         }
@@ -195,12 +146,12 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
 
     for mint in MINTS {
-        context.qualification_stage(if mint == &"mint-pg" {
+        context.qualification_stage(if mint == &"mint" {
             "conformance-postgres"
         } else {
             "conformance-sqlite"
         })?;
-        let request_id = format!("nutshell-oidc-{mint}-baseline");
+        let request_id = format!("cdk-oidc-{mint}-baseline");
         crate::driver::authentication_conformance(
             context,
             &mut client,
@@ -233,7 +184,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         "statefulset/database",
         "deployment/identity",
         "deployment/mint",
-        "deployment/mint-pg",
+        "deployment/mint-sqlite",
     ] {
         kubectl.rollout_restart(&namespace, target)?;
     }
@@ -249,7 +200,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
     println!(
-        "Nutshell 0.21.0 + Keycloak 25.0.6 passed NUT-21/NUT-22 with upstream endpoint defaults, SQLite and PostgreSQL auth stores, replay persistence, restart recovery, and teardown"
+        "CDK 0.18.1 + Keycloak 25.0.6 passed NUT-21/NUT-22 with upstream endpoint defaults, SQLite and PostgreSQL auth stores, replay persistence, restart recovery, and teardown"
     );
     Ok(())
 }
@@ -277,12 +228,12 @@ fn verify_spend_and_replay(
     namespace: &str,
     mint: &str,
 ) -> Result<()> {
-    context.qualification_stage(if mint == "mint-pg" {
+    context.qualification_stage(if mint == "mint" {
         "protected-spend-postgres"
     } else {
         "protected-spend-sqlite"
     })?;
-    let spend_id = format!("nutshell-oidc-{mint}-protected-spend");
+    let spend_id = format!("cdk-oidc-{mint}-protected-spend");
     crate::driver::authentication_protected_spend(
         context,
         client,
@@ -307,12 +258,12 @@ fn verify_spend_and_replay(
         mint,
         super::authentication::now()?,
     )?;
-    context.qualification_stage(if mint == "mint-pg" {
+    context.qualification_stage(if mint == "mint" {
         "replay-postgres"
     } else {
         "replay-sqlite"
     })?;
-    let replay_id = format!("nutshell-oidc-{mint}-replay");
+    let replay_id = format!("cdk-oidc-{mint}-replay");
     crate::driver::authentication_replay(
         context,
         client,
@@ -350,7 +301,7 @@ mod tests {
             let Scenario::Gate { name, versions } = &case.scenario else {
                 continue;
             };
-            if name != "nutshell-oidc" {
+            if name != "cdk-oidc" {
                 continue;
             }
             covered.insert(case.platform.as_str());
@@ -369,25 +320,19 @@ mod tests {
                 .links
                 .iter()
                 .filter(|link| {
-                    link.from == "mint-pg"
-                        && link.kind == proofstorm_core::LinkKind::DatabaseBackend
+                    link.from == "mint" && link.kind == proofstorm_core::LinkKind::DatabaseBackend
                 })
                 .collect();
-            assert_eq!(databases.len(), 1);
-            assert!(matches!(
-                databases[0].binding,
-                Some(proofstorm_core::DependencyBinding::Database {
-                    role: DatabaseRole::Authentication,
-                    ..
-                })
-            ));
-            assert_eq!(databases[0].to, "database");
-            assert!(!cell.links.iter().any(|link| link.from == "mint"
+            assert_eq!(databases.len(), 2);
+            for role in [DatabaseRole::Primary, DatabaseRole::Authentication] {
+                assert!(databases.iter().any(|link| link.to == "database" && matches!(link.binding, Some(proofstorm_core::DependencyBinding::Database { role: actual, .. }) if actual == role)));
+            }
+            assert!(!cell.links.iter().any(|link| link.from == "mint-sqlite"
                 && link.kind == proofstorm_core::LinkKind::DatabaseBackend));
             assert_eq!(
                 cell.components
                     .iter()
-                    .filter(|component| component.implementation == "nutshell")
+                    .filter(|component| component.implementation == "cdk")
                     .count(),
                 2
             );
