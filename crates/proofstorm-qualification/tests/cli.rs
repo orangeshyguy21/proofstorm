@@ -151,19 +151,28 @@ fn mint_auth_is_qualified_only_where_declared_and_keeps_identity_provider_covera
                     .any(|entry| entry["implementation"] == "postgresql")
         }));
     }
-    // Nutshell does not declare auth (upstream gap); CDK does, via its own gate.
-    assert!(!cases.to_string().contains("nutshell-oidc"));
+    // Auth qualification is explicit for both current mints on both platforms.
     for platform in ["linux/amd64", "linux/arm64"] {
-        let auth = cases
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|case| case["platform"] == platform && case["scenario"]["name"] == "cdk-oidc")
-            .collect::<Vec<_>>();
-        assert_eq!(auth.len(), 1, "{platform}");
-        let claims = auth[0]["claims"].to_string();
-        assert!(claims.contains("nut21_clear") && claims.contains("nut22_blind"));
-        assert!(!claims.contains("nutshell"));
+        for (implementation, gate) in [("cdk", "cdk-oidc"), ("nutshell", "nutshell-oidc")] {
+            let auth = cases
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|case| case["platform"] == platform && case["scenario"]["name"] == gate)
+                .collect::<Vec<_>>();
+            assert_eq!(auth.len(), 1, "{platform}: {gate}");
+            let claims = auth[0]["claims"].to_string();
+            assert!(claims.contains("nut21_clear") && claims.contains("nut22_blind"));
+            let mint = auth[0]["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|component| component["implementation"] == implementation)
+                .unwrap();
+            if implementation == "nutshell" {
+                assert_eq!(mint["version"], "0.21.0");
+            }
+        }
     }
 }
 

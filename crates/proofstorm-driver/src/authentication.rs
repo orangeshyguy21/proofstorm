@@ -35,8 +35,9 @@ impl Config {
     }
 }
 /// Protocol error codes and optional limits differ by mint implementation.
-/// Nutshell uses its own 8xxxx codes; CDK uses the NUT-21/22 spec codes and
-/// reports an over-limit BAT request as a generic amount-range error.
+/// Nutshell 0.21 uses the NUT-21/22 codes; CDK uses the NUT-21 clear-auth code,
+/// a generic proof-verification error for invalid BAT signatures, and a generic
+/// amount-range error for over-limit BAT requests.
 struct Profile {
     invalid_bat: i64,
     invalid_cat: i64,
@@ -49,17 +50,17 @@ impl Profile {
     fn of(implementation: &str) -> Result<Self> {
         match implementation {
             "nutshell" => Ok(Self {
-                invalid_bat: 81002,
-                invalid_cat: 80002,
-                bat_maximum: 81003,
-                spent_bat: 81002,
-                cat_rate_limit: Some(81004),
-            }),
-            "cdk" => Ok(Self {
                 invalid_bat: 31002,
                 invalid_cat: 30002,
-                bat_maximum: 11006,
+                bat_maximum: 31003,
                 spent_bat: 31002,
+                cat_rate_limit: Some(31004),
+            }),
+            "cdk" => Ok(Self {
+                invalid_bat: 10001,
+                invalid_cat: 30002,
+                bat_maximum: 11006,
+                spent_bat: 11001,
                 cat_rate_limit: None,
             }),
             _ => bail!("unsupported mint implementation"),
@@ -75,11 +76,13 @@ struct Probe {
 }
 
 impl Probe {
-    fn select(info: &Value, config: &Config) -> Option<Self> {
+    fn select(info: &Value, config: &Config, keys: &AuthKeys) -> Option<Self> {
         let protected = info["nuts"]["22"]["protected_endpoints"].as_array()?;
         [
             ("/v1/mint/quote/bolt11", json!({"amount":1,"unit":"sat"})),
-            ("/v1/restore", json!({"outputs":[]})),
+            // CDK's SQL restore path rejects an empty list. A fresh, unknown
+            // blinded point performs a valid read without minting any ecash.
+            ("/v1/restore", json!({"outputs":[{"amount":1,"id":keys.id,"B_":SecretKey::generate().public_key()}]})),
         ]
         .into_iter()
         .find(|(path, _)| {
@@ -267,6 +270,15 @@ fn outputs(keys: &AuthKeys, count: usize) -> Result<Vec<Output>> {
         })
         .collect()
 }
+// A syntactically valid BAT with an invalid signature reaches the protocol
+// verifier. Malformed base64 is rejected by CDK's HTTP extractor as plain text,
+// before it can return a NUT-22 error code.
+fn invalid_token(keys: &AuthKeys) -> Result<String> {
+    let body =
+        serde_json::to_vec(&json!({"id": keys.id, "secret": Secret::generate(), "C": keys.one}))?;
+    Ok(format!("authA{}", URL_SAFE_NO_PAD.encode(body)))
+}
+
 fn tokens(keys: &AuthKeys, outputs: Vec<Output>, value: &Value) -> Result<Vec<String>> {
     let signatures: Vec<BlindSignature> = serde_json::from_value(value["signatures"].clone())?;
     ensure!(
@@ -332,9 +344,11 @@ async fn conformance(config: &Config) -> Result<Value> {
     if rejected.ok() {
         return Ok(finding(&mut result, "invalid_oidc_password", None));
     }
-    let Some(probe) = Probe::select(&info.value, config) else {
+    let keys = AuthKeys::load(&client, config).await?;
+    let Some(probe) = Probe::select(&info.value, config, &keys) else {
         return Ok(finding(&mut result, "protected_endpoint", None));
     };
+    let invalid_bat = invalid_token(&keys)?;
     let auth = format!("{}/v1/auth/blind/mint", config.url);
     for (field, stage, url, payload, header, expected) in [
         (
@@ -350,7 +364,7 @@ async fn conformance(config: &Config) -> Result<Value> {
             "invalid_bat",
             probe.url.as_str(),
             probe.body.clone(),
-            Some(("Blind-auth", "authAinvalid")),
+            Some(("Blind-auth", invalid_bat.as_str())),
             Some(profile.invalid_bat),
         ),
         (
@@ -392,7 +406,6 @@ async fn conformance(config: &Config) -> Result<Value> {
     if result["claims_match"] != true {
         return Ok(finding(&mut result, "oidc_claims", None));
     }
-    let keys = AuthKeys::load(&client, config).await?;
     let excessive = session.mint(config, &outputs(&keys, 4)?).await?;
     result["bat_max_code"] = json!(excessive.code());
     if excessive.ok() || excessive.code() != Some(profile.bat_maximum) {
@@ -443,7 +456,8 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
     if !info.ok() {
         return Ok(finding(&mut result, "mint_info", Some(&info)));
     }
-    let Some(probe) = Probe::select(&info.value, config) else {
+    let keys = AuthKeys::load(&client, config).await?;
+    let Some(probe) = Probe::select(&info.value, config, &keys) else {
         return Ok(finding(&mut result, "protected_endpoint", None));
     };
     if is_replay {
@@ -463,7 +477,6 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
     if session.authenticate(config).await.is_err() {
         return Ok(finding(&mut result, "oidc_login", None));
     }
-    let keys = AuthKeys::load(&client, config).await?;
     let pending = outputs(&keys, 3)?;
     let issued = session.mint(config, &pending).await?;
     let count = issued.value["signatures"].as_array().map_or(0, Vec::len);
@@ -531,6 +544,23 @@ mod tests {
             secret,
         )
     }
+    #[test]
+    fn invalid_bat_parses_but_cannot_verify_as_a_signed_proof() {
+        let (keys, signing_key) = keyset();
+        let token = invalid_token(&keys).unwrap();
+        let _: cashu::nuts::nut22::BlindAuthToken = token.parse().unwrap();
+        let body: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(token.strip_prefix("authA").unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["id"], json!(keys.id));
+        let secret = body["secret"].as_str().unwrap();
+        let signature: PublicKey = serde_json::from_value(body["C"].clone()).unwrap();
+        assert!(dhke::verify_message(&signing_key, signature, secret.as_bytes()).is_err());
+    }
+
     fn issue(keys: &AuthKeys, secret: &SecretKey, outputs: &[Output]) -> Value {
         json!({"signatures":outputs.iter().map(|output| BlindSignature::new(1_u64.into(),dhke::sign_message(secret,&output.message.blinded_secret).unwrap(),keys.id,&output.message.blinded_secret,secret).unwrap()).collect::<Vec<_>>()})
     }
@@ -554,26 +584,35 @@ mod tests {
         let nutshell = Probe::select(
             &info(&["/v1/swap", "/v1/mint/quote/bolt11"]),
             &config("nutshell"),
+            &keyset().0,
         )
         .unwrap();
         assert_eq!(nutshell.url, "http://mint:3338/v1/mint/quote/bolt11");
-        let cdk = Probe::select(&info(&["/v1/swap", "/v1/restore"]), &config("cdk")).unwrap();
+        let cdk = Probe::select(
+            &info(&["/v1/swap", "/v1/restore"]),
+            &config("cdk"),
+            &keyset().0,
+        )
+        .unwrap();
         assert_eq!(cdk.url, "http://mint:3338/v1/restore");
-        assert!(Probe::select(&info(&["/v1/swap"]), &config("cdk")).is_none());
+        assert!(Probe::select(&info(&["/v1/swap"]), &config("cdk"), &keyset().0).is_none());
         let reply = |value| Reply {
             status: StatusCode::OK,
             value,
         };
         assert!(cdk.accepted(&reply(json!({"outputs":[],"signatures":[]}))));
+        let restore: cashu::nuts::nut09::RestoreRequest =
+            serde_json::from_value(cdk.body.clone()).unwrap();
+        assert_eq!(restore.outputs.len(), 1);
         assert!(!cdk.accepted(&reply(json!({}))));
         assert!(nutshell.accepted(&reply(json!({"quote":"q"}))));
     }
 
     #[test]
     fn protocol_profiles_are_explicit_per_implementation() {
-        assert_eq!(Profile::of("nutshell").unwrap().cat_rate_limit, Some(81004));
+        assert_eq!(Profile::of("nutshell").unwrap().cat_rate_limit, Some(31004));
         let cdk = Profile::of("cdk").unwrap();
-        assert_eq!((cdk.invalid_bat, cdk.invalid_cat), (31002, 30002));
+        assert_eq!((cdk.invalid_bat, cdk.invalid_cat), (10001, 30002));
         assert!(cdk.cat_rate_limit.is_none());
         assert!(Profile::of("other").is_err());
     }

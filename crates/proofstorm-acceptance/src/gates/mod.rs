@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use crate::GateContext;
 
 pub mod agents;
+mod authentication;
 mod candidate_isolation;
 pub mod candidates;
 mod candidates_nutshell;

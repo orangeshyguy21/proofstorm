@@ -1,5 +1,5 @@
 //! CDK 0.18.1 + Keycloak 25.0.6: NUT-21 and NUT-22 with CDK's upstream default
-//! endpoint protection, the auth store on a separate database of the mint's
+//! endpoint protection, SQLite and a separate auth database on the mint's
 //! shared PostgreSQL server, spent-token replay persistence, restart recovery,
 //! and teardown.
 
@@ -12,9 +12,10 @@ use crate::{GateContext, cell, gate::CONTROL_NAMESPACE, json as expect};
 
 const INSTANCE: &str = "cdk-oidc-instance";
 const EXPERIMENT: &str = "cdk-oidc-experiment";
+const MINTS: &[&str] = &["mint", "mint-sqlite"];
 
 fn cell_document() -> Value {
-    json!({
+    let mut document = json!({
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-oidc-live-cell",
         "components": [
@@ -33,7 +34,18 @@ fn cell_document() -> Value {
             {"id": "mint-identity", "kind": "authentication_backend", "from": "mint", "to": "identity", "binding": {"type": "authentication", "protocol": "oidc"}}
         ],
         "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
-    })
+    });
+    let mut sqlite = document["components"][4].clone();
+    sqlite["id"] = json!("mint-sqlite");
+    document["components"]
+        .as_array_mut()
+        .expect("fixture array")
+        .push(sqlite);
+    document["links"].as_array_mut().expect("fixture array").extend([
+        json!({"id": "sqlite-lightning", "kind": "payment_backend", "from": "mint-sqlite", "to": "lightning", "binding": {"type": "payment", "method": "bolt11", "unit": "sat"}}),
+        json!({"id": "sqlite-identity", "kind": "authentication_backend", "from": "mint-sqlite", "to": "identity", "binding": {"type": "authentication", "protocol": "oidc"}}),
+    ]);
+    document
 }
 
 const CONFIG_FRAGMENTS: &[&str] = &[
@@ -41,7 +53,6 @@ const CONFIG_FRAGMENTS: &[&str] = &[
     "openid_discovery = \"http://identity:8080/realms/proofstorm/.well-known/openid-configuration\"",
     "openid_client_id = \"cashu-client\"",
     "mint_max_bat = 3",
-    "[auth_database.postgres]\nurl = \"env:CDK_MINTD_AUTH_POSTGRES_URL\"",
 ];
 
 fn finding(client: &mut crate::McpClient, what: &str, result: &Value) -> Result<()> {
@@ -78,14 +89,21 @@ pub fn run(context: &GateContext) -> Result<()> {
     let namespace = expect::string(&status, "/instance_namespace")?.to_string();
 
     context.qualification_stage("configuration")?;
-    let config = kubectl.exec(
-        &namespace,
-        "deployment/mint",
-        &["cat", "/config/config.toml"],
-    )?;
-    for fragment in CONFIG_FRAGMENTS {
-        if !config.contains(fragment) {
-            bail!("mint configuration is missing {fragment:?}: {config}");
+    for mint in MINTS {
+        let config = kubectl.exec(
+            &namespace,
+            &format!("deployment/{mint}"),
+            &["cat", "/config/config.toml"],
+        )?;
+        for fragment in CONFIG_FRAGMENTS {
+            if !config.contains(fragment) {
+                bail!("{mint} configuration is missing {fragment:?}");
+            }
+        }
+        let postgres_auth =
+            config.contains("[auth_database.postgres]\nurl = \"env:CDK_MINTD_AUTH_POSTGRES_URL\"");
+        if postgres_auth != (*mint == "mint") {
+            bail!("{mint} has the wrong authentication database configuration");
         }
     }
     let databases = kubectl.exec(
@@ -127,28 +145,33 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"request_id":"7036","run_id": EXPERIMENT, "name": INSTANCE}),
     )?;
 
-    context.qualification_stage("conformance")?;
-    crate::driver::authentication_conformance(
-        context,
-        &mut client,
-        json!({
-            "name": INSTANCE,
-            "run_id": EXPERIMENT,
-            "request_id": "cdk-oidc-baseline",
-            "mint": "mint",
-            "identity_provider": "identity"}),
-    )?;
-    let baseline = cell::wait_operation(&mut client, "cdk-oidc-baseline", 60)?;
-    let baseline = cell::artifact_content(&baseline)?;
-    expect::equals(
-        baseline,
-        "/contract",
-        &Value::from("proofstorm/authentication-conformance/v1"),
-    )?;
-    if !expect::boolean(baseline, "/conformant")? {
-        return finding(&mut client, "baseline", baseline);
+    for mint in MINTS {
+        context.qualification_stage(if mint == &"mint" {
+            "conformance-postgres"
+        } else {
+            "conformance-sqlite"
+        })?;
+        let request_id = format!("cdk-oidc-{mint}-baseline");
+        crate::driver::authentication_conformance(
+            context,
+            &mut client,
+            json!({"name": INSTANCE, "run_id": EXPERIMENT,
+                "request_id": request_id, "mint": mint, "identity_provider": "identity"}),
+        )?;
+        let operation = wait_auth_operation(context, &mut client, &namespace, &request_id)?;
+        let baseline = cell::artifact_content(&operation)?;
+        expect::equals(
+            baseline,
+            "/contract",
+            &json!("proofstorm/authentication-conformance/v1"),
+        )?;
+        expect::equals(baseline, "/mint", &json!(mint))?;
+        if !expect::boolean(baseline, "/conformant")? {
+            return finding(&mut client, &format!("{mint} baseline"), baseline);
+        }
     }
 
+    context.qualification_stage("restart")?;
     kubectl.rollout_restart(CONTROL_NAMESPACE, "deployment/proofstormd")?;
     sleep(Duration::from_secs(5));
     if kubectl.digest(&identity_args)? != identity_digest {
@@ -161,56 +184,159 @@ pub fn run(context: &GateContext) -> Result<()> {
         "statefulset/database",
         "deployment/identity",
         "deployment/mint",
+        "deployment/mint-sqlite",
     ] {
         kubectl.rollout_restart(&namespace, target)?;
     }
 
-    context.qualification_stage("protected-spend")?;
-    crate::driver::authentication_protected_spend(
-        context,
-        &mut client,
-        json!({
-            "name": INSTANCE,
-            "run_id": EXPERIMENT,
-            "request_id": "cdk-oidc-protected-spend",
-            "mint": "mint",
-            "identity_provider": "identity"}),
-    )?;
-    let protected = cell::wait_operation(&mut client, "cdk-oidc-protected-spend", 60)?;
-    let protected = cell::artifact_content(&protected)?;
-    if !expect::boolean(protected, "/conformant")?
-        || !expect::boolean(protected, "/protected_request")?
-    {
-        return finding(&mut client, "protected spend", protected);
+    let restarted_at = super::authentication::now()?;
+    for mint in MINTS {
+        super::authentication::wait_protocol_ready(&mut client, INSTANCE, mint, restarted_at)?;
+        verify_spend_and_replay(context, &mut client, &namespace, mint)?;
     }
 
-    // The spent BAT lives in the PostgreSQL auth database; it must stay spent
-    // across a mint restart.
-    kubectl.rollout_restart(&namespace, "deployment/mint")?;
-
-    context.qualification_stage("replay")?;
-    crate::driver::authentication_replay(
-        context,
-        &mut client,
-        json!({
-            "name": INSTANCE,
-            "run_id": EXPERIMENT,
-            "request_id": "cdk-oidc-replay",
-            "mint": "mint",
-            "identity_provider": "identity",
-            "source_operation_id": "cdk-oidc-protected-spend"}),
-    )?;
-    let replay = cell::wait_operation(&mut client, "cdk-oidc-replay", 60)?;
-    let replay = cell::artifact_content(&replay)?;
-    if !expect::boolean(replay, "/conformant")? || !expect::boolean(replay, "/protected_request")? {
-        return finding(&mut client, "replay", replay);
-    }
-
+    context.qualification_stage("teardown")?;
     cell::wait_phase(&mut client, INSTANCE, "ready", 100, Duration::from_secs(3))?;
     client.call("cell_remove", json!({"name": INSTANCE}))?;
     cell::wait_phase(&mut client, INSTANCE, "closed", 100, Duration::from_secs(3))?;
     println!(
-        "CDK 0.18.1 + Keycloak 25.0.6 passed NUT-21/NUT-22 with upstream endpoint defaults, PostgreSQL auth store, replay persistence, restart recovery, and teardown"
+        "CDK 0.18.1 + Keycloak 25.0.6 passed NUT-21/NUT-22 with upstream endpoint defaults, SQLite and PostgreSQL auth stores, replay persistence, restart recovery, and teardown"
     );
     Ok(())
+}
+
+fn wait_auth_operation(
+    context: &GateContext,
+    client: &mut crate::McpClient,
+    namespace: &str,
+    operation: &str,
+) -> Result<Value> {
+    let result = cell::wait_operation(client, operation, 60);
+    if result.is_err() {
+        // Keep termination diagnostics in the run's private directory before
+        // the owned runner tears down the failed cell. Never print pod contents.
+        if let Ok(pods) = context.kubectl.get_json(&["get", "pods", "-n", namespace]) {
+            context.record(&format!("{operation}-failed-pods.json"), &pods)?;
+        }
+    }
+    result
+}
+
+fn verify_spend_and_replay(
+    context: &GateContext,
+    client: &mut crate::McpClient,
+    namespace: &str,
+    mint: &str,
+) -> Result<()> {
+    context.qualification_stage(if mint == "mint" {
+        "protected-spend-postgres"
+    } else {
+        "protected-spend-sqlite"
+    })?;
+    let spend_id = format!("cdk-oidc-{mint}-protected-spend");
+    crate::driver::authentication_protected_spend(
+        context,
+        client,
+        json!({"name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": spend_id, "mint": mint, "identity_provider": "identity"}),
+    )?;
+    let operation = wait_auth_operation(context, client, namespace, &spend_id)?;
+    let protected = cell::artifact_content(&operation)?;
+    if !expect::boolean(protected, "/conformant")?
+        || !expect::boolean(protected, "/protected_request")?
+    {
+        return finding(client, &format!("{mint} protected spend"), protected);
+    }
+
+    // Both auth stores must keep the BAT spent after replacing the mint process.
+    context
+        .kubectl
+        .rollout_restart(namespace, &format!("deployment/{mint}"))?;
+    super::authentication::wait_protocol_ready(
+        client,
+        INSTANCE,
+        mint,
+        super::authentication::now()?,
+    )?;
+    context.qualification_stage(if mint == "mint" {
+        "replay-postgres"
+    } else {
+        "replay-sqlite"
+    })?;
+    let replay_id = format!("cdk-oidc-{mint}-replay");
+    crate::driver::authentication_replay(
+        context,
+        client,
+        json!({"name": INSTANCE, "run_id": EXPERIMENT,
+            "request_id": replay_id, "mint": mint, "identity_provider": "identity",
+            "source_operation_id": spend_id}),
+    )?;
+    let operation = wait_auth_operation(context, client, namespace, &replay_id)?;
+    let replay = cell::artifact_content(&operation)?;
+    if !expect::boolean(replay, "/conformant")? || !expect::boolean(replay, "/protected_request")? {
+        return finding(client, &format!("{mint} replay"), replay);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proofstorm_core::{CellSpec, DatabaseRole, resolve_lock, validate_cell};
+    use proofstorm_qualification::{Identity, Mode, Scenario};
+
+    #[test]
+    fn auth_fixture_qualifies_both_stores_on_every_planned_platform() {
+        let plan = proofstorm_qualification::plan(
+            Identity {
+                revision: "a".repeat(40),
+                run_id: "0".into(),
+                attempt: 1,
+            },
+            Mode::Compatibility,
+        )
+        .unwrap();
+        let mut covered = std::collections::BTreeSet::new();
+        for case in &plan.cases {
+            let Scenario::Gate { name, versions } = &case.scenario else {
+                continue;
+            };
+            if name != "cdk-oidc" {
+                continue;
+            }
+            covered.insert(case.platform.as_str());
+            let mut fixture = cell_document();
+            let observer = crate::qualification::Observer::new(case.clone());
+            observer.document(&mut fixture).unwrap();
+            observer.finish().unwrap();
+            let cell: CellSpec = serde_json::from_value(fixture).unwrap();
+            let validation = validate_cell(&cell);
+            assert!(validation.valid, "{:?}", validation.issues);
+            let catalog = proofstorm_qualification::catalog(&case.platform).unwrap();
+            for entry in resolve_lock(&cell, &catalog).unwrap().entries {
+                assert_eq!(entry.version, versions[&entry.catalog_id]);
+            }
+            let databases: Vec<_> = cell
+                .links
+                .iter()
+                .filter(|link| {
+                    link.from == "mint" && link.kind == proofstorm_core::LinkKind::DatabaseBackend
+                })
+                .collect();
+            assert_eq!(databases.len(), 2);
+            for role in [DatabaseRole::Primary, DatabaseRole::Authentication] {
+                assert!(databases.iter().any(|link| link.to == "database" && matches!(link.binding, Some(proofstorm_core::DependencyBinding::Database { role: actual, .. }) if actual == role)));
+            }
+            assert!(!cell.links.iter().any(|link| link.from == "mint-sqlite"
+                && link.kind == proofstorm_core::LinkKind::DatabaseBackend));
+            assert_eq!(
+                cell.components
+                    .iter()
+                    .filter(|component| component.implementation == "cdk")
+                    .count(),
+                2
+            );
+        }
+        assert_eq!(covered, ["linux/amd64", "linux/arm64"].into());
+    }
 }

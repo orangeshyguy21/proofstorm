@@ -299,6 +299,12 @@ fn gate_stage(work: &Path) -> &'static str {
         Some("cdk-replay") => "cdk-replay",
         Some("nutshell-replay") => "nutshell-replay",
         Some("configuration") => "configuration",
+        Some("conformance-postgres") => "conformance-postgres",
+        Some("conformance-sqlite") => "conformance-sqlite",
+        Some("protected-spend-postgres") => "protected-spend-postgres",
+        Some("protected-spend-sqlite") => "protected-spend-sqlite",
+        Some("replay-postgres") => "replay-postgres",
+        Some("replay-sqlite") => "replay-sqlite",
         Some("version") => "version",
         Some("peer-connect") => "peer-connect",
         Some("funding") => "funding",
@@ -643,6 +649,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(progress(root.path(), &log, 121)["stage"], "gate");
+    }
+
+    #[test]
+    fn auth_store_stages_remain_visible_in_progress() {
+        let work = tempfile::tempdir().unwrap();
+        for stage in [
+            "conformance-postgres",
+            "conformance-sqlite",
+            "protected-spend-postgres",
+            "protected-spend-sqlite",
+            "replay-postgres",
+            "replay-sqlite",
+        ] {
+            fs::write(
+                work.path().join("qualification-stage.json"),
+                serde_json::to_vec(stage).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(gate_stage(work.path()), stage);
+        }
     }
 
     #[test]

@@ -1963,8 +1963,7 @@ fn one_postgres_server_hosts_a_database_per_linked_component() {
     assert!(error.contains("duplicate_database_name"));
 }
 
-#[test]
-fn cdk_auth_keeps_upstream_endpoint_defaults_and_follows_the_primary_engine() {
+fn cdk_auth_fixture(name: &str) -> CellSpec {
     let identity_links = || {
         vec![
             chain_link("lightning", "chain"),
@@ -2002,33 +2001,37 @@ fn cdk_auth_keeps_upstream_endpoint_defaults_and_follows_the_primary_engine() {
             component("mint", ComponentKind::Mint, "cdk", ControlClass::Target),
         ]
     };
-    let render_mint = |spec: &CellSpec| {
-        let lock = resolve_lock(spec, default_catalog()).expect("CDK auth lock");
-        let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, spec, &lock)
-            .expect("CDK auth plans");
-        let plan = plans
-            .iter()
-            .find(|plan| plan.component_id == "mint")
-            .unwrap();
-        let rendered = render_cdk_component(plan).expect("CDK auth render");
-        let config = rendered.config_maps[0].data.as_ref().unwrap()["config.toml"].clone();
-        let pod =
-            serde_json::to_value(&rendered.deployments[0]).unwrap()["spec"]["template"]["spec"]
-                .clone();
-        (config, pod)
-    };
-    let init_names = |pod: &Value| {
-        pod["initContainers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|container| container["name"].as_str().unwrap().to_owned())
-            .collect::<Vec<_>>()
-    };
+    cell(name, components(), identity_links())
+}
 
-    // SQLite: the auth store stays beside the mint database.
-    let sqlite = cell("golden-cdk-auth", components(), identity_links());
-    let (config, pod) = render_mint(&sqlite);
+fn render_cdk_auth_mint(spec: &CellSpec) -> (String, Value) {
+    let lock = resolve_lock(spec, default_catalog()).expect("CDK auth lock");
+    let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, spec, &lock)
+        .expect("CDK auth plans");
+    let plan = plans
+        .iter()
+        .find(|plan| plan.component_id == "mint")
+        .unwrap();
+    let rendered = render_cdk_component(plan).expect("CDK auth render");
+    let config = rendered.config_maps[0].data.as_ref().unwrap()["config.toml"].clone();
+    let pod =
+        serde_json::to_value(&rendered.deployments[0]).unwrap()["spec"]["template"]["spec"].clone();
+    (config, pod)
+}
+
+fn cdk_auth_init_names(pod: &Value) -> Vec<String> {
+    pod["initContainers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|container| container["name"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>()
+}
+
+#[test]
+fn cdk_sqlite_auth_keeps_upstream_endpoint_defaults() {
+    let sqlite = cdk_auth_fixture("golden-cdk-auth");
+    let (config, pod) = render_cdk_auth_mint(&sqlite);
     for fragment in [
         "[auth]\nauth_enabled = true",
         "openid_discovery = \"http://identity:8080/realms/proofstorm/.well-known/openid-configuration\"",
@@ -2041,10 +2044,12 @@ fn cdk_auth_keeps_upstream_endpoint_defaults_and_follows_the_primary_engine() {
     for absent in ["[auth_database", "get_mint_quote", "swap =", "restore ="] {
         assert!(!config.contains(absent), "unexpected {absent:?}");
     }
-    assert!(init_names(&pod).contains(&"wait-for-oidc".to_owned()));
+    assert!(cdk_auth_init_names(&pod).contains(&"wait-for-oidc".to_owned()));
+}
 
-    // PostgreSQL: a separate auth database on the same server is required.
-    let mut postgres = cell("golden-cdk-auth-postgres", components(), identity_links());
+#[test]
+fn cdk_postgres_auth_requires_a_separate_database_on_the_same_server() {
+    let mut postgres = cdk_auth_fixture("golden-cdk-auth-postgres");
     postgres.links.push(database_link("mint", "database"));
     assert!(
         resolve_lock(&postgres, default_catalog())
@@ -2061,9 +2066,9 @@ fn cdk_auth_keeps_upstream_endpoint_defaults_and_follows_the_primary_engine() {
             database: None,
         }),
     });
-    let (config, pod) = render_mint(&postgres);
+    let (config, pod) = render_cdk_auth_mint(&postgres);
     assert!(config.contains("[auth_database.postgres]\nurl = \"env:CDK_MINTD_AUTH_POSTGRES_URL\""));
-    let names = init_names(&pod);
+    let names = cdk_auth_init_names(&pod);
     for name in ["ensure-database", "ensure-auth-database", "wait-for-oidc"] {
         assert!(names.contains(&name.to_owned()), "missing {name}");
     }

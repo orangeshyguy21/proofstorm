@@ -783,14 +783,14 @@ async fn reconcile_action(
                 Api::<EndpointSlice>::namespaced(context.client.clone(), &instance_namespace);
             native_exec_artifact(&pod_api, &endpoint_slices, action.as_ref(), &pods.items).await?
         } else if matches!(action.spec.action, CellAction::AuthenticationConformance(_)) {
-            authentication_conformance_artifact(action.as_ref(), &pods.items)
+            authentication_conformance_artifact(action.as_ref(), &cell, &pods.items)
         } else if matches!(
             action.spec.action,
             CellAction::AuthenticationProtectedSpend(_)
         ) {
             authentication_protected_spend_artifact(action.as_ref(), &pods.items, &context).await?
         } else if matches!(action.spec.action, CellAction::AuthenticationReplay(_)) {
-            authentication_replay_artifact(action.as_ref(), &pods.items)
+            authentication_replay_artifact(action.as_ref(), &cell, &pods.items)
         } else {
             pods.items
                 .iter()
@@ -2132,6 +2132,7 @@ fn termination_message(pod: &Pod, target: &str) -> Option<String> {
 
 fn authentication_conformance_artifact(
     action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
     let CellAction::AuthenticationConformance(request) = &action.spec.action else {
@@ -2140,13 +2141,26 @@ fn authentication_conformance_artifact(
     let message = pods
         .iter()
         .find_map(|pod| termination_message(pod, "authentication"))?;
-    validate_authentication_conformance_result(request, &message)
+    let implementation = &cell
+        .spec
+        .cell
+        .components
+        .iter()
+        .find(|component| component.id == request.mint)?
+        .implementation;
+    validate_authentication_conformance_result(request, implementation, &message)
 }
 
 fn validate_authentication_conformance_result(
     request: &proofstorm_kube::AuthenticationConformanceAction,
+    implementation: &str,
     message: &str,
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let (clear_code, blind_code, bat_maximum, rate_limit) = match implementation {
+        "nutshell" => (30_002, 31_002, 31_003, Some(31_004)),
+        "cdk" => (30_002, 10_001, 11_006, None),
+        _ => return None,
+    };
     let result = serde_json::from_str::<AuthenticationConformanceResult>(message).ok()?;
     if result.contract != "proofstorm/authentication-conformance/v1"
         || result.mint != request.mint
@@ -2156,16 +2170,16 @@ fn validate_authentication_conformance_result(
                 || !result.advertised_nut22
                 || !result.invalid_oidc_password_rejected
                 || !result.missing_cat_rejected
-                || result.invalid_cat_code != Some(80_002)
+                || result.invalid_cat_code != Some(clear_code)
                 || !result.missing_bat_rejected
-                || result.invalid_bat_code != Some(81_002)
+                || result.invalid_bat_code != Some(blind_code)
                 || !result.oidc_login
                 || !result.claims_match
                 || !result.mint_accepted_cat
                 || !result.bat_issued
                 || !result.bat_dleq
-                || result.bat_max_code != Some(81_003)
-                || result.rate_limit_code != Some(81_004)
+                || result.bat_max_code != Some(bat_maximum)
+                || result.rate_limit_code != rate_limit
                 || result.failure_stage.is_some()
                 || result.failure_status.is_some()
                 || result.failure_protocol_code.is_some()))
@@ -2330,6 +2344,7 @@ async fn persist_authentication_session(
 
 fn authentication_replay_artifact(
     action: &ProofstormCellAction,
+    cell: &ProofstormCell,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
     let CellAction::AuthenticationReplay(request) = &action.spec.action else {
@@ -2338,20 +2353,33 @@ fn authentication_replay_artifact(
     let message = pods
         .iter()
         .find_map(|pod| termination_message(pod, "authentication"))?;
-    validate_authentication_replay_result(request, &message)
+    let implementation = &cell
+        .spec
+        .cell
+        .components
+        .iter()
+        .find(|component| component.id == request.mint)?
+        .implementation;
+    validate_authentication_replay_result(request, implementation, &message)
 }
 
 fn validate_authentication_replay_result(
     request: &proofstorm_kube::AuthenticationReplayAction,
+    implementation: &str,
     message: &str,
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+    let spent_bat = match implementation {
+        "nutshell" => 31_002,
+        "cdk" => 11_001,
+        _ => return None,
+    };
     let result = serde_json::from_str::<AuthenticationReplayResult>(message).ok()?;
     if result.contract != "proofstorm/authentication-replay/v1"
         || result.mint != request.mint
         || result.identity_provider != request.identity_provider
         || result.source_operation_id != request.source_operation_id
         || (result.conformant
-            && (result.spent_bat_replay_code != Some(81_002)
+            && (result.spent_bat_replay_code != Some(spent_bat)
                 || result.fresh_bat_count != 3
                 || !result.fresh_bat_dleq
                 || !result.protected_request
@@ -2641,16 +2669,16 @@ mod tests {
             "advertised_nut22": true,
             "invalid_oidc_password_rejected": true,
             "missing_cat_rejected": true,
-            "invalid_cat_code": 80002,
+            "invalid_cat_code": 30002,
             "missing_bat_rejected": true,
-            "invalid_bat_code": 81002,
+            "invalid_bat_code": 31002,
             "oidc_login": true,
             "claims_match": true,
             "mint_accepted_cat": true,
             "bat_issued": conformant,
             "bat_dleq": conformant,
-            "bat_max_code": 81003,
-            "rate_limit_code": if conformant { Some(81004) } else { None },
+            "bat_max_code": 31003,
+            "rate_limit_code": if conformant { Some(31004) } else { None },
             "conformant": conformant,
             "failure_stage": if conformant { None } else { Some("bat_issuance") },
             "failure_status": if conformant { None } else { Some(400) },
@@ -2744,24 +2772,64 @@ mod tests {
     fn authentication_artifact_accepts_only_the_secret_free_typed_shape() {
         let request = authentication_request();
         let valid = authentication_result(true);
-        assert!(validate_authentication_conformance_result(&request, &valid.to_string()).is_some());
+        assert!(
+            validate_authentication_conformance_result(&request, "nutshell", &valid.to_string())
+                .is_some()
+        );
 
         let finding = authentication_result(false);
         assert!(
-            validate_authentication_conformance_result(&request, &finding.to_string()).is_some()
+            validate_authentication_conformance_result(&request, "nutshell", &finding.to_string())
+                .is_some()
         );
 
         let mut leaked = finding;
         leaked["password"] = serde_json::json!("sentinel-secret");
         assert!(
-            validate_authentication_conformance_result(&request, &leaked.to_string()).is_none(),
+            validate_authentication_conformance_result(&request, "nutshell", &leaked.to_string())
+                .is_none(),
             "unknown fields, including leaked credentials, fail closed"
         );
 
         let mut wrong_identity = authentication_result(false);
         wrong_identity["identity_provider"] = serde_json::json!("other");
         assert!(
-            validate_authentication_conformance_result(&request, &wrong_identity.to_string())
+            validate_authentication_conformance_result(
+                &request,
+                "nutshell",
+                &wrong_identity.to_string()
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn cdk_conformance_uses_its_own_codes_and_has_no_cat_rate_limit() {
+        let request = authentication_request();
+        let mut result = authentication_result(true);
+        assert!(
+            validate_authentication_conformance_result(&request, "cdk", &result.to_string())
+                .is_none()
+        );
+        result["invalid_cat_code"] = serde_json::json!(30002);
+        result["invalid_bat_code"] = serde_json::json!(10001);
+        result["bat_max_code"] = serde_json::json!(11006);
+        result["rate_limit_code"] = serde_json::Value::Null;
+        assert!(
+            validate_authentication_conformance_result(&request, "cdk", &result.to_string())
+                .is_some()
+        );
+        assert!(
+            validate_authentication_conformance_result(&request, "nutshell", &result.to_string())
+                .is_none()
+        );
+        assert!(
+            validate_authentication_conformance_result(&request, "unknown", &result.to_string())
+                .is_none()
+        );
+        result["rate_limit_code"] = serde_json::json!(31004);
+        assert!(
+            validate_authentication_conformance_result(&request, "cdk", &result.to_string())
                 .is_none()
         );
     }
@@ -2807,7 +2875,7 @@ mod tests {
             "mint": "mint",
             "identity_provider": "identity",
             "source_operation_id": "auth-spend",
-            "spent_bat_replay_code": 81002,
+            "spent_bat_replay_code": 31002,
             "fresh_bat_count": 3,
             "fresh_bat_dleq": true,
             "protected_request": true,
@@ -2817,13 +2885,40 @@ mod tests {
             "failure_protocol_code": null
         });
         assert!(
-            validate_authentication_replay_result(&replay_request, &replay.to_string()).is_some()
+            validate_authentication_replay_result(&replay_request, "nutshell", &replay.to_string())
+                .is_some()
+        );
+        let mut cdk_replay = replay.clone();
+        cdk_replay["spent_bat_replay_code"] = serde_json::json!(11001);
+        assert!(
+            validate_authentication_replay_result(&replay_request, "cdk", &cdk_replay.to_string())
+                .is_some()
+        );
+        assert!(
+            validate_authentication_replay_result(
+                &replay_request,
+                "nutshell",
+                &cdk_replay.to_string()
+            )
+            .is_none()
+        );
+        assert!(
+            validate_authentication_replay_result(
+                &replay_request,
+                "unknown",
+                &cdk_replay.to_string()
+            )
+            .is_none()
         );
         let mut leaked_replay = replay;
         leaked_replay["spent_bat"] = serde_json::json!("authAprivate-bearer");
         assert!(
-            validate_authentication_replay_result(&replay_request, &leaked_replay.to_string())
-                .is_none()
+            validate_authentication_replay_result(
+                &replay_request,
+                "nutshell",
+                &leaked_replay.to_string()
+            )
+            .is_none()
         );
     }
 

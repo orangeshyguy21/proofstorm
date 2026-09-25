@@ -598,8 +598,8 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                         &["0.20.4-beta", "0.21.3-beta"],
                     ),
                 ],
-                // Both shipped Nutshell families have an auth promises schema
-                // that cannot satisfy the shared ledger's issuance writes.
+                // The retained 0.20.3 release lacks working auth issuance.
+                // Auth is enabled only on the promoted, qualified 0.21 release.
                 &[AuthenticationMode::Unauthenticated],
                 vec![version_support("nutshell-wallet", &["0.20.3"])],
             ),
@@ -776,6 +776,20 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
         entry.image = image.into();
         if entry.id == "nutshell" {
             entry.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
+            entry.runtime_endpoints[0].limitations.push("Enable NUT-21/22 with an authentication_backend link to Keycloak. Auth storage defaults to SQLite; an optional database_backend link with role authentication selects PostgreSQL independently of primary storage. Use auth_max_blind_tokens and auth_rate_limit_per_minute for issuance limits. Endpoint protection follows upstream defaults. Native wallet authentication is supported; typed wallet operations against protected mints are not.".into());
+
+            entry
+                .features
+                .extend([CatalogFeature::ClearAuth, CatalogFeature::BlindAuth]);
+            entry.support_matrix.authentication.extend([
+                AuthenticationMode::Nut21Clear,
+                AuthenticationMode::Nut22Blind,
+            ]);
+            entry.compatible_dependencies.push(dependency(
+                LinkKind::AuthenticationBackend,
+                "keycloak",
+                &["25.0.6"],
+            ));
         }
         if entry.kind == ComponentKind::Mint {
             entry.support_matrix.compatible_wallet_adapters =
@@ -1435,7 +1449,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
                 "component",
                 "mint",
                 &["component_logs", "reachability_oracle"],
-                &[CDK_MANAGEMENT],
+                &[CDK_MANAGEMENT, "Enable NUT-21/22 with an authentication_backend link to Keycloak; auth_max_blind_tokens defaults to 50. SQLite primary storage uses local SQLite auth and forbids an auth database link. PostgreSQL primary storage requires a separate database_backend link with role authentication; both databases may share one PostgreSQL component. Endpoint protection follows upstream defaults. Use native cdk-cli authentication commands; typed wallet operations against protected mints are not supported."],
             ),
             runtime_endpoint(
                 "ldk-node",
@@ -2171,25 +2185,48 @@ mod qualification_support_tests {
     fn upstream_gaps_are_not_advertised_as_supported_on_either_platform() {
         for platform in [CatalogPlatform::LinuxAmd64, CatalogPlatform::LinuxArm64] {
             let catalog = catalog_for_platform(platform);
-            for version in ["0.20.3", "0.21.0"] {
-                let entry = catalog
-                    .entries
+            let entry = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == "nutshell" && entry.version == "0.20.3")
+                .unwrap();
+            assert_eq!(
+                entry.support_matrix.authentication,
+                [AuthenticationMode::Unauthenticated].into()
+            );
+            assert!(!entry.features.contains(&CatalogFeature::ClearAuth));
+            assert!(!entry.features.contains(&CatalogFeature::BlindAuth));
+            assert!(
+                !entry
+                    .compatible_dependencies
                     .iter()
-                    .find(|entry| entry.id == "nutshell" && entry.version == version)
-                    .unwrap();
-                assert_eq!(
-                    entry.support_matrix.authentication,
-                    [AuthenticationMode::Unauthenticated].into()
-                );
-                assert!(!entry.features.contains(&CatalogFeature::ClearAuth));
-                assert!(!entry.features.contains(&CatalogFeature::BlindAuth));
-                assert!(
-                    !entry
-                        .compatible_dependencies
-                        .iter()
-                        .any(|dependency| dependency.link_kind == LinkKind::AuthenticationBackend)
-                );
-            }
+                    .any(|dependency| dependency.link_kind == LinkKind::AuthenticationBackend)
+            );
+            let current = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == "nutshell" && entry.version == "0.21.0")
+                .unwrap();
+            assert_eq!(
+                current.support_matrix.authentication,
+                [
+                    AuthenticationMode::Unauthenticated,
+                    AuthenticationMode::Nut21Clear,
+                    AuthenticationMode::Nut22Blind
+                ]
+                .into()
+            );
+            assert!(current.features.contains(&CatalogFeature::ClearAuth));
+            assert!(current.features.contains(&CatalogFeature::BlindAuth));
+            assert!(
+                current
+                    .compatible_dependencies
+                    .iter()
+                    .any(
+                        |dependency| dependency.link_kind == LinkKind::AuthenticationBackend
+                            && dependency.implementation == "keycloak"
+                    )
+            );
             let mut onchain_only = catalog
                 .entries
                 .iter()
