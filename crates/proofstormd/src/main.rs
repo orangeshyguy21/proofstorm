@@ -2,6 +2,7 @@
 mod candidate_tests;
 mod component_lifecycle;
 mod probes;
+mod retry;
 #[cfg(test)]
 use component_lifecycle::same_lifecycle_identity;
 mod cell_updates;
@@ -67,6 +68,8 @@ const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
 struct Context {
     client: Client,
     probes: Arc<probes::Manager>,
+    /// Shared by every controller; keyed by object reference.
+    retries: Arc<retry::Backoff>,
 }
 
 #[derive(Debug, Error)]
@@ -133,7 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image = std::env::var("PROOFSTORM_PROBER_IMAGE")
         .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
-    let context = Arc::new(Context { client, probes });
+    let context = Arc::new(Context {
+        client,
+        probes,
+        retries: Arc::default(),
+    });
     let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
         receive.recv().await.map(|object| (object, receive))
     });
@@ -143,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             kube::runtime::controller::Config::default().concurrency(CELL_CONTROLLER_CONCURRENCY),
         )
         .shutdown_on_signal()
-        .run(reconcile, error_policy, context.clone())
+        .run(reconcile_cell, error_policy, context.clone())
         .for_each(|result| async move {
             match result {
                 Ok((object, _)) => eprintln!("reconciled ProofstormCell {object:?}"),
@@ -155,7 +162,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             kube::runtime::controller::Config::default().concurrency(ACTION_CONTROLLER_CONCURRENCY),
         )
         .shutdown_on_signal()
-        .run(reconcile_action, action_error_policy, context.clone())
+        .run(
+            reconcile_action_with_backoff,
+            action_error_policy,
+            context.clone(),
+        )
         .for_each(|result| async move {
             match result {
                 Ok((object, _)) => eprintln!("reconciled ProofstormCellAction {object:?}"),
@@ -166,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_config(kube::runtime::controller::Config::default().concurrency(2))
         .shutdown_on_signal()
         .run(
-            reconcile_candidate_build,
+            reconcile_candidate_build_with_backoff,
             candidate_error_policy,
             context.clone(),
         )
@@ -2072,9 +2083,15 @@ fn validate_instance_key(key: &str) -> Result<(), Error> {
     clippy::needless_pass_by_value,
     reason = "kube runtime requires an owned Arc in the error-policy callback signature"
 )]
-fn error_policy(cell: Arc<ProofstormCell>, error: &Error, _context: Arc<Context>) -> Action {
-    eprintln!("retryable controller error: {error}");
-    jittered_requeue(&cell.spec.instance_key, 5, 4)
+fn error_policy(cell: Arc<ProofstormCell>, error: &Error, context: Arc<Context>) -> Action {
+    let action = retry_action(
+        cell.as_ref(),
+        error,
+        &context.retries,
+        &cell.spec.instance_key,
+    );
+    eprintln!("retryable controller error ({action:?}): {error}");
+    action
 }
 
 #[allow(
@@ -2084,10 +2101,16 @@ fn error_policy(cell: Arc<ProofstormCell>, error: &Error, _context: Arc<Context>
 fn action_error_policy(
     action: Arc<ProofstormCellAction>,
     error: &Error,
-    _context: Arc<Context>,
+    context: Arc<Context>,
 ) -> Action {
-    eprintln!("retryable action controller error: {error}");
-    jittered_requeue(&action.spec.operation_id, 5, 4)
+    let next = retry_action(
+        action.as_ref(),
+        error,
+        &context.retries,
+        &action.spec.operation_id,
+    );
+    eprintln!("retryable action controller error ({next:?}): {error}");
+    next
 }
 
 #[allow(
@@ -2097,10 +2120,83 @@ fn action_error_policy(
 fn candidate_error_policy(
     build: Arc<ProofstormCandidateBuild>,
     error: &Error,
-    _context: Arc<Context>,
+    context: Arc<Context>,
 ) -> Action {
-    eprintln!("retryable candidate build controller error: {error}");
-    jittered_requeue(&build.spec.candidate_id, 5, 4)
+    let next = retry_action(
+        build.as_ref(),
+        error,
+        &context.retries,
+        &build.spec.candidate_id,
+    );
+    eprintln!("retryable candidate build controller error ({next:?}): {error}");
+    next
+}
+
+/// Cleanup waits are expected progress and keep their short jittered requeue.
+/// Every other failure backs off exponentially per object until it succeeds.
+fn retry_action<K>(object: &K, error: &Error, retries: &retry::Backoff, identity: &str) -> Action
+where
+    K: kube::Resource<DynamicType = ()>,
+{
+    if matches!(
+        error,
+        Error::CleanupPending(_) | Error::ActionCleanupPending(_)
+    ) {
+        return jittered_requeue(identity, 5, 4);
+    }
+    let (key, fingerprint) = retry::identity(object);
+    Action::requeue(retries.failed(&key, &fingerprint, std::time::Instant::now()))
+}
+
+/// Skip work while an unchanged object is still backing off, whatever
+/// triggered this reconcile; clear the backoff once a reconcile succeeds.
+async fn with_backoff<K, F>(object: &K, retries: &retry::Backoff, work: F) -> Result<Action, Error>
+where
+    K: kube::Resource<DynamicType = ()>,
+    F: std::future::Future<Output = Result<Action, Error>>,
+{
+    let (key, fingerprint) = retry::identity(object);
+    if let Some(wait) = retries.remaining(&key, &fingerprint, std::time::Instant::now()) {
+        return Ok(Action::requeue(wait));
+    }
+    let result = work.await;
+    if result.is_ok() {
+        retries.succeeded(&key);
+    }
+    result
+}
+
+async fn reconcile_cell(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<Action, Error> {
+    with_backoff(
+        cell.as_ref(),
+        &context.retries,
+        Box::pin(reconcile(cell.clone(), context.clone())),
+    )
+    .await
+}
+
+async fn reconcile_action_with_backoff(
+    action: Arc<ProofstormCellAction>,
+    context: Arc<Context>,
+) -> Result<Action, Error> {
+    with_backoff(
+        action.as_ref(),
+        &context.retries,
+        Box::pin(reconcile_action(action.clone(), context.clone())),
+    )
+    .await
+}
+
+async fn reconcile_candidate_build_with_backoff(
+    build: Arc<ProofstormCandidateBuild>,
+    context: Arc<Context>,
+) -> Result<Action, Error> {
+    with_backoff(
+        build.as_ref(),
+        &context.retries,
+        Box::pin(reconcile_candidate_build(build.clone(), context.clone())),
+    )
+    .await
 }
 
 fn jittered_requeue(identity: &str, base_seconds: u64, spread_seconds: u64) -> Action {
@@ -2650,6 +2746,68 @@ fn status_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failing_cells_are_held_back_whatever_triggers_the_next_reconcile() {
+        let spec = proofstorm_core::CellSpec {
+            api_version: proofstorm_core::API_VERSION.into(),
+            name: "backoff".into(),
+            components: vec![],
+            links: vec![],
+            policy: proofstorm_core::CellPolicy::default(),
+        };
+        let lock =
+            proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).expect("lock");
+        let mut cell = ProofstormCell::new(
+            "backoff",
+            proofstorm_kube::ProofstormCellSpec {
+                workspace_id: "test".into(),
+                instance_id: "test".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "sha256:current".into(),
+                cell: spec,
+                lock,
+            },
+        );
+        cell.metadata.namespace = Some("proofstorm-system".into());
+        cell.metadata.generation = Some(1);
+        let retries = retry::Backoff::default();
+        let attempts = std::sync::atomic::AtomicU32::new(0);
+        let failing = || async {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err::<Action, _>(Error::SecretContract("missing key".into()))
+        };
+
+        let error = with_backoff(&cell, &retries, failing()).await.unwrap_err();
+        assert_eq!(
+            retry_action(&cell, &error, &retries, "cell"),
+            Action::requeue(Duration::from_secs(1))
+        );
+        // An immediate prober trigger or watch event does no work.
+        let held = with_backoff(&cell, &retries, failing())
+            .await
+            .expect("held");
+        assert_ne!(
+            held,
+            Action::await_change(),
+            "a held reconcile must requeue"
+        );
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // An edit is reconciled at once.
+        cell.metadata.generation = Some(2);
+        assert!(with_backoff(&cell, &retries, failing()).await.is_err());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        // Cleanup progress keeps its short requeue and records no backoff.
+        let pending = retry_action(
+            &cell,
+            &Error::CleanupPending("namespace".into()),
+            &retries,
+            "cell",
+        );
+        assert_eq!(pending, jittered_requeue("cell", 5, 4));
+    }
 
     fn authentication_request() -> proofstorm_kube::AuthenticationConformanceAction {
         proofstorm_kube::AuthenticationConformanceAction {

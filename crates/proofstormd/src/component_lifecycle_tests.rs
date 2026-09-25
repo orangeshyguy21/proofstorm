@@ -164,6 +164,7 @@ fn fixture(
     let context = Context {
         probes: crate::probes::Manager::new(client.clone(), "fixture-controller".into()).0,
         client,
+        retries: std::sync::Arc::default(),
     };
     (
         rendered
@@ -274,6 +275,7 @@ async fn interrupted_stops_wait_for_pods_and_never_delete_storage() {
                 )
                 .0,
                 client: client(cluster.clone()),
+                retries: std::sync::Arc::default(),
             },
             Control::Stop,
         )
